@@ -63,8 +63,8 @@ not exposed by this slice; there is no blocking-worker fallback.
 
 **This is not full Spin compilation or GraalVM feature/performance parity.**
 The native guest actor increments a persistent request count and passes the
-adapter-selected status through a statically imported public function/private
-helper before returning it. Parsing, fixed routing and response formatting
+adapter-selected status through a statically imported public function and a
+private scalar class method before returning it. Parsing, fixed routing and response formatting
 are trusted C++ work. Only bodyless HTTP/1.1 requests are admitted; `/health`
 returns `ok\n`; other GET paths produce 404 and other methods produce 405.
 Request bodies, TLS, HTTP/2, general routing, async guest handlers, cancellation,

@@ -15,7 +15,7 @@ not actor handle transfer. Separate actor heaps can occupy the same address spac
 | 4 | Fence exclusive request/response ownership | generation + actor identity; mailbox rejection rollback; completion release/acquire |
 | 5 | Verify reuse, malformed framing and deterministic retirement | real TCP tests in Release and ASan/UBSan, separately allocated actor heaps |
 | 6 | Establish 180-second native transport baseline | reproducible benchmark with artifact/source hashes; results published separately |
-| 7 | Resolve the actual Spin import/type graph ahead of time | **Partial**: relative function modules link and execute; public object/method surfaces and the actual route graph remain |
+| 7 | Resolve the actual Spin import/type graph ahead of time | **Partial**: relative modules and public scalar classes/direct methods compile; String/Array/object returns and the actual route graph remain |
 | 8 | Lower typed HTTP exchange/response capabilities into guest ABI | **Remaining**: today request parsing/response formatting is native adapter work |
 | 9 | Lower Future/await/cooperate/cancellation continuations | **Remaining**: native scalar handler does not exercise JVM suspend checkpoints |
 | 10 | Integrate shared/private source actor placement and capability policy | **Remaining**: separate native heaps are not hardware address-space isolation |

@@ -56,8 +56,9 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
-    // The native subset has no instance methods. All member projections
-    // therefore originate outside the declaring class.
+    // This is the lexical accessibility set for the currently checked frame.
+    // Only methods of this exact nominal class receive its private fields;
+    // forwarding a receiver to an ordinary function does not forward privilege.
     if (!found->second.public_fields.count(field))
         throw std::runtime_error("ownership violation: private class field '" +
                                  found->second.class_name + "." + field +
@@ -444,7 +445,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.final_fields = class_finals.at(param.class_name);
-                entry.public_fields = class_public.at(param.class_name);
+                entry.public_fields = function.method_owner == param.class_name
+                    ? class_fields.at(param.class_name) : class_public.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -489,7 +491,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
-                entry.public_fields = class_public.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {

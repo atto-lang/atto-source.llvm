@@ -16,6 +16,9 @@ reject them without producing IR. See [the native select parity contract](docs/S
 - Typed `int` parameters, `return` expressions, integer literals with underscores,
   unary `-`, parentheses, `+`, `-`, `*`, parameter references and same-module function calls.
 - Forward declarations enable calls before definitions and recursion (not bounded recursion).
+- Scalar instance methods lower with implicit read/exclusive receiver loans,
+  lexical private access and qualified public class identity. See
+  [native class methods and remaining limits](docs/NATIVE_CLASS_METHODS.md).
 - Relative module selections are statically linked across files, preserving private
   helpers, overload slots and whole-program ownership checking. See
   [native module linking and limits](docs/NATIVE_MODULE_LINKING.md).

@@ -21,6 +21,8 @@ struct Unit {
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
+    std::unordered_map<std::string, bool> class_exports;
+    std::unordered_map<std::string, bool> constructor_exports;
 };
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
@@ -55,6 +57,7 @@ public:
                 linked.functions.push_back(std::move(fn));
             }
             for (auto& cls : unit.program.classes) {
+                binding_name(unit, cls.name);
                 for (const auto& name : cls.constructor_parameters) binding_name(unit, name);
                 for (auto& field : cls.fields) expression(unit, field.initializer_expression.get());
                 cls.name = unit.prefix + cls.name;
@@ -103,7 +106,10 @@ private:
             auto& arities = unit->functions[fn.name];
             arities.emplace(fn.parameters.size(), fn.exported);
         }
-        for (const auto& cls : unit->program.classes) unit->classes.insert(cls.name);
+        for (const auto& cls : unit->program.classes) {
+            unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
+            unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);
+        }
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
@@ -171,10 +177,23 @@ private:
             fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;
     }
+    std::string class_type(const Unit& unit, const std::string& name, bool constructing = false) {
+        if (unit.classes.count(name)) return unit.prefix + name;
+        const auto dot = name.find('.');
+        if (dot == std::string::npos) return name;
+        const auto dependency = unit.dependencies.find(name.substr(0, dot));
+        if (dependency == unit.dependencies.end()) fail(unit, "unknown module in class type");
+        const auto& target = *units[dependency->second];
+        auto member = target.class_exports.find(name.substr(dot + 1));
+        if (member == target.class_exports.end() || !member->second)
+            fail(unit, "unknown or private imported class type '" + name + "'");
+        if (constructing && !target.constructor_exports.at(member->first))
+            fail(unit, "private imported constructor is not accessible");
+        return target.prefix + member->first;
+    }
     void local(const Unit& unit, LocalBinding& binding) {
         binding_name(unit, binding.name);
-        if (!binding.class_name.empty() && unit.classes.count(binding.class_name))
-            binding.class_name = unit.prefix + binding.class_name;
+        if (!binding.class_name.empty()) binding.class_name = class_type(unit, binding.class_name, binding.new_class);
         expression(unit, binding.initializer.get());
         for (auto& arg : binding.constructor_arguments) expression(unit, arg.get());
     }
@@ -189,10 +208,10 @@ private:
     }
     void qualify_function(const Unit& unit, Function& fn) {
         binding_name(unit, fn.name);
+        if (!fn.method_owner.empty()) fn.method_owner = class_type(unit, fn.method_owner);
         for (auto& parameter : fn.parameters) {
             binding_name(unit, parameter.name);
-            if (!parameter.class_name.empty() && unit.classes.count(parameter.class_name))
-                parameter.class_name = unit.prefix + parameter.class_name;
+            if (!parameter.class_name.empty()) parameter.class_name = class_type(unit, parameter.class_name);
         }
         for (auto& binding : fn.locals) local(unit, binding);
         for (auto& stmt : fn.statements) statement(unit, stmt);

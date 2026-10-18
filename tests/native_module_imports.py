@@ -189,7 +189,7 @@ def main():
         os.link(directory/'lib.ores',directory/'other.ores')
         (directory/'main.ores').write_text('import module Lib as A from "./lib"; import module Lib as B from "./other"; pub fnc main():int{const a:int=A.value();const b:int=B.value();return a+b;}')
         result=run([a.compiler,str(directory/'main.ores')])
-        if result.returncode or result.stdout.count('define i64 @__ores_module_1.value(') != 1:
+        if result.returncode or (result.stdout.count('define i64 @__ores_module_1.value(') != 1 or result.stdout.count('define i64 @__ores_module_') != 1):
             raise AssertionError(('hardlink identity not deduplicated',result.stderr))
         passed+=1
         # Every unsupported target fails before emitting even a module header.

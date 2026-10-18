@@ -1,5 +1,6 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/frontend/MethodResolver.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -241,7 +242,10 @@ public:
             program.imports.push_back(std::move(imported));
         }
         bool wrapped_module = false;
+        const bool first_public_class = token_.text == "pub" && [&] { Lexer look = lexer_; return look.next().text == "define"; }();
+        if (first_public_class) advance();
         if (accept("define")) {
+            if (first_public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -251,7 +255,7 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("class")) { auto cls = class_declaration(); cls.exported = first_public_class; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -261,12 +265,15 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            const bool public_class = token_.text == "pub" && [&] { Lexer look = lexer_; return look.next().text == "define"; }();
+            if (public_class) advance();
             if (accept("define")) {
+                if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -278,9 +285,10 @@ public:
                 program.functions.push_back(function());
             }
         }
+        for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty() &&
+        if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
@@ -386,10 +394,28 @@ private:
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
+            if (!publicly_visible) accept("private");
+            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && !reserved(token_.text)
+                && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
+            if (method_ahead) {
+                auto method = function(result.name, publicly_visible);
+                ClassMethod signature;
+                signature.name = method.name.substr(result.name.size() + 1);
+                signature.arity = method.parameters.size() - 1;
+                signature.public_member = publicly_visible;
+                signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
+                for (const auto& prior : result.methods)
+                    if (prior.name == signature.name && prior.arity == signature.arity)
+                        fail("duplicate native method name/arity");
+                result.methods.push_back(std::move(signature));
+                methods_.push_back(std::move(method));
+                continue;
+            }
             if (accept("constructor")) {
                 if (result.explicit_constructor)
                     fail("native class may declare only one scalar constructor");
                 result.explicit_constructor = true;
+                result.constructor_exported = publicly_visible;
                 require("(");
                 std::unordered_set<std::string> params;
                 if (!accept(")")) {
@@ -409,8 +435,6 @@ private:
                 if (token_.text != "}")
                     fail("native scalar constructor body must be empty or contain only 'return;'");
                 require("}");
-                if (token_.text != "end")
-                    fail("native scalar constructor must be the last class member");
                 continue;
             }
             if (result.explicit_constructor)
@@ -479,6 +503,8 @@ private:
             result.fields.push_back(std::move(field));
         }
         if (result.fields.empty()) fail("native class requires at least one field");
+        for (const auto& method : result.methods)
+            if (seen.count(method.name)) fail("native field/method name collision requires explicit callable member resolution");
         std::unordered_set<std::string> allowed(
             result.constructor_parameters.begin(), result.constructor_parameters.end());
         for (const auto& field : result.fields) {
@@ -556,10 +582,15 @@ private:
         return loop;
     }
 
-    Function function() {
+    Function function(std::string owner = {}, bool visible = false) {
+        struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
+        method_scope_ = owner;
+        struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
+        class_receivers_.clear();
         Function value;
+        value.method_owner = owner;
         value.offset = token_.offset;
-        value.exported = accept("pub");
+        value.exported = owner.empty() ? accept("pub") : visible;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -583,11 +614,12 @@ private:
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
-        if (!accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (owner.empty() && !accept("fnc") && !accept("routine")) fail("expected fnc or routine");
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
-        value.name = identifier();
+        value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
             do {
@@ -616,6 +648,17 @@ private:
         if (value.name == "main" && !value.generic_parameters.empty())
             fail("native entrypoint main cannot be generic");
         require("(");
+        if (!owner.empty()) {
+            Parameter receiver;
+            receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
+            if (accept("mut")) {
+                require("self"); require(")"); require("(");
+                receiver.mode = Parameter::Mode::BorrowMut;
+            } else if (token_.text == "self") {
+                fail("native explicit read receiver type unsupported; omit self for a read method");
+            }
+            value.parameters.push_back(std::move(receiver));
+        }
         if (!accept(")")) {
             do {
                 Parameter parameter;
@@ -624,7 +667,7 @@ private:
                                                     : Parameter::Mode::Borrow;
                 }
                 if (!accept("int")) {
-                    const std::string type = identifier();
+                    const std::string type = type_identifier();
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
@@ -636,7 +679,9 @@ private:
             } while (accept(","));
             require(")");
         }
-        require(":");
+        for (const auto& parameter : value.parameters)
+            if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
+        if (!accept(":")) { require("-"); require(">"); }
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
@@ -661,6 +706,8 @@ private:
                 value.declared_effects.bits |= bit;
             } while (accept(","));
         }
+        if (!owner.empty() && value.has_declared_effects)
+            fail("native method using effects require receiver effect summaries");
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
@@ -696,11 +743,11 @@ private:
                     require(")");
                     binding.int_array = true;
                 } else {
-                binding.class_name = identifier();
+                binding.class_name = type_identifier();
                 binding.name = identifier();
                 require("=");
                 if (accept("new")) {
-                    const std::string ctor = identifier();
+                    const std::string ctor = type_identifier();
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
                     if (!accept(")")) {
@@ -775,6 +822,7 @@ private:
                 binding.initializer = expression();
             }
             require(";");
+            if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
             value.locals.push_back(std::move(binding));
         }
         // Restrict the first general-source CFG slice to synchronous
@@ -1292,11 +1340,12 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
-        expr->name = identifier();
+        if (token_.text == "self" && !method_scope_.empty()) { expr->name = "self"; advance(); }
+        else expr->name = identifier();
         if (module_names_.count(expr->name) && accept("."))
             expr->name += "." + identifier();
         if (accept("<")) {
@@ -1356,7 +1405,10 @@ private:
             field->name = identifier();
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
-            if (field->name != "send" && accept("(")) {
+            const bool actor_send = field->name == "send" && field->left
+                && field->left->kind == Expression::Kind::Variable
+                && !class_receivers_.count(field->left->name);
+            if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
@@ -1416,6 +1468,12 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    std::string type_identifier() {
+        auto name = identifier();
+        if (module_names_.count(name) && accept(".")) name += "." + identifier();
+        return name;
     }
 
     std::string identifier() {
@@ -1624,6 +1682,8 @@ private:
     static void validate(const Program& program) {
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
+            if (cls.constructor_exported && !cls.exported)
+                throw std::runtime_error("public constructor requires a public class");
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
@@ -1872,6 +1932,9 @@ private:
     Lexer lexer_;
     Token token_;
     std::unordered_set<std::string> module_names_;
+    std::string method_scope_;
+    std::unordered_set<std::string> class_receivers_;
+    std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
 };
@@ -1890,9 +1953,10 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
     return program;
 }
 
-void resolve_and_validate_program(const Program& program) {
+void resolve_and_validate_program(Program& program) {
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
+    resolve_native_methods(program);
     Parser::validate_complete(program);
     validate_i64_ownership(program);
 }

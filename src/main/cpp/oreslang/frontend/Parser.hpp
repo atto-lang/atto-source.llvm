@@ -71,12 +71,22 @@ struct ClassField {
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
 };
 
+struct ClassMethod {
+    std::string name;
+    std::size_t arity = 0; // source arguments, excludes hidden self
+    bool public_member = false;
+    bool mutable_receiver = false;
+};
+
 struct ClassDecl {
+    bool exported = false;
+    std::vector<ClassMethod> methods;
     std::string name;
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
     bool explicit_constructor = false;
+    bool constructor_exported = false;
     std::vector<std::string> constructor_parameters;
 };
 
@@ -176,6 +186,7 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
@@ -224,6 +235,6 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false);
-void resolve_and_validate_program(const Program& program);
+void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
