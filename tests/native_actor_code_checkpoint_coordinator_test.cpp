@@ -33,13 +33,13 @@ static Coordinator::Shape shape() {
     return {Coordinator::Gate::Kind::trusted_private,
             "message-v1", "actor-state-v1", "shared-cell-v1", "caps-v1"};
 }
-static Wire::Header manifest(std::uint8_t code) {
+static Wire::Header manifest() {
     return {actor_id(), 9, Wire::Digest{}, Wire::Digest{},
             Wire::Digest{}, Wire::Digest{}};
 }
 static Coordinator::Image version(std::uint8_t digest,
                                    Coordinator::Behavior fn) {
-    auto header = manifest(digest);
+    auto header = manifest();
     header.code_digest.fill(digest);
     header.state_schema_digest.fill(1);
     header.message_abi_digest.fill(2);
