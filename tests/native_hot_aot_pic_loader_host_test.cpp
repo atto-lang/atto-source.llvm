@@ -68,6 +68,15 @@ public:
         call_ = manifest->apply;
     }
     std::int64_t apply(std::int64_t input) const { return call_(input); }
+    void set_unload_hook(void (*callback)()) const {
+        void* sym = dlsym(so_->value, "ores_test_hot_aot_set_unload_hook");
+        if (!sym) throw std::runtime_error("missing trusted fixture unload hook");
+        using Setter = void (*)(void (*)());
+        Setter setter = nullptr;
+        static_assert(sizeof(setter) == sizeof(sym), "unsupported function pointer ABI");
+        std::memcpy(&setter, &sym, sizeof(setter));
+        setter(callback);
+    }
     const std::string& code() const noexcept { return code_sha_; }
     bool compatible(const Image& old) const {
         return state_sha_ == old.state_sha_
@@ -166,9 +175,22 @@ template<class F> bool rejects(F&& f) {
 }
 }
 
+TrustedFixtureRouter* reentry_router = nullptr;
+std::atomic<int> finalizers{0};
+std::atomic<int> denied_during_finalizer{0};
+void on_test_unload() {
+    ++finalizers;
+    try {
+        if (reentry_router) (void)reentry_router->acquire();
+    } catch (const std::logic_error&) {
+        ++denied_during_finalizer;
+    }
+}
+
 int main(int argc, char** argv) {
     assert(argc == 4);
     const std::string old_path = argv[1], new_path = argv[2], bad_path = argv[3];
+    {
     auto old = std::make_shared<Image>(old_path);
     auto next = std::make_shared<Image>(new_path);
     auto bad = std::make_shared<Image>(bad_path);
@@ -201,5 +223,19 @@ int main(int argc, char** argv) {
     reader.join();
     assert(ok.load());
     assert(first->apply(9) == 19);
+    }
+    {
+        // Ensure every earlier handle has gone out of scope before reopening
+        // the exact fixture: dlclose must then execute its ELF finalizer.
+        TrustedFixtureRouter router;
+        auto fixture = std::make_shared<Image>(old_path);
+        fixture->set_unload_hook(&on_test_unload);
+        router.install_initial(std::move(fixture));
+        reentry_router = &router;
+        router.close();
+        reentry_router = nullptr;
+        assert(finalizers == 1);
+        assert(denied_during_finalizer == 1);
+    }
     return 0;
 }
