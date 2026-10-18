@@ -44,6 +44,15 @@ int main() {
     rejects([&] { admit(registry, {sig({n}), sig({{Kind::Primitive, "bool", ""}})}); });
     rejects([&] { (void)select(registry, family, {{Kind::Variant, "file::Foo", "Missing"}, n}); });
     rejects([&] { admit(registry, {sig({{Kind::Enum, "file::Unknown", ""}})}); });
+    Registry extraComplex = registry;
+    extraComplex.emplace("file::Unrelated", EnumInfo{"file::Unrelated", {{"Unsafe", Payload::Complex}}});
+    REQUIRE(select(extraComplex, family, {a, n}) == 1);
+    Registry unknownLayout = registry;
+    unknownLayout.at("file::Foo").cases.at("C") = static_cast<Payload>(99);
+    rejects([&] { admit(unknownLayout, family); });
+    Signature forgedDomain = general;
+    forgedDomain.domain = static_cast<Domain>(99);
+    rejects([&] { admit(registry, {forgedDomain}); });
     Registry changed = registry;
     changed.at("file::Foo").cases.at("C") = Payload::Complex;
     rejects([&] { admit(changed, family); });
