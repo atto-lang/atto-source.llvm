@@ -228,7 +228,9 @@ static inline ores_std_sync_code ores_std_start(
     ores_std_sync_code code = ORES_STD_SYNC_STALE;
     if (slot) {
         code = slot->state == ORES_STD_ADMITTED
-            ? ORES_STD_SYNC_GRANTED : ORES_STD_SYNC_EXECUTING;
+            ? ORES_STD_SYNC_GRANTED :
+            slot->state == ORES_STD_WAITING ? ORES_STD_SYNC_QUEUED :
+            ORES_STD_SYNC_EXECUTING;
         if (slot->state == ORES_STD_ADMITTED) slot->state = ORES_STD_RUNNING;
     }
     ores_std_leave_metadata(gate);
