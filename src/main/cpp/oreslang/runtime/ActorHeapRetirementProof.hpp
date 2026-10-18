@@ -3,6 +3,7 @@
 #include "oreslang/runtime/ActorHeapIdentity.hpp"
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -47,6 +48,14 @@ public:
     explicit ActorHeapBorrowGate(ActorHeapIdentity owner) : owner_(owner) {}
     ActorHeapBorrowGate(const ActorHeapBorrowGate&) = delete;
     ActorHeapBorrowGate& operator=(const ActorHeapBorrowGate&) = delete;
+    // A standalone gate may be stack-owned, not only graph-heap-owned.
+    // No external Lease/Mutation may outlive the gate's storage; otherwise
+    // their RAII release would dereference a destroyed atomic. Terminate
+    // rather than silently permit a use-after-free.
+    ~ActorHeapBorrowGate() noexcept {
+        if (state_.load(std::memory_order_acquire) &
+                (mutation_bit | counter_mask)) std::terminate();
+    }
 
     class Lease final {
         friend class ActorHeapBorrowGate;
