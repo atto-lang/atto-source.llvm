@@ -61,6 +61,8 @@ def main():
         "source-actor-threads-max4-ceiling-reject.ores": "1 <= min <= max <= 3",
         "source-actor-threads-native-separator-reject.ores": "malformed actor thread integer separator",
         "source-actor-threads-annotation-separator-reject.ores": "malformed actor thread integer separator",
+        "source-actor-threads-angle-annotation-reject.ores": "actor thread annotations require parentheses",
+        "source-actor-threads-angle-legacy-reject.ores": "actor thread annotations require parentheses",
         "source-actor-threads-legacy-mixed-reject.ores": "duplicate actor thread policy",
         "source-actor-threads-legacy-duplicate-annotation-reject.ores": "expected 'define'",
         "source-actor-threads-legacy-enum-invalid-reject.ores": "backing value must be the canonical integer",
