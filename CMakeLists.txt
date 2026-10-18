@@ -2053,3 +2053,14 @@ if(BUILD_TESTING AND OpenSSL_FOUND)
     set_tests_properties(native_source_actor_checkpoint_v1_java_parity_host_only
         PROPERTIES TIMEOUT 20)
 endif()
+
+if(BUILD_TESTING)
+    add_test(NAME logical_actor_route_model
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/logical_actor_cross_context_route_model.py")
+    add_test(NAME logical_actor_route_model_optimized
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/logical_actor_cross_context_route_model.py")
+    set_tests_properties(logical_actor_route_model logical_actor_route_model_optimized
+        PROPERTIES TIMEOUT 30)
+endif()
