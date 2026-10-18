@@ -4,7 +4,7 @@ This branch implements allocation-free, nonparking C11 atomic mutex and RW admis
 
 Tests in `tests/native_core_sync_test.c` cover concurrent access, invalid and stale releases, generation exhaustion and writer cancellation competing with acquisition. The core implementation does not depend on Java, pthread mutexes, an allocator or an OS wait. The test harness uses pthreads to exercise contention.
 
-Validation: [private native exact-blob CI run #39147733116](https://github.com/sagitta-stack/sagitta-docs/actions/runs/39147733116), passed both GCC and Clang paths: Git blob verification, freestanding object compilation, Release/NDEBUG threaded stress and ASan/UBSan threaded stress.
+Validation: [private native exact-blob CI run #39147733116](https://github.com/sagitta-stack/sagitta-docs/actions/runs/39147965114), passed both GCC and Clang paths: Git blob verification, freestanding object compilation, Release/NDEBUG threaded stress, ASan/UBSan threaded stress and GCC ThreadSanitizer stress.
 
 Exact verified source blobs:
 - `OresCoreSync.h`: `b0f355d4c1364962cef2550ef2d17237ddaf63d8`
