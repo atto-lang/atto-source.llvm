@@ -168,6 +168,8 @@ class NativeEnumGuestAot(unittest.TestCase):
                        original + "\n//ores: target=host",
                        original + "\n//  ores : capability=filesystem",
                        original + "\n//\tores:\tcapability=filesystem",
+                       original + "\n/// ores: target=wasm32",
+                       original + "\n//// ores : capability=network",
                        original.replace("define enum",
                                         "// ores: target=host\ndefine enum", 1)):
             with self.subTest(position=source.find("//"), text=source[:96]):
