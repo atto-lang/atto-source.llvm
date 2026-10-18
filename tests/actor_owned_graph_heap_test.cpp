@@ -352,7 +352,32 @@ static void test_heap_domains_never_wrap_or_repeat() {
           "zero heap domain must never be issued");
 }
 
+/* Regression: capacity/template specializations must not each restart their
+ * own domain counter. A forged cross-shape handle must remain foreign even
+ * when slot and generation happen to be identical. */
+static void test_cross_template_graph_heap_domain_isolation() {
+    const ActorHeapIdentity owner{91, 27, 3};
+    using Left = ActorOwnedGraphHeap<5, 23, 2>;
+    using Right = ActorOwnedGraphHeap<6, 29, 2>;
+    Left left(owner);
+    Right right(owner);
+    check(left.heap_id() != right.heap_id(),
+          "different graph layout specializations reused a heap domain");
+    const std::uint8_t byte = 7;
+    const auto lhs = left.allocate(owner, &byte, 1);
+    const auto rhs = right.allocate(owner, &byte, 1);
+    check(lhs.has_value() && rhs.has_value(), "cross-template setup failed");
+    check(lhs->slot == rhs->slot && lhs->generation == rhs->generation,
+          "cross-template test did not construct colliding slot/generation");
+    const Right::Handle forged{lhs->heap, rhs->slot, rhs->generation};
+    std::uint8_t copied = 0;
+    must_reject([&] {
+        (void)right.copy_out(owner, forged, &copied, 1);
+    }, "cross-template foreign graph handle was accepted");
+}
+
 int main() {
+    test_cross_template_graph_heap_domain_isolation();
     test_heap_domains_never_wrap_or_repeat();
     for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
                                0xC0DEC0DEu, 0xDEADBEEFu}) {
