@@ -133,7 +133,12 @@ public:
             throw std::invalid_argument("invalid local transport session");
         std::lock_guard<std::mutex> guard(mutex_);
         std::vector<LostCorrelation> retired;
-        retired.reserve(pending_.size());
+        std::size_t matching = 0;
+        for (const auto& [sequence, entry] : pending_) {
+            (void)sequence;
+            matching += entry.envelope.session == trusted_session ? 1u : 0u;
+        }
+        retired.reserve(matching);
         for (const auto& [sequence, entry] : pending_) {
             (void)sequence;
             if (entry.envelope.session == trusted_session)
