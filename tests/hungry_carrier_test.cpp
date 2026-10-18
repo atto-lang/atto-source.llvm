@@ -227,6 +227,112 @@ static void test_cancel_hook_runs_once_on_actor_thread() {
     check(rejected, "legacy handler silently accepted generated-frame cancel hook");
 }
 
+struct DoneRaceState {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<int> callbacks{0};
+    std::atomic<int> violations{0};
+};
+static ActorStep done_race_handler(void* raw, ActorMessage message,
+                                   ResumeCause cause, std::int64_t io) noexcept {
+    auto& state = *static_cast<DoneRaceState*>(raw);
+    if (message.id != 1 || cause != ResumeCause::initial || io != 0 ||
+            HungryCarrier::active_heap() == nullptr) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    state.entered.store(true, std::memory_order_release);
+    while (!state.release.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    return {StepKind::done, 0, 0};
+}
+static void done_race_cancel(void* raw, ActorMessage) noexcept {
+    static_cast<DoneRaceState*>(raw)->callbacks.fetch_add(1);
+}
+static void test_stop_racing_done_does_not_cancel_completed_turn() {
+    for (int round = 0; round < 128; ++round) {
+        DoneRaceState state;
+        HungryCarrier::Options options{};
+        options.cancel_handler = done_race_cancel;
+        HungryCarrier actor(&state, done_race_handler, nullptr, io_double, options);
+        actor.start();
+        check(actor.producer_handle().try_send({1, 0}),
+              "done-race logical turn was not accepted");
+        check(until([&] { return state.entered.load(std::memory_order_acquire); }, 1s),
+              "done-race callback did not enter");
+        actor.request_stop();
+        state.release.store(true, std::memory_order_release);
+        actor.join();
+        const auto stats = actor.stats();
+        check(state.violations.load() == 0,
+              "done-race callback lost actor-thread authority");
+        check(state.callbacks.load() == 0 && stats.cancel_callbacks == 0,
+              "completed logical turn incorrectly ran cancellation callback");
+        check(stats.completed == 1 && stats.abandoned_on_stop == 0,
+              "DONE racing stop was misclassified as abandoned");
+        check(stats.protocol_failures == 0,
+              "DONE racing stop caused protocol failure");
+    }
+}
+
+struct InvalidStepState {
+    std::atomic<int> callbacks{0};
+    std::atomic<int> violations{0};
+    HungryCarrier::NativeHeap::Handle owned{};
+};
+static ActorStep invalid_step_after_alloc(void* raw, ActorMessage message,
+                                          ResumeCause cause, std::int64_t io) noexcept {
+    auto& state = *static_cast<InvalidStepState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1 || cause != ResumeCause::initial || io != 0) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    auto handle = heap->allocate(sizeof(std::uint64_t));
+    const std::uint64_t value = 0xBAD5EEDULL;
+    if (!handle || !heap->write(*handle, 0, &value, sizeof(value))) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    state.owned = *handle;
+    // COOPERATE may not smuggle I/O-like value/delay payload.
+    return {StepKind::cooperate, 42, 1};
+}
+static void invalid_step_cancel(void* raw, ActorMessage message) noexcept {
+    auto& state = *static_cast<InvalidStepState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1 || !state.owned.heap ||
+            !heap->release(state.owned))
+        state.violations.fetch_add(1);
+    state.callbacks.fetch_add(1);
+}
+static void test_protocol_failure_still_cancels_active_owned_frame() {
+    for (int round = 0; round < 128; ++round) {
+        InvalidStepState state;
+        HungryCarrier::Options options{};
+        options.cancel_handler = invalid_step_cancel;
+        HungryCarrier actor(&state, invalid_step_after_alloc, nullptr, io_double, options);
+        actor.start();
+        check(actor.producer_handle().try_send({1, 0}),
+              "invalid-step logical turn was not accepted");
+        check(until([&] { return actor.stopped(); }, 1s),
+              "invalid continuation protocol did not stop carrier");
+        actor.join();
+        const auto stats = actor.stats();
+        check(state.violations.load() == 0,
+              "protocol-failure cancellation lacked actor-heap authority");
+        check(state.callbacks.load() == 1 && stats.cancel_callbacks == 1,
+              "invalid continuation protocol did not cancel exactly once");
+        check(stats.protocol_failures == 1 && stats.completed == 0,
+              "invalid continuation protocol had wrong terminal accounting");
+        check(stats.abandoned_on_stop == 1,
+              "protocol-failed active turn was not recorded abandoned");
+        actor.join();
+        check(state.callbacks.load() == 1 && actor.stats().cancel_callbacks == 1,
+              "idempotent join reran protocol-failure cancellation");
+    }
+}
+
 static void test_fixed_arena_bounds_and_alignment() {
     FixedArena<128> arena;
     auto* number = arena.emplace<std::uint64_t>(42);
@@ -667,6 +773,8 @@ int main() {
         test_bounded_queue_head_readiness();
         test_fixed_arena_bounds_and_alignment();
         test_cancel_hook_runs_once_on_actor_thread();
+        test_stop_racing_done_does_not_cancel_completed_turn();
+        test_protocol_failure_still_cancels_active_owned_frame();
         test_actor_heap_bound_to_carrier_across_await();
         test_150ms_await_serial_and_same_carrier();
         test_actual_socket_io_off_carrier();
