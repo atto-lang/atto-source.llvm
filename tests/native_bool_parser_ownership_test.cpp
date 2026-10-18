@@ -80,7 +80,7 @@ int main() {
                     return left;
                 }
                 pub fnc probe(bool left, bool right): bool {
-                    return BooleanOps.And(left, right);
+                    return BooleanOps.And(right: right, left: left);
                 }
             end
         )");
@@ -92,6 +92,10 @@ int main() {
         require(call.kind == Expression::Kind::Call &&
                 call.name == "BooleanOps.And",
                 "real BooleanOps.And source call was stolen by intrinsic");
+        require(call.argument_names.size() == 2 &&
+                call.argument_names[0] == "right" &&
+                call.argument_names[1] == "left",
+                "real BooleanOps source named arguments were not preserved");
     }
 
     {
