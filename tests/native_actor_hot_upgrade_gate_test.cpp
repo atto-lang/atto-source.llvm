@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdint>
 #include <stdexcept>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -163,10 +165,107 @@ static void racing_turn_admission_vs_upgrade_freeze() {
     }
 }
 
+static void abandoned_freeze_rolls_back_without_reclaiming_live_code() {
+    std::atomic<int> reclaims{0};
+    const ActorHeapIdentity id{111, 222, 333};
+    Gate gate(id, shape(Gate::Kind::trusted_private), "v1",
+              [&] { ++reclaims; });
+    {
+        auto forgotten = gate.freeze(id, 1);
+        denied([&] { (void)gate.pin(id); }, "frozen actor admitted DATA before ticket died");
+    }
+    auto resumed = gate.pin(id);
+    check(resumed.code() == "v1" && reclaims == 0,
+          "RAII ticket cleanup discarded live code or failed to resume admission");
+    resumed.close();
+    {
+        auto first = gate.freeze(id, 1);
+        auto transferred = std::move(first);
+        denied([&] { gate.abort(first); }, "moved-from token retained CONTROL authority");
+        check(gate.quiesced(transferred), "move invalidated the surviving freeze token");
+    }
+    auto again = gate.pin(id);
+    again.close();
+    auto live = gate.freeze(id, 1);
+    // An abandoned token from a past epoch must not undo a new freeze.
+    gate.abort(live);
+    auto later = gate.freeze(id, 1);
+    denied([&] { (void)gate.pin(id); }, "newer freeze bypassed");
+    check(gate.promote(later, shape(Gate::Kind::trusted_private), "v2",
+                       [&] { ++reclaims; }).revision == 2,
+          "RAII abort damaged a later valid publication");
+    gate.close();
+    check(reclaims == 2, "admission recovery leaked code revisions");
+}
+
+struct TrackedActorImage final {
+    std::shared_ptr<std::atomic<int>> live;
+    explicit TrackedActorImage(std::shared_ptr<std::atomic<int>> value)
+        : live(std::move(value)) { ++*live; }
+    TrackedActorImage(const TrackedActorImage&) = delete;
+    TrackedActorImage& operator=(const TrackedActorImage&) = delete;
+    TrackedActorImage(TrackedActorImage&&) noexcept = default;
+    TrackedActorImage& operator=(TrackedActorImage&&) noexcept = default;
+    ~TrackedActorImage() noexcept { if (live) --*live; }
+};
+static void actor_rejection_reclaims_after_wrapper_destructor() {
+    using TrackedGate = NativeActorHotUpgradeGate<TrackedActorImage>;
+    const ActorHeapIdentity id{200, 1, 9};
+    const TrackedGate::Shape actor_shape{
+        TrackedGate::Kind::untrusted, "msg", "state", "shared", "cap"};
+    std::atomic<int> calls{0}, early_unloads{0};
+    auto alive = [] { return std::make_shared<std::atomic<int>>(0); };
+    auto cleanup = [&](std::shared_ptr<std::atomic<int>> counter) {
+        return [&, counter] {
+            ++calls;
+            if (counter->load() != 0) ++early_unloads;
+        };
+    };
+    const auto old = alive();
+    TrackedGate gate(id, actor_shape, TrackedActorImage(old), cleanup(old));
+    auto pinned = gate.pin(id);
+    auto ticket = gate.freeze(id, 1);
+    const auto denied_code = alive();
+    denied([&] {
+        (void)gate.promote(ticket, actor_shape, TrackedActorImage(denied_code),
+                           cleanup(denied_code));
+    }, "promoted while old code had a running pin");
+    check(denied_code->load() == 0 && calls == 1 && early_unloads == 0,
+          "gate rejection unloaded library before code wrapper destructor");
+    pinned.close();
+    const auto new_code = alive();
+    check(gate.promote(ticket, actor_shape, TrackedActorImage(new_code),
+                       cleanup(new_code)).revision == 2,
+          "valid tracked image could not be published");
+    check(old->load() == 0 && new_code->load() == 1,
+          "old tracked generation was not retired after publication");
+    gate.close();
+    check(new_code->load() == 0 && calls == 3 && early_unloads == 0,
+          "successful code upgrade unloaded a live wrapper or leaked image");
+}
+
+static void actor_pin_outlives_gate_instance() {
+    const ActorHeapIdentity id{201, 2, 10};
+    std::atomic<int> cleanup{0};
+    std::optional<Gate::Pin> outside;
+    {
+        Gate gate(id, shape(Gate::Kind::trusted_shared), "persistent",
+                  [&] { ++cleanup; });
+        outside.emplace(gate.pin(id));
+    }
+    check(cleanup == 0 && outside->code() == "persistent",
+          "gate destructor unloaded an image with a live continuation pin");
+    outside.reset();
+    check(cleanup == 1, "orphaned continuation pin leaked retired code");
+}
+
 int main() {
     actor_code_only_upgrade(Gate::Kind::trusted_shared);
     actor_code_only_upgrade(Gate::Kind::trusted_private);
     actor_code_only_upgrade(Gate::Kind::untrusted);
     terminal_close_preserves_old_pin();
     racing_turn_admission_vs_upgrade_freeze();
+    abandoned_freeze_rolls_back_without_reclaiming_live_code();
+    actor_rejection_reclaims_after_wrapper_destructor();
+    actor_pin_outlives_gate_instance();
 }
