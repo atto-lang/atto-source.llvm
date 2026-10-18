@@ -1935,3 +1935,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-untrusted-network-quota-host-test)
     set_tests_properties(untrusted_network_quota_host_only PROPERTIES TIMEOUT 20)
 endif()
+
+# Hierarchical host-only HTTP/TCP quota: child, supervisor, tenant.
+# This does not admit arbitrary native UNTRUSTED guest source.
+if(BUILD_TESTING)
+    add_executable(oreslang-trusted-hierarchical-network-gate-host-test
+        tests/trusted_hierarchical_network_gate_test.cpp)
+    target_include_directories(oreslang-trusted-hierarchical-network-gate-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-trusted-hierarchical-network-gate-host-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-hierarchical-network-gate-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME trusted_hierarchical_network_gate_host_only
+        COMMAND oreslang-trusted-hierarchical-network-gate-host-test)
+    set_tests_properties(trusted_hierarchical_network_gate_host_only PROPERTIES TIMEOUT 20)
+endif()
