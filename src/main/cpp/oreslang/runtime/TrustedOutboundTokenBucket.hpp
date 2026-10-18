@@ -68,8 +68,11 @@ public:
 
 private:
     void refill(std::uint64_t now) noexcept {
-        if (now <= last_nanos_) return; // rollback never restores capacity
+        // Monotonic uint64 nanoseconds may wrap. Serial arithmetic allows
+        // forward elapsed intervals strictly below 2^63 ns (~292 years),
+        // while short backwards/ambiguous samples never mint capacity.
         const std::uint64_t elapsed = now - last_nanos_;
+        if (elapsed == 0 || elapsed >= (UINT64_C(1) << 63)) return;
         last_nanos_ = now;
         if (tokens_ == burst_) {
             remainder_ = 0;
