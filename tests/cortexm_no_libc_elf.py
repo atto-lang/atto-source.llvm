@@ -372,6 +372,67 @@ def main():
                    in wide_output and "ORESLANG_BAREMETAL_GUEST_FAIL"
                    not in wide_output,
                    "QEMU failed nonzero-high i64 argument/return case: " + wide_output)
+            # Signed and cross-word carry cases exercise the ABI independently
+            # of the common zero-upper-half path, without i64 overflow.
+            scalar_call = """  movs r0, #9
+  movs r1, #0
+  movs r2, #4
+  movs r3, #0
+  bl ores_embedded_probe
+  @ 3 * 9 + 4 = 31. Verify BOTH halves of the 64-bit result.
+  cmp r1, #0
+  bne guest_fail
+  cmp r0, #31
+  bne guest_fail"""
+            verify(STARTUP.count(scalar_call) == 1,
+                   "baseline AAPCS32 startup instructions changed unexpectedly")
+            for case, left, right in (
+                    ("signed_negative", -3, 4),
+                    ("crossword_carry", 0xffffffff, 0xffffffff),
+                    ("negative_high_word", -(2**32 + 2), 2**32 + 5)):
+                result = 3 * left + right
+                verify(-(1 << 63) <= result < (1 << 63),
+                       "test must not rely on unspecified signed i64 overflow")
+                word_mask = (1 << 32) - 1
+                def halves(value):
+                    value &= (1 << 64) - 1
+                    return value & word_mask, value >> 32
+                alo, ahi = halves(left)
+                blo, bhi = halves(right)
+                rlo, rhi = halves(result)
+                call = "\n".join((
+                    "  ldr r0, =0x%08x" % alo,
+                    "  ldr r1, =0x%08x" % ahi,
+                    "  ldr r2, =0x%08x" % blo,
+                    "  ldr r3, =0x%08x" % bhi,
+                    "  bl ores_embedded_probe",
+                    "  ldr r12, =0x%08x" % rhi,
+                    "  cmp r1, r12",
+                    "  bne guest_fail",
+                    "  ldr r12, =0x%08x" % rlo,
+                    "  cmp r0, r12",
+                    "  bne guest_fail"))
+                label = "ORESLANG_BAREMETAL_GUEST_PASS case=" + case
+                custom = STARTUP.replace(scalar_call, call, 1)
+                custom = custom.replace(
+                    "ORESLANG_BAREMETAL_GUEST_PASS value=31", label, 1)
+                source_path = root / ("startup-" + case + ".S")
+                obj_path = root / ("startup-" + case + ".o")
+                image = root / (case + ".elf")
+                source_path.write_text(custom)
+                run(common + ["-c", str(source_path), "-o", str(obj_path)])
+                run([args.clang, "--target=thumbv7m-none-eabi",
+                     "-fuse-ld=lld", "-nostdlib", "-nodefaultlibs",
+                     "-Wl,--no-undefined", str(root / "guest.o"),
+                     str(obj_path), "-Wl,-T," + str(root / "linker.ld"),
+                     "-o", str(image)])
+                verify_vector_table(image)
+                status, observed = qemu_execute(image)
+                verify(status == 0 and label in observed
+                       and "ORESLANG_BAREMETAL_GUEST_FAIL" not in observed,
+                       "QEMU failed signed/carry i64 case " + case
+                       + ": " + observed)
+            print("Oreslang Cortex-M i64 signed/carry cases PASS (3/3)")
             print("Oreslang Cortex-M i64 high-register ABI proof PASS")
             print("Oreslang Cortex-M no-OS QEMU positive/negative guest PASS")
 
