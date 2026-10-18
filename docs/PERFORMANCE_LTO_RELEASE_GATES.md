@@ -1,23 +1,36 @@
 # LLVM LTO and ThinLTO — experimental release contract
 
-Status: **planning document**; LTO is not enabled. The current `scripts/compile-aot.sh` accepts one source and emits IR, then calls Clang `-O2`; cross-module Oreslang source resolution is not implied.
+Status: **experimental opt-in driver support on this draft branch**. Full and ThinLTO flags are wired into the single-source native AOT driver. This is not cross-Oreslang-module LTO, and no speedup has been measured.
 
-## Requirements
-1. Preserve the current 2-argument single-file CLI and its atomic output publication (a failed build must retain the previous executable).
-2. A future opt-in driver accepts exact verified units and an explicit `off|full|thin` LTO mode. The default stays `off` until semantics and evidence pass.
-3. Require a compatible, pinned compiler + Clang + linker toolchain, explicit binary and symbol ABI, and reproducible flags. An unavailable ThinLTO cache/linker is a hard `UNSUPPORTED` error when requested.
-4. The optimizer must never turn unsupported guest constructs into implicit fallbacks, dynamically load arbitrary modules or cross actor/tenant isolation boundaries.
-5. Preserve entrypoint exit-code semantics, source admission, overflow behavior, private symbols and explicit exports.
+## Supported initial slice
 
-## Implementation milestones
-- [ ] Add toolchain preflight and opt-in mode parser with invalid-input tests
-- [ ] Emit valid bitcode from verified IR and test Clang/LLD compatibility
-- [ ] Once compiler multi-unit support exists, link two genuine independent units through a controlled symbol interface
-- [ ] Observe cross-unit inlining/dead-code elimination via optimization remarks / IR / disassembly; don't rely only on smaller file size
-- [ ] Run ABI/correctness cases, link failures, missing symbols and atomic-publish regressions
-- [ ] Benchmark clean `-O2`, full LTO, ThinLTO under matched build/runtime conditions
+The original two-argument driver remains unchanged:
 
-## Evidence template
-Store source SHA, IR hashes, bitcode hashes, Clang/LLD versions, flags, host/CPU, link time, peak RSS, executable bytes, 5+ runtime samples, observed inlining and correctness statuses. A dummy second object is **not** proof of cross-unit Oreslang support.
+```sh
+# Requires native oreslang-llvmc and compatible Clang.
+scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /tmp/ores-aot
+ORESLANG_LTO=full scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /tmp/ores-aot-full
+ORESLANG_LTO=thin scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /tmp/ores-aot-thin
+```
+
+- `ORESLANG_LTO=off` is the default and uses the original `clang -O2` invocation.
+- `full` and `thin` require Clang plus LLD and pass `-O2 -flto=full|thin -fuse-ld=lld`.
+- Invalid modes and missing LLD reject the build; a failed compile/link never overwrites the previous published executable.
+- The current Oreslang compiler emits **one** verified IR module for one admitted source file. Flags alone do not demonstrate inter-Oreslang-module inlining or optimization across libraries.
+- The real compiler E2E test in `tests/test_aot_driver.py` exercises both modes when LLD exists, entrypoint exit 42, invalid mode rejection and atomic publication on unsupported guest sources. The opt-in modes were also link-smoke-tested locally with a **fake** IR emitter, which verifies driver plumbing but NOT real Oreslang parity.
+
+## Next milestones
+
+- [x] Opt-in LTO modes with fail-closed toolchain preflight and atomic existing CLI behavior (branch implementation)
+- [x] Extend real-source AOT E2E test for full/ThinLTO, conditionally when LLD installed (test added; CI confirmation outstanding)
+- [ ] Support at least two separately verified Oreslang translation units with an explicit closed-world ABI and linkage manifest.
+- [ ] Use compatible bitcode outputs and linker diagnostics to demonstrate real cross-unit inlining/unused-symbol stripping.
+- [ ] Pin and record toolchain versions, source SHA, IR/bitcode hashes, compile/link time and artifact size.
+- [ ] Capture held-out 5+ process runs under equivalent conditions; compare `off`, `full`, `thin` with actual source-generated code.
+- [ ] Run ownership, actor isolation, effects and import-admission regressions before any default mode change.
+
+## Evidence policy
+
+Document source SHA, IR hashes, bitcode hashes, Clang/LLD versions, flags, host/CPU, link time, peak RSS, binary bytes, observed optimization remarks and correctness statuses. A single LLVM IR module or a dummy second object is **not** proof of cross-module Oreslang support. No performance claims without real measurements.
 
 Tracking: https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/578
