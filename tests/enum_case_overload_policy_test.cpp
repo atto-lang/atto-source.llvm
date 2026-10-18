@@ -126,6 +126,12 @@ int main() {
     }
     rejects([&] { checkFamily({f({count})}, oversizedRegistry); });
     rejects([&] { checkFamily({f({Parameter::whole("root. Foo")})}, registry); });
+    for (const std::string& bytes : {
+            std::string("\\xc2\\xa0"), std::string("\\xe2\\x80\\x87"),
+            std::string("\\xe2\\x80\\xaf")}) {
+        rejects([&] { checkFamily(
+            {f({Parameter::whole("root." + bytes + "Foo")})}, registry); });
+    }
     rejects([&] { checkFamily({f({Parameter::whole(
             std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::selectedCase("root.Foo",
