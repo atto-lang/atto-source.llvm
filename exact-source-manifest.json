@@ -1,0 +1,14 @@
+{
+  "source_repository": "ores-truffle-oreslang/oreslang-source.llvm",
+  "kernel_pr": 629,
+  "kernel_revision": "ef3d933dfa20e1370c49bf0824b748e204337d09",
+  "compiler_pr": 580,
+  "compiler_revision": "cf7a7dfebb52914bc0147e1566164fdc4dd85455",
+  "exact_dependency_git_blob_sha1": {
+    "src/main/cpp/oreslang/runtime/FreestandingActorKernel.c": "04dce7bcf708dbe0296a869f42e065bcfebd06c5",
+    "src/main/cpp/oreslang/runtime/FreestandingActorKernel.h": "40415a683411931ee7c326ef609f4d84f4944aff",
+    "src/main/cpp/oreslang/runtime/SourceActorBootstrap.h": "29d1b8afeca0ef9c4a596a3222a683c3f6195161",
+    "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h": "dc30ed99bf6d4268fc15a841d751e97e9eefaa06"
+  },
+  "source_actor_compiler_qemu": "NOT EXECUTED; requires authorized source compiler and QEMU"
+}
