@@ -1967,3 +1967,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-enum-tag32-layout-test)
     set_tests_properties(native_enum_tag32_aot_layout PROPERTIES TIMEOUT 15)
 endif()
+
+# Canonical eos2 static call -> exact implementation closure (host-only).
+# Compiling an Oreslang guest binary remains a separate, blocked release gate.
+if(BUILD_TESTING)
+    add_executable(oreslang-enum-case-aot-link-test
+        tests/enum_case_aot_link_plan_test.cpp)
+    target_include_directories(oreslang-enum-case-aot-link-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-enum-case-aot-link-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_case_eos2_closed_aot_link
+        COMMAND oreslang-enum-case-aot-link-test)
+    set_tests_properties(native_enum_case_eos2_closed_aot_link
+        PROPERTIES TIMEOUT 15)
+endif()
