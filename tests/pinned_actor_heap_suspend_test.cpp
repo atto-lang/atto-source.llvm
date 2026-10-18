@@ -182,6 +182,23 @@ int main() {
         ores_actor_i64_heap_release(heap, loan);
         check(!ores_actor_i64_heap_try_destroy(heap),
               "continuation lifetime lease disappeared before frame retirement");
+        // CONTROL may attempt physical reclamation concurrently while the
+        // continuation still owns a lease. Join all destroy probes BEFORE
+        // releasing that lease: after successful destroy, raw heap pointers
+        // must never be used again, even for a speculative try_destroy().
+        std::atomic<bool> earlyDestroy{false};
+        std::vector<std::thread> destroyProbes;
+        for (int probe = 0; probe < 4; ++probe) {
+            destroyProbes.emplace_back([&] {
+                for (int attempt = 0; attempt < 128; ++attempt) {
+                    if (ores_actor_i64_heap_try_destroy(heap))
+                        earlyDestroy.store(true, std::memory_order_release);
+                }
+            });
+        }
+        for (auto& probe : destroyProbes) probe.join();
+        check(!earlyDestroy.load(std::memory_order_acquire),
+              "CONTROL reclaimed a heap while its continuation lease was live");
         // Read-only observers may run on another carrier. The retirement
         // publish edge must be after native lease release, never before it.
         std::atomic<bool> retiredWithPin{false};
