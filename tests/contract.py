@@ -163,7 +163,13 @@ def main():
             isolated_fixture = pathlib.Path(directory) / source_fixture.name
             shutil.copyfile(source_fixture, isolated_fixture)
             expected_source = isolated_fixture.read_bytes()
-            isolated_cmd = [*cmd[:-1], str(isolated_fixture)]
+            # A relative compiler pathname is resolved BEFORE changing cwd.
+            # Bare executable names keep ordinary PATH semantics.
+            compiler_executable = shutil.which(args.compiler)
+            require(compiler_executable is not None,
+                    "compiler executable not found before isolated negative test")
+            compiler_executable = str(pathlib.Path(compiler_executable).resolve(strict=True))
+            isolated_cmd = [compiler_executable, *cmd[1:-1], str(isolated_fixture)]
             compile_result = subprocess.run(
                 isolated_cmd, cwd=directory, capture_output=True,
                 text=True, check=False, timeout=20
