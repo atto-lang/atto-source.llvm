@@ -108,6 +108,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Executable source admission gate: function values are not nominal classes.
+    add_test(NAME native_callable_nominal_boundary
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_callable_nominal_boundary.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
@@ -121,6 +127,19 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
+    # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
+    # Four portable cases have lossless exit status; DO NOT claim seven.
+    find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_SOURCE_I64_CLANG)
+        message(WARNING "Portable native i64 execution gate will fail: Clang not found")
+        set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
+    endif()
+    add_test(NAME native_source_i64_os_exit_subset
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
@@ -799,6 +818,13 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> requires spawn initializer")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
+    # These tests reject nested type declarations BEFORE member-call lowering.
+    # They prove fail-closed type admission, not flatten/unwrap_all execution.
+    # Operation-level conformance remains blocked on LLVM generic representation.
+    oreslang_contract_test(source_nested_option_type_admission_fail_closed
+        source-nested-option-flatten-unimplemented.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(source_nested_future_type_admission_fail_closed
+        source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
