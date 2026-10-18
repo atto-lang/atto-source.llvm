@@ -2003,6 +2003,8 @@ if(BUILD_TESTING)
         tests/native_ipc_receipt_ledger_test.cpp)
     target_include_directories(oreslang-native-ipc-receipt-ledger-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    find_package(Threads REQUIRED)
+    target_link_libraries(oreslang-native-ipc-receipt-ledger-test PRIVATE Threads::Threads)
     target_compile_features(oreslang-native-ipc-receipt-ledger-test PRIVATE cxx_std_20)
     target_compile_options(oreslang-native-ipc-receipt-ledger-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
