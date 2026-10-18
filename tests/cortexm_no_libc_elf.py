@@ -131,6 +131,12 @@ def verify_vector_table(elf_path):
         verify((FLASH_BEGIN <= vaddr and vaddr + memsz <= FLASH_END)
                or (RAM_BEGIN <= vaddr and vaddr + memsz <= RAM_END),
                "ELF PT_LOAD outside physical Cortex-M3 board memory")
+        # No RAM initializers or zeroing runtime has been implemented.
+        # A scalar guest needing .data/.bss would otherwise link and
+        # silently run with undefined startup state.
+        if RAM_BEGIN <= vaddr < RAM_END:
+            verify(memsz == 0,
+                   "freestanding scalar startup cannot initialize RAM PT_LOAD")
         if vaddr == FLASH_BEGIN:
             verify(filesz >= 8, "vector table is not part of the flash image")
             sp, reset = struct.unpack_from("<II", raw, file_off)
@@ -188,6 +194,34 @@ def main():
         program = run([args.readelf, "-lW", str(elf)])
         dynamic = run([args.readelf, "-d", str(elf)])
         verify_vector_table(elf)
+
+        # Self-test the independently parsed ELF vector gate: a valid link
+        # must be distinguished from corrupted or out-of-board firmware.
+        original = elf.read_bytes()
+        phoff = struct.unpack_from("<I", original, 28)[0]
+        entsize, phcount = struct.unpack_from("<HH", original, 42)
+        vectors_offset = None
+        for i in range(phcount):
+            off = phoff + i * entsize
+            kind, file_off, vaddr = struct.unpack_from("<III", original, off)
+            if kind == 1 and vaddr == FLASH_BEGIN:
+                vectors_offset = file_off
+                break
+        verify(vectors_offset is not None, "missing vector-test segment")
+        for label, delta, value, diagnostic in (
+                ("invalid-sp", 0, RAM_END + 0x10000, "reset stack pointer"),
+                ("invalid-reset", 4, 0, "reset vector")):
+            mutated = bytearray(original)
+            struct.pack_into("<I", mutated, vectors_offset + delta, value)
+            corrupt_path = root / (label + ".elf")
+            corrupt_path.write_bytes(mutated)
+            try:
+                verify_vector_table(corrupt_path)
+            except RuntimeError as err:
+                verify(diagnostic in str(err),
+                       "ELF vector audit rejected wrong reason: " + str(err))
+            else:
+                raise RuntimeError("ELF vector audit admitted " + label)
         verify("Machine:                           ARM" in header,
                "bare-metal ELF has wrong architecture")
         verify("EXEC (Executable file)" in header,
