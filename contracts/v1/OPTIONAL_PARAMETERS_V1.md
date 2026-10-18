@@ -51,7 +51,7 @@ This contract extends named value arguments from mandatory-only slots to omittab
 
 The existing dispatch policy uses declaration name and arity, with eligible nominal enum distinctions separately staged. Optional parameters extend call *effective supplied arities* beyond declaration arity; simply keeping an arity-sized lookup is incorrect.
 
-For v1, within each existing overload domain (fnc and routine share one; class instance/static have separate domains), reject optional-capable overload families whose conservative supplied-argument-count intervals intersect: [number of required formals, total formals]. This errs on the side of rejecting potentially unambiguous call shapes, but ensures no call can select a different declaration in the type/ownership/runtime passes without a stronger proof. Keep existing ordinary distinct-arity overloads when intervals do not intersect. Do NOT use labels, runtime values or nullable conversions to break ties. Overrides and interface implementations keep exact parameter labels, types and optionality at each ordinal slot; changing optionality is source/API breaking. Constructor overloads use effective user arity, with construction-scoped leading self erased from the caller-visible selector; multiple constructors remain gated on backend implementation.
+For v1, within each existing overload domain (fnc and routine share one; class instance/static have separate domains), reject optional-capable overload families whose conservative supplied-argument-count intervals intersect: [number of required formals, total formals]. This errs on the side of rejecting potentially unambiguous call shapes, but ensures no call can select a different declaration in the type/ownership/runtime passes without a stronger proof. Keep existing ordinary distinct-arity overloads when intervals do not intersect. Do NOT use labels, runtime values or nullable conversions to break ties. Overrides and interface implementations keep exact parameter labels, types and optionality at each ordinal slot; changing optionality is source/API breaking. Constructors remain a single explicit declaration.
 
 A subsequent version may relax interval collisions only with a sound proven call-shape disjointness algorithm and a selected declaration ID carried through all backend paths.
 
@@ -141,71 +141,16 @@ V1 constraints for safety:
 - Effective arity is `[required_fixed_count, +infinity)` for any variadic signature, so it conservatively conflicts with any sibling overload in the same existing domain whose admitted call arity intersects. Reject the ambiguous overload family, without selecting by element runtime types, names or omission markers.
 - Keep actor-message transport, constructor field initialization, FFI, overrides, public metadata and binary/serialized interfaces fail closed until they carry explicit rest shapes and feature-negotiated ABI. Constructors may adopt a trailing variadic rest only after those invariants are proven.
 
-## Absence, explicit Option values, and variadic tails (2026-10-18 audit)
-
-This contract does **not** make `void` a value or make `null` synonymous
-with absence. `None` is a typed `Option<T>` variant, so a caller may
-explicitly supply `None` to a `T? name` slot or simply omit the slot. A
-plain `T` is lifted into `Some<T>`; a type-checked `Option<T>` value
-passes unchanged. The implicit lifting happens *only* at an optional-formal
-boundary, not in general assignments. The compiler must reject `void` as
-an expression argument even if a called routine returns no result, reject
-`null` for `T?`, and reject empty positional holes such as `f(3,,true)`.
-A separate nullable type, if introduced later, must remain distinct.
-
-```oreslang
-foo(3, None, true);         // valid: b is Option<string>.None
-foo(3, Some("x"), true);    // valid: b is Some<string>("x")
-foo(3, void, true);         // error: void is not a value
-foo(3, null, true);         // error: null is not None
-foo(3,,true);               // error: no empty positional grammar
-```
-
-**Variadic contract — pure-binder stage only, surface spelling provisional:**
-a declaration may have at most one `rest ...T items` parameter and it must
-be the final formal. It is **not** optional (`?` is forbidden there).
-The callee sees an owned/borrow-checked typed collection of `T`; zero
-supplied tail elements is an **empty collection**, not `None`. Each
-positional argument before rest binds to the next fixed formal even if
-that formal is optional; remaining positional arguments form the rest
-elements in lexical evaluation order. Positional elements after any
-named item remain illegal. Named binding directly to the rest parameter
-and any spread expansion (including named + spread) are gated until an
-independent statically typed collection/tuple-expansion plan is proven.
-The user may still use named arguments for fixed slots and leave rest
-empty. `None` as a rest *element* is legal only when the element type
-itself is `Option<T>` and the normal type checker proves it; `None`
-never means "zero rest arguments".
-
-Illustrative non-executable declaration:
-
-```oreslang
-pub fnc log(string? prefix, rest ...string messages): void { /* ... */ }
-
-log();                          // prefix=None, messages=[]
-log("title", "a", "b");        // prefix=Some("title"), messages=["a","b"]
-log(prefix: None);              // prefix=None, messages=[]
-log(prefix: None, "hello");     // ERROR positional after named
-log(prefix: "x", messages: xs); // ERROR named-rest pack not yet specified
-```
-
-Overload admission treats a rest tail as a **supplied-argument range with
-no finite upper bound**: `[required_fixed, infinity)`. Any intersection
-with a fixed or optional overload count range is rejected at declaration
-or link time. Thus `f(int x)` cannot coexist with
-`f(int x, rest ...int tail)`. Overloads must never resolve by trying
-parameter types, labels, nullable coercions, or declaring order.
-Constructor overloads follow effective *user* arity and this same
-intersection rule, excluding a leading construction-scoped `self`.
-Actor constructors remain prohibited.
-
-The Java pure binder now plans rest source indexes and optional value
-adaptations, while the LLVM JSON/Python oracle includes adversarial
-null/void/rest cases. **These are tests of a proposed static contract**,
-not evidence that either frontend parses optional or rest declarations,
-that typed Option wrappers lower in any backend, or that CI/runtime parity
-is established. Dynamic and foreign calls remain fail-closed.
-
 ### Compatibility and migration guard
 
 Before promoting this proposal to syntax, audit all reachable user-visible call signatures and the existing use of identifier `omit` (including imports, methods, symbols and backtick escaping) to decide how to reserve it without shadowing existing value bindings. v1 only reserves a bare `omit` **argument item**, not every occurrence of the letters in a longer expression. For callable overrides and imported signatures, preserve exact optional/rest markers and source names in versioned public metadata; reject metadata drift rather than guessing. A typed Option-like value and an omitted slot are still separately represented even when both lower to None. Treat any unsupported variadic/constructor/actor-suspending form as a compile-time error, never silently lower to zero/null/empty string.
+
+## Implementation phases and competing syntax resolution
+
+The **single canonical proposed spelling** is `...T rest` (e.g. `...string messages`), symmetric with Oreslang's already existing call spread `...tuple`. The alternative draft `rest ...T items` is **not** an accepted alias. Do not teach both spellings or silently parse one as the other.
+
+- Phase A: implement named value argument AST/binding, then optional `T? slot`, bare contextual `omit`, typed `None`, constructor parity and overload-domain admission.
+- Phase B: implement final `...T rest` with only explicit positional variadic elements, empty-rest behavior, per-element typing, borrowed `Slice<T>` and ownership/lifetime checks. Names may bind fixed slots and leave rest empty. No runtime-length collection spread or named-rest pack until separately proved.
+- Phase C: implement **checked** final dynamic collection spread and named rest pack with complete source-order, borrow/effect, continuation and backing-storage proofs. Reference-oracle scenarios for `...tagList` and `tags: list` describe **Phase C semantics**, not currently admitted guest syntax. Existing Java static fixed-tuple spread remains independent.
+- No second or overloaded explicit constructor in v1. In a future separately gated constructor-overloading feature, only caller-visible parameters count toward overload admission; the implicit construction receiver is not an argument. Actor constructors remain disallowed.
+- Experimental pure-binder results are not evidence of executable Java/LLVM guest syntax, Option lowering, variadic runtime packing or CI parity. Fail closed on unsupported paths.
