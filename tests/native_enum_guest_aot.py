@@ -170,7 +170,7 @@ class NativeEnumGuestAot(unittest.TestCase):
                        original + "\n//\tores:\tcapability=filesystem",
                        original.replace("define enum",
                                         "// ores: target=host\ndefine enum", 1)):
-            with self.subTest(position=source.index("// ores:")):
+            with self.subTest(position=source.find("//"), text=source[:96]):
                 result = self.compile(source)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertEqual(result.stdout, "")
