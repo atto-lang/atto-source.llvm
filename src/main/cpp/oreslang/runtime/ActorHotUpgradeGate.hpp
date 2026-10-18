@@ -113,7 +113,32 @@ public:
                   std::uint64_t ticket)
             : state_(std::move(state)), origin_epoch_(epoch), ticket_(ticket) {}
     public:
-        Candidate(const Candidate&) = default;
+        // A prepared release seals DATA admission. Dropping its last owned
+        // ticket on any exception path must never strand the actor frozen.
+        Candidate(const Candidate&) = delete;
+        Candidate& operator=(const Candidate&) = delete;
+        Candidate(Candidate&&) noexcept = default;
+        Candidate& operator=(Candidate&& other) noexcept {
+            if (this != &other) {
+                release();
+                state_ = std::move(other.state_);
+                origin_epoch_ = other.origin_epoch_;
+                ticket_ = other.ticket_;
+            }
+            return *this;
+        }
+        ~Candidate() noexcept { release(); }
+    private:
+        void release() noexcept {
+            auto state = std::move(state_);
+            if (!state) return;
+            std::lock_guard<std::mutex> guard(state->mutex);
+            if (!state->closed && state->epoch == origin_epoch_
+                    && state->pending && state->pending_ticket == ticket_) {
+                state->pending.reset();
+                state->pending_ticket = 0;
+            }
+        }
     };
 
     explicit ActorHotUpgradeGate(std::uint64_t actor_id, Image initial) {
