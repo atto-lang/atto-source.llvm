@@ -176,12 +176,12 @@ static void stop_runs_compiled_frame_cancellation_exactly_once() {
     CHECK(oreslang_rt_scalar_frame_step(&state.frame, 1) == 2);
     CHECK(stats.completed == 0);
     CHECK(stats.abandoned_on_stop == 1);
-    CHECK(stats.cancel_cleanups == 1);
+    CHECK(stats.cancel_callbacks == 1);
     CHECK(stats.protocol_failures == 0);
     // Idempotent lifecycle calls must not invoke cleanup again.
     carrier.join();
     CHECK(state.cleanups.load() == 1);
-    CHECK(carrier.stats().cancel_cleanups == 1);
+    CHECK(carrier.stats().cancel_callbacks == 1);
 }
 
 struct BusyState {
