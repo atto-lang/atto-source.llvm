@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "note": "Reference-only binding tests, not guest compiler conformance: supplied Option::None is distinct from an omitted slot, and a variadic rest is a sequence.",
+  "note": "Reference-only binding tests, not guest compiler conformance: supplied Option::None is distinct from an omitted slot, and a variadic rest is a sequence. Source-order proofs now include original call-item indexes, explicitly skipping '_' and omit markers.",
   "parameters": [
     {
       "name": "a",
@@ -221,6 +221,10 @@
         "7",
         "None",
         "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1
       ]
     },
     {
@@ -242,6 +246,10 @@
         "effect_a()",
         "None",
         "effect_c()"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1
       ]
     },
     {
@@ -272,6 +280,10 @@
       "evaluation_order": [
         "3",
         "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
       ]
     },
     {
@@ -301,6 +313,10 @@
         "provided",
         "explicit_omit",
         "provided"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
       ]
     },
     {
@@ -333,6 +349,11 @@
         "3",
         "None",
         "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        1,
+        2
       ]
     },
     {
@@ -440,6 +461,12 @@
         "explicit_omit",
         "provided",
         "rest_values"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3,
+        4
       ]
     },
     {
@@ -500,6 +527,11 @@
         "3",
         "true",
         "items"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3
       ]
     },
     {
@@ -611,6 +643,10 @@
       "evaluation_order": [
         "3",
         "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
       ]
     },
     {
@@ -644,6 +680,10 @@
       "evaluation_order": [
         "true",
         "3"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
       ]
     },
     {
@@ -704,6 +744,11 @@
         "3",
         "true",
         "items"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2,
+        3
       ]
     }
   ],
