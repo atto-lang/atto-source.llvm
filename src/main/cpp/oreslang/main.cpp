@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
             }
             experimental_rt_scalar_loop = true;
         } else if (arg == "--experimental-enum-aot") {
-            if (experimental_enum_aot) { std::cerr << "duplicate enum AOT option\\n"; return 2; }
+            if (experimental_enum_aot) { std::cerr << "duplicate enum AOT option\n"; return 2; }
             experimental_enum_aot = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
         }
         if (experimental_enum_aot) {
             if (experimental_owned_int || experimental_rt_scalar_loop ||
-                wasm32_target || cortex_m_target || target_seen && !(!wasm32_target && !cortex_m_target)) {
+                wasm32_target || cortex_m_target) {
                 throw std::runtime_error("experimental enum AOT accepts host-only and no other experiments");
             }
             // This path is opt-in, never falls back to the i64-only parser,
