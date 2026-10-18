@@ -1,0 +1,5 @@
+define static contract Factory as
+  fnc create(): int;
+end
+
+pub fnc main(): int { return 0; }
