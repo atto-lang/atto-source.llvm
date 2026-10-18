@@ -1,6 +1,7 @@
 #include "oreslang/runtime/ActorHotUpgradeGate.hpp"
 
 #include <atomic>
+#include <optional>
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -125,6 +126,33 @@ int main() {
         auto followup = gate.prepare(image('c'));
         assert(gate.publish(followup));
         assert(gate.epoch() == 2);
+    }
+    {
+        // Releasing a stale ticket must not unfreeze a later prepared epoch.
+        ActorHotUpgradeGate gate(19, image('a'));
+        {
+            auto obsolete = gate.prepare(image('b'));
+            gate.abort(obsolete);
+            auto current = gate.prepare(image('c'));
+            assert(gate.frozen());
+            // obsolete destructs after current, proving generation identity
+            // checks never undo a newer CONTROL freeze.
+            assert(gate.publish(current));
+            assert(gate.epoch() == 2 && !gate.frozen());
+        }
+        auto next = gate.pin();
+        next.close();
+    }
+    {
+        // The ticket may outlive the gate wrapper; terminal close remains
+        // authoritative and the token releases only its shared State.
+        std::optional<ActorHotUpgradeGate::Candidate> orphan;
+        {
+            ActorHotUpgradeGate gate(20, image('a'));
+            orphan.emplace(gate.prepare(image('b')));
+            assert(gate.frozen());
+        }
+        orphan.reset();
     }
     return 0;
 }
