@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -12,7 +13,8 @@ namespace oreslang::runtime {
 
 /**
  * Compiler-facing pure preflight for strided, item-aligned views of an already
- * authenticated owned buffer. No pointer escape, allocation, or borrow lease.
+ * authenticated owned buffer. No guest pointer escape, buffer allocation or
+ * borrow lease; at most 16 axis pairs use fixed stack-local metadata.
  * The caller must obtain storage_bytes from the real owner's current region.
  * A write grant also needs a separate ownership/alias loan over this range.
  *
@@ -34,8 +36,8 @@ struct NativeNdArrayViewAdmission final {
                 storage_bytes > max_index || offset_bytes % itemsize)
             throw std::invalid_argument("NdArray element alignment/extent invalid");
         bool empty = false;
-        std::vector<std::pair<std::uint64_t, std::uint64_t>> axes;
-        axes.reserve(shape.size());
+        std::array<std::pair<std::uint64_t, std::uint64_t>, 16> axes{};
+        std::size_t axis_count = 0;
         for (std::size_t i = 0; i < shape.size(); ++i) {
             if (shape[i] > max_index || strides_bytes[i] == std::numeric_limits<std::int64_t>::min())
                 throw std::invalid_argument("NdArray dimension or stride overflow");
@@ -44,7 +46,7 @@ struct NativeNdArrayViewAdmission final {
             if (abs_stride % itemsize)
                 throw std::invalid_argument("unaligned NdArray stride");
             if (!shape[i]) empty = true;
-            if (shape[i] > 1) axes.emplace_back(abs_stride, shape[i]);
+            if (shape[i] > 1) axes[axis_count++] = {abs_stride, shape[i]};
         }
         if (empty) {
             if (offset_bytes > storage_bytes) throw std::out_of_range("empty view offset outside owner");
@@ -68,9 +70,10 @@ struct NativeNdArrayViewAdmission final {
         if (high > max_index - itemsize || high + itemsize > storage_bytes)
             throw std::out_of_range("NdArray view beyond owner");
         if (writable) {
-            std::sort(axes.begin(), axes.end());
+            std::sort(axes.begin(), axes.begin() + axis_count);
             std::uint64_t span = itemsize;
-            for (const auto& [stride, dim] : axes) {
+            for (std::size_t i = 0; i < axis_count; ++i) {
+                const auto& [stride, dim] = axes[i];
                 if (stride < span)
                     throw std::invalid_argument("aliased mutable NdArray view");
                 if (dim > 1 && stride > (max_index - span) / (dim - 1))
