@@ -197,5 +197,36 @@ int main() {
         "fnc classify(Foo.A v): int { return -" +
         std::to_string(static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 2u)
         + "; }\nfnc main(): int { return classify(Foo.A); }");
+    // Deterministic mutation fuzz over the ORIGINAL compiler parser/selector.
+    // Any single-byte mutation must either be rejected as invalid source
+    // or produce a fully revalidated immutable image; never crash/UB or
+    // produce a partially accepted forged call target.
+    {
+        std::uint32_t rng = 0x0e520a07u;
+        const std::string original = fixture() + "// harmless utf8 comment";
+        const unsigned char mutations[] = {
+            0u, 0xc0u, 0xedu, 0xf4u, 'A', '9', ' ', '\n',
+            '=', '+', '/', ':', '(', ')', '{', '}'
+        };
+        std::size_t accepted = 0, rejected = 0;
+        for (std::size_t trial = 0; trial < 4096; ++trial) {
+            rng = rng * 1664525u + 1013904223u;
+            std::string altered = original;
+            const std::size_t pos = static_cast<std::size_t>(rng) % altered.size();
+            rng = rng * 1664525u + 1013904223u;
+            altered[pos] = static_cast<char>(mutations[rng % (sizeof(mutations) / sizeof(mutations[0]))]);
+            try {
+                const auto image = oreslang::enum_aot::parseVerified(altered);
+                oreslang::enum_aot::validatePlan(image.readOnly());
+                REQUIRE(oreslang::enum_aot::checkedNativeExit(image.readOnly()) <= 255u);
+                ++accepted;
+            } catch (const std::invalid_argument&) {
+                ++rejected;
+            }
+        }
+        REQUIRE(accepted > 0);
+        REQUIRE(rejected > 0);
+        REQUIRE(accepted + rejected == 4096);
+    }
     std::puts("PASS: compiled original native enum AOT frontend policy header");
 }
