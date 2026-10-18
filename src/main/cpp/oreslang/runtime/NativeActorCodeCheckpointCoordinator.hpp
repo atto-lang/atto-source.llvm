@@ -98,8 +98,17 @@ public:
         : identity_(identity), actor_id_(actor_id), shape_(std::move(shape)),
           gate_(identity, shape_, std::move(initial), std::move(reclaim)),
           state_(initial_state), sha256_(sha256) {
-        if (!sha256_ || actor_id_ != gate_.pin(identity_).code().manifest.actor_id)
-            throw std::invalid_argument("invalid checkpoint SHA-256 provider or actor identity");
+        auto initial_pin = gate_.pin(identity_);
+        if (!sha256_ || !initial_pin.code().invoke
+            || actor_id_ != initial_pin.code().manifest.actor_id)
+            throw std::invalid_argument(
+                "invalid initial actor image, checkpoint hasher or actor identity");
+        // Fail closed on a malformed initial checkpoint epoch before the
+        // actor may serve its first DATA turn. The gate owns initial reclaim
+        // even when this constructor throws during verification.
+        const auto frame = Wire::encode(
+            {initial_pin.code().manifest, scalar(initial_state)}, sha256_);
+        (void)Wire::decode(frame, initial_pin.code().manifest, sha256_);
     }
 
     NativeActorCodeCheckpointCoordinator(
