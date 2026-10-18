@@ -70,6 +70,7 @@ def main():
     negatives=[
         ('public-constructor-private-class', 'define class Box as let int value=42;pub constructor(){return;}end pub fnc main():int{return 0;}',{},'public constructor requires a public class'),
         ('field-method-collision', 'define class Box as let int read=42;pub read():int{return 42;}end pub fnc main():int{return 0;}',{},'field/method name collision'),
+        ('split-arrow-not-an-operator', 'define class Box as let int value=42;pub read() - > int{return self.value;}end pub fnc main():int{return 0;}',{},"expected '->'"),
         ('private-field', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.value;}',{},'private class field'),
         ('private-method', '''define class Box as let int value=42;hidden():int{return self.value;}end
           pub fnc main():int{let Box b=new Box();return b.hidden();}''',{},'private instance method'),

@@ -54,7 +54,7 @@ module and method bodies into the artifact; no method/source interpretation or
 JVM occurs while serving. The trusted C++ HTTP adapter is still responsible for
 framing/routing/formatting. Full Spin/HTTP/OTel compilation remains incomplete.
 
-`native_source_class_methods_release` and its ASan/UBSan counterpart cover 32
+`native_source_class_methods_release` and its ASan/UBSan counterpart cover 33
 cases, including nominal mismatch, private fields/methods/constructors, receiver
 loans and actor-send disambiguation. Eleven identical positive programs also run
 in Java. Three qualified imported-construction cases are native-only evidence:

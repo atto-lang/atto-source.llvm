@@ -132,6 +132,10 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
+        if (source_.substr(at_, 2) == "->") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -681,7 +685,7 @@ private:
         }
         for (const auto& parameter : value.parameters)
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
-        if (!accept(":")) { require("-"); require(">"); }
+        if (!accept(":")) require("->");
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
@@ -1405,9 +1409,10 @@ private:
             field->name = identifier();
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
-            const bool actor_send = field->name == "send" && field->left
+            const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
-                && !class_receivers_.count(field->left->name);
+                && class_receivers_.count(field->left->name);
+            const bool actor_send = field->name == "send" && !named_class_receiver;
             if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
