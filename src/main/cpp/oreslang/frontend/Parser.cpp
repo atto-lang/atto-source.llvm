@@ -1202,6 +1202,26 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (token_.text == "suspends" || token_.text == "suspend") {
+            // Suspends lambdas execute on their caller's Task, but require
+            // typed suspension-effect call sites and heap continuation state.
+            // Never emit scalar IR as though they were ordinary functions.
+            Lexer lookahead = lexer_;
+            const auto following = lookahead.next().text;
+            if (following == "|")
+                fail("native suspends lambda effect lowering unsupported: caller continuation required");
+            if (following == "(") {
+                int nesting = 1;
+                for (int tokens = 0; nesting > 0 && tokens < 128; ++tokens) {
+                    const auto next = lookahead.next().text;
+                    if (next == "(") ++nesting;
+                    else if (next == ")") --nesting;
+                    else if (next.empty()) break;
+                }
+                if (nesting == 0 && lookahead.next().text == "->")
+                    fail("native suspends lambda effect lowering unsupported: caller continuation required");
+            }
+        }
         if (token_.text == "async") {
             // Java distinguishes ordinary async lambdas (Future<R>)
             // from whole-body async task lambdas (Task<R>). Native
