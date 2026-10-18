@@ -135,7 +135,8 @@ public:
         bool require_exclusive_core = false;  // fail closed until OS reservation manager exists
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
-        std::optional<ActorHeapIdentity> heap_owner; // minted at supervisor admission
+        std::optional<ActorHeapIdentity> heap_owner; // legacy single-lane convenience
+        std::shared_ptr<ActorHeapRetirementCohort> retirement_cohort;
         ActorCancelHandler cancel_handler = nullptr; // V2 continuation frames only
         // Optional externally owned supervisor components; must outlive join.
         oreslang::SupervisorControlTurn* supervisor_control = nullptr;
@@ -167,6 +168,10 @@ public:
     // May be minted only after all carrier/broker/producers are joined/drained
     // AND every started-but-abandoned logical frame proved cancellation cleanup.
     std::optional<CarrierRetirementProof> retirement_proof() const noexcept;
+    // Trusted runtime access for binding actor-wide heaps to this cohort.
+    std::shared_ptr<ActorHeapRetirementCohort> retirement_cohort() const noexcept {
+        return options_.retirement_cohort;
+    }
     bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
     CarrierStats stats() const noexcept;
 
@@ -183,6 +188,7 @@ private:
     void actor_loop() noexcept;
     void broker_loop() noexcept;
     void run_handler(ActorMessage, ResumeCause cause, std::int64_t result) noexcept;
+    void bind_retirement_cohort();
     void cancel_active_turn() noexcept;
     void wait_actor() noexcept;
     bool has_input_ready() const noexcept;
@@ -230,6 +236,8 @@ private:
     // cleanup. This covers invalid protocol returns and stop races that happen
     // before pending_/cooperating_ are published.
     bool turn_active_ = false;
+    bool retirement_lane_registered_ = false;
+    bool retirement_lane_acknowledged_ = false;
     // CPU-cooperating turn remains the unique logical owner and outranks
     // subsequent mailbox messages, but never urgent supervisor CONTROL.
     bool cooperating_ = false;
