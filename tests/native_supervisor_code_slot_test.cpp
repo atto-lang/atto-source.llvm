@@ -127,7 +127,7 @@ int main(){
         check(rejected,"pinned code revision cap not enforced");
         second.close();
         old.close();
-        check(reclaimed.load()==1,"old code must reclaim exactly once");
+        check(reclaimed.load()==2,"rejected candidate and old pinned code must each reclaim once");
         rejected=false;
         try{(void)slot.activate(99,"abi1","bad",[&]{reclaimed++;});}
         catch(const std::logic_error&){rejected=true;}
@@ -138,18 +138,18 @@ int main(){
         check(rejected,"unchecked ABI migration admitted");
         check(slot.activate(2,"abi1","Daddy-v3",[&]{reclaimed++;}).revision==3,
               "new policy revision could not activate after releasing old pin");
-        check(reclaimed.load()==2,"unreferenced generation not reclaimed");
+        check(reclaimed.load()==5,"rejected candidates and replaced code images not reclaimed");
         check(group->group_id()==group_id && group->supervisor_id()==supervisor_id,
               "code reload changed identity or group association");
         auto pinned = slot.pin();
         slot.close();
-        check(reclaimed.load()==2,"close freed a pinned new supervisor policy");
+        check(reclaimed.load()==5,"close freed a pinned new supervisor policy");
         rejected=false;
         try{(void)slot.pin();}catch(const std::logic_error&){rejected=true;}
         check(rejected,"closed policy admitted another turn");
         pinned.close();
     }
-    check(reclaimed.load()==3,"new policy leaked after final pinned turn");
+    check(reclaimed.load()==6,"new policy or rejected candidate leaked after final pinned turn");
     group->close();
     exercise_rejected_hot_reload_reclamation();
 }
