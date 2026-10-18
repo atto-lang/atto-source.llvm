@@ -174,6 +174,8 @@ int main() {
                      "second native publisher stole a live route claim");
             rejected([&] { (void)publication.abort_and_advance(31); },
                      "epoch abort discarded claimed native route frame");
+            rejected([&] { publication.close(); },
+                     "native close retired frame with in-flight publication lease");
             rejected([&] { publication.complete(origin); },
                      "explicit completion hid an in-flight native route claim");
             check(!origin->published() && publication.outstanding() == 1,
