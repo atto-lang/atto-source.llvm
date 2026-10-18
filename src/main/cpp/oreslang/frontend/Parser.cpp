@@ -324,6 +324,16 @@ private:
                 require(assignment);
                 if (token_.kind != Kind::Integer)
                     fail("actor thread limits require positive integer literals");
+                // Lexing intentionally permits legacy numeric separators.
+                // Capacity metadata is stricter: '_' must separate two digits.
+                for (std::size_t k = 0; k < token_.text.size(); ++k) {
+                    const char ch = token_.text[k];
+                    if (ch == '_' && (k == 0 || k + 1 == token_.text.size()
+                            || !digit(token_.text[k - 1])
+                            || !digit(token_.text[k + 1]))) {
+                        fail("malformed actor thread integer separator");
+                    }
+                }
                 std::string digits;
                 for (char ch : token_.text) if (ch != '_') digits.push_back(ch);
                 std::int64_t value = 0;
