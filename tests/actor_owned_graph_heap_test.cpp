@@ -1,8 +1,12 @@
 #include "oreslang/runtime/ActorOwnedGraphHeap.hpp"
 #include "oreslang/runtime/HungryCarrier.hpp"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <limits>
+#include <thread>
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
@@ -304,7 +308,52 @@ static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
     std::cout << "PASS seeded differential graph ownership and ABA stress\\n";
 }
 
+
+/* Exercise heap-domain exhaustion without creating billions of arenas.
+ * The injected atomic is equivalent to the allocator's static counter, so
+ * every contending thread must receive either a unique ID or overflow. */
+static void test_heap_domains_never_wrap_or_repeat() {
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    std::atomic<std::uint64_t> next{max - 4};
+    std::array<std::uint64_t, 12> outcomes{};
+    std::array<std::thread, 12> threads;
+    for (std::size_t i = 0; i < threads.size(); ++i) {
+        threads[i] = std::thread([&, i]() {
+            try {
+                outcomes[i] = oreslang::runtime::detail::reserve_actor_graph_heap_id(next);
+            } catch (const std::overflow_error&) {
+                outcomes[i] = 0;
+            }
+        });
+    }
+    for (auto& worker : threads) worker.join();
+    std::sort(outcomes.begin(), outcomes.end());
+    for (std::size_t i = 0; i < 8; ++i)
+        check(outcomes[i] == 0, "exhausted graph domain was incorrectly reissued");
+    for (std::size_t i = 0; i < 4; ++i)
+        check(outcomes[8 + i] == max - 4 + i, "duplicate or skipped graph heap domain");
+    check(next.load() == max, "heap domain counter wrapped after saturation");
+    bool saturated = false;
+    try {
+        (void)oreslang::runtime::detail::reserve_actor_graph_heap_id(next);
+    } catch (const std::overflow_error&) {
+        saturated = true;
+    }
+    check(saturated && next.load() == max,
+          "exhausted heap domain must permanently reject allocation");
+    std::atomic<std::uint64_t> invalid{0};
+    saturated = false;
+    try {
+        (void)oreslang::runtime::detail::reserve_actor_graph_heap_id(invalid);
+    } catch (const std::overflow_error&) {
+        saturated = true;
+    }
+    check(saturated && invalid.load() == 0,
+          "zero heap domain must never be issued");
+}
+
 int main() {
+    test_heap_domains_never_wrap_or_repeat();
     for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
                                0xC0DEC0DEu, 0xDEADBEEFu}) {
         model_check_graph_reuse_and_stale_handles(seed);
