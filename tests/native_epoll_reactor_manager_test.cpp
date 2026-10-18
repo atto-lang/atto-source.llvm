@@ -345,6 +345,46 @@ int main() {
         check(!source.try_watch(*token, EPOLLIN).has_value());
     }
     {
+        // Two freshly created managers can have equal reactor-local slot and
+        // generation. A public ticket from either must not authorize
+        // cancellation in the other domain.
+        NativeEpollReactorManager left(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        NativeEpollReactorManager right(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        int lfds[2]{-1, -1}, rfds[2]{-1, -1};
+        check(::pipe2(lfds, O_NONBLOCK | O_CLOEXEC) == 0);
+        check(::pipe2(rfds, O_NONBLOCK | O_CLOEXEC) == 0);
+        auto l = left.try_watch(lfds[0], EPOLLIN);
+        auto r = right.try_watch(rfds[0], EPOLLIN);
+        check(l.has_value() && r.has_value());
+        check(l->ticket.value != r->ticket.value);
+        check(!right.try_cancel(*l));
+        check(!left.try_cancel(*r));
+        check(right.try_cancel(*r));
+        check(left.try_cancel(*l));
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(3);
+        std::optional<NativeEpollReactorManager::Completion> lc, rc;
+        while ((!lc || !rc) && std::chrono::steady_clock::now() < deadline) {
+            if (!lc) lc = left.try_pop();
+            if (!rc) rc = right.try_pop();
+            if (!lc || !rc) std::this_thread::yield();
+        }
+        check(lc.has_value() && rc.has_value());
+        check(lc->event.ticket.value == l->ticket.value);
+        check(rc->event.ticket.value == r->ticket.value);
+        check(lc->event.outcome == NativeEpollReactor::Outcome::cancelled);
+        check(rc->event.outcome == NativeEpollReactor::Outcome::cancelled);
+        check(left.orphaned_completions() == 0);
+        check(right.orphaned_completions() == 0);
+        check(!left.try_cancel(*l));
+        check(!right.try_cancel(*r));
+        left.stop(); right.stop();
+        ::close(lfds[0]); ::close(lfds[1]);
+        ::close(rfds[0]); ::close(rfds[1]);
+    }
+    {
         // Explicit host bootstrap seal is enforceable in throughput mode too:
         // no later kernel descriptors, but pre-minted capabilities still work.
         NativeEpollReactorManager manager(1);

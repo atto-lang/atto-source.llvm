@@ -33,6 +33,25 @@ int main(void) {
     require(ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &first));
     require(first.ticket != 0 && first.reactor == 0);
     require(ores_native_nio_started_reactors(runtime) == 1);
+    /* Foreign runtime handles must not collide, even when both reactors
+     * start at slot 1 / generation 1. Public ABI size remains unchanged. */
+    OresNativeNio* foreign_runtime = ores_native_nio_open(1, 1, 1);
+    require(foreign_runtime != NULL);
+    int foreign_pipe[2] = {-1, -1};
+    require(pipe2(foreign_pipe, O_NONBLOCK | O_CLOEXEC) == 0);
+    OresNativeNioWatch foreign_watch = {0};
+    require(ores_native_nio_try_watch(
+        foreign_runtime, foreign_pipe[0], EPOLLIN, &foreign_watch));
+    require(foreign_watch.ticket != first.ticket);
+    require(!ores_native_nio_try_cancel(foreign_runtime, first));
+    require(!ores_native_nio_try_cancel(runtime, foreign_watch));
+    require(ores_native_nio_try_cancel(foreign_runtime, foreign_watch));
+    OresNativeNioCompletion foreign_result = {0};
+    require(next_completion(foreign_runtime, &foreign_result));
+    require(foreign_result.outcome == ORES_NATIVE_NIO_CANCELLED);
+    require(foreign_result.watch.ticket == foreign_watch.ticket);
+    close(foreign_pipe[0]); close(foreign_pipe[1]);
+    ores_native_nio_close(foreign_runtime);
     require(write(pipefd[1], "!", 1) == 1);
     /* A host polling the completion FD must be able to acknowledge its
      * readiness without entering a permanently readable busy loop. */

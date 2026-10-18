@@ -86,6 +86,11 @@ public:
     std::size_t started_threads() const noexcept { return started_.load(std::memory_order_acquire); }
     std::size_t limit() const noexcept { return limit_; }
     Profile profile() const noexcept { return profile_; }
+    // Audit counter: an internal completion that could not be authenticated
+    // against a live manager-level ownership claim was suppressed.
+    std::uint64_t orphaned_completions() const noexcept {
+        return orphaned_completions_.load(std::memory_order_acquire);
+    }
 
     // Legacy/raw descriptors have no authenticated open-file-description
     // provenance. Admit sockets/pipes conservatively and reject anon inodes.
@@ -208,6 +213,12 @@ private:
                      claim.access_mode == access_mode)) return std::nullopt;
         }
         if (!available) return std::nullopt;
+        // Tickets returned by each kernel reactor encode only local
+        // slot/generation. Two managers can therefore issue identical
+        // reactor tokens. Reserve a process-unique public ID BEFORE any
+        // epoll registration; exhaustion fails closed without rollback.
+        const auto public_id = take_public_ticket();
+        if (public_id == 0) return std::nullopt;
         auto count = started_.load(std::memory_order_relaxed);
         // Do not seal a preallocated RT profile merely because validation
         // passed: epoll admission may still fail due to an unsupported FD,
@@ -228,12 +239,14 @@ private:
             const std::size_t index = (best + i) % count;
             auto token = reactors_[index]->try_watch(fd, events);
             if (token) {
-                const Watch result{static_cast<std::uint8_t>(index), *token};
-                // This slot remains free until the successful reactor
-                // registration and cannot be claimed by another caller while
-                // mu_ is held. No post-admission failure/rollback path exists.
+                const Watch result{static_cast<std::uint8_t>(index),
+                                   NativeEpollReactor::Ticket{public_id}};
+                // Store BOTH ticket namespaces. Only the manager-internal
+                // ticket is used to cancel the kernel watch; the public ticket
+                // never crosses into the reactor's slot/generation domain.
                 *available = FdClaim{true, fd, stream_identity, identity.st_dev,
-                                     identity.st_ino, access_mode, result, owner};
+                                     identity.st_ino, access_mode, result, owner,
+                                     *token};
                 // The manager lock covers both the ownership table and the
                 // bootstrap phase; no creator can race this barrier.
                 if (profile_ == Profile::preallocated_rt)
@@ -253,8 +266,15 @@ public:
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
         if (!gate.owns_lock() || stopped_) return false;
         const auto count = started_.load(std::memory_order_acquire);
-        if (watch.reactor >= count) return false;
-        return reactors_[watch.reactor]->try_cancel(watch.ticket);
+        if (watch.reactor >= count || watch.ticket.value == 0) return false;
+        // Check actual live provenance before invoking cancellation: a token
+        // created by another manager cannot cancel an unrelated local slot.
+        for (const auto& claim : claimed_fds_) {
+            if (!claim.occupied || claim.watch.reactor != watch.reactor ||
+                    claim.watch.ticket.value != watch.ticket.value) continue;
+            return reactors_[watch.reactor]->try_cancel(claim.reactor_ticket);
+        }
+        return false;
     }
 
     std::optional<Completion> try_pop() noexcept {
@@ -269,12 +289,18 @@ public:
             auto event = reactors_[index]->try_pop();
             if (event) {
                 for (auto& claim : claimed_fds_) {
-                    if (!claim.occupied || claim.watch.reactor != index
-                        || claim.watch.ticket.value != event->ticket.value) continue;
+                    if (!claim.occupied || claim.watch.reactor != index ||
+                            claim.reactor_ticket.value != event->ticket.value) continue;
+                    // Translate the trusted reactor-local completion to the
+                    // globally minted public ticket before exposing the ABI.
+                    event->ticket = claim.watch.ticket;
                     claim.occupied = false;
-                    break;
+                    return Completion{static_cast<std::uint8_t>(index), *event};
                 }
-                return Completion{static_cast<std::uint8_t>(index), *event};
+                // A completion without a manager claim must not expose a raw
+                // reactor token as if it carried valid guest ownership.
+                orphaned_completions_.fetch_add(1, std::memory_order_relaxed);
+                return std::nullopt;
             }
         }
         return std::nullopt;
@@ -328,6 +354,7 @@ private:
         int access_mode = 0;
         Watch watch{};
         std::uint64_t owner = 0;
+        NativeEpollReactor::Ticket reactor_ticket{};
     };
     // Fixed-size, process-local ownership table. No allocation on reactor
     // registration/completion paths; protected by mu_ with try-lock admission.
@@ -361,6 +388,18 @@ private:
         throw std::runtime_error("native NIO capability instance exhausted");
     }
     inline static std::atomic<std::uint64_t> global_instance_{1};
+    // Lifetime-unique within this linked runtime image; never wrap into a
+    // formerly issued handle, even if a watch admission was rejected.
+    static std::uint64_t take_public_ticket() noexcept {
+        auto id = global_public_ticket_.load(std::memory_order_relaxed);
+        while (id != UINT64_MAX && id != 0) {
+            if (global_public_ticket_.compare_exchange_weak(
+                    id, id + 1, std::memory_order_relaxed))
+                return id;
+        }
+        return 0; // fail closed at exhaustion
+    }
+    inline static std::atomic<std::uint64_t> global_public_ticket_{1};
     const std::size_t limit_;
     const Profile profile_;
     const std::uint64_t instance_;
@@ -371,6 +410,7 @@ private:
     std::atomic<std::size_t> started_{0};
     std::array<std::uint64_t, maximum_reactors> last_sample_{};
     std::atomic<std::size_t> next_completion_{0};
+    std::atomic<std::uint64_t> orphaned_completions_{0};
     mutable std::mutex mu_;
     bool stopped_ = false;
     bool owned_bootstrap_sealed_ = false; // guarded by mu_

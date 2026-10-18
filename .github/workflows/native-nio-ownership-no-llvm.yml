@@ -1,0 +1,76 @@
+name: Native NIO descriptor ownership (no LLVM dependency)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorManager.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.*'
+      - 'tests/native_epoll_reactor_manager_test.cpp'
+      - 'tests/native_epoll_reactor_abi_test.c'
+      - '.github/workflows/native-nio-ownership-no-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-nio:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: gcc
+            cc: gcc
+            cxx: g++
+            flags: '-O2 -UNDEBUG'
+          - flavor: clang-asan-ubsan
+            cc: clang
+            cxx: clang++
+            flags: '-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer'
+    steps:
+      - name: Checkout exact PR source head with no retained credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pin exact source commit and tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "NATIVE_NIO_EXACT_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "NATIVE_NIO_EXACT_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain)"
+      - name: Compile manager and C ABI against actual private source files
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          set -euo pipefail
+          read -r -a options <<< "$FLAGS"
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_reactor_manager_test.cpp \
+            -o /tmp/oreslang-nio-manager-exact-head
+          "$CC" -std=c11 -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp -c tests/native_epoll_reactor_abi_test.c \
+            -o /tmp/oreslang-nio-abi-test.o
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            /tmp/oreslang-nio-abi-test.o -o /tmp/oreslang-nio-abi-exact-head
+      - name: Execute both actual-source binaries three times
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            echo "NATIVE_NIO_ATTEMPT=$n"
+            timeout 45s /tmp/oreslang-nio-manager-exact-head
+            timeout 45s /tmp/oreslang-nio-abi-exact-head
+          done
+          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3"
