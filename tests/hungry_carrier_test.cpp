@@ -227,6 +227,79 @@ static void test_cancel_hook_runs_once_on_actor_thread() {
     check(rejected, "legacy handler silently accepted generated-frame cancel hook");
 }
 
+struct PendingCancelState {
+    std::atomic<int> initials{0};
+    std::atomic<int> resumes{0};
+    std::atomic<int> callbacks{0};
+    std::atomic<int> violations{0};
+    HungryCarrier::NativeHeap::Handle owned{};
+};
+static ActorStep pending_cancel_handler(void* raw, ActorMessage message,
+                                        ResumeCause cause, std::int64_t io) noexcept {
+    auto& state = *static_cast<PendingCancelState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    if (cause == ResumeCause::initial) {
+        if (io != 0 || state.initials.fetch_add(1) != 0)
+            state.violations.fetch_add(1);
+        auto handle = heap->allocate(sizeof(std::uint64_t));
+        const std::uint64_t value = 0x10A7CACEULL;
+        if (!handle || !heap->write(*handle, 0, &value, sizeof(value))) {
+            state.violations.fetch_add(1);
+            return {};
+        }
+        state.owned = *handle;
+        return {StepKind::await_io, 77, 500};
+    }
+    state.resumes.fetch_add(1);
+    state.violations.fetch_add(1); // canceled broker work must never resume user code
+    return {};
+}
+static void pending_cancel_cleanup(void* raw, ActorMessage message) noexcept {
+    auto& state = *static_cast<PendingCancelState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1 || !state.owned.heap ||
+            !heap->release(state.owned))
+        state.violations.fetch_add(1);
+    state.callbacks.fetch_add(1);
+}
+static std::int64_t pending_cancel_io(void*, std::int64_t value,
+                                      const std::atomic<bool>& cancel) noexcept {
+    // The broker's synthetic delay should be interrupted before this callback
+    // is reached. Still fail closed if a future scheduling change calls it.
+    return cancel.load(std::memory_order_acquire) ? -1 : value;
+}
+static void test_pending_io_stop_runs_frame_cancel_before_retirement() {
+    for (int round = 0; round < 64; ++round) {
+        PendingCancelState state;
+        HungryCarrier::Options options{};
+        options.cancel_handler = pending_cancel_cleanup;
+        HungryCarrier actor(&state, pending_cancel_handler, nullptr,
+                            pending_cancel_io, options);
+        actor.start();
+        check(actor.producer_handle().try_send({1, 0}),
+              "pending-cancel logical turn was not accepted");
+        check(until([&] { return state.initials.load() == 1; }, 1s),
+              "pending-cancel handler did not enter");
+        actor.request_stop();
+        actor.join();
+        const auto stats = actor.stats();
+        check(state.resumes.load() == 0,
+              "canceled pending I/O resumed the actor handler");
+        check(state.callbacks.load() == 1 && stats.cancel_callbacks == 1,
+              "pending I/O frame cancellation did not run exactly once");
+        check(state.violations.load() == 0,
+              "pending I/O cleanup lost actor heap authority");
+        check(stats.completed == 0 && stats.abandoned_on_stop == 1,
+              "pending I/O cancellation terminal accounting is wrong");
+        check(stats.canceled_inflight == 1 && stats.protocol_failures == 0,
+              "pending I/O terminal was not canceled cleanly");
+    }
+}
+
 struct DoneRaceState {
     std::atomic<bool> entered{false};
     std::atomic<bool> release{false};
@@ -773,6 +846,7 @@ int main() {
         test_bounded_queue_head_readiness();
         test_fixed_arena_bounds_and_alignment();
         test_cancel_hook_runs_once_on_actor_thread();
+        test_pending_io_stop_runs_frame_cancel_before_retirement();
         test_stop_racing_done_does_not_cancel_completed_turn();
         test_protocol_failure_still_cancels_active_owned_frame();
         test_actor_heap_bound_to_carrier_across_await();
