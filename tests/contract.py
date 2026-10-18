@@ -7,6 +7,7 @@ under -O / PYTHONOPTIMIZE; a release harness must never silently skip gates.
 import argparse
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -155,7 +156,14 @@ def main():
         # files behind even when the compiler reports an error. An isolated cwd
         # detects output artifacts without touching the source checkout.
         with tempfile.TemporaryDirectory(prefix="oreslang-rejected-source-") as directory:
-            isolated_cmd = [*cmd[:-1], str(pathlib.Path(args.fixture).resolve())]
+            # Copy the fixture too: a compiler may write artifacts beside its
+            # input rather than in cwd. Do not give it the canonical source
+            # test-file path when verifying a negative contract.
+            source_fixture = pathlib.Path(args.fixture).resolve(strict=True)
+            isolated_fixture = pathlib.Path(directory) / source_fixture.name
+            shutil.copyfile(source_fixture, isolated_fixture)
+            expected_source = isolated_fixture.read_bytes()
+            isolated_cmd = [*cmd[:-1], str(isolated_fixture)]
             compile_result = subprocess.run(
                 isolated_cmd, cwd=directory, capture_output=True,
                 text=True, check=False, timeout=20
@@ -165,7 +173,10 @@ def main():
             require(args.diagnostic in compile_result.stderr,
                     "expected compiler diagnostic was absent")
             require(not compile_result.stdout, "compiler emitted stdout after rejection")
-            require(not any(pathlib.Path(directory).iterdir()),
+            require(isolated_fixture.is_file() and not isolated_fixture.is_symlink()
+                    and isolated_fixture.read_bytes() == expected_source,
+                    "compiler mutated rejected source fixture")
+            require({p.name for p in pathlib.Path(directory).iterdir()} == {isolated_fixture.name},
                     "compiler emitted filesystem artifacts after rejection")
         return
     compile_result = subprocess.run(
