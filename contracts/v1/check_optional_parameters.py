@@ -74,6 +74,14 @@ def bind(formals, actuals):
     for source_index, item in enumerate(actuals):
         kind = item.get("kind", "value")
         label = item.get("label")
+        # The lexer/parser must emit an Omit item for a standalone '_'.
+        # '_' is not an expression or a partial-application placeholder.
+        if kind == "underscore":
+            if item.get("expr") not in (None, "_"):
+                raise ValueError("malformed underscore omission marker")
+            kind = "omit"
+        if kind == "value" and item.get("expr") == "_":
+            raise ValueError("underscore is a call-item omission, not a value")
         if kind not in ("value", "omit", "spread", "pack"):
             raise ValueError("invalid call argument kind")
         if label is not None:
