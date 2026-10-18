@@ -147,6 +147,40 @@ static void exercise_destructor_before_image_unload() {
           "rejected initial admission leaked or unloaded a live image wrapper");
 }
 
+// Throwing std::function copies simulate staging allocation failure after the
+// API has accepted ownership of a loaded resource. No image may leak.
+struct ThrowWhenCopied final {
+    std::shared_ptr<std::atomic<int>> callbacks;
+    explicit ThrowWhenCopied(std::shared_ptr<std::atomic<int>> count)
+        : callbacks(std::move(count)) {}
+    ThrowWhenCopied(const ThrowWhenCopied&) {
+        throw std::runtime_error("injected callback-copy failure");
+    }
+    ThrowWhenCopied(ThrowWhenCopied&&) noexcept = default;
+    void operator()() const noexcept { ++*callbacks; }
+};
+static void exercise_callback_copy_failure_cleanup() {
+    auto counter = std::make_shared<std::atomic<int>>(0);
+    NativeSupervisorCodeSlot<std::string> slot("abi", "old",
+        [] {});
+    std::function<void()> risky = ThrowWhenCopied(counter);
+    bool threw = false;
+    try {
+        (void)slot.activate(1, "abi", "unpublished", std::move(risky));
+    } catch (const std::runtime_error&) { threw = true; }
+    check(threw && counter->load() == 1 && slot.current().revision == 1,
+          "exception while constructing image leaked candidate or published it");
+    auto init_counter = std::make_shared<std::atomic<int>>(0);
+    std::function<void()> initial_risky = ThrowWhenCopied(init_counter);
+    threw = false;
+    try {
+        NativeSupervisorCodeSlot<std::string> rejected_initial(
+            "abi", "never-active", std::move(initial_risky));
+    } catch (const std::runtime_error&) { threw = true; }
+    check(threw && init_counter->load() == 1,
+          "exception while constructing initial image leaked loaded resource");
+}
+
 int main(){
     std::atomic<int> reclaimed{0};
     NativeSupervisorRegistry supervisors(42, 8, 8);
@@ -214,4 +248,5 @@ int main(){
     group->close();
     exercise_rejected_hot_reload_reclamation();
     exercise_destructor_before_image_unload();
+    exercise_callback_copy_failure_cleanup();
 }
