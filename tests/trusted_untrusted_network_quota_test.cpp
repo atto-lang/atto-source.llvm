@@ -106,7 +106,7 @@ static void connection_attempt_churn_is_rate_limited() {
     c.lease.release();
 }
 
-static void pre_dispatch_abort_refunds_exactly_once() {
+static void published_cancellation_never_refunds_rate_tokens() {
     TrustedUntrustedNetworkQuota quota({}, 0);
     auto http = quota.try_start_http(0);
     check(http.status == Status::admitted);
@@ -116,18 +116,45 @@ static void pre_dispatch_abort_refunds_exactly_once() {
     http.lease.release();
     check(quota.http_in_flight() == 0);
     auto first = quota.try_start_http(0);
-    auto second = quota.try_start_http(0);
-    check(first.status == Status::admitted && second.status == Status::admitted);
+    check(first.status == Status::admitted);
     check(quota.try_start_http(0).status == Status::rate_limited);
     check(first.lease.commit_dispatch());
     check(!first.lease.abort_before_dispatch(0));
     first.lease.release();
-    second.lease.release();
 
     auto tcp = quota.try_open_tcp(0);
     check(tcp.status == Status::admitted);
     check(tcp.lease.abort_before_dispatch(0));
     check(!tcp.lease.abort_before_dispatch(0));
+    check(quota.tcp_connections() == 0);
+}
+
+static void delayed_cancellation_cannot_inflate_future_burst() {
+    TrustedUntrustedNetworkQuota quota({}, 0);
+    auto a = quota.try_start_http(0);
+    auto b = quota.try_start_http(0);
+    check(a.status == Status::admitted && b.status == Status::admitted);
+    auto c = quota.try_start_http(1000000000ULL);
+    auto d = quota.try_start_http(1000000000ULL);
+    check(c.status == Status::admitted && d.status == Status::admitted);
+    check(a.lease.abort_before_dispatch(1000000000ULL));
+    check(b.lease.abort_before_dispatch(1000000000ULL));
+    check(quota.try_start_http(1000000000ULL).status == Status::rate_limited);
+    c.lease.release();
+    d.lease.release();
+    check(quota.http_in_flight() == 0);
+
+    auto t1 = quota.try_open_tcp(1000000000ULL);
+    auto t2 = quota.try_open_tcp(1000000000ULL);
+    check(t1.status == Status::admitted && t2.status == Status::admitted);
+    auto t3 = quota.try_open_tcp(2000000000ULL);
+    auto t4 = quota.try_open_tcp(2000000000ULL);
+    check(t3.status == Status::admitted && t4.status == Status::admitted);
+    check(t1.lease.abort_before_dispatch(2000000000ULL));
+    check(t2.lease.abort_before_dispatch(2000000000ULL));
+    check(quota.try_open_tcp(2000000000ULL).status == Status::rate_limited);
+    t3.lease.release();
+    t4.lease.release();
     check(quota.tcp_connections() == 0);
 }
 
@@ -165,6 +192,7 @@ int main() {
     concurrent_tcp_open_is_bounded();
     connection_attempt_churn_is_rate_limited();
     pre_dispatch_abort_refunds_exactly_once();
+    delayed_cancellation_cannot_inflate_future_burst();
     revoked_quota_rejects_undispatched_http_and_tcp();
     invalid_policy_fails_closed();
     std::cout << "UNTRUSTED_NETWORK_QUOTA_HOST_ONLY_PASS\n";
