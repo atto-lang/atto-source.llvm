@@ -157,6 +157,25 @@ bool HungryCarrier::pop_next_input(ActorMessage& message) noexcept {
     return false;
 }
 
+void HungryCarrier::bind_retirement_cohort() {
+    if (options_.retirement_cohort != nullptr) {
+        const auto owner = options_.retirement_cohort->owner();
+        if (options_.heap_owner.has_value() && *options_.heap_owner != owner)
+            throw std::invalid_argument("heap owner does not match retirement cohort");
+        options_.heap_owner = owner;
+    } else if (options_.heap_owner.has_value()) {
+        // Backward-compatible single-lane path. The live-cohort registry still
+        // rejects a second carrier for the same actor generation.
+        options_.retirement_cohort =
+            ActorHeapRetirementCohort::create(*options_.heap_owner, 1);
+    }
+    if (options_.retirement_cohort != nullptr) {
+        if (!options_.retirement_cohort->register_lane())
+            throw std::invalid_argument("actor retirement cohort lane capacity exceeded");
+        retirement_lane_registered_ = true;
+    }
+}
+
 HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
                              void* broker_state, BrokerOperation operation,
                              Options options)
@@ -179,6 +198,7 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandler handler,
         throw std::invalid_argument("lock-free atomic indexes unavailable");
     if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
         throw std::invalid_argument("spin window exceeds 100 ms maximum");
+    bind_retirement_cohort();
 }
 
 HungryCarrier::HungryCarrier(void* actor_state, ActorHandlerV2 handler,
@@ -199,6 +219,7 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandlerV2 handler,
         throw std::invalid_argument("lock-free atomic indexes unavailable");
     if (options_.spin_before_park.count() < 0 || options_.spin_before_park.count() > 100000)
         throw std::invalid_argument("spin window exceeds 100 ms maximum");
+    bind_retirement_cohort();
 }
 
 HungryCarrier::~HungryCarrier() noexcept {
@@ -305,14 +326,22 @@ void HungryCarrier::join() noexcept {
     } else {
         abandoned_on_stop_.store(accepted - completed, std::memory_order_release);
     }
+    if (retirement_lane_registered_ && !retirement_lane_acknowledged_) {
+        const bool cleanup_ok =
+            !retirement_cleanup_blocked_.load(std::memory_order_acquire);
+        options_.retirement_cohort->acknowledge_lane(cleanup_ok);
+        retirement_lane_acknowledged_ = true;
+    }
     joined_.store(true, std::memory_order_release);
 }
 
 std::optional<CarrierRetirementProof> HungryCarrier::retirement_proof() const noexcept {
-    if (!joined_.load(std::memory_order_acquire) || !options_.heap_owner.has_value() ||
-            retirement_cleanup_blocked_.load(std::memory_order_acquire))
+    if (!joined_.load(std::memory_order_acquire) ||
+            options_.retirement_cohort == nullptr ||
+            retirement_cleanup_blocked_.load(std::memory_order_acquire) ||
+            !options_.retirement_cohort->ready_for_retirement())
         return std::nullopt;
-    return CarrierRetirementProof{*options_.heap_owner};
+    return CarrierRetirementProof{options_.retirement_cohort};
 }
 
 CarrierStats HungryCarrier::stats() const noexcept {
