@@ -212,3 +212,28 @@ Parser context and diagnostics:
 Guest-language acceptance remains gated on real parser, semantic checker,
 Option lowering and runtime tests. A pure-binder or Python oracle cannot
 establish that this syntax already executes.
+
+## Lowering proof: original call-item indexes versus evaluated-expression indexes
+
+Do **not** use a dense evaluated-argument index directly to index the original
+call AST after parsing explicit `_` / `omit`. Such markers occupy source
+items without creating expressions; using the wrong index can accidentally
+evaluate an omission node or evaluate an entirely different expression.
+
+For `foo(3, _, effect())`, the raw call-item indexes are `[0,1,2]`.
+The **evaluated expression list** is `[3,effect()]`; the immutable
+`callItemIndexByEvaluatedSource` map is `[0,2]`. A formal-to-evaluated
+mapping might be `[0,-1,1]`. Therefore the third formal reads evaluated
+source 1, which resolves to raw AST item 2. A named reordered call such as
+`foo(c: effectC(), b: _, a: effectA())` also produces raw evaluated item
+map `[0,2]`, while the formal-to-evaluated mapping is `[1,-1,0]`.
+The receiver/callee must be evaluated once before all present arguments;
+arguments then evaluate **lexically in source order** regardless of formal
+order. `None` is a real Option expression and remains in the evaluated list.
+
+The binder and reference vectors now preserve and test this correspondence,
+but neither Java/Graal nor LLVM may claim guest-runtime support until AST,
+type checking, ownership/effect checking, invocation lowering, and target
+execution use the same immutable selected-call plan. Existing parsers that
+still represent calls as `List<Expr>` must fail closed, not map `_` to
+`NameExpr("_")` or silently enable source omission.
