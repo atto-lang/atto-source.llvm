@@ -1,6 +1,7 @@
 #pragma once
 #include "oreslang/runtime/ActorPipeContract.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -36,6 +37,9 @@ public:
         const std::vector<std::string> path_;
         const std::size_t at_;
         const bool returning_;
+        // VM-only. Exactly one publisher can hold the initial claim;
+        // published is irreversible even if the active frame later retires.
+        mutable std::atomic<unsigned char> publication_state_{0};
     public:
         Frame(const Frame&) = delete;
         Frame& operator=(const Frame&) = delete;
@@ -44,8 +48,45 @@ public:
         std::uint64_t route_id() const noexcept { return route_; }
         const std::string& receiver() const noexcept { return path_[at_]; }
         bool returning() const noexcept { return returning_; }
+        bool published() const noexcept {
+            return publication_state_.load(std::memory_order_acquire) == 2;
+        }
     };
     using Handle = std::shared_ptr<const Frame>;
+
+    /** Move-only publication capability. Destruction refunds ONLY the
+     * publisher that successfully claimed the frame. Losers never receive
+     * a lease and cannot undo a competing publisher's in-flight claim.
+     *
+     * Native scheduler must call commit() immediately following successful
+     * bounded mailbox enqueue, with no fallible work between those steps.
+     * Returning a lease does not itself enqueue actor DATA. */
+    class PublicationClaim final {
+        friend class ActorPipeRouteLedger;
+        Handle frame_;
+        explicit PublicationClaim(Handle frame) noexcept
+            : frame_(std::move(frame)) { }
+    public:
+        PublicationClaim(const PublicationClaim&) = delete;
+        PublicationClaim& operator=(const PublicationClaim&) = delete;
+        PublicationClaim(PublicationClaim&& other) noexcept
+            : frame_(std::move(other.frame_)) { }
+        PublicationClaim& operator=(PublicationClaim&&) = delete;
+        ~PublicationClaim() noexcept { abort(); }
+        void abort() noexcept {
+            if (!frame_) return;
+            unsigned char expected = 1;
+            frame_->publication_state_.compare_exchange_strong(
+                expected, 0, std::memory_order_acq_rel,
+                std::memory_order_acquire);
+            frame_.reset();
+        }
+        void commit() noexcept {
+            if (!frame_) return;
+            frame_->publication_state_.store(2, std::memory_order_release);
+            frame_.reset();
+        }
+    };
 
     ActorPipeRouteLedger(const std::vector<PipeStage>& stages,
                          const std::vector<PipeConnection>& edges,
@@ -78,6 +119,21 @@ public:
         cursors_.reserve(outgoing_.size());
         for (const auto& source : outgoing_)
             cursors_.emplace(source.first, 0);
+    }
+
+    /** Reserve a real frame for one native mailbox publication attempt.
+     * The live generation and identity are validated while the ledger is
+     * locked. The final atomic claim excludes another concurrent writer.
+     * Only an obtained PublicationClaim may release this reservation. */
+    PublicationClaim claim_publication(const Handle& frame) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        require_active(frame);
+        unsigned char expected = 0;
+        if (!frame->publication_state_.compare_exchange_strong(
+                expected, 1, std::memory_order_acq_rel,
+                std::memory_order_acquire))
+            throw std::logic_error("actor route frame already claimed or published");
+        return PublicationClaim(frame);
     }
 
     Handle ingress(const std::string& root) {
