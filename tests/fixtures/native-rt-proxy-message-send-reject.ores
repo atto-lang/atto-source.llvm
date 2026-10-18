@@ -2,8 +2,10 @@ define class Box as
   pub let int value = 7;
 end
 define actor Sink as {
+  let seen: int = 0;
   pub fnc on_message(int value): int {
-    return value;
+    seen = value;
+    return seen;
   }
 }
 pub fnc main(): int using suspend {
