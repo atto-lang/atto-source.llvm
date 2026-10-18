@@ -41,8 +41,19 @@ public:
         epoll_ = ::epoll_create1(EPOLL_CLOEXEC);
         if (epoll_ < 0) throw std::system_error(errno, std::generic_category(), "epoll_create1");
         wake_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (wake_ < 0) {
+            const int saved = errno;
+            cleanup();
+            throw std::system_error(saved, std::generic_category(), "eventfd wakeup");
+        }
         completion_signal_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-        if (wake_ < 0 || completion_signal_ < 0) { cleanup(); throw std::system_error(errno, std::generic_category(), "eventfd"); }
+        if (completion_signal_ < 0) {
+            // Preserve the failing syscall's errno across close(): cleanup
+            // may otherwise overwrite the actionable startup diagnosis.
+            const int saved = errno;
+            cleanup();
+            throw std::system_error(saved, std::generic_category(), "eventfd completion");
+        }
         epoll_event e{};
         e.events = EPOLLIN;
         e.data.u64 = wake_token;
