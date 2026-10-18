@@ -203,30 +203,31 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
-            if (accept("serial")) {
-                require("actor");
-                fail("native serial actor requires shared HTTP/message lane lowering");
-            }
-            if (accept("module")) {
+        // Only the optional module prelude is consumed here. Dispatch all
+        // definitions, including a first-line actor or frozen compatibility
+        // enum, through the same policy-aware main loop.
+        if (token_.text == "define") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "module") {
+                require("define");
+                require("module");
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
-            } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("@")) {
-                require("ActorThreads");
-                const auto annotation = token_.text == "("
-                        ? actor_thread_arguments("=") : std::pair<int, int>{1, 1};
+                std::pair<int, int> annotation{0, 0};
+                if (accept("ActorThreads")) {
+                    annotation = token_.text == "("
+                            ? actor_thread_arguments("=") : std::pair<int, int>{1, 1};
+                } else if (accept("ActorMaxThreads")) {
+                    annotation = legacy_actor_max_threads_attribute();
+                } else {
+                    fail("unsupported native annotation: only actor thread policies are admitted");
+                }
                 require("define");
                 require("actor");
                 program.actors.push_back(actor_declaration(annotation));
@@ -235,7 +236,11 @@ public:
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("enum")) {
+                    legacy_actor_threads_enum();
+                } else if (accept("class")) {
+                    program.classes.push_back(class_declaration());
+                }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -262,6 +267,47 @@ public:
     }
 
 private:
+    /**
+     * Frozen, source-compatible MaxActorThreads declaration: not general enum
+     * lowering. No user enum may redefine the scheduler's built-in tiers.
+     */
+    void legacy_actor_threads_enum() {
+        if (actor_threads_enum_seen_)
+            fail("duplicate MaxActorThreads enum definition");
+        require("MaxActorThreads");
+        require("as");
+        constexpr std::string_view tiers[] = {"LOW", "MEDIUM", "HIGH"};
+        constexpr std::string_view values[] = {"1", "2", "3"};
+        for (std::size_t i = 0; i < 3; ++i) {
+            require(tiers[i]);
+            require("int");
+            require("=");
+            if (token_.kind != Kind::Integer || token_.text != values[i])
+                fail("MaxActorThreads backing value must be the canonical integer");
+            advance();
+            accept(";");
+        }
+        require("end");
+        actor_threads_enum_seen_ = true;
+    }
+
+    /** Map the older enum-only annotation into the same min/max policy. */
+    std::pair<int, int> legacy_actor_max_threads_attribute() {
+        require("(");
+        require("MaxActorThreads");
+        require(".");
+        int max = 0;
+        if (accept("LOW")) max = 1;
+        else if (accept("MEDIUM")) max = 2;
+        else if (accept("HIGH")) max = 3;
+        else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
+        require(")");
+        if (max > 1)
+            fail("parallel actor threads require state effects and scheduler admission; "
+                 "max > 1 is not yet supported");
+        return {1, max};
+    }
+
     // The LLVM source subset retains this metadata but is not yet allowed
     // to lower genuinely concurrent actor-owned guest execution.
     std::pair<int, int> actor_thread_arguments(std::string_view assignment) {
@@ -1887,6 +1933,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool actor_threads_enum_seen_ = false;
 };
 
 } // namespace
