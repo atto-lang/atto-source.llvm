@@ -205,3 +205,67 @@ space with actor capacities 2 and 3 and proves the same carrier cannot hold
 two actor grants in a valid state; disabling the global exclusion guard
 produces a two-claim counterexample. This is a bounded abstract check, not
 end-to-end scheduler or effect-checking evidence.
+
+## Canonical configuration and compatibility consolidation (2026-10-17)
+
+The **single authoritative AST/ABI description** is
+`ActorThreadPolicy(min, max)`, encoded as two positive bounded integer
+fields, with `1 <= min <= max <= 3`. Annotations are declarative inputs;
+neither of these fields is an executable scheduler grant.
+
+The new primary spellings are:
+
+- `with threads(min: 1, max: 3)` in a source actor header;
+- `@ActorThreads(min = 1, max = 3)` on a source actor declaration.
+
+Compatibility for the earlier MaxActorThreads proposal is explicit:
+
+- `@ActorMaxThreads(MaxActorThreads.LOW)` is accepted and **normalizes
+  immediately** to `ActorThreadPolicy(1, 1)`; the enum itself is not a
+  separate execution-policy field.
+- `MaxActorThreads.MEDIUM` and `MaxActorThreads.HIGH` are recognized but
+  fail closed until actual parallel guest execution is certified, exactly
+  like `@ActorThreads(max = 2/3)`.
+- The exact historical `define enum MaxActorThreads as LOW int = 1;
+  MEDIUM int = 2; HIGH int = 3 end` declaration is a narrowly recognized
+  frozen compatibility form, **not** general user-defined enum lowering.
+  Reordered values, redefinitions and duplicate declarations are errors.
+- Mixing `@ActorMaxThreads`, `@ActorThreads` and the native `with threads`
+  clause, even when all specify (1,1), is **a compile error**. A single actor
+  must never have two policy sources.
+- Old Java AST consumers may use `ClassDecl.maxActorThreads()` as a
+  max-only compatibility view, or construct an AST from the legacy enum;
+  both resolve to the same canonical record. The compatibility getter
+  does not promise to preserve the new `min` capacity floor. New compiler
+  passes must carry the whole `actorThreads` record.
+
+Current version scope is bounded to three slots. Future >3 behavior requires a
+new versioned ABI and scheduler/effect-checking qualification; it is not
+implicitly enabled by a widened host-side counter or manually fabricated AST.
+
+### Integration boundaries
+
+Java #1100 and LLVM #485 contain earlier host-only NIO/turn-credit designs
+and still require reconciliation with the new canonical policy. **Do not**
+cherry-pick their parser/AST code over Java #1182 or LLVM #541 without
+conflict-resolving this schema; that would silently resurrect two independent
+policies or lose one during AST rewriting. They are not validated as a
+production multi-turn runtime.
+
+The production v1 scheduler is still single-carrier. The host-side grant gate
+in Java #1182 is a separate prototype and cannot substitute for scheduler
+admission, backend ownership checking, actor state-loan verification, or
+per-turn continuation frames. Any transition to actual max=2/3 guest
+execution requires explicit feature negotiation and all v2 runtime tests.
+
+### Source and CI provenance
+
+Both GitHub source organizations currently report workflow failures with
+zero executed job steps on these PR heads: this is **NOT_EXECUTED**, not a
+compiler pass/failure. Only source-local JDK25/Graal Native Image and
+LLVM/CTest/ASan/UBSan execution on the exact Git tree can qualify the release,
+or an independently authorized private execution environment that has passed
+the mandatory two-repository numeric-ID/visibility preflight. Source-free
+models and focused external component runs are separately labeled and cannot
+be promoted to full-tree runtime evidence. No alternate-organization transfer
+is authorized by this proposal.
