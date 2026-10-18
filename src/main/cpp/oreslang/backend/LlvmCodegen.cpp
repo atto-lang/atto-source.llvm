@@ -275,10 +275,12 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
     // This API receives an ordinary C++ Plan aggregate, not an unforgeable
     // typechecker token. Revalidate its declaration and call provenance
     // BEFORE LLVM IR emission, including when invoked outside main.cpp.
-    if (plan.enumId.rfind("local_unit.__root__.", 0) != 0 ||
-        plan.enumId.size() <= std::string("local_unit.__root__.").size()) {
+    const std::string localPrefix = "local_unit.__root__.";
+    if (plan.enumId.rfind(localPrefix, 0) != 0 ||
+        plan.enumId.size() <= localPrefix.size()) {
         throw std::invalid_argument("native enum AOT requires resolved local root enum");
     }
+    enum_aot::validateLexicalName(plan.enumId.substr(localPrefix.size()));
     if (plan.cases.empty() || plan.cases.size() > types::case_overloads::MaxCases ||
         plan.functions.empty() ||
         plan.functions.size() > types::case_overloads::MaxCandidates ||
@@ -291,7 +293,7 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
     std::unordered_set<std::int32_t> validTags;
     std::int32_t priorTag = 0;
     for (const auto& item : plan.cases) {
-        types::case_overloads::identifier(item.name);
+        enum_aot::validateLexicalName(item.name);
         if (!names.insert(item.name).second || item.tag <= priorTag ||
             !validTags.insert(item.tag).second) {
             throw std::invalid_argument("invalid native enum AOT case identity/tag");
@@ -306,6 +308,9 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
     family.reserve(plan.functions.size());
     for (const auto& fn : plan.functions) {
         const auto& sig = fn.signature;
+        enum_aot::validateLexicalName(sig.name);
+        if (sig.name == "main")
+            throw std::invalid_argument("native enum AOT cannot alias entrypoint");
         if (sig.domain != types::case_overloads::Domain::Module ||
             sig.owner != "local_unit.__root__" || sig.params.size() != 1 ||
             sig.params[0].identity != plan.enumId ||
