@@ -100,6 +100,18 @@ CASES = {
         "pub fnc main(): int { return nb { return 7; }; }",
         "native Task block lowering unsupported",
     ),
+    "suspends-lambda-no-spawn-pipe": (
+        "pub fnc main(): int { return (suspends |int a| -> a)(5); }",
+        "native suspends lambda effect lowering unsupported",
+    ),
+    "suspend-lambda-no-spawn-alias": (
+        "pub fnc main(): int { return (suspend |int a| -> a)(5); }",
+        "native suspends lambda effect lowering unsupported",
+    ),
+    "suspends-lambda-typed": (
+        "pub fnc main(): int { return (suspends (int a) -> a)(5); }",
+        "native suspends lambda effect lowering unsupported",
+    ),
     "async-task-lambda-block": (
         "pub fnc main(): int { return (async task |int a| -> { return a; })(5); }",
         "native async task lambda lowering unsupported",
