@@ -1739,6 +1739,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-send-stop-race-test)
     set_tests_properties(native_actor_send_stop_linearizable_race PROPERTIES TIMEOUT 30)
 
+    # Integration of the *actual native C scheduler* with the actor-owned C++
+    # graph heap under two distinct actor lanes. No source-language actor
+    # lowering or guest-state-loan enforcement is claimed by this host test.
+    add_executable(oreslang-native-actor-graph-scheduler-bridge-test
+        tests/native_actor_scheduler_graph_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_scheduler_graph_heap_host_integration
+        COMMAND oreslang-native-actor-graph-scheduler-bridge-test)
+    set_tests_properties(native_actor_scheduler_graph_heap_host_integration
+        PROPERTIES TIMEOUT 30)
+
     # ActorRef scheduler domains are capabilities: exhaustion must not wrap
     # and concurrent opens near UINT64_MAX must never issue duplicates.
     add_executable(oreslang-native-domain-exhaustion-test
