@@ -88,13 +88,6 @@ private:
         return out;
     }
 
-    void require_ticket_locked(const class Ticket& ticket) const {
-        if (ticket.state_.get() != state_.get()
-            || ticket.epoch_ != state_->ticket_epoch
-            || !state_->frozen)
-            throw std::logic_error("stale or foreign actor hot-upgrade ticket");
-    }
-
 public:
     class Pin final {
         friend class NativeActorHotUpgradeGate;
@@ -146,6 +139,15 @@ public:
         Ticket& operator=(Ticket&&) noexcept = default;
     };
 
+private:
+    void require_ticket_locked(const Ticket& ticket) const {
+        if (ticket.state_.get() != state_.get()
+            || ticket.epoch_ != state_->ticket_epoch
+            || !state_->frozen)
+            throw std::logic_error("stale or foreign actor hot-upgrade ticket");
+    }
+
+public:
     NativeActorHotUpgradeGate(ActorHeapIdentity heap, Shape shape,
                               CodeImage initial, std::function<void()> reclaim,
                               std::size_t maximum_revisions = 8) {
