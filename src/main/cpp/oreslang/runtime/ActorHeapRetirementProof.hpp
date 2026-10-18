@@ -38,7 +38,8 @@ public:
  */
 class ActorHeapBorrowGate final {
     static constexpr std::uint64_t closing_bit = std::uint64_t{1} << 63;
-    static constexpr std::uint64_t counter_mask = closing_bit - 1;
+    static constexpr std::uint64_t mutation_bit = std::uint64_t{1} << 62;
+    static constexpr std::uint64_t counter_mask = mutation_bit - 1;
     ActorHeapIdentity owner_;
     std::atomic<std::uint64_t> state_{0};
 
@@ -71,11 +72,50 @@ public:
         }
     };
 
+    // A mutation token excludes every external loan and prevents new loans
+    // for the duration of the operation. Merely observing zero loans before
+    // mutating would be racy with a concurrent acquire().
+    class Mutation final {
+        friend class ActorHeapBorrowGate;
+        ActorHeapBorrowGate* gate_ = nullptr;
+        explicit Mutation(ActorHeapBorrowGate* gate) noexcept : gate_(gate) {}
+    public:
+        Mutation() noexcept = default;
+        Mutation(const Mutation&) = delete;
+        Mutation& operator=(const Mutation&) = delete;
+        Mutation(Mutation&& other) noexcept
+            : gate_(std::exchange(other.gate_, nullptr)) {}
+        Mutation& operator=(Mutation&& other) noexcept {
+            if (this != &other) {
+                reset();
+                gate_ = std::exchange(other.gate_, nullptr);
+            }
+            return *this;
+        }
+        ~Mutation() noexcept { reset(); }
+        explicit operator bool() const noexcept { return gate_ != nullptr; }
+        void reset() noexcept {
+            if (auto* gate = std::exchange(gate_, nullptr))
+                gate->state_.fetch_and(~mutation_bit, std::memory_order_release);
+        }
+    };
+
+    std::optional<Mutation> begin_mutation(ActorHeapIdentity actor) {
+        if (actor != owner_) throw std::logic_error("foreign heap mutation admission");
+        auto current = state_.load(std::memory_order_acquire);
+        for (;;) {
+            if (current != 0) return std::nullopt;
+            if (state_.compare_exchange_weak(current, mutation_bit,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return Mutation{this};
+        }
+    }
+
     std::optional<Lease> acquire(ActorHeapIdentity actor) {
         if (actor != owner_) throw std::logic_error("foreign heap borrow admission");
         auto current = state_.load(std::memory_order_acquire);
         for (;;) {
-            if (current & closing_bit) return std::nullopt;
+            if (current & (closing_bit | mutation_bit)) return std::nullopt;
             if ((current & counter_mask) == counter_mask)
                 throw std::overflow_error("actor heap borrower count overflow");
             if (state_.compare_exchange_weak(current, current + 1,
@@ -89,7 +129,7 @@ public:
     bool seal_and_quiesced(ActorHeapIdentity actor) {
         if (actor != owner_) throw std::logic_error("foreign actor heap retirement");
         const auto previous = state_.fetch_or(closing_bit, std::memory_order_acq_rel);
-        return (previous & counter_mask) == 0;
+        return (previous & (mutation_bit | counter_mask)) == 0;
     }
     bool quiesced() const noexcept {
         return state_.load(std::memory_order_acquire) == closing_bit;
