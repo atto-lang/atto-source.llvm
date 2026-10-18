@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeEpollReactor.hpp"
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -151,16 +152,30 @@ int main() {
         const auto ticket = competing.try_watch(ends[0], EPOLLIN);
         expect(ticket.has_value(), "register stop-race ticket");
 
+        std::atomic<bool> cancel_won{false};
         std::thread first([&] { competing.stop(); });
         std::thread second([&] { competing.stop(); });
+        // In alternating rounds cancellation contends with both teardown
+        // calls; whichever wins determines the one terminal record.
+        std::optional<std::thread> cancellation;
+        if ((round & 1) != 0) {
+            cancellation.emplace([&] {
+                cancel_won.store(competing.try_cancel(*ticket),
+                                 std::memory_order_release);
+            });
+        }
         first.join();
         second.join();
+        if (cancellation) cancellation->join();
 
         auto completion = until_completion(competing);
+        const auto expected_outcome = cancel_won.load(std::memory_order_acquire)
+                ? NativeEpollReactor::Outcome::cancelled
+                : NativeEpollReactor::Outcome::stopped;
         expect(completion.has_value()
                && completion->ticket.value == ticket->value
-               && completion->outcome == NativeEpollReactor::Outcome::stopped,
-               "exactly one stopped completion after competing teardown");
+               && completion->outcome == expected_outcome,
+               "exactly one correctly owned terminal completion after competing teardown");
         expect(!competing.try_pop().has_value(),
                "competing stop must not emit duplicate terminal completion");
         expect(competing.pending() == 0, "stop-race completion must reclaim ticket");
