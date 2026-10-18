@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "note": "Reference binder / overload admission only; not actual Oreslang compiler conformance.",
+  "version": 2,
+  "note": "Reference-only binding tests, not guest compiler conformance: supplied Option::None is distinct from an omitted slot, and a variadic rest is a sequence.",
   "parameters": [
     {
       "name": "a",
@@ -146,8 +146,7 @@
         },
         {
           "label": "b",
-          "expr": "None",
-          "kind": "none"
+          "expr": "None"
         },
         {
           "label": "c",
@@ -169,8 +168,7 @@
         },
         {
           "label": "b",
-          "expr": "Some(\"x\")",
-          "kind": "option"
+          "expr": "Some(\"x\")"
         },
         {
           "label": "c",
@@ -219,6 +217,191 @@
         "effect_a()",
         "None",
         "effect_c()"
+      ]
+    },
+    {
+      "id": "explicit-omit-middle",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "true"
+      ]
+    },
+    {
+      "id": "named-omit-middle",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3"
+        },
+        {
+          "label": "b",
+          "kind": "omit"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ]
+    },
+    {
+      "id": "explicit-none-is-supplied",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "None"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_none",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "variadic-zero",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        []
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_empty"
+      ]
+    },
+    {
+      "id": "variadic-many",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true"
+        },
+        {
+          "expr": "\"x\""
+        },
+        {
+          "expr": "\"y\""
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "\"x\"",
+          "\"y\""
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_values"
       ]
     }
   ],
@@ -362,6 +545,121 @@
         }
       ],
       "error": "duplicate"
+    },
+    {
+      "id": "reject-omit-required",
+      "args": [
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "\"x\""
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "error": "required"
+    },
+    {
+      "id": "reject-void-literal",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "void"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "error": "void"
+    },
+    {
+      "id": "reject-null-literal",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "null"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "error": "null"
+    },
+    {
+      "id": "reject-none-required-string",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string"
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        }
+      ],
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "None"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "error": "type mismatch"
+    },
+    {
+      "id": "reject-rest-omit",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3"
+        },
+        {
+          "label": "tags",
+          "kind": "omit"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-variadic-nonfinal",
+      "parameters": [
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        },
+        {
+          "name": "a",
+          "type": "int"
+        }
+      ],
+      "args": [],
+      "error": "final"
     }
   ],
   "overloads": [
@@ -447,492 +745,10 @@
         ]
       ],
       "admit": true
-    }
-  ],
-  "rest_accepts": [
-    {
-      "id": "rest-empty-named-prefix",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "label": "head",
-          "expr": "3"
-        }
-      ],
-      "slots": [
-        "3",
-        "Rest()"
-      ]
     },
     {
-      "id": "rest-empty-positional-prefix",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "3"
-        }
-      ],
-      "slots": [
-        "3",
-        "Rest()"
-      ]
-    },
-    {
-      "id": "rest-multiple-positional",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "\"x\""
-        },
-        {
-          "expr": "\"y\""
-        }
-      ],
-      "slots": [
-        "3",
-        "Rest(\"x\", \"y\")"
-      ]
-    },
-    {
-      "id": "rest-optional-prefix-omitted",
-      "parameters": [
-        {
-          "name": "prefix",
-          "type": "string",
-          "optional": true
-        },
-        {
-          "name": "items",
-          "type": "int",
-          "rest": true
-        }
-      ],
-      "args": [],
-      "slots": [
-        "None",
-        "Rest()"
-      ]
-    },
-    {
-      "id": "rest-optional-prefix-supplied",
-      "parameters": [
-        {
-          "name": "prefix",
-          "type": "string",
-          "optional": true
-        },
-        {
-          "name": "items",
-          "type": "int",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "\"label\""
-        },
-        {
-          "expr": "1"
-        },
-        {
-          "expr": "2"
-        }
-      ],
-      "slots": [
-        "Some(\"label\")",
-        "Rest(1, 2)"
-      ]
-    },
-    {
-      "id": "rest-optional-prefix-explicit-none",
-      "parameters": [
-        {
-          "name": "prefix",
-          "type": "string",
-          "optional": true
-        },
-        {
-          "name": "items",
-          "type": "int",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "None",
-          "kind": "none"
-        },
-        {
-          "expr": "1"
-        }
-      ],
-      "slots": [
-        "None",
-        "Rest(1)"
-      ]
-    },
-    {
-      "id": "required-option-not-optional",
-      "parameters": [
-        {
-          "name": "x",
-          "type": "Option<string>"
-        }
-      ],
-      "args": [
-        {
-          "expr": "None",
-          "kind": "plain"
-        }
-      ],
-      "slots": [
-        "None"
-      ]
-    },
-    {
-      "id": "rest-source-order-preserved",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "effect_head()"
-        },
-        {
-          "expr": "effect_1()"
-        },
-        {
-          "expr": "effect_2()"
-        }
-      ],
-      "slots": [
-        "effect_head()",
-        "Rest(effect_1(), effect_2())"
-      ]
-    }
-  ],
-  "rest_rejects": [
-    {
-      "id": "explicit-null-rejected",
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "null",
-          "kind": "null"
-        },
-        {
-          "expr": "true"
-        }
-      ],
-      "error": "invalid-absence"
-    },
-    {
-      "id": "explicit-void-rejected",
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "void",
-          "kind": "void"
-        },
-        {
-          "expr": "true"
-        }
-      ],
-      "error": "invalid-absence"
-    },
-    {
-      "id": "void-expression-rejected",
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "returns_void()",
-          "kind": "void"
-        },
-        {
-          "expr": "true"
-        }
-      ],
-      "error": "invalid-absence"
-    },
-    {
-      "id": "null-in-rest-rejected",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "null",
-          "kind": "null"
-        }
-      ],
-      "error": "invalid-absence"
-    },
-    {
-      "id": "void-in-rest-rejected",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "void",
-          "kind": "void"
-        }
-      ],
-      "error": "invalid-absence"
-    },
-    {
-      "id": "named-rest-no-static-pack",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "label": "head",
-          "expr": "3"
-        },
-        {
-          "label": "items",
-          "expr": "xs"
-        }
-      ],
-      "error": "named rest"
-    },
-    {
-      "id": "positional-after-named-even-with-rest",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "label": "head",
-          "expr": "3"
-        },
-        {
-          "expr": "\"x\""
-        }
-      ],
-      "error": "positional-after-named"
-    },
-    {
-      "id": "rest-must-be-last",
-      "parameters": [
-        {
-          "name": "items",
-          "type": "int",
-          "rest": true
-        },
-        {
-          "name": "after",
-          "type": "int"
-        }
-      ],
-      "args": [],
-      "error": "must be final"
-    },
-    {
-      "id": "rest-cannot-be-optional",
-      "parameters": [
-        {
-          "name": "items",
-          "type": "int",
-          "optional": true,
-          "rest": true
-        }
-      ],
-      "args": [],
-      "error": "cannot also be optional"
-    },
-    {
-      "id": "spread-cannot-bypass-binder",
-      "parameters": [
-        {
-          "name": "head",
-          "type": "int"
-        },
-        {
-          "name": "items",
-          "type": "string",
-          "rest": true
-        }
-      ],
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "values",
-          "spread": true
-        }
-      ],
-      "error": "spread"
-    },
-    {
-      "id": "positional-holes-not-supported",
-      "args": [
-        {
-          "expr": "3"
-        },
-        {
-          "expr": "true"
-        }
-      ],
-      "error": "missing"
-    }
-  ],
-  "rest_overloads": [
-    {
-      "id": "rest-collides-single-fixed",
+      "id": "rest-alone",
       "signatures": [
-        [
-          false
-        ],
-        [
-          false,
-          {
-            "rest": true
-          }
-        ]
-      ],
-      "admit": false
-    },
-    {
-      "id": "rest-collides-two-fixed",
-      "signatures": [
-        [
-          false,
-          false
-        ],
-        [
-          false,
-          {
-            "rest": true
-          }
-        ]
-      ],
-      "admit": false
-    },
-    {
-      "id": "rest-collides-optional",
-      "signatures": [
-        [
-          false,
-          true
-        ],
-        [
-          false,
-          {
-            "rest": true
-          }
-        ]
-      ],
-      "admit": false
-    },
-    {
-      "id": "rest-vs-rest",
-      "signatures": [
-        [
-          {
-            "rest": true
-          }
-        ],
-        [
-          false,
-          {
-            "rest": true
-          }
-        ]
-      ],
-      "admit": false
-    },
-    {
-      "id": "rest-min-one-vs-zero-only",
-      "signatures": [
-        [],
         [
           false,
           {
@@ -943,18 +759,17 @@
       "admit": true
     },
     {
-      "id": "rest-nested-separated-not-possible",
+      "id": "rest-versus-fixed",
       "signatures": [
-        [
-          false,
-          false,
-          false
-        ],
         [
           false,
           {
             "rest": true
           }
+        ],
+        [
+          false,
+          false
         ]
       ],
       "admit": false
