@@ -431,6 +431,26 @@ if(BUILD_TESTING)
     set_tests_properties(native_ctest_manifest_harness_adversarial
         PROPERTIES TIMEOUT 30)
 
+    # Contract/conformance parity is intentionally rejection-only in the
+    # native frontend until nominal contract metadata, linker provenance and
+    # static/module namespace lowering exist. These tests require a targeted
+    # diagnostic and the common harness rejects any emitted partial LLVM IR.
+    oreslang_contract_test(native_module_contract_failclosed
+        unsupported-module-contract.ores
+        --diagnostic "native module contract lowering unsupported")
+    oreslang_contract_test(native_static_contract_failclosed
+        unsupported-static-contract.ores
+        --diagnostic "native static contract lowering unsupported")
+    oreslang_contract_test(native_module_conforms_failclosed
+        unsupported-module-conforms.ores
+        --diagnostic "native module contract conformance lowering unsupported")
+    oreslang_contract_test(native_class_implements_failclosed
+        unsupported-class-implements.ores
+        --diagnostic "native class contract conformance lowering unsupported")
+    oreslang_contract_test(native_class_implements_static_failclosed
+        unsupported-class-implements-static.ores
+        --diagnostic "native class contract conformance lowering unsupported")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
