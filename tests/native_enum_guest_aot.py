@@ -85,6 +85,45 @@ class NativeEnumGuestAot(unittest.TestCase):
                                         text=True, timeout=10, check=False)
                 self.assertEqual(native.returncode, 10, native.stderr)
 
+    def test_declaration_permutation_and_nominal_tag_metamorphism(self):
+        """Actual source compiler must preserve dispatch across declaration order."""
+        head = "define enum Foo as A = %d, B = %d end\\n"
+        defs = (
+            "fnc classify(Foo.A value): int { return 10; }\\n",
+            "fnc classify(Foo.B value): int { return 20; }\\n",
+            "fnc classify(Foo value): int { return 0; }\\n",
+        )
+        body = ("fnc main(): int { const Foo widened = Foo.B; "
+                "return classify(Foo.A) + classify(Foo.B) + classify(widened); }")
+        baseline = None
+        for order, tags in (((0, 1, 2), (17, 29)),
+                            ((1, 2, 0), (17, 29)),
+                            ((2, 0, 1), (500, 901)),
+                            ((0, 2, 1), (1, 2147483647))):
+            with self.subTest(order=order, tags=tags):
+                text = head % tags + "".join(defs[i] for i in order) + body
+                result = self.compile(text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                symbols = re.findall(
+                    r'call i64 @("?eos2[^\\s(]+"?)\\(', result.stdout)
+                self.assertEqual(len(symbols), 3, result.stdout)
+                self.assertEqual(len(set(symbols)), 3, result.stdout)
+                if baseline is None:
+                    baseline = symbols
+                else:
+                    self.assertEqual(symbols, baseline, result.stdout)
+                with tempfile.TemporaryDirectory(prefix="ores-enum-order-") as temp:
+                    ll = pathlib.Path(temp) / "ordered.ll"
+                    exe = pathlib.Path(temp) / "ordered"
+                    ll.write_text(result.stdout, encoding="utf-8")
+                    built = subprocess.run(
+                        [self.clang, "-x", "ir", "-O2", str(ll), "-o", str(exe)],
+                        capture_output=True, text=True, timeout=30, check=False)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    ran = subprocess.run([str(exe)], capture_output=True,
+                                         text=True, timeout=10, check=False)
+                    self.assertEqual(ran.returncode, 30, ran.stderr)
+
     def test_exit_code_and_signed_sum_are_checked_before_codegen(self):
         base = """define enum Foo as A, B end
             fnc foo(Foo.A x): int { return %s; }
