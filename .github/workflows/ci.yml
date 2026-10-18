@@ -35,6 +35,10 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Original C++ enum source parser conformance
+        run: |
+          clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -I src/main/cpp tests/native_enum_aot_slice_test.cpp -o build/native-enum-aot-source-test
+          ./build/native-enum-aot-source-test
       - name: Compile and execute real enum-case guest AOT binary (opt-in)
         run: |
           set -euo pipefail
