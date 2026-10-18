@@ -1224,10 +1224,11 @@ private:
         }
         if (token_.text == "nb") {
             Lexer next = lexer_;
-            if (next.next().text == "task") {
+            const auto following = next.next().text;
+            if (following == "task") {
                 fail("nb task is not a language construct; use task {}, do task {}, or await task {}");
             }
-            if (next.next().text == "{")
+            if (following == "{")
                 fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
         }
         if (token_.text == "trap") {
