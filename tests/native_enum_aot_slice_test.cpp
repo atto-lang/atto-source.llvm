@@ -36,6 +36,36 @@ std::string fixture(int a = 1, int b = 2, const std::string& first = "10",
 }
 int main() {
     auto plan = oreslang::enum_aot::parse(fixture());
+    oreslang::enum_aot::validatePlan(plan);
+    auto expectForgedRejected = [&](const oreslang::enum_aot::Plan& tampered) {
+        bool rejected = false;
+        try { oreslang::enum_aot::validatePlan(tampered); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        REQUIRE(rejected);
+    };
+    {
+        auto forged = plan;
+        forged.returnCalls[0].exactSymbol = forged.returnCalls[1].exactSymbol;
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.returnCalls[0].tag = forged.cases[1].tag;
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.returnCalls[0].staticallyProvenCase = "Missing";
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.enumId = "local_unit.__root__.Other";
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.cases[0].name = "int";
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.cases[0].tag = 0;
+        expectForgedRejected(forged);
+        forged = plan;
+        forged.functions[0].signature.name = "other";
+        expectForgedRejected(forged);
+    }
     REQUIRE(plan.enumId == "local_unit.__root__.Foo");
     REQUIRE(plan.cases.size() == 2);
     REQUIRE(plan.functions.size() == 2);
