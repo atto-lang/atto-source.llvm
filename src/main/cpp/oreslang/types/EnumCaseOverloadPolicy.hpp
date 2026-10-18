@@ -19,6 +19,7 @@ constexpr std::size_t MaxArity = 64;
 constexpr std::size_t MaxCandidates = 128;
 constexpr std::size_t MaxCases = 1024;
 constexpr std::size_t MaxEnums = 4096;
+constexpr std::size_t MaxIdBytes = 512;
 
 enum class Domain { Module, Instance, Static };
 enum class Kind { Fixed, Enum, Case };
@@ -31,6 +32,8 @@ inline bool fixedScalar(const std::string& name) {
 
 inline void identifier(const std::string& s) {
     if (s.empty()) throw std::invalid_argument("empty nominal identity");
+    if (s.size() > MaxIdBytes)
+        throw std::invalid_argument("nominal identity UTF-8 budget exceeded");
     // Reject malformed UTF-8, embedded NUL, ASCII control and whitespace.
     // Valid multibyte values are kept as their canonical UTF-8 bytes for ABI.
     for (std::size_t i = 0; i < s.size();) {
