@@ -106,7 +106,7 @@ RAM_END = 0x20010000
 
 def verify_vector_table(elf_path):
     raw = elf_path.read_bytes()
-    verify(len(raw) >= 52 and raw[:6] == b"\\x7fELF\\x01\\x01",
+    verify(len(raw) >= 52 and raw[:6] == b"\x7fELF\x01\x01",
            "expected ELF32 little-endian firmware")
     verify(struct.unpack_from("<H", raw, 16)[0] == 2,
            "expected ET_EXEC standalone firmware")
