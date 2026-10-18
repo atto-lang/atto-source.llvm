@@ -15,7 +15,10 @@ class HungryCarrier;
 
 /**
  * Minted only after HungryCarrier::join() has stopped actor and broker,
- * closed ingress, and drained every outstanding producer call.
+ * closed ingress, drained every outstanding producer call, and either no
+ * logical frame was abandoned or its carrier-thread cancellation/drop callback
+ * explicitly acknowledged cleanup. Missing/failed frame cleanup blocks proof
+ * issuance permanently for that carrier instance.
  *
  * A proof does NOT cover unrelated FFI borrows: those must be tracked with
  * ActorHeapBorrowGate below and drained separately.
