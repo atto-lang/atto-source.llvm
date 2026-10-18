@@ -291,6 +291,13 @@ int ores_native_vm_poll_done(
     return vm && valid_domain(domain)
         && ores_native_actor_scheduler_poll_done(vm->schedulers[domain], ref);
 }
+int ores_native_vm_actor_terminal_state(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, OresNativeActorTerminalState* output) {
+    return vm && valid_domain(domain) && output
+        && ores_native_actor_scheduler_terminal_state(
+            vm->schedulers[domain], ref, output);
+}
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
     return vm && valid_domain(domain)
