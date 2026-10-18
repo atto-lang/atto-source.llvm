@@ -838,6 +838,12 @@ if(BUILD_TESTING)
     # before IR emission (no silent fallback to a generic mailbox actor).
     oreslang_contract_test(native_reject_serial_unary_http_actor native-transport-serial-unary-http.ores
         --diagnostic "native specialized actor serial unary http requires typed adapter")
+    oreslang_contract_test(native_reject_http_actor native-transport-http.ores
+        --diagnostic "native specialized actor http requires typed adapter")
+    oreslang_contract_test(native_reject_unary_mail_actor native-transport-unary-mail.ores
+        --diagnostic "native specialized actor unary requires typed adapter")
+    oreslang_contract_test(native_reject_serial_mail_actor native-transport-serial-mail.ores
+        --diagnostic "native specialized actor serial requires typed adapter")
     oreslang_contract_test(native_reject_ipc_actor native-transport-ipc.ores
         --diagnostic "native specialized actor ipc requires typed adapter")
     oreslang_contract_test(native_reject_tcp_actor native-transport-tcp.ores
