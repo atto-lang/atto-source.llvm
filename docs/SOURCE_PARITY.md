@@ -118,3 +118,14 @@ Record the exact Java source SHA in future differential fixtures, rather than cl
 Next priorities: imported Java lexer golden cases, unambiguous checked integer semantics,
 structured control flow, typed return analysis, precise ownership and actor ABI,
 before introducing scheduler or pinned-frame execution.
+
+## Async lambda / Task lambda native parity gate (2026-10-18)
+
+The Java/Graal frontend draft #1377 parses two distinct lambda modifiers:
+
+- `async |int a| -> nb { return a; }` intends an ordinary async callable returning `Future<Task<int>>`. Awaiting once resolves only the outer Future, leaving the Task handle to be awaited separately. No implicit flattening.
+- `async task |int a| -> { return a; }` intends a **single Task<int>** whose whole body is scheduled (equivalent in semantics to a non-async lambda returning `nb { return a; }`). Braceless expression bodies also work, and `await` joins that single Task.
+
+The native bootstrap currently cannot create either typed closure or nonparking continuation. It now fails closed with **distinct diagnostics**, before emitting LLVM IR, for `async task |...|` and `async |...|`, including the latter wrapping `nb { ... }`. `task` is contextual after `async`, not a globally reserved type/identifier.
+
+Do not enable native source execution until task-owned capture/borrowing and cancellation, single-completion publication, lexical return and cleanup unwinding, bounded scheduler admission, cross-domain actor and tenant isolation, and exact-head executable parity evidence are available. Rejection proves only absence of unsafe partial lowering, not implementation.
