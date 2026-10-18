@@ -284,3 +284,14 @@ without separators.
 In all backends, **physical actor execution remains max=1** until the real
 scheduler admission, ownership/effect checking and full-tree tests run.
 Host gates and syntax-only compiler tests cannot authorize parallel actors.
+
+
+### Exact annotation delimiters across backends
+
+Actor thread configuration uses the same parentheses grammar in every
+frontend: `@ActorThreads(min = 1, max = 1)` and
+`@ActorMaxThreads(MaxActorThreads.LOW)`. The otherwise legal generic
+annotation spelling `@ActorThreads<...>` / `@ActorMaxThreads<...>`
+**must fail compilation**; silently accepting a different form in one
+backend creates incompatible scheduling-policy admission. Java and LLVM
+now reject this explicitly and include negative regression cases.
