@@ -205,3 +205,42 @@ private compiler checkout; independent local C++17 compilation and
 sanitizer checks exercised only a separately reproduced seal/literal
 boundary, not this full source. Release status stays DRAFT until
 runner-backed exact-head compiler and executable tests pass.
+
+## October 18 security audit: direct API admission and bound provenance
+
+The compiler CLI had a target/capability admission guard for the exact
+`// ores:` directive. Previously direct `parseVerified()` callers could
+bypass that check. The sealed library entry now rejects the same directive
+before parsing, including when supplied in otherwise ignored comments.
+The source C++ and Python regression suites include fail-closed positive
+and negative cases.
+
+The original private C++ parser harness now runs 4,096 deterministic
+one-byte input mutations. A mutation must either fail with a rejected
+source or yield a fully validated sealed plan. The suite also checks
+valid/minimum signed-i64 literals, deliberate forged exact-call IDs and
+rejected arbitrary changes to enum wire schema. These source-compiled
+tests have **not yet executed** on the private LLVM CI runner.
+
+The single-command exact-source script has optional
+`EXPECTED_SOURCE_SHA` and `EXPECTED_SOURCE_TREE` pins. When supplied,
+mismatches fail before compilation; it prints the actual HEAD commit,
+Git tree and tracked compiler/test blob IDs. A local isolated Git fixture
+verified Bash syntax, mismatched commit (exit 3), mismatched tree
+(exit 3), and dirty checkout (nonzero). The isolated script test
+**does not qualify the private compiler**.
+
+The funded `sagitta-stack/sagitta-infra` source-free synthetic contract
+run [#39147637964](https://github.com/sagitta-stack/sagitta-infra/actions/runs/39147637964)
+at independent head `c4d71334a3de10da123f00e51d7fb4ee44ed8a4a`
+passed 18 Python tests each in normal, optimized and development modes,
+54 executed test invocations in total, including a separate
+4,096-iteration admission mutation model. This run contains no private
+Oreslang Git objects/headers/source files and **cannot certify** the
+actual C++ source or Oreslang guest executable.
+
+The reviewed cross-organization private-source carrier allowlist remains
+empty. P0 source-export incidents #22 and #77 in the platform-conformance
+repository remain open and require independent security review. The
+availability of funded GitHub Actions minutes in a private destination is
+not authority to export the original private source tree.
