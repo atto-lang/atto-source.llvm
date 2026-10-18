@@ -22,11 +22,32 @@ public:
     using Quota = TrustedUntrustedNetworkQuota;
     using Status = Quota::Status;
 
+    // Destruction with live Scope/Lease objects is a deterministic failure,
+    // never a silent use-after-free of a host-owned quota gate.
+    ~TrustedHierarchicalNetworkGate() noexcept {
+        std::lock_guard<std::mutex> guard(lock_);
+        if (live_scopes_ || live_leases_) std::abort();
+    }
+    TrustedHierarchicalNetworkGate() = default;
+    TrustedHierarchicalNetworkGate(const TrustedHierarchicalNetworkGate&) = delete;
+    TrustedHierarchicalNetworkGate& operator=(const TrustedHierarchicalNetworkGate&) = delete;
+
     class Scope final {
     public:
         Scope(TrustedHierarchicalNetworkGate& gate, Quota::Policy policy,
               std::uint64_t initial_host_nanos) noexcept
-            : gate_(&gate), quota_(policy, initial_host_nanos) {}
+            : gate_(&gate), quota_(policy, initial_host_nanos) {
+            std::lock_guard<std::mutex> guard(gate_->lock_);
+            ++gate_->live_scopes_;
+        }
+        ~Scope() noexcept {
+            // Every Scope must outlive its leases and be destroyed before the
+            // gate. A native freed Scope is not safe to dereference on refund.
+            std::lock_guard<std::mutex> guard(gate_->lock_);
+            if (gate_->live_scopes_ == 0) std::abort();
+            if (quota_.http_in_flight() || quota_.tcp_connections()) std::abort();
+            --gate_->live_scopes_;
+        }
         Scope(const Scope&) = delete;
         Scope& operator=(const Scope&) = delete;
         Scope(Scope&&) = delete;
@@ -65,7 +86,7 @@ public:
         ~Lease() noexcept { release(); }
 
         bool commit_dispatch() noexcept {
-            if (!gate_) return false;
+            if (state_.load() != 0 || !gate_) return false;
             std::lock_guard<std::mutex> guard(gate_->lock_);
             std::uint8_t expected = 0;
             if (!state_.compare_exchange_strong(expected, 1)) return false;
@@ -75,23 +96,29 @@ public:
         }
 
         bool abort_before_dispatch(std::uint64_t trusted_nanos) noexcept {
-            if (!gate_) return false;
+            if (state_.load() != 0 || !gate_) return false;
             std::lock_guard<std::mutex> guard(gate_->lock_);
             std::uint8_t expected = 0;
             if (!state_.compare_exchange_strong(expected, 2)) return false;
             if (!child_.abort_before_dispatch(trusted_nanos)
                     || !supervisor_.abort_before_dispatch(trusted_nanos)
                     || !tenant_.abort_before_dispatch(trusted_nanos)) std::abort();
+            if (gate_->live_leases_ == 0) std::abort();
+            --gate_->live_leases_;
             return true;
         }
 
         void release() noexcept {
-            if (!gate_) return;
+            // A moved-from/settled lease must not dereference a possibly
+            // retired gate (particularly during a later destructor).
+            if (state_.load() == 2 || !gate_) return;
             std::lock_guard<std::mutex> guard(gate_->lock_);
             if (state_.exchange(2) == 2) return;
             child_.release();
             supervisor_.release();
             tenant_.release();
+            if (gate_->live_leases_ == 0) std::abort();
+            --gate_->live_leases_;
         }
     private:
         friend class TrustedHierarchicalNetworkGate;
@@ -139,6 +166,8 @@ private:
                     || !first.lease.abort_before_dispatch(now)) std::abort();
             return {third.status, Lease{}};
         }
+        // All three reservations now belong to one logical lease.
+        ++live_leases_;
         return {Status::admitted, Lease(*this, std::move(first.lease),
                                       std::move(second.lease), std::move(third.lease))};
     }
@@ -147,5 +176,7 @@ private:
         return http ? quota.try_start_http(now) : quota.try_open_tcp(now);
     }
     std::mutex lock_;
+    std::uint64_t live_scopes_ = 0; // guarded by lock_
+    std::uint64_t live_leases_ = 0; // guarded by lock_
 };
 } // namespace oreslang::runtime
