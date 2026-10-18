@@ -38,8 +38,9 @@ static void end_release(ores_std_ticket t) {
     do { code=ores_state_end(&state,77u,9u,t); }
     while (code==ORES_STD_SYNC_RETRY);
     assert(code==ORES_STD_SYNC_GRANTED);
-    assert(ores_state_ready_to_suspend(&state,77u,9u,t)==ORES_STD_SYNC_EXECUTING ||
-           ores_state_ready_to_suspend(&state,77u,9u,t)==ORES_STD_SYNC_RETRY);
+    ores_std_sync_code suspend_check = ores_state_ready_to_suspend(&state,77u,9u,t);
+    assert(suspend_check == ORES_STD_SYNC_EXECUTING ||
+           suspend_check == ORES_STD_SYNC_RETRY);
     ores_std_sync_result r;
     do {r=ores_state_release(&state,77u,9u,t);}
     while(r.code==ORES_STD_SYNC_RETRY);
@@ -50,8 +51,10 @@ static void *writer_worker(void* p) {
     for(unsigned i=0;i<4000;++i) {
         ores_actor_state_acquisition r=request_access(ORES_STD_WRITE);
         wait_start(r.admission.ticket);
-        assert(ores_state_ready_to_suspend(&state,77u,9u,r.admission.ticket)==ORES_STD_SYNC_EXECUTING ||
-               ores_state_ready_to_suspend(&state,77u,9u,r.admission.ticket)==ORES_STD_SYNC_RETRY);
+        ores_std_sync_code suspend_check =
+            ores_state_ready_to_suspend(&state,77u,9u,r.admission.ticket);
+        assert(suspend_check == ORES_STD_SYNC_EXECUTING ||
+               suspend_check == ORES_STD_SYNC_RETRY);
         ++protected_count;
         end_release(r.admission.ticket);
     }
