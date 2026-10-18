@@ -92,6 +92,14 @@ CASES = {
         "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
         "expected 'finally'",
     ),
+    "task-discard-block": (
+        "pub fnc main(): int { do nb { return 7; }; return 0; }",
+        "native Task block lowering unsupported",
+    ),
+    "task-valued-block": (
+        "pub fnc main(): int { let Task<int> t = nb { return 7; }; return 0; }",
+        "native Task block lowering unsupported",
+    ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
