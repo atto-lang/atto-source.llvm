@@ -48,6 +48,65 @@ static HungryCarrier::Options bound_options(
     return options;
 }
 
+static void multi_lane_cohort_requires_every_carrier_to_join() {
+    using Heap = ActorOwnedGraphHeap<4, 32, 2>;
+    const ActorHeapIdentity owner{109, 71, 5};
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 3);
+    Heap graph(cohort);
+    std::uint64_t payload = 17;
+    check(graph.allocate(owner, &payload, sizeof(payload)).has_value(),
+          "multi-lane cohort graph allocation failed");
+
+    HungryCarrier first(nullptr, done_handler, nullptr, io_noop,
+                        bound_options(owner, cohort));
+    HungryCarrier second(nullptr, done_handler, nullptr, io_noop,
+                         bound_options(owner, cohort));
+    HungryCarrier third(nullptr, done_handler, nullptr, io_noop,
+                        bound_options(owner, cohort));
+    check(cohort->registered_lanes() == 3,
+          "retirement cohort did not register all expected lanes");
+
+    bool fourthRejected = false;
+    try {
+        HungryCarrier extra(nullptr, done_handler, nullptr, io_noop,
+                            bound_options(owner, cohort));
+    } catch (const std::invalid_argument&) {
+        fourthRejected = true;
+    }
+    check(fourthRejected, "retirement cohort admitted an unexpected fourth lane");
+
+    bool duplicateCohortRejected = false;
+    try {
+        (void)oreslang::runtime::ActorHeapRetirementCohort::create(owner, 1);
+    } catch (const std::logic_error&) {
+        duplicateCohortRejected = true;
+    }
+    check(duplicateCohortRejected,
+          "same actor generation admitted two live retirement cohorts");
+
+    first.start();
+    second.start();
+    third.start();
+    first.join();
+    check(!first.retirement_proof().has_value() &&
+          cohort->joined_lanes() == 1,
+          "one of three joined lanes fabricated actor-wide retirement proof");
+    second.join();
+    check(!second.retirement_proof().has_value() &&
+          cohort->joined_lanes() == 2,
+          "two of three joined lanes fabricated actor-wide retirement proof");
+    third.join();
+    const auto proof = third.retirement_proof();
+    check(proof.has_value() && proof->lanes() == 3 &&
+          proof->cohort_id() == graph.retirement_cohort_id(),
+          "all three lanes did not mint the bound cohort retirement proof");
+    check(first.retirement_proof().has_value() &&
+          second.retirement_proof().has_value(),
+          "fully quiesced cohort proof not visible from already-joined lanes");
+    graph.retire(owner, *proof);
+    check(graph.retired(), "three-lane actor graph did not retire after quorum");
+}
+
 static void cycles_reclaim_without_gc() {
     using Heap = ActorOwnedGraphHeap<16, 32, 4>;
     ActorHeapIdentity owner{9, 7, 1};
@@ -560,6 +619,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 }
 
 int main() {
+    multi_lane_cohort_requires_every_carrier_to_join();
     heap_identity_never_wraps_and_remains_unique_under_races();
     heap_identity_unique_across_graph_specializations();
     concurrent_graph_read_write_links_are_exclusive();
