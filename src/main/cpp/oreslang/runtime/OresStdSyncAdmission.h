@@ -268,7 +268,10 @@ static inline ores_std_sync_code ores_std_start(
             ? ORES_STD_SYNC_GRANTED :
             slot->state == ORES_STD_WAITING ? ORES_STD_SYNC_QUEUED :
             ORES_STD_SYNC_EXECUTING;
-        if (slot->state == ORES_STD_ADMITTED) slot->state = ORES_STD_RUNNING;
+        /* Closed is an observation only: never turn a revoked dormant
+         * admission into a physical callback. STOP owns revocation. */
+        if (!gate->sealed && slot->state == ORES_STD_ADMITTED)
+            slot->state = ORES_STD_RUNNING;
     }
     ores_std_leave_metadata(gate);
     return code;
