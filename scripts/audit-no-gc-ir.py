@@ -26,7 +26,7 @@ MAX_IR_BYTES = 64 * 1024 * 1024
 # LLVM quoted symbol names support byte escapes. Until strict LLVM decoding
 # is integrated, reject escaped quoted identifiers rather than letting a GC
 # intrinsic alias evade a byte-oriented name screen.
-ESCAPED_QUOTED_SYMBOL = re.compile(r'@"(?:[^"\\\\]|\\\\.)*\\\\[0-9A-Fa-f]{2}')
+ESCAPED_QUOTED_SYMBOL = re.compile(r'@"(?:[^"\\]|\\.)*\\[0-9A-Fa-f]{2}')
 
 
 def executable_ir_line(raw):
@@ -38,7 +38,7 @@ def executable_ir_line(raw):
     for index, char in enumerate(raw):
         if escaped:
             escaped = False
-        elif quoted and char == "\\\\":
+        elif quoted and char == "\\":
             escaped = True
         elif char == '"':
             quoted = not quoted
