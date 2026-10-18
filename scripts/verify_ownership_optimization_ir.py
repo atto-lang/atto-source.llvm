@@ -7,8 +7,8 @@ import re
 import sys
 from pathlib import Path
 
-UNPROVEN = re.compile(r"!(?:tbaa(?:\.struct)?|alias\.scope|noalias|llvm\.loop)\b|\bnoalias\b")
-FAST_MATH = re.compile(r"\b(?:fadd|fsub|fmul|fdiv|frem|fcmp)\s+(?:fast|nnan|ninf|nsz|arcp|contract|afn|reassoc)\b")
+UNPROVEN = re.compile(r"!(?:tbaa(?:\.struct)?|alias\.scope|noalias|llvm\.loop|llvm\.access\.group|llvm\.mem\.parallel_loop_access|invariant\.(?:load|group))\b|\bnoalias\b")
+FAST_MATH = re.compile(r"\b(?:fneg|fadd|fsub|fmul|fdiv|frem|fcmp|select|phi|call|invoke)\s+(?:fast|nnan|ninf|nsz|arcp|contract|afn|reassoc)\b")
 
 
 class UnsafeOptimizationMetadata(ValueError):
