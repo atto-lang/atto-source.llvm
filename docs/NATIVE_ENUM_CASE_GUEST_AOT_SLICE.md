@@ -171,3 +171,37 @@ source budget, binary NUL and hidden invalid Unicode. Tests still require
 a real source-runner execution; a zero-step Actions failure is **not**
 evidence of a successful compilation. Source policy still forbids
 unapproved cross-org private Git-tree transfer.
+
+## One-command exact-tree release preflight (October 18)
+
+A consolidated same-repository qualification script is now checked in:
+
+```sh
+bash scripts/ci-enum-aot-exact-source.sh
+```
+
+The script refuses a dirty checkout, reports its exact `git rev-parse HEAD`,
+and compiles the **original** `native_enum_aot_slice_test.cpp` using
+Clang and GCC under C++17 strict warnings. It repeats the parser test with
+Clang ASan/UBSan, builds the production `oreslang-llvmc` and CTest
+target from that checkout, executes both dedicated enum-AOT CTests,
+and explicitly runs `native_enum_guest_aot.py` through Clang with the
+actual Oreslang fixture.
+
+The native Python smoke now compiles the same emitted IR under **both**
+`clang -O0` and `-O2` and executes the resulting binaries, expecting
+exit status `10`. Six enumerator-retagging examples (including near
+positive Int32 maximum) additionally compile and execute optimized guest
+binaries, proving numeric wire tags cannot change statically selected
+`eos2` call targets or native output.
+
+The manual script can be invoked on any **authorized** checkout of the
+private repository; it does not mirror source across organizations. The
+primary existing source CI workflow already contains original C++ and
+native executable steps. A new dedicated GitHub Actions workflow could
+not be installed through the available connector, so it has not been
+represented as active. This script has **not** yet run against the exact
+private compiler checkout; independent local C++17 compilation and
+sanitizer checks exercised only a separately reproduced seal/literal
+boundary, not this full source. Release status stays DRAFT until
+runner-backed exact-head compiler and executable tests pass.
