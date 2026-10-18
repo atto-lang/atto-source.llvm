@@ -100,6 +100,18 @@ CASES = {
         "pub fnc main(): int { return nb { return 7; }; }",
         "native Task block lowering unsupported",
     ),
+    "async-task-lambda-block": (
+        "pub fnc main(): int { return (async task |int a| -> { return a; })(5); }",
+        "native async task lambda lowering unsupported",
+    ),
+    "async-task-lambda-expression": (
+        "pub fnc main(): int { return (async task |int a| -> a)(5); }",
+        "native async task lambda lowering unsupported",
+    ),
+    "async-future-with-inner-task": (
+        "pub fnc main(): int { return (async |int a| -> nb { return a; })(5); }",
+        "native async Future lambda lowering unsupported",
+    ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
