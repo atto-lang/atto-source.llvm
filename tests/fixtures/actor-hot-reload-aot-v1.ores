@@ -1,0 +1,11 @@
+// Actual native guest actor, first generation. Persistent fields are owned by
+// OresActorI64Heap; source compiler lowers the fixed actor field ABI.
+define actor Counter as {
+  const base: int = 40;
+  val delta: int = 2;
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + base + delta + n;
+    return total;
+  }
+}
