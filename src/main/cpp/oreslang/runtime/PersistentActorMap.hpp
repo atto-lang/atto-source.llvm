@@ -1,5 +1,7 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -18,7 +20,8 @@ public:
         Value(std::int64_t v): value_(v) {}
         Value(int v): value_(static_cast<std::int64_t>(v)) {}
         Value(double v): value_(v) {
-            if (!(v == v)) throw std::invalid_argument("NaN actor value");
+            if (!std::isfinite(v))
+                throw std::invalid_argument("nonfinite actor value");
         }
         Value(std::string v): value_(std::move(v)) {}
         Value(const char* v): value_(std::string(v)) {}
