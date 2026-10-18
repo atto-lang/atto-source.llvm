@@ -1,5 +1,8 @@
 #include "oreslang/runtime/OresCoreSync.h"
 #include <pthread.h>
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
