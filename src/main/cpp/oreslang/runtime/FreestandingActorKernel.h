@@ -18,7 +18,10 @@ extern "C" {
 #define ORES_KERNEL_MAGIC UINT32_C(0x4f52414b)
 
 typedef struct OresKernel OresKernel;
-typedef struct { uint32_t slot; uint32_t generation; } OresKernelRef;
+/* Local-only reference identity: owner pointer prevents cross-kernel slot and
+ * generation collisions. This is NOT an unforgeable security capability or
+ * a transferable/wire-format ActorRef. */
+typedef struct { uint32_t slot; uint32_t generation; const OresKernel *owner; } OresKernelRef;
 /* Invoked only by the trusted executor. The field pointer belongs to the
  * current actor and must not be retained/shared outside the callback. */
 typedef int (*OresKernelHandler)(uint64_t fields[ORES_KERNEL_FIELDS],
