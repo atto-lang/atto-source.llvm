@@ -165,6 +165,12 @@ int main() {
     )", "unknown native BooleanOps member 'Nand'");
 
     rejected(R"(
+        fnc bad(bool BooleanOps, bool a, bool b): bool {
+            return BooleanOps.And(a, b);
+        }
+    )", "BooleanOps builtin namespace is shadowed by a bool parameter");
+
+    rejected(R"(
         fnc bad(bool a): bool {
             return And(a);
         }
