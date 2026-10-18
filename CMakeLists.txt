@@ -948,6 +948,20 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_scalar_state_critical_lifetimes
         COMMAND oreslang-native-scalar-state-test)
+    # Pinned hot code revisions: exercise exact-ABI CAS, bounded retention,
+    # failed candidate reclamation and callbacks outside the CONTROL mutex.
+    # This is a host-only runtime substrate, not source actor hot replacement.
+    add_executable(oreslang-native-supervisor-code-slot-test
+        tests/native_supervisor_code_slot_test.cpp)
+    target_include_directories(oreslang-native-supervisor-code-slot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-supervisor-code-slot-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-supervisor-code-slot-test PRIVATE Threads::Threads)
+    add_test(NAME native_supervisor_hot_reload_generation_reclamation
+        COMMAND oreslang-native-supervisor-code-slot-test)
+    set_tests_properties(native_supervisor_hot_reload_generation_reclamation
+        PROPERTIES TIMEOUT 20)
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
