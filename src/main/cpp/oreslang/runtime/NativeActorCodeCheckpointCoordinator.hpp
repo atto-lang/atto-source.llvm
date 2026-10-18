@@ -111,6 +111,40 @@ public:
         (void)Wire::decode(frame, initial_pin.code().manifest, sha256_);
     }
 
+    /**
+     * A host continuation root retains the *exact* code image across carrier
+     * suspension, even though no OS thread remains inside the actor handler.
+     * Only source compiler/scheduler lowering may create these roots in a
+     * production OresVM; the exposed API is a host-only contract test.
+     *
+     * The lease carries executable code but deliberately NOT actor-owned
+     * mutable state or an implicit right to enter a closed actor. Await/FFI
+     * lowering must separately validate its state/capability grant on resume.
+     */
+    class SuspendedCodeLease final {
+        friend class NativeActorCodeCheckpointCoordinator;
+        Gate::Pin pinned_;
+        explicit SuspendedCodeLease(Gate::Pin&& pin) noexcept
+            : pinned_(std::move(pin)) {}
+    public:
+        SuspendedCodeLease(const SuspendedCodeLease&) = delete;
+        SuspendedCodeLease& operator=(const SuspendedCodeLease&) = delete;
+        SuspendedCodeLease(SuspendedCodeLease&&) noexcept = default;
+        SuspendedCodeLease& operator=(SuspendedCodeLease&&) noexcept = default;
+        Gate::Descriptor descriptor() const { return pinned_.descriptor(); }
+        Wire::Header manifest() const { return pinned_.code().manifest; }
+        std::int64_t invoke_pinned(std::int64_t value, std::int64_t delta) const {
+            if (!pinned_.code().invoke)
+                throw std::logic_error("invalid suspended native code generation");
+            return pinned_.code().invoke(value, delta);
+        }
+        void release() noexcept { pinned_.close(); }
+    };
+
+    SuspendedCodeLease suspend_code() {
+        return SuspendedCodeLease(gate_.pin(identity_));
+    }
+
     NativeActorCodeCheckpointCoordinator(
             const NativeActorCodeCheckpointCoordinator&) = delete;
     NativeActorCodeCheckpointCoordinator& operator=(
