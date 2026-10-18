@@ -1924,4 +1924,20 @@ if(BUILD_TESTING)
     add_test(NAME freestanding_actor_kernel_bounded_host
         COMMAND oreslang-freestanding-actor-kernel-test)
     set_tests_properties(freestanding_actor_kernel_bounded_host PROPERTIES TIMEOUT 15)
+    # Independent bounded-mailbox reference model. Deterministic 100k-step
+    # spawn/send/stop/snapshot/reset/turn matrix with stale-handle coverage.
+    add_executable(oreslang-freestanding-actor-kernel-model-test
+        tests/freestanding_actor_kernel_model_test.c
+        src/main/cpp/oreslang/runtime/FreestandingActorKernel.c)
+    target_include_directories(oreslang-freestanding-actor-kernel-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    if(MSVC)
+        target_compile_options(oreslang-freestanding-actor-kernel-model-test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(oreslang-freestanding-actor-kernel-model-test PRIVATE
+            -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME freestanding_actor_kernel_model_100k
+        COMMAND oreslang-freestanding-actor-kernel-model-test)
+    set_tests_properties(freestanding_actor_kernel_model_100k PROPERTIES TIMEOUT 30)
 endif()
