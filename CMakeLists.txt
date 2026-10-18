@@ -1971,3 +1971,26 @@ if(BUILD_TESTING)
     set_tests_properties(actor_checkpoint_v1_wire_oracle
         actor_checkpoint_v1_wire_oracle_optimized PROPERTIES TIMEOUT 20)
 endif()
+
+# Standalone checkpoint v1 host parity against the Java/Python golden.
+# Native SHA-256 is an injected host provider; no crypto implementation or
+# POSIX dependency is introduced into the freestanding actor/core substrate.
+if(BUILD_TESTING)
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-native-actor-checkpoint-v1-test
+            tests/native_actor_checkpoint_v1_test.cpp)
+        target_include_directories(oreslang-native-actor-checkpoint-v1-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-actor-checkpoint-v1-test PRIVATE
+            OpenSSL::Crypto)
+        target_compile_options(oreslang-native-actor-checkpoint-v1-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_actor_checkpoint_v1_canonical_wire_host_only
+            COMMAND oreslang-native-actor-checkpoint-v1-test)
+        set_tests_properties(native_actor_checkpoint_v1_canonical_wire_host_only
+            PROPERTIES TIMEOUT 25)
+    else()
+        message(STATUS "OpenSSL Crypto unavailable: skipping host checkpoint checksum parity test")
+    endif()
+endif()
