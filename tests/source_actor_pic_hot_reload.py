@@ -51,8 +51,13 @@ def main():
                 raise RuntimeError(f"{version}: no real LLVM IR from compiler")
             for symbol in ("oreslang_actor_Counter_init",
                            "oreslang_actor_Counter_on_message"):
-                if ("@" + symbol + "(") not in guest.stdout:
-                    raise RuntimeError(f"{version}: missing native actor ABI: {symbol}")
+                # Merely declaring (or calling) the symbol is insufficient:
+                # the compiler must emit the ACTUAL source-defined body.
+                if not any(line.startswith("define ")
+                           and ("@" + symbol + "(") in line
+                           for line in guest.stdout.splitlines()):
+                    raise RuntimeError(
+                        f"{version}: missing compiler-defined actor ABI: {symbol}")
             ir = temp / f"{version}.ll"
             ir.write_text(guest.stdout, encoding="utf-8")
             shared = temp / f"counter-{version}.so"
