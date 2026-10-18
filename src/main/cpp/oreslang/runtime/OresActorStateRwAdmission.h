@@ -33,7 +33,7 @@ typedef struct ores_actor_state_rw {
 } ores_actor_state_rw;
 
 #define ORES_ACTOR_STATE_RW_INIT(ACTOR_ID, INCARNATION) { \
-    .actor_id=(ACTOR_ID), .incarnation=(INCARNATION), .gate=ORES_STD_RW_INIT }
+    .actor_id=(ACTOR_ID), .incarnation=(INCARNATION), .gate=ORES_STD_RW_INIT_SCOPE(INCARNATION) }
 
 typedef struct ores_actor_state_acquisition {
     ores_state_admission_code verification;
