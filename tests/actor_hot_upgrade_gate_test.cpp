@@ -131,12 +131,14 @@ int main() {
         // Releasing a stale ticket must not unfreeze a later prepared epoch.
         ActorHotUpgradeGate gate(19, image('a'));
         {
-            auto obsolete = gate.prepare(image('b'));
-            gate.abort(obsolete);
+            std::optional<ActorHotUpgradeGate::Candidate> obsolete;
+            obsolete.emplace(gate.prepare(image('b')));
+            gate.abort(*obsolete);
             auto current = gate.prepare(image('c'));
             assert(gate.frozen());
-            // obsolete destructs after current, proving generation identity
-            // checks never undo a newer CONTROL freeze.
+            obsolete.reset();
+            // Stale RAII cleanup must never undo a later ticket's fence.
+            assert(gate.frozen());
             assert(gate.publish(current));
             assert(gate.epoch() == 2 && !gate.frozen());
         }
