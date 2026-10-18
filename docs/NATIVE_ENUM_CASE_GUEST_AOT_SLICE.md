@@ -269,3 +269,36 @@ at synthetic head `4fdc9c875fc651b64aef6007648a13b4d2c9d278` reported 18
 passing Python tests in each of three modes (54 executions). No private
 Oreslang source was mirrored. Exact-source GCC/Clang, sanitizer and real
 Oreslang-to-native guest execution remain required and unexecuted.
+
+## Declaration order and wire-tag independence (2026-10-18)
+
+The native C++ parser harness now builds a three-way family of nullary
+enum overloads: `classify(Foo.A)` returns 10,
+`classify(Foo.B)` returns 20 and `classify(Foo)` returns 0.
+The guest `main` invokes specialized A, specialized B and a widened
+`Foo` containing B, requiring exact static call identities for all
+three and a result of 30. Four permutations of declaration order and
+two disjoint enum-tag assignments must preserve the same selected
+`eos2` targets, even though the widened value carries B's wire tag.
+
+The exact-source Python executable smoke has matching permutations and
+compiles their emitted IR with Clang `-O2`, expecting exit 30.
+An escaping error in the initial regression test was fixed: the source
+strings now contain actual newlines when parsed, and the eos2 matching
+expression correctly recognizes native call symbols.
+
+**Independent executable evidence only:** a source-free model on funded
+`sagitta-stack/sagitta-infra`, head
+`a4ce8a1e1cf9cf52cc3e6c55bb3c340f2c349253`,
+passed [Actions run #39152152869](https://github.com/sagitta-stack/sagitta-infra/actions/runs/39152152869)
+with 19 tests in each of normal, optimized and development Python
+modes, totaling 57 successful test executions. Its Clang-linked
+synthetic IR covers 4 declaration permutations x 2 native optimization
+levels per mode and checks process exit 30. This verifies a
+source-free ABI model only, NOT the original private Oreslang compiler.
+
+The exact-source CI job on the private LLVM head still has no assigned
+runner and no executed steps. Cross-org Git-object copying remains
+prohibited by the empty security-approved carrier allowlist and open
+platform-conformance source-transfer incidents #22 and #77. This
+feature is NOT compiler-verified, and the PR must remain draft.
