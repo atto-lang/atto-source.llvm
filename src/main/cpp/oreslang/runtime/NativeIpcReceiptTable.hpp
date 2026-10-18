@@ -114,6 +114,29 @@ public:
         throw std::invalid_argument("illegal or duplicate IPC receipt transition");
     }
 
+    /** Local transport teardown after EOF/crash. No wire-supplied identity is trusted.
+     *  Every uncompleted message for this session becomes OUTCOME_UNKNOWN;
+     *  known-dispatched messages MUST NOT be automatically replayed.
+     *  Correlations on newer transport sessions remain untouched.
+     */
+    std::size_t mark_transport_lost(const std::string& trusted_session) {
+        if (!token(trusted_session))
+            throw std::invalid_argument("invalid local transport session");
+        std::lock_guard<std::mutex> guard(mutex_);
+        std::size_t retired = 0;
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->second.envelope.session != trusted_session) {
+                ++it;
+                continue;
+            }
+            if (it->second.stage == IpcReceiptStage::local_admitted)
+                --transport_credits_;
+            it = pending_.erase(it);
+            ++retired;
+        }
+        return retired;
+    }
+
     std::pair<std::size_t, std::size_t> counters() const {
         std::lock_guard<std::mutex> guard(mutex_);
         return {pending_.size(), transport_credits_};
