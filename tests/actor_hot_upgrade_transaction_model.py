@@ -8,6 +8,10 @@ import collections
 import dataclasses
 import random
 
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
 @dataclasses.dataclass
 class Model:
     actor_id: int = 1
@@ -43,6 +47,7 @@ class Model:
         if self.in_flight is None:
             return False
         ticket, delta = self.in_flight
+        require(ticket == self.delivered + 1, "lost or duplicated delivery ticket")
         self.state += delta if self.code == 1 else abs(delta)
         self.delivered += 1
         self.in_flight = None
@@ -50,7 +55,7 @@ class Model:
         return True
 
     def attempt(self, compatible=True, restore_ok=True):
-        assert not self.frozen
+        require(not self.frozen, "nested admission freeze")
         self.frozen = True
         old = (self.actor_id, self.epoch, self.code, self.state)
         try:
@@ -70,16 +75,16 @@ class Model:
             return True
         finally:
             self.frozen = False
-            assert self.actor_id == old[0]
+            require(self.actor_id == old[0], "actor identity changed")
             if (self.epoch, self.code) == (old[1], old[2]):
-                assert self.state == old[3]
+                require(self.state == old[3], "rollback changed actor state")
 
     def verify(self):
-        assert self.actor_id == 1 and self.epoch >= 1
-        assert self.pins == (1 if self.in_flight is not None else 0)
-        assert self.accepted == self.delivered + len(self.mail) + self.pins
-        assert not self.frozen
-        assert self.published + 1 == self.epoch
+        require(self.actor_id == 1 and self.epoch >= 1, "invalid identity or epoch")
+        require(self.pins == (1 if self.in_flight is not None else 0), "pin invariant")
+        require(self.accepted == self.delivered + len(self.mail) + self.pins, "message conservation")
+        require(not self.frozen, "leaked freeze")
+        require(self.published + 1 == self.epoch, "epoch drift")
 
 def main():
     transitions = 0
@@ -106,9 +111,9 @@ def main():
             if model.in_flight: model.finish()
             else: model.start()
             model.verify()
-        assert model.accepted == model.delivered
-        assert model.pins == 0
-        assert not model.mail
+        require(model.accepted == model.delivered, "final message lost")
+        require(model.pins == 0, "final generation pin leaked")
+        require(not model.mail, "final mailbox not drained")
     print(f"PASS: {transitions} modeled interleavings, "
           f"{upgrades} committed upgrades, 32 no-loss/no-dup final drains")
 
