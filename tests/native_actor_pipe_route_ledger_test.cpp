@@ -172,7 +172,10 @@ int main() {
             auto first = publication.claim_publication(origin);
             rejected([&] { (void)publication.claim_publication(origin); },
                      "second native publisher stole a live route claim");
-            check(!origin->published(), "uncommitted route was published");
+            rejected([&] { (void)publication.abort_and_advance(31); },
+                     "epoch abort discarded claimed native route frame");
+            check(!origin->published() && publication.outstanding() == 1,
+                  "rejected abort corrupted live native frame");
             // First lease's destructor, NOT the rejected contender,
             // is solely responsible for freeing the claim.
         }
@@ -187,6 +190,16 @@ int main() {
         publication.complete(origin);
         check(origin->published(),
               "native route retirement incorrectly reset publication status");
+        publication.advance_generation(31);
+        const auto replacement = publication.ingress("source");
+        auto in_flight = publication.claim_publication(replacement);
+        rejected([&] { (void)publication.abort_and_advance(32); },
+                 "new generation abandoned a claimed native mailbox route");
+        in_flight.abort();
+        check(publication.abort_and_advance(32) == 1,
+              "native prepublication rejection failed to permit epoch abort");
+        rejected([&] { (void)publication.claim_publication(replacement); },
+                 "native old-generation frame survived epoch abort");
         publication.close();
     }
 
