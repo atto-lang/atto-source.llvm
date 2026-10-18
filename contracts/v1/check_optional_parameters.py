@@ -71,6 +71,7 @@ def bind(formals, actuals):
     positional = 0
     order = []
     evaluated_call_item_indices = []
+    explicit_omission_bindings = []
 
     for source_index, item in enumerate(actuals):
         kind = item.get("kind", "value")
@@ -144,6 +145,7 @@ def bind(formals, actuals):
             if not param.get("optional", False):
                 raise ValueError("required parameter cannot be omitted: " + param["name"])
             bound[index] = ("None", "explicit_omit")
+            explicit_omission_bindings.append([source_index, index])
         elif kind in ("spread", "pack"):
             raise ValueError("fixed-arity runtime spread or rest pack is unsupported")
         else:
@@ -169,7 +171,8 @@ def bind(formals, actuals):
             evaluated_call_item_indices, evaluated_call_item_indices[1:])):
         raise AssertionError("evaluated argument indexes must preserve lexical order")
     return {"slots": slots, "statuses": statuses, "evaluation_order": order,
-            "call_item_index_by_evaluated_source": evaluated_call_item_indices}
+            "call_item_index_by_evaluated_source": evaluated_call_item_indices,
+            "omission_bindings": explicit_omission_bindings}
 
 
 def admit(signatures):
@@ -192,7 +195,7 @@ def main():
     for case in data["accepts"]:
         result = bind(case.get("parameters", data["parameters"]), case["args"])
         for field in ("slots", "statuses", "evaluation_order",
-                      "call_item_index_by_evaluated_source"):
+                      "call_item_index_by_evaluated_source", "omission_bindings"):
             if field in case:
                 assert result[field] == case[field], (
                     case["id"], field, result[field], case[field])
