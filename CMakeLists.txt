@@ -41,6 +41,29 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_assert_canonical_import_parser
         COMMAND oreslang-assert-import-parser-test)
+    # Backend entrypoint is callable with compiler-constructed Program ASTs:
+    # defend reserved assertion symbols and pure bool result from bypassing
+    # parser-only checks. This is a real LLVM codegen rejection test.
+    add_executable(oreslang-assert-abi-symbol-guard-test
+        tests/native_assert_abi_symbol_guard_test.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-assert-abi-symbol-guard-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    # LLVM is third-party; do not turn warnings inside installed LLVM 18+
+    # headers into errors while keeping -Werror for our own source.
+    target_include_directories(oreslang-assert-abi-symbol-guard-test SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-assert-abi-symbol-guard-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-assert-abi-symbol-guard-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+        # GCC may flag LLVM's required GlobalVariable(module, ...) ownership
+        # constructor as mismatched-new-delete at O2. Treat that specific LLVM
+        # API diagnostic as nonfatal, not arbitrary native warnings.
+        $<$<CXX_COMPILER_ID:GNU>:-Wno-error=mismatched-new-delete>)
+    add_test(NAME native_assert_linker_owned_abi_and_bool_ast_guard
+        COMMAND oreslang-assert-abi-symbol-guard-test)
+
 
     # Generated, verifiable LLVM IR for the primitive scalar ABI only.
     # Compiled guest std/assert linking is a separate milestone.
@@ -545,6 +568,21 @@ if(BUILD_TESTING)
         unsupported-core-assert-import.ores --diagnostic "native module imports are unsupported")
     oreslang_contract_test(reject_unadmitted_nested_core_assert_import
         unsupported-core-assert-nested-import.ores --diagnostic "native module imports must precede declarations")
+    # First truly source-compiled native i1 Boolean return slice.
+    # It is NOT imported std/assert, Option or trap lowering.
+    oreslang_contract_test(native_bool_literal_true_i1
+        primitive-bool-aot.ores --ir "ret i1 true")
+    oreslang_contract_test(native_bool_literal_false_i1
+        primitive-bool-aot.ores --ir "ret i1 false")
+    add_test(NAME native_bool_literal_guest_aot_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_source_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_NATIVE_ARRAY_CLANG}"
+            --cxx "${CMAKE_CXX_COMPILER}"
+            --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_bool_literal_guest_aot_asan_ubsan
+        PROPERTIES TIMEOUT 180)
     oreslang_contract_test(constant_main constant-main.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
