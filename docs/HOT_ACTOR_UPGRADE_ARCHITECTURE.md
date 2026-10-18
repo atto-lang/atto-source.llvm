@@ -388,3 +388,124 @@ compiled Oreslang guest actor. Compiler-generated owned-state schemas,
 automatic resource/FFI pinning, protected worker boundaries, rebindable
 stable source `ActorRef`, actual AOT/ORC image admission, and full CI
 must all pass before releasing a real source actor upgrade.
+
+
+## Fifth audit slice: real Java Oreslang source-actor same-context upgrade v1
+
+The Java/Graal evaluator now implements the source-actor upgrade contract
+directly; this is no longer limited to a fake host counter behavior.
+
+### Runtime transaction
+
+`ActorRuntime.upgradeSourceActorSameSchema(ref, candidateExecutor)` is a
+supervisor-only Java host API and requires the runtime ceiling to grant
+`HOT_CODE_LOAD`. V1 preserves the existing logical/physical `ActorRef`,
+mailbox, output stream, parent/supervision relationship and actor kind.
+
+The transaction:
+1. seals new user ingress with the real actor freeze;
+2. requires complete physical scheduler drain, including continuation
+   publication and registered external-resource pins;
+3. captures the old executor/image/state/epoch under `lifecycleLock`;
+4. requires old and candidate executors to share one opaque
+   `actorUpgradeDomain()` identity, so an evaluator from another
+   `OresContext` cannot be spliced into this actor;
+5. requires a different code receipt but identical state-schema and message-ABI
+   receipts;
+6. releases `lifecycleLock` before compiler-owned serialization/restoration,
+   so CONTROL/cancellation is never held behind codec work;
+7. wraps the serialized state in `ActorCheckpointEnvelopeV1`, bound to actor
+   UUID, source-code epoch, code/schema/message receipts and the effective
+   runtime actor policy;
+8. restores a fresh candidate-owned state object without running field
+   initializers or `on_start`;
+9. re-snapshots the candidate and requires byte-for-byte state equality;
+10. reacquires `lifecycleLock`, rechecks drain and the complete old
+    executor/image/state/epoch tuple, and commits the candidate
+    image/executor/state as one monitor-protected transition.
+
+A stop, late continuation, changed generation, altered candidate provenance or
+other lifecycle change during staging fails closed rather than publishing a
+stale checkpoint. This is intentionally an in-place same-`OresContext`
+transaction; cross-context/process migration requires a future logical actor
+routing/incarnation layer rather than weakening this domain check.
+
+### Real evaluator state transfer
+
+`OresEvalRootNode.Evaluator` now supplies:
+- an opaque upgrade domain equal to its owning `OresContext`;
+- deterministic structural code, state-schema and message-ABI receipts;
+- source actor kind in schema/message receipts;
+- compiler-private snapshot and restore of persistent fields;
+- candidate restoration into a fresh `OresObject`/`SourceActorState` with
+  the original logical actor id;
+- no candidate `on_start` execution during restore.
+
+The structural code digest is deliberately independent of source filename, so
+renaming an otherwise identical AST does not manufacture a new code version.
+It is a runtime structural receipt, **not** a signed artifact digest.
+
+### ORESAS01 scalar payload
+
+`SourceActorCheckpointCodecV1` is the inner deterministic state serializer.
+V1 admits only persistent `int`, `bool` and `string` fields. It preserves
+field order/name/type, signed int64 exactly, canonical bool 0/1 and strict
+UTF-8. Hidden/missing fields, floating-point coercion, oversized integers,
+malformed UTF-8, unsupported object graphs and payloads above 1 MiB fail
+closed. Raw ActorRefs, closures, capabilities, OS/JNI handles and arbitrary
+JVM objects are not serializable.
+
+`ORESAS01` itself is intentionally **not** a checksum. The outer
+`ActorCheckpointEnvelopeV1` supplies the SHA-256 corruption trailer and actor
+identity/ABI binding. The independent Python oracle was corrected after audit:
+structural corruption must fail, while a changed scalar value may remain a
+valid but different serialized state.
+
+The identical Python wire oracle blob in Java and LLVM is
+`69c52e82cdf8dc589e00e416542bb7f43940d6db`; exact local execution passed
+**123 checks in normal Python and 123 under `python -O`**.
+
+### End-to-end Java source test
+
+`SourceActorHotUpgradeExecutionTest` evaluates two genuine Oreslang programs
+inside one restricted language context, retrieves their linked real evaluator
+executors, and:
+- spawns source actor `Counter` v1 with `count = 1`;
+- sends 41 and observes 42;
+- upgrades to real source v2 with the same actor reference/address;
+- proves v2's `on_start { count = 999 }` is NOT rerun;
+- sends -1 / -2 and observes 43 / 45 under changed v2 receive semantics;
+- rejects identical structural code, changed field schema, changed receive
+  message ABI, changed actor kind and a candidate evaluator from a different
+  `OresContext`;
+- verifies failed candidates leave v1 operational.
+
+The test retries only nonblocking safe-point admission; it never retries guest
+messages or guest computations.
+
+These new Maven/Graal integration tests are **committed but not yet executed**
+on the exact source head because source-owned Actions jobs continue to receive
+zero runner steps.
+
+### Native parity
+
+LLVM now contains `SourceActorCheckpointCodecV1.hpp`, a C++17 implementation
+of the same ORESAS01 scalar payload, plus an OpenSSL-backed golden/parity test.
+Current exact native blobs:
+- codec header: `715a9e70367aef3afebaf4b081b9a70356696fd4`;
+- native test: `9133cdc8560ad75ca03ff9c80413407aec844b6c`.
+
+Those exact blobs compiled with Clang C++17 warnings-as-errors and passed the
+golden hash, signed-int64 extremes, truncation, trailing-data, malformed UTF-8,
+type mismatch, ASan+UBSan/leak detection, and **100 additional optimized
+executions**. This establishes state-wire parity only; LLVM still lacks a real
+compiled `.ores` actor image/state restore and routing commit.
+
+### Remaining production gates
+
+V1 still does not provide cross-`HotReloadManager` Context migration,
+cross-process stable ActorRef routing, arrays/records/options/results,
+explicit schema migrations, compiler-derived required-capability/effect
+receipts, signed executable/dependency provenance, or automatic generation
+leases in every timer/FFI/GPU/shared-memory broker. These remain mandatory
+before production hot upgrade.
