@@ -68,6 +68,13 @@ inline void identifier(const std::string& s) {
             || scalar == 0x2028 || scalar == 0x2029
             || scalar == 0x205f || scalar == 0x3000)
             throw std::invalid_argument("Unicode control/whitespace in identity");
+        // Explicit version-independent bidi and invisible-format denylist.
+        // Must agree with Java's EnumCaseOverloadPolicy.identifier().
+        if (scalar == 0x061c || (scalar >= 0x200b && scalar <= 0x200f)
+            || (scalar >= 0x202a && scalar <= 0x202e)
+            || scalar == 0x2060 || (scalar >= 0x2066 && scalar <= 0x2069)
+            || scalar == 0xfeff)
+            throw std::invalid_argument("bidi/invisible control in identity");
         i += len;
     }
 }
