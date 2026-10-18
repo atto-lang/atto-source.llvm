@@ -2064,3 +2064,17 @@ if(BUILD_TESTING)
     set_tests_properties(logical_actor_route_model logical_actor_route_model_optimized
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Source-independent logical ActorRef route/upgrade linearization oracle shared
+# with Java. Explicit checks remain active under python -O.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME logical_actor_route_upgrade_model
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/logical_actor_route_upgrade_model.py")
+    add_test(NAME logical_actor_route_upgrade_model_optimized
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/logical_actor_route_upgrade_model.py")
+    set_tests_properties(logical_actor_route_upgrade_model
+        logical_actor_route_upgrade_model_optimized PROPERTIES TIMEOUT 20)
+endif()
