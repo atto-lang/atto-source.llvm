@@ -162,10 +162,10 @@ def verify_vector_table(elf_path):
             reset_address = reset
             flash_load = True
     verify(flash_load, "no flash PT_LOAD contains the reset vector")
-    verify(entry == reset_address,
-           "ELF entry point must match the Thumb reset vector")
     verify(any(lo <= (reset_address & ~1) < hi for lo, hi in executable),
            "reset vector does not point into an executable load segment")
+    verify(entry == reset_address,
+           "ELF entry point must match the Thumb reset vector")
 
 def main():
     parser = argparse.ArgumentParser()
