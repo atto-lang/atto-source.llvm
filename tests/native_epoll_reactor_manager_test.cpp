@@ -330,6 +330,41 @@ int main() {
         check(manager.close_owned_eventfd(*alias));
     }
     {
+        // A manager with only host-issued eventfd capabilities must drain
+        // its own completions even when another manager has active raw-stream
+        // claims. No global stream lock is needed for its eventfd fast path.
+        NativeEpollReactorManager owned(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        NativeEpollReactorManager raw(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        int pipefd[2]{-1, -1};
+        check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+        auto claim = raw.try_watch(pipefd[0], EPOLLIN);
+        check(claim.has_value());
+        auto owned_key = owned.open_owned_eventfd();
+        check(owned_key.has_value());
+        auto watch = owned.try_watch(*owned_key, EPOLLIN);
+        check(watch.has_value());
+        check(owned.signal_owned_eventfd(*owned_key));
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(3);
+        std::optional<NativeEpollReactorManager::Completion> done;
+        while (!done && std::chrono::steady_clock::now() < deadline) {
+            done = owned.try_pop();
+            if (!done) std::this_thread::yield();
+        }
+        check(done.has_value() && done->event.ticket.value == watch->ticket.value);
+        check(owned.orphaned_completions() == 0);
+        check(!raw.try_watch(pipefd[0], EPOLLIN).has_value());
+        raw.stop();
+        auto raw_done = raw.try_pop();
+        check(raw_done.has_value() &&
+              raw_done->event.ticket.value == claim->ticket.value);
+        owned.stop();
+        check(owned.close_owned_eventfd(*owned_key));
+        ::close(pipefd[0]); ::close(pipefd[1]);
+    }
+    {
         // A copied capability must not authenticate against another manager,
         // even if both registries use the same slot and local generation.
         NativeEpollReactorManager source(1);

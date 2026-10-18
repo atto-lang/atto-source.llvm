@@ -278,6 +278,7 @@ private:
                 if (process_slot) {
                     *process_slot = ProcessClaim{true, identity.st_dev,
                         identity.st_ino, access_mode, instance_, public_id};
+                    ++active_stream_claims_; // protected by manager mu_
                 }
                 // The manager lock covers both the ownership table and the
                 // bootstrap phase; no creator can race this barrier.
@@ -313,12 +314,15 @@ public:
         // Never wait behind producer registration or shutdown on a carrier.
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
         if (!gate.owns_lock()) return std::nullopt;
-        // Serialize retirement with admission in *all* other local managers.
-        // Reserve the global gate before popping a reactor ticket so that a
-        // transient try-lock miss cannot release a claim prematurely.
+        // Owned eventfds have manager-validated capability identity and do
+        // not enter the global raw-stream table. When this manager has no
+        // outstanding raw pipe/socket watches, avoid unrelated process-wide
+        // mutex contention on every eventfd completion. The count is guarded
+        // by mu_; global stream claims cannot appear while it is held.
         std::unique_lock<std::mutex> process_gate(process_claim_mu_,
-                                                   std::try_to_lock);
-        if (!process_gate.owns_lock()) return std::nullopt;
+                                                   std::defer_lock);
+        if (active_stream_claims_ != 0 && !process_gate.try_lock())
+            return std::nullopt;
         const auto count = started_.load(std::memory_order_acquire);
         if (count == 0) return std::nullopt;
         const auto first = next_completion_.fetch_add(1, std::memory_order_relaxed) % count;
@@ -337,6 +341,7 @@ public:
                             if (global.occupied && global.instance == instance_ &&
                                 global.ticket == event->ticket.value) {
                                 global.occupied = false;
+                                --active_stream_claims_; // verified global claim
                                 break;
                             }
                         }
@@ -409,6 +414,9 @@ private:
     static constexpr std::size_t maximum_claims =
         maximum_reactors * NativeEpollReactor::capacity;
     std::array<FdClaim, maximum_claims> claimed_fds_{};
+    // Only raw streams need the process-wide lock at terminal retirement.
+    // Guarded by mu_ and incremented only with a published global claim.
+    std::size_t active_stream_claims_ = 0;
     struct ProcessClaim {
         bool occupied;
         dev_t device;
