@@ -259,6 +259,72 @@ static void actor_pin_outlives_gate_instance() {
     check(cleanup == 1, "orphaned continuation pin leaked retired code");
 }
 
+
+struct FailingActivationCopy {
+    std::atomic<bool>* fail_copy;
+    Gate::Ticket* ticket;
+    std::atomic<int>* cleanups;
+    FailingActivationCopy(std::atomic<bool>& f, Gate::Ticket& t, std::atomic<int>& c)
+        : fail_copy(&f), ticket(&t), cleanups(&c) {}
+    FailingActivationCopy(const FailingActivationCopy& other)
+        : fail_copy(other.fail_copy), ticket(other.ticket),
+          cleanups(other.cleanups) {
+        if (fail_copy->load()) throw std::runtime_error("injected callback copy failure");
+    }
+    void operator()() const {
+        ++*cleanups;
+        ticket->abandon();
+    }
+};
+static void abandoned_publication_restores_admission_on_exception() {
+    const ActorHeapIdentity id{321, 77, 1};
+    std::atomic<int> old_cleanup{0}, rejected_cleanup{0};
+    std::atomic<bool> fail_copy{false};
+    Gate gate(id, shape(Gate::Kind::trusted_private), "v1",
+              [&] { ++old_cleanup; });
+    auto ticket = gate.freeze(id, 1);
+    std::function<void()> cleanup(
+        FailingActivationCopy(fail_copy, ticket, rejected_cleanup));
+    fail_copy.store(true);
+    bool thrown = false;
+    try {
+        (void)gate.promote(ticket, shape(Gate::Kind::trusted_private),
+                           "v2", std::move(cleanup));
+    } catch (const std::runtime_error&) { thrown = true; }
+    check(thrown, "fault injection did not fail publication");
+    check(rejected_cleanup == 1 && old_cleanup == 0,
+          "rejected candidate reclaimed incorrectly");
+    auto resumed = gate.pin(id);
+    check(resumed.code() == "v1",
+          "abandoned publication leaked freeze or damaged old image");
+    resumed.close();
+    auto retry = gate.freeze(id, 1);
+    check(gate.promote(retry, shape(Gate::Kind::trusted_private), "v3",
+                       [&] { ++old_cleanup; }).revision == 2,
+          "failed publication prevented valid retry");
+    gate.close();
+    check(old_cleanup == 2, "retry leaked code generations");
+}
+static void abandon_during_successful_publication_is_terminal_safe() {
+    const ActorHeapIdentity id{321, 78, 1};
+    std::atomic<int> reclaimed{0};
+    Gate::Ticket* active = nullptr;
+    Gate gate(id, shape(Gate::Kind::trusted_shared), "old", [&] {
+        ++reclaimed;
+        if (active) active->abandon();
+    });
+    auto ticket = gate.freeze(id, 1);
+    active = &ticket;
+    check(gate.promote(ticket, shape(Gate::Kind::trusted_shared),
+                       "new", [&] { ++reclaimed; }).revision == 2,
+          "abandoned successful publish was not committed");
+    auto pin = gate.pin(id);
+    check(pin.code() == "new", "successful release left DATA frozen");
+    pin.close();
+    gate.close();
+    check(reclaimed == 2, "successful abandoned ticket double reclaimed code");
+}
+
 int main() {
     actor_code_only_upgrade(Gate::Kind::trusted_shared);
     actor_code_only_upgrade(Gate::Kind::trusted_private);
@@ -268,4 +334,6 @@ int main() {
     abandoned_freeze_rolls_back_without_reclaiming_live_code();
     actor_rejection_reclaims_after_wrapper_destructor();
     actor_pin_outlives_gate_instance();
+    abandoned_publication_restores_admission_on_exception();
+    abandon_during_successful_publication_is_terminal_safe();
 }
