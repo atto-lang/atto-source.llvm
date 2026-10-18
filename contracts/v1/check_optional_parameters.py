@@ -77,6 +77,10 @@ def bind(formals, actuals):
         label = item.get("label")
         # The lexer/parser must emit an Omit item for a standalone '_'.
         # '_' is not an expression or a partial-application placeholder.
+        if kind == "omit" and ("expr" in item or "value_type" in item):
+            raise ValueError("omit marker cannot carry a value")
+        if kind == "underscore" and "value_type" in item:
+            raise ValueError("underscore omission cannot carry a typed value")
         if kind == "underscore":
             if item.get("expr") not in (None, "_"):
                 raise ValueError("malformed underscore omission marker")
