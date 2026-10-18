@@ -2002,6 +2002,13 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-enum-source-aot-plan-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_executable(oreslang-enum-tag-boundary-test tests/native_enum_aot_tag_boundary_test.cpp)
+    target_include_directories(oreslang-enum-tag-boundary-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-enum-tag-boundary-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_tag_boundary
+        COMMAND oreslang-enum-tag-boundary-test)
     add_test(NAME native_enum_source_aot_plan_integrity
         COMMAND oreslang-enum-source-aot-plan-test)
     set_tests_properties(native_enum_source_aot_plan_integrity PROPERTIES TIMEOUT 20)
