@@ -206,14 +206,31 @@ public:
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
 
+    // Native transport classes are NOT aliases for ordinary mailbox actors.
+    // Diagnose the whole contextual prefix before any source IR can be emitted.
+    void reject_unlowered_actor_protocol() {
+        std::string modifiers;
+        while (token_.text == "serial" || token_.text == "unary"
+                || token_.text == "stream" || token_.text == "http"
+                || token_.text == "ipc" || token_.text == "tcp"
+                || token_.text == "ffi" || token_.text == "proxy"
+                || token_.text == "websocket") {
+            if (!modifiers.empty()) modifiers += " ";
+            modifiers += token_.text;
+            token_ = lexer_.next();
+        }
+        if (modifiers.empty()) return;
+        if (!accept("actor"))
+            fail("native actor protocol modifiers require 'actor' after " + modifiers);
+        fail("native specialized actor " + modifiers
+                + " requires typed adapter, capability/effect and source dispatch lowering");
+    }
+
     Program parse() {
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
-            if (accept("serial")) {
-                require("actor");
-                fail("native serial actor requires shared HTTP/message lane lowering");
-            }
+            reject_unlowered_actor_protocol();
             if (accept("module")) {
                 program.module = identifier();
                 accept("as");
@@ -230,10 +247,7 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
-                if (accept("serial")) {
-                    require("actor");
-                    fail("native serial actor requires shared HTTP/message lane lowering");
-                }
+                reject_unlowered_actor_protocol();
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
