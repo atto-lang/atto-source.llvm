@@ -21,18 +21,24 @@ static void retire(OresKernelActor *actor) {
     actor->active = 0;
 }
 
-void ores_kernel_init(OresKernel *kernel) {
-    if (kernel == 0) return;
+OresKernelStatus ores_kernel_init(OresKernel *kernel) {
+    if (kernel == 0) return ORES_KERNEL_INVALID;
+    const int reinitializing = kernel->magic == ORES_KERNEL_MAGIC;
+    if (reinitializing && kernel->executing) return ORES_KERNEL_BUSY;
     kernel->magic = 0; /* Fail closed while clearing. */
     kernel->next_slot = 0;
     kernel->executing = 0;
     kernel->fault_count = 0;
     for (uint32_t n=0; n<ORES_KERNEL_ACTORS; ++n) {
         OresKernelActor *actor = &kernel->actors[n];
-        actor->generation = 0;
+        /* A previous handle must not revive after repeated initialization. */
+        uint32_t generation = reinitializing ? actor->generation : 0;
+        if (reinitializing && generation != UINT32_MAX) generation++;
         retire(actor);
+        actor->generation = generation;
     }
     kernel->magic = ORES_KERNEL_MAGIC;
+    return ORES_KERNEL_OK;
 }
 
 OresKernelStatus ores_kernel_spawn(OresKernel *kernel, OresKernelHandler handler,
@@ -113,7 +119,7 @@ OresKernelTick ores_kernel_tick(OresKernel *kernel) {
         kernel->next_slot = (slot + 1) % ORES_KERNEL_ACTORS;
         if (!ok) {
             retire(actor);
-            kernel->fault_count++;
+            if (kernel->fault_count != UINT32_MAX) kernel->fault_count++;
             kernel->executing = 0;
             return ORES_KERNEL_HANDLER_FAILED;
         }
