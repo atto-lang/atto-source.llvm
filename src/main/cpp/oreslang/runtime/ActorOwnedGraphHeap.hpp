@@ -167,11 +167,22 @@ private:
     }
 
 public:
+    // Unbound heaps are permitted for isolated host tests/local scratch
+    // arenas, but explicit retire() requires a bound actor-wide cohort.
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
         : owner_(owner), heap_id_(detail::ActorGraphHeapIdSource::mint()),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
+    }
+
+    explicit ActorOwnedGraphHeap(
+            std::shared_ptr<ActorHeapRetirementCohort> cohort)
+        : owner_(require_cohort_owner(cohort)),
+          heap_id_(detail::ActorGraphHeapIdSource::mint()),
+          borrow_gate_(owner_), retirement_cohort_(std::move(cohort)) {
+        if (!heap_id_)
+            throw std::overflow_error("actor graph heap identity exhausted");
     }
     ActorOwnedGraphHeap(const ActorOwnedGraphHeap&) = delete;
     ActorOwnedGraphHeap& operator=(const ActorOwnedGraphHeap&) = delete;
