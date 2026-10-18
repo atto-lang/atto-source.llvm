@@ -235,5 +235,52 @@ int main() {
         ::close(pipe_ends[0]);
         ::close(pipe_ends[1]);
     }
+    // Full bounded terminal ring: shutdown must emit exactly one stopped
+    // record for every admitted watch without overflowing the fixed queue.
+    {
+        NativeEpollReactor full;
+        expect(full.start(), "start capacity-saturation reactor");
+        std::array<std::array<int, 2>, NativeEpollReactor::capacity> pipes{};
+        std::array<NativeEpollReactor::Ticket, NativeEpollReactor::capacity> tickets{};
+        for (std::size_t i = 0; i < NativeEpollReactor::capacity; ++i) {
+            expect(::pipe(pipes[i].data()) == 0, "create saturation pipe");
+            const int flags = ::fcntl(pipes[i][0], F_GETFL);
+            expect(flags >= 0
+                   && ::fcntl(pipes[i][0], F_SETFL, flags | O_NONBLOCK) == 0,
+                   "make saturation pipe nonblocking");
+            auto ticket = full.try_watch(pipes[i][0], EPOLLIN);
+            expect(ticket.has_value(), "admit capacity saturation watch");
+            tickets[i] = *ticket;
+        }
+        expect(full.pending() == NativeEpollReactor::capacity,
+               "all bounded watch slots occupied");
+        full.stop();
+        std::array<bool, NativeEpollReactor::capacity> seen{};
+        for (std::size_t received = 0; received < NativeEpollReactor::capacity; ++received) {
+            auto completion = until_completion(full);
+            expect(completion.has_value(), "missing saturation terminal completion");
+            expect(completion->outcome == NativeEpollReactor::Outcome::stopped,
+                   "saturation shutdown must settle unready watches as stopped");
+            bool matched = false;
+            for (std::size_t index = 0; index < tickets.size(); ++index) {
+                if (completion->ticket.value == tickets[index].value) {
+                    expect(!seen[index], "duplicate ticket during ring drain");
+                    seen[index] = true;
+                    matched = true;
+                    break;
+                }
+            }
+            expect(matched, "terminal record had no admitted ticket");
+        }
+        for (bool delivered : seen)
+            expect(delivered, "admitted ticket never terminated");
+        expect(!full.try_pop().has_value(), "saturation emitted extra completion");
+        expect(full.pending() == 0, "saturation leaked a reserved ticket");
+        full.stop();
+        for (auto& ends : pipes) {
+            ::close(ends[0]);
+            ::close(ends[1]);
+        }
+    }
     return 0;
 }
