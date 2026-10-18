@@ -1905,3 +1905,23 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Prototype freestanding actor kernel: host harness exercises the same C11
+# implementation that compiles to ARM without libc or pthread dependencies.
+# This does NOT yet prove source-defined actor execution under QEMU.
+if(BUILD_TESTING)
+    add_executable(oreslang-freestanding-actor-kernel-test
+        tests/freestanding_actor_kernel_test.c
+        src/main/cpp/oreslang/runtime/FreestandingActorKernel.c)
+    target_include_directories(oreslang-freestanding-actor-kernel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    if(MSVC)
+        target_compile_options(oreslang-freestanding-actor-kernel-test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(oreslang-freestanding-actor-kernel-test PRIVATE
+            -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME freestanding_actor_kernel_bounded_host
+        COMMAND oreslang-freestanding-actor-kernel-test)
+    set_tests_properties(freestanding_actor_kernel_bounded_host PROPERTIES TIMEOUT 15)
+endif()
