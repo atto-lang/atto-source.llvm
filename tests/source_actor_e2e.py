@@ -56,6 +56,7 @@ def main():
         "source-actor-threads-annotated-placement-reject.ores": "expected 'define'",
         "source-actor-threads-annotated-min2-reject.ores": "max > 1 is not yet supported",
         "source-actor-threads-legacy-high-reject.ores": "max > 1 is not yet supported",
+        "source-actor-threads-max4-ceiling-reject.ores": "1 <= min <= max <= 3",
         "source-actor-threads-legacy-mixed-reject.ores": "duplicate actor thread policy",
         "source-actor-threads-legacy-duplicate-annotation-reject.ores": "expected 'define'",
         "source-actor-threads-legacy-enum-invalid-reject.ores": "backing value must be the canonical integer",
