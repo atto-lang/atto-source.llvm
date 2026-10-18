@@ -173,6 +173,14 @@ private:
             fail("identifier required");
         }
         std::string text = token_.text;
+        static const std::unordered_set<std::string> reserved{
+            "define", "enum", "as", "end", "fnc", "routine", "pub",
+            "private", "return", "int", "bool", "void", "const", "val",
+            "let", "mut", "class", "module", "import", "from", "actor",
+            "async", "suspend", "suspends", "match", "switch", "new",
+            "if", "else", "true", "false", "null", "rt", "self"
+        };
+        if (reserved.count(text)) fail("reserved keyword cannot name enum/case/callable");
         advance();
         return text;
     }
