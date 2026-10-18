@@ -525,6 +525,13 @@ inline VerifiedPlan parseVerified(std::string_view source) {
         throw std::invalid_argument("native enum AOT: source size/NUL admission failed");
     }
     requireSourceUtf8(source);
+    // The CLI refuses unverified runtime/target/capability directives.
+    // Apply the identical policy for all direct sealed compiler-library
+    // callers, including directives hidden in lexically ignored comments.
+    if (source.find("// ores:") != std::string_view::npos) {
+        throw std::invalid_argument(
+            "native enum AOT: target/capability directives require compiler verification");
+    }
     Plan plan = parse(source);
     validatePlan(plan);
     return VerifiedPlan(std::move(plan));
