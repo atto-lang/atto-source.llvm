@@ -178,6 +178,13 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn("filesystem artifacts after rejection", p.stderr)
 
+    def test_relative_compiler_path_with_isolated_workdir(self):
+        compiler = self.compiler(status=1, stderr="private class field")
+        relative_compiler = os.path.relpath(compiler, Path.cwd())
+        result = self.run_contract(relative_compiler,
+                                   "--diagnostic", "private class field")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_rejected_source_mutation_stays_isolated_and_fails(self):
         original = self.fixture.read_bytes()
         compiler = self.compiler(
