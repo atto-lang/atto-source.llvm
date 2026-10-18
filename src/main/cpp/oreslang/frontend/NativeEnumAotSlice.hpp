@@ -101,6 +101,73 @@ inline void validateLexicalName(const std::string& name) {
         throw std::invalid_argument("native enum AOT: reserved identifier");
 }
 
+/** Verify ordinary mutable C++ Plan aggregates at EVERY trust boundary.
+ * This is the narrow native enum guest subset, not imported symbol provenance.
+ */
+inline void validatePlan(const Plan& plan) {
+    using namespace types::case_overloads;
+    static constexpr std::string_view prefix = "local_unit.__root__.";
+    if (plan.enumId.compare(0, prefix.size(), prefix) != 0 ||
+        plan.enumId.size() <= prefix.size() ||
+        plan.enumId.size() > MaxIdBytes) {
+        throw std::invalid_argument("native enum AOT: unresolved or oversized enum ID");
+    }
+    validateLexicalName(plan.enumId.substr(prefix.size()));
+    if (plan.cases.empty() || plan.cases.size() > MaxCases ||
+        plan.functions.empty() || plan.functions.size() > MaxCandidates ||
+        plan.returnCalls.empty() || plan.returnCalls.size() > 64) {
+        throw std::invalid_argument("native enum AOT: invalid plan budget");
+    }
+    std::vector<std::string> cases;
+    cases.reserve(plan.cases.size());
+    std::unordered_map<std::string, std::int32_t> tags;
+    std::unordered_set<std::int32_t> admittedTags;
+    std::int32_t last = 0;
+    for (const auto& item : plan.cases) {
+        validateLexicalName(item.name);
+        if (item.tag <= last || !tags.emplace(item.name, item.tag).second ||
+            !admittedTags.insert(item.tag).second) {
+            throw std::invalid_argument("native enum AOT: invalid wire tag or duplicate case");
+        }
+        last = item.tag;
+        cases.push_back(item.name);
+    }
+    const Registry registry{{plan.enumId, {plan.enumId, cases, true}}};
+    std::vector<Signature> declarations;
+    declarations.reserve(plan.functions.size());
+    for (const auto& function : plan.functions) {
+        const Signature& s = function.signature;
+        validateLexicalName(s.name);
+        if (s.name == "main" || s.domain != Domain::Module ||
+            s.owner != "local_unit.__root__" || s.params.size() != 1 ||
+            s.params[0].identity != plan.enumId ||
+            (s.params[0].kind != Kind::Enum && s.params[0].kind != Kind::Case)) {
+            throw std::invalid_argument("native enum AOT: nonlocal or forged function declaration");
+        }
+        declarations.push_back(s);
+    }
+    checkFamily(declarations, registry);
+    for (const Call& call : plan.returnCalls) {
+        if (!admittedTags.count(call.tag)) {
+            throw std::invalid_argument("native enum AOT: unknown literal wire tag");
+        }
+        const Parameter actual = call.staticallyProvenCase.empty()
+            ? Parameter::whole(plan.enumId)
+            : Parameter::selectedCase(plan.enumId, call.staticallyProvenCase);
+        const std::size_t selected = selectStatic(declarations, registry, {actual});
+        if (call.exactSymbol != declarations.at(selected).symbolId()) {
+            throw std::invalid_argument("native enum AOT: forged or stale exact call");
+        }
+        if (!call.staticallyProvenCase.empty()) {
+            const auto found = tags.find(call.staticallyProvenCase);
+            if (found == tags.end() || found->second != call.tag) {
+                throw std::invalid_argument("native enum AOT: refined case/tag mismatch");
+            }
+        }
+    }
+    (void)checkedNativeExit(plan);
+}
+
 class Parser final {
 public:
     explicit Parser(std::string_view source) : source_(source) { advance(); }
@@ -159,7 +226,7 @@ public:
                 family.at(selected).symbolId(), call.tag, valueType.second
             });
         }
-        (void)checkedNativeExit(plan_); // Do not emit partial IR for overflowing input.
+        validatePlan(plan_); // Complete revalidation before any LLVM IR emission.
         return std::move(plan_);
     }
 
