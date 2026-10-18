@@ -517,6 +517,28 @@ inline void requireSourceUtf8(std::string_view source) {
     }
 }
 
+/**
+ * Reject target/capability header directives even when horizontal spacing
+ * differs. The restricted lexer otherwise skips // comments wholesale.
+ * Both the CLI and the sealed library entry use this same source gate.
+ */
+inline bool hasUnverifiedEnvironmentDirective(std::string_view source) {
+    std::size_t start = 0;
+    while ((start = source.find("//", start)) != std::string_view::npos) {
+        std::size_t cursor = start + 2;
+        while (cursor < source.size() &&
+               (source[cursor] == ' ' || source[cursor] == '\t')) ++cursor;
+        if (source.substr(cursor, 4) == "ores") {
+            cursor += 4;
+            while (cursor < source.size() &&
+                   (source[cursor] == ' ' || source[cursor] == '\t')) ++cursor;
+            if (cursor < source.size() && source[cursor] == ':') return true;
+        }
+        start += 2;
+    }
+    return false;
+}
+
 inline VerifiedPlan parseVerified(std::string_view source) {
     // This API may also be invoked directly by host compiler libraries:
     // enforce the CLI's source-byte and binary-NUL admission limits here.
@@ -528,7 +550,7 @@ inline VerifiedPlan parseVerified(std::string_view source) {
     // The CLI refuses unverified runtime/target/capability directives.
     // Apply the identical policy for all direct sealed compiler-library
     // callers, including directives hidden in lexically ignored comments.
-    if (source.find("// ores:") != std::string_view::npos) {
+    if (hasUnverifiedEnvironmentDirective(source)) {
         throw std::invalid_argument(
             "native enum AOT: target/capability directives require compiler verification");
     }
