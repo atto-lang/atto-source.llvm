@@ -18,6 +18,7 @@ def main():
         ir = folder / "compiled.llvm.ll"
         compiled = run([args.compiler, "--experimental-rt-scalar-loop", args.fixture])
         assert "define i32 @oreslang_rt_scalar_frame_step" in compiled.stdout
+        assert "define void @oreslang_rt_scalar_frame_cancel" in compiled.stdout
         ir.write_text(compiled.stdout)
         src = pathlib.Path(args.source_root)
         for opt in (["-O2"], ["-O3", "-DNDEBUG"]):
