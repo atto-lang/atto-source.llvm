@@ -339,6 +339,7 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
             }
         }
     }
+    const std::uint8_t certifiedExit = enum_aot::checkedNativeExit(plan);
     llvm::LLVMContext context;
     llvm::Module module("oreslang.native.enum.case.aot", context);
     llvm::IRBuilder<> builder(context);
@@ -382,8 +383,10 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
             "enum.static.call");
         accumulator = builder.CreateAdd(accumulator, value, "enum.static.sum");
     }
-    // Native C process ABI returns i32; Oreslang i64 scalar results truncate
-    // only at this externally defined entrypoint boundary.
+    // The restricted literal-only guest slice independently proved 0..255
+    // and overflow-free accumulation, so this i64 -> i32 conversion cannot
+    // silently lose guest result bits or change the observable exit status.
+    (void)certifiedExit;
     builder.CreateRet(builder.CreateTrunc(accumulator, i32, "exit.code"));
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
