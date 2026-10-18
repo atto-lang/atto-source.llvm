@@ -962,6 +962,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-code-slot-test)
     set_tests_properties(native_supervisor_hot_reload_generation_reclamation
         PROPERTIES TIMEOUT 20)
+    # Actor-incarnation bounded code-only release; host-only precompiler gate.
+    add_executable(oreslang-native-actor-hot-upgrade-gate-test
+        tests/native_actor_hot_upgrade_gate_test.cpp)
+    target_include_directories(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-hot-upgrade-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-actor-hot-upgrade-gate-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_hot_upgrade_generation_quiescence
+        COMMAND oreslang-native-actor-hot-upgrade-gate-test)
+    set_tests_properties(native_actor_hot_upgrade_generation_quiescence
+        PROPERTIES TIMEOUT 20)
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
