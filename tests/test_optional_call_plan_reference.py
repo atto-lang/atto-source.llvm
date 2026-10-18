@@ -34,6 +34,7 @@ def bind(formals, items):
                 if not isinstance(value, tuple):
                     raise ValueError("named rest requires typed pack representation")
                 assigned[slot] = value
+                evaluation.append(source_index)
                 continue
         else:
             if saw_named:
@@ -82,6 +83,13 @@ class OptionalCallPlanReferenceTests(unittest.TestCase):
             ("value", "c", "third", 0),
             ("value", "a", "first", 1)])
         self.assertEqual(slots, ("first", None, "third"))
+        self.assertEqual(source, (0, 1))
+
+    def test_named_rest_pack_preserves_original_item_origin(self):
+        slots, source = bind(self.formals, [
+            ("value", "tags", ("x", "y"), 0),
+            ("value", "a", 5, 1)])
+        self.assertEqual(slots, (5, None, ("x", "y")))
         self.assertEqual(source, (0, 1))
 
     def test_no_rest_is_empty_tuple(self):
