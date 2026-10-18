@@ -60,7 +60,7 @@ class NativeEnumGuestAot(unittest.TestCase):
                                     f"A = {tag}, B = {tag + 1} end")
             result = self.compile(text)
             self.assertEqual(result.returncode, 0, result.stderr)
-            selected = re.findall(r'call i64 @("?eos2[^\\s(]+"?)\\(', result.stdout)
+            selected = re.findall(r'call i64 @("?eos2[^\s(]+"?)\(', result.stdout)
             self.assertEqual(len(selected), 2)
             self.assertNotEqual(selected[0], selected[1])
             if symbols is None:
@@ -69,6 +69,26 @@ class NativeEnumGuestAot(unittest.TestCase):
                 self.assertEqual(selected, symbols,
                                  "wire tag changes must not change overload ABI")
             self.assertIn(f"i64 {tag}", result.stdout)
+
+    def test_exit_code_and_signed_sum_are_checked_before_codegen(self):
+        base = """define enum Foo as A, B end
+            fnc foo(Foo.A x): int { return %s; }
+            fnc foo(Foo x): int { return %s; }
+            fnc main(): int {
+                return foo(Foo.A) + foo(Foo.B);
+            }"""
+        for x, y in ((200, 100), (-1, 0), (9223372036854775807, 1),
+                     (-9223372036854775807, -2)):
+            with self.subTest(x=x, y=y):
+                result = self.compile(base % (x, y))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.stdout)
+                self.assertIn("native enum AOT", result.stderr)
+        for x, y in ((100, 155), (-5, 15), (0, 0)):
+            with self.subTest(valid=(x, y)):
+                result = self.compile(base % (x, y))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("define i32 @main()", result.stdout)
 
     def test_without_experimental_flag_remains_rejected(self):
         with tempfile.TemporaryDirectory(prefix="ores-enum-gate-") as temp:
