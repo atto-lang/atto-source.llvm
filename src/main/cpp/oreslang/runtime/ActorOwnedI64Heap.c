@@ -407,9 +407,9 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     memset(heap->loan_entries, 0, sizeof(heap->loan_entries));
     memset(heap->external_leases, 0, sizeof(heap->external_leases));
     heap->domain = 0;
-    /* Release lock before teardown; the supervisor must have fenced all
-     * transport, scheduler, timer and callback handles to this heap. */
-    unlock_heap(heap);
+    /* The supervisor must already have fenced every external holder. Once
+     * quiescence is proven, do not publish an unlocked heap that is about to
+     * be scrubbed/freed; the terminal lock dies with the allocation. */
     memset(heap, 0, bytes);
     free(heap);
     return 1;
