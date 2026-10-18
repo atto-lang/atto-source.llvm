@@ -27,7 +27,7 @@ static void failed_enqueue_refunds_only_prior_charge() {
     TrustedOutboundTokenBucket bucket(1, 2, 0);
     require(bucket.try_consume(2, 0));
     require(!bucket.try_consume(1, 0));
-    require(bucket.refund_failed_send(2, 0));
+    require(bucket.rollback_unpublished(2, 0));
     require(bucket.available(0) == 2);
     require(bucket.try_consume(2, 0));
     require(!bucket.try_consume(1, 0));
@@ -61,7 +61,7 @@ static void invalid_policy_or_charge_denied() {
     TrustedOutboundTokenBucket bucket(1, 5, 0);
     require(!bucket.try_consume(0, 0));
     require(!bucket.try_consume(6, 0));
-    require(!bucket.refund_failed_send(0, 0));
+    require(!bucket.rollback_unpublished(0, 0));
 }
 
 int main() {
