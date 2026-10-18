@@ -582,6 +582,129 @@
       "statuses": [
         "explicit_none"
       ]
+    },
+    {
+      "id": "underscore-middle-equivalent",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "3",
+        "true"
+      ]
+    },
+    {
+      "id": "underscore-named-omission",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "b",
+          "kind": "underscore"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "true",
+        "3"
+      ]
+    },
+    {
+      "id": "underscore-in-variadic-fixed-prefix",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_spread"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ]
     }
   ],
   "rejects": [
@@ -1073,6 +1196,85 @@
       ],
       "args": [],
       "error": "optional"
+    },
+    {
+      "id": "reject-underscore-required",
+      "args": [
+        {
+          "kind": "underscore"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "required"
+    },
+    {
+      "id": "reject-underscore-rest",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "tags",
+          "kind": "underscore"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-underscore-as-expression",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "expr": "_",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "not a value"
+    },
+    {
+      "id": "reject-malformed-underscore-omission",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore",
+          "expr": "from_value"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "malformed underscore"
     }
   ],
   "overloads": [
