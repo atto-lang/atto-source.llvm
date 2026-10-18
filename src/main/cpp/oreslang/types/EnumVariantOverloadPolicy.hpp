@@ -267,6 +267,10 @@ public:
         : registry_(std::move(registry)), declarations_(std::move(declarations)),
           compiledBodies_(std::move(compiledBodies)), imageIdentity_(nextIdentity()) {
         admit(registry_, declarations_);
+        for (const Signature& declaration : declarations_) {
+            need(declaration.domain != Domain::Instance,
+                 "instance method requires exact-signature vtable AOT lowering");
+        }
         need(compiledBodies_.size() == declarations_.size(), "missing or extra AOT definitions");
         for (std::size_t i = 0; i < declarations_.size(); ++i) {
             const Signature& declaration = declarations_[i];
