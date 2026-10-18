@@ -57,6 +57,114 @@ bool reserved(std::string_view name) {
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
 
+
+bool refinement_annotation(std::string_view name) {
+    return name == "Size" || name == "Length" || name == "NotEmpty" ||
+           name == "MinLength" || name == "MaxLength" ||
+           name == "Min" || name == "Max" || name == "Range";
+}
+
+void reject_unsupported_refinement_surface(std::string_view source) {
+    bool in_type = false;
+    for (std::size_t at = 0; at < source.size();) {
+        const unsigned char ch = static_cast<unsigned char>(source[at]);
+        if (std::isspace(ch)) { ++at; continue; }
+        if (source.substr(at, 2) == "//") {
+            const auto end = source.find('\n', at + 2);
+            at = end == std::string_view::npos ? source.size() : end;
+            continue;
+        }
+        if (source.substr(at, 2) == "/*") {
+            const auto start = at;
+            at += 2;
+            std::size_t depth = 1;
+            while (depth != 0) {
+                if (at == source.size())
+                    throw std::runtime_error("unterminated block comment at byte " +
+                                             std::to_string(start));
+                if (source.substr(at, 2) == "/*") { at += 2; ++depth; }
+                else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
+                else ++at;
+            }
+            continue;
+        }
+        if (source[at] == '"' || source[at] == '\'') {
+            const char quote = source[at++];
+            bool escaped = false;
+            while (at < source.size()) {
+                const char c = source[at++];
+                if (escaped) { escaped = false; continue; }
+                if (c == '\\') { escaped = true; continue; }
+                if (c == quote) break;
+            }
+            continue;
+        }
+        if (source[at] == ';') { in_type = false; ++at; continue; }
+
+        if (source[at] == '@') {
+            const auto marker = at++;
+            while (at < source.size() &&
+                   std::isspace(static_cast<unsigned char>(source[at]))) ++at;
+            const auto start = at;
+            if (at < source.size() && identifier_start(source[at])) {
+                ++at;
+                while (at < source.size() && identifier_part(source[at])) ++at;
+                if (refinement_annotation(source.substr(start, at - start))) {
+                    throw std::runtime_error(
+                        "native refinement boundary unsupported: checked "
+                        "construction/lowering required at byte " +
+                        std::to_string(marker));
+                }
+            }
+            continue;
+        }
+
+        if (identifier_start(source[at])) {
+            const auto start = at++;
+            while (at < source.size() && identifier_part(source[at])) ++at;
+            const auto word = source.substr(start, at - start);
+            if (word == "newtype") {
+                throw std::runtime_error(
+                    "native refinement boundary unsupported: nominal newtype "
+                    "lowering required at byte " + std::to_string(start));
+            }
+            if (word == "type") {
+                in_type = true;
+                continue;
+            }
+            if (in_type && (word == "with" || word == "where")) {
+                throw std::runtime_error(
+                    "native refinement boundary unsupported: constrained type "
+                    "lowering required at byte " + std::to_string(start));
+            }
+            if (in_type && word == "Zorde") {
+                std::size_t probe = at;
+                while (probe < source.size() &&
+                       std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                if (probe < source.size() && source[probe] == '.') {
+                    ++probe;
+                    while (probe < source.size() &&
+                           std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                    const auto id = probe;
+                    if (probe < source.size() && identifier_start(source[probe])) {
+                        ++probe;
+                        while (probe < source.size() &&
+                               identifier_part(source[probe])) ++probe;
+                        if (source.substr(id, probe - id) == "infer") {
+                            throw std::runtime_error(
+                                "native refinement boundary unsupported: Zorde.infer "
+                                "requires checked schema lowering at byte " +
+                                std::to_string(start));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        ++at;
+    }
+}
+
 class Lexer {
 public:
     explicit Lexer(std::string_view source) : source_(source) {}
@@ -1833,6 +1941,9 @@ private:
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
+    // Compiler-owned fail-closed gate. Tests assert this diagnostic rather
+    // than relying on incidental lexer/parser failure for refinement syntax.
+    reject_unsupported_refinement_surface(source);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&

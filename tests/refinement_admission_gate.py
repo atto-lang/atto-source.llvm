@@ -12,6 +12,11 @@ import subprocess
 import tempfile
 
 CONTROL = "fnc main(): int { return 42; }\n"
+CONTROL_WITH_DECOYS = (
+    "/* @Range(min=1,max=2) type X = int with value gt 0; */\n"
+    "// define newtype Hidden(int);\n"
+    "fnc main(): int { return 42; }\n"
+)
 UNSUPPORTED = {
     "annotation": "@Size(min=1,max=32)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "with": "type NonEmpty = string with length gt 0;\nfnc main(): int { return 42; }\n",
@@ -39,6 +44,8 @@ UNSUPPORTED = {
     "legacy-ge": "type Legacy = int with value ge 1;\nfnc main(): int { return 42; }\n",
     "legacy-le": "type Legacy = int with value le 10;\nfnc main(): int { return 42; }\n",
     "invalid-with": "type T = string with length gt 0 or length eq 10;\nfnc main(): int { return 42; }\n",
+    "effective-hole": "type T = int with value gte 1 and value ne 2;\nfnc main(): int { return 42; }\n",
+    "spaced-annotation": "@ Range(min=1,max=2) type R = int;\nfnc main(): int { return 42; }\n",
 }
 
 def run(compiler: pathlib.Path, source: pathlib.Path) -> subprocess.CompletedProcess[str]:
@@ -57,6 +64,11 @@ def main() -> None:
         yes = run(compiler, control)
         if yes.returncode != 0 or "define" not in yes.stdout:
             raise AssertionError("native positive control failed; rejection checks are not evidence")
+        decoy = directory / "comment-decoys.ores"
+        decoy.write_text(CONTROL_WITH_DECOYS, encoding="utf-8")
+        decoy_result = run(compiler, decoy)
+        if decoy_result.returncode != 0 or "define" not in decoy_result.stdout:
+            raise AssertionError("refinement words inside comments caused false-positive admission failure")
         for case, source in UNSUPPORTED.items():
             candidate = directory / (case + ".ores")
             candidate.write_text(source, encoding="utf-8")
@@ -67,6 +79,10 @@ def main() -> None:
                 raise AssertionError(f"{case}: failed admission leaked partial LLVM IR/stdout")
             if not result.stderr.strip():
                 raise AssertionError(f"{case}: failure had no diagnostic")
+            if "native refinement boundary unsupported" not in result.stderr:
+                raise AssertionError(
+                    f"{case}: rejection was incidental parser failure, not compiler-owned gate"
+                )
         print(f"native fail-closed refinements: {len(UNSUPPORTED)} negative cases + positive control")
 
 if __name__ == "__main__":
