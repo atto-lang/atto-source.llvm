@@ -59,7 +59,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
 
     def test_dirty_tracked(self):
         (self.repo / 'source.c').write_text('changed\n')
-        self.reject('dirty')
+        self.reject('raw tracked blob mismatch')
 
     def test_untracked_source(self):
         (self.repo / 'shadow.c').write_text('int x;\n')
@@ -70,7 +70,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
         (self.repo / 'source.c').chmod(0o755)
         ordinary = run('git', 'status', '--porcelain', cwd=self.repo)
         self.assertEqual('', ordinary.stdout)
-        self.reject('file-mode-modified')
+        self.reject('tracked source executable mode mismatch')
 
     def test_assume_unchanged(self):
         self.assertEqual(0, run('git', 'update-index', '--assume-unchanged', 'source.c', cwd=self.repo).returncode)
@@ -109,6 +109,23 @@ class NativeNioWorktreeTests(unittest.TestCase):
         self.assertEqual('', status.stdout, status.stderr)
         self.reject('raw tracked blob mismatch')
 
+    def test_filter_command_must_not_execute_during_integrity_check(self):
+        attrs = self.repo / '.git' / 'info' / 'attributes'
+        attrs.write_text('source.c filter=attack\n')
+        command = "sh -c 'echo invoked > .git/clean-filter-invoked; tr A-Z a-z'"
+        self.assertEqual(0, run('git', 'config', 'filter.attack.clean',
+                                command, cwd=self.repo).returncode)
+        before = (self.repo / 'source.c').read_text()
+        (self.repo / 'source.c').write_text(before.replace('int source', 'INT source'))
+        self.reject('raw tracked blob mismatch')
+        self.assertFalse((self.repo / '.git' / 'clean-filter-invoked').exists(),
+                         'the verifier must not execute local Git clean filters')
+
+    def test_staged_index_must_equal_head(self):
+        (self.repo / 'source.c').write_text('int source(void) { return 2; }\n')
+        self.assertEqual(0, run('git', 'add', 'source.c', cwd=self.repo).returncode)
+        self.reject('staged Git index differs from HEAD')
+
     def test_git_index_override(self):
         env = os.environ.copy()
         env['GIT_INDEX_FILE'] = str(self.repo / '.git' / 'fake-index')
@@ -119,7 +136,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
     def test_postflight_mutation(self):
         self.assertEqual(0, self.gate().returncode)
         (self.repo / 'source.c').write_text('mutated during compile\n')
-        self.reject('dirty')
+        self.reject('raw tracked blob mismatch')
 
     def test_build_symlink(self):
         outside = Path(self.tmp.name) / 'outside'

@@ -109,12 +109,19 @@ def verify(commit: str, tree: str) -> None:
         if candidate.is_symlink():
             raise ValueError("cmake-build path may not be a symlink")
 
-    # Explicitly override a locally disabled core.fileMode and cached fsmonitor.
-    if git("status", "--porcelain=v1", "-z", "--untracked-files=all"):
-        raise ValueError("dirty, untracked, or file-mode-modified source")
-    # Git's status/diff may run user-configured clean filters and compare the
-    # normalized result instead of actual compiler-visible bytes.
+    # Git status can execute attacker-configured clean-filter commands while
+    # checking the worktree. Compare HEAD to the staged index directly (without
+    # working-file conversion, textconv, or external diff), then hash each raw
+    # tracked worktree file independently; never invoke a clean/smudge filter.
+    diff = subprocess.run(("git", "-c", "core.fileMode=true",
+                           "-c", "core.fsmonitor=false", "diff", "--cached",
+                           "--quiet", "--no-ext-diff", "--no-textconv",
+                           "HEAD", "--"), capture_output=True, check=False)
+    if diff.returncode != 0:
+        raise ValueError("staged Git index differs from HEAD")
     verify_raw_tracked_blobs()
+    if git("ls-files", "--others", "--exclude-standard", "-z"):
+        raise ValueError("dirty or untracked source")
 
     # Ignored files can still affect a native build. Permit only root-scoped
     # cache/build directories; never ignored files inside source or tests.
