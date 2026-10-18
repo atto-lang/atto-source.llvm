@@ -131,6 +131,26 @@ static void pre_dispatch_abort_refunds_exactly_once() {
     check(quota.tcp_connections() == 0);
 }
 
+static void revoked_quota_rejects_undispatched_http_and_tcp() {
+    TrustedUntrustedNetworkQuota http({}, 0);
+    auto h = http.try_start_http(0);
+    check(h.status == Status::admitted);
+    http.close();
+    check(!h.lease.commit_dispatch());
+    check(h.lease.abort_before_dispatch(0));
+    check(!h.lease.abort_before_dispatch(0));
+    check(http.http_in_flight() == 0);
+    check(http.try_start_http(0).status == Status::closed);
+
+    TrustedUntrustedNetworkQuota tcp({}, 0);
+    auto t = tcp.try_open_tcp(0);
+    check(t.status == Status::admitted);
+    tcp.close();
+    check(!t.lease.commit_dispatch());
+    check(t.lease.abort_before_dispatch(0));
+    check(tcp.tcp_connections() == 0);
+}
+
 static void invalid_policy_fails_closed() {
     TrustedUntrustedNetworkQuota::Policy p;
     p.max_tcp_connections = 0;
@@ -145,6 +165,7 @@ int main() {
     concurrent_tcp_open_is_bounded();
     connection_attempt_churn_is_rate_limited();
     pre_dispatch_abort_refunds_exactly_once();
+    revoked_quota_rejects_undispatched_http_and_tcp();
     invalid_policy_fails_closed();
     std::cout << "UNTRUSTED_NETWORK_QUOTA_HOST_ONLY_PASS\n";
 }
