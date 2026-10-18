@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 namespace oreslang::runtime {
@@ -61,7 +63,10 @@ public:
             Record{id, IpcReceiptStage::local_admitted});
         if (!inserted)
             throw std::logic_error("IPC sequence collision");
-        stream_ = std::move(stream);
+        // This optional emplacement cannot throw: tuple/string move constructors
+        // are noexcept. A failed map insertion must not publish correlation.
+        static_assert(std::is_nothrow_move_constructible_v<StreamId>);
+        if (!stream_) stream_.emplace(std::move(stream));
         last_sequence_ = id.message_sequence;
         last_route_epoch_ = id.route_epoch;
         last_capability_generation_ = id.capability_generation;
@@ -129,10 +134,14 @@ private:
             !valid_token(id.destination_actor) ||
             !valid_token(id.transport_session))
             throw std::invalid_argument("invalid IPC actor identity");
-        if (!id.sender_incarnation || !id.destination_incarnation ||
-            !id.route_epoch || !id.message_sequence || !id.frame_sequence ||
-            !id.capability_generation)
-            throw std::invalid_argument("zero IPC incarnation or sequence");
+        const auto bounded = [](std::uint64_t value) {
+            return value > 0 && value <= static_cast<std::uint64_t>(
+                (std::numeric_limits<std::int64_t>::max)());
+        };
+        if (!bounded(id.sender_incarnation) || !bounded(id.destination_incarnation) ||
+            !bounded(id.route_epoch) || !bounded(id.message_sequence) ||
+            !bounded(id.frame_sequence) || !bounded(id.capability_generation))
+            throw std::invalid_argument("invalid or overflowing IPC identity number");
         if (id.payload_sha256.size() != 64)
             throw std::invalid_argument("IPC payload hash size");
         for (unsigned char c : id.payload_sha256)
