@@ -8,6 +8,16 @@ is a construction receiver marker, not a parameter and not an ABI slot.
 Parameter names and types cannot produce additional overload identities.
 Return type is not a constructor dispatch dimension.
 
+Native `ScalarConstructor.binds_self` now retains the parser's explicit
+receiver marker instead of discarding it. This is semantic metadata only:
+`constructor(self, int n)` and `constructor(int n)` still have the same
+caller-visible arity and are conflicting overloads within one class.
+There is no source-executable constructor receiver in this limited native
+subset yet. In particular, Java's same-object `constructor(...)` delegation
+and construction-time `self.field` assignments remain **unsupported** by
+this LLVM slice and must fail closed until the full CFG/ownership/runtime
+lowering and its native conformance tests land.
+
 The native lexer/parser reserves `constructor` as a declaration keyword,
 so it cannot be used as a class, local, parameter or callable identifier.
 
