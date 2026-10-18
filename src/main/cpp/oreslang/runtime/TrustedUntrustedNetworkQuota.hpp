@@ -65,6 +65,16 @@ public:
             return *this;
         }
         ~Lease() noexcept { release(); }
+
+        // Host gate holds its admission mutex during this preflight, and
+        // host Scope.close uses that same mutex. All scopes can be tested
+        // before any one of their leases is committed.
+        bool can_commit_dispatch() const noexcept {
+            if (state_.load() != 0 || owner_ == nullptr) return false;
+            std::lock_guard<std::mutex> hold(owner_->lock_);
+            return !owner_->closed_ && state_.load() == 0;
+        }
+
         bool commit_dispatch() noexcept {
             // Policy revocation fences commits that have not reached the host
             // IO dispatch boundary; committed operations still require broker
