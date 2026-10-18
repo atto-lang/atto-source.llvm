@@ -26,6 +26,9 @@ class InvertedColumns {
                   "phase-one columns only support pointer-free arithmetic and enum fields");
     static_assert((std::is_trivially_copyable_v<Fields> && ...),
                   "phase-one columns require trivial field copies");
+    static_assert(((sizeof(Fields) == 1 || sizeof(Fields) == 2 ||
+                    sizeof(Fields) == 4 || sizeof(Fields) == 8) && ...),
+                  "phase-one column cells must have a fixed 1/2/4/8 byte width");
     static constexpr std::size_t field_count = sizeof...(Fields);
     // vector<bool> is bit-packed and has no data() span; represent bool
     // as canonical 0/1 bytes in the initial SoA ABI instead.
