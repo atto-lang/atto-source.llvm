@@ -71,3 +71,27 @@ build, or actual Oreslang guest-source test. Those are distinct release gates.
 - Source-level borrow-checker negative fixtures and end-to-end Java/Graal
   and LLVM runtime parity tests, plus full-tree GitHub CI and freestanding
   target link tests.
+
+## Follow-up STOP race hardening (same day)
+
+A review of `ores_std_start` found a transition bug: a sealed gate could
+return `CLOSED` for an admitted-but-not-running ticket but still change the
+ticket state to `RUNNING`. That contradicts physical-admission linearization
+and could strand state quiescence during supervisor teardown.
+
+Corrected the transition to mark `RUNNING` only if the gate remains unsealed.
+Added `test_closed_start_does_not_reactivate_dormant_grant`, in addition to
+the existing STOP vs start threaded race. The regression checks two CLOSED
+observations, no transition to RUNNING, explicit dormant release and completed
+quiescence.
+
+The affected exact source and test blobs were independently mirrored and
+SHA-verified:
+
+- `OresStdSyncAdmission.h`: `2823a6f8ec4b03a54e000267f78c8d50b52fe581`
+- `native_std_sync_admission_test.c`: `7139f394a614c332c0d56e7429de8eb5b4921e1e`
+
+[Alternate-org exact-blob CI run #39151903902](https://github.com/sagitta-stack/sagitta-docs/actions/runs/39151903902)
+passed both GCC and Clang full focused matrices, including NDEBUG,
+ASan/UBSan and GCC TSan. This does not yet validate the entire LLVM Git tree,
+compiler guest lowering or max=3 native actor source execution.
