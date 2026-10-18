@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -49,6 +50,19 @@ inline void identifier(const std::string& s) {
             || (c == 0xf0 && second < 0x90)
             || (c == 0xf4 && second > 0x8f))
             throw std::invalid_argument("overlong/surrogate/out-of-range UTF-8");
+        // Match Java Character.isISOControl / isWhitespace on Unicode
+        // scalars, without locale dependence or implementation-defined
+        // isspace() behavior. NBSP/U+2007/U+202F are NOT Java whitespace.
+        std::uint32_t scalar = c & (len == 2 ? 0x1fu : (len == 3 ? 0x0fu : 0x07u));
+        for (std::size_t n = 1; n < len; ++n) {
+            scalar = (scalar << 6) | (static_cast<unsigned char>(s[i+n]) & 0x3fu);
+        }
+        if ((scalar >= 0x80 && scalar <= 0x9f) || scalar == 0x1680
+            || (scalar >= 0x2000 && scalar <= 0x2006)
+            || (scalar >= 0x2008 && scalar <= 0x200a)
+            || scalar == 0x2028 || scalar == 0x2029
+            || scalar == 0x205f || scalar == 0x3000)
+            throw std::invalid_argument("Unicode control/whitespace in identity");
         i += len;
     }
 }
