@@ -221,27 +221,47 @@ def main():
         phoff = struct.unpack_from("<I", original, 28)[0]
         entsize, phcount = struct.unpack_from("<HH", original, 42)
         vectors_offset = None
+        vector_phoff = None
+        text_phoff = None
         for i in range(phcount):
             off = phoff + i * entsize
-            kind, file_off, vaddr = struct.unpack_from("<III", original, off)
-            if kind == 1 and vaddr == FLASH_BEGIN:
-                vectors_offset = file_off
-                break
-        verify(vectors_offset is not None, "missing vector-test segment")
-        for label, delta, value, diagnostic in (
-                ("invalid-sp", 0, RAM_END + 0x10000, "reset stack pointer"),
-                ("invalid-reset", 4, 0, "reset vector")):
+            kind, file_off, vaddr, paddr, size, memsz, flags, alignment = (
+                struct.unpack_from("<IIIIIIII", original, off))
+            if kind != 1:
+                continue
+            if paddr == FLASH_BEGIN:
+                vectors_offset, vector_phoff = file_off, off
+            if flags & 0x1 and text_phoff is None:
+                text_phoff = off
+        verify(vectors_offset is not None and text_phoff is not None,
+               "missing vector/text self-test segments")
+        # The corruption harness must prove that a superficially valid ELF
+        # cannot smuggle a different physical image, entrypoint or permissions.
+        mutations = (
+            ("invalid-sp", vectors_offset, RAM_END + 0x10000,
+             "reset stack pointer"),
+            ("invalid-reset", vectors_offset + 4, 0, "reset vector"),
+            ("nonexec-reset", vectors_offset + 4, FLASH_END - 3,
+             "not point into an executable"),
+            ("wrong-physical-address", vector_phoff + 12, FLASH_END + 4,
+             "physical load address"),
+            ("mismatched-entry", 24, 0x101,
+             "ELF entry point must match"),
+            ("writable-executable", text_phoff + 24, 7,
+             "writable executable"),
+        )
+        for label, offset, value, diagnostic in mutations:
             mutated = bytearray(original)
-            struct.pack_into("<I", mutated, vectors_offset + delta, value)
+            struct.pack_into("<I", mutated, offset, value)
             corrupt_path = root / (label + ".elf")
             corrupt_path.write_bytes(mutated)
             try:
                 verify_vector_table(corrupt_path)
             except RuntimeError as err:
                 verify(diagnostic in str(err),
-                       "ELF vector audit rejected wrong reason: " + str(err))
+                       "ELF audit rejected " + label + " for wrong reason: " + str(err))
             else:
-                raise RuntimeError("ELF vector audit admitted " + label)
+                raise RuntimeError("ELF audit admitted " + label)
         verify("Machine:                           ARM" in header,
                "bare-metal ELF has wrong architecture")
         verify("EXEC (Executable file)" in header,
