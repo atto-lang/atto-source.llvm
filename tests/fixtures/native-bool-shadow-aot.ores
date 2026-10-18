@@ -1,9 +1,13 @@
-define module BoolShadow as
+define module BooleanOps as
     pub fnc And(bool left, bool right): bool {
         return left;
     }
 
-    pub fnc probe(bool left, bool right): bool {
+    pub fnc probe_unqualified(bool left, bool right): bool {
         return And(left, right);
+    }
+
+    pub fnc probe_qualified(bool left, bool right): bool {
+        return BooleanOps.And(left, right);
     }
 end
