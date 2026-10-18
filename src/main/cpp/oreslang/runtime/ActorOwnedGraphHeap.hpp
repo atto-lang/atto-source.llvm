@@ -78,6 +78,17 @@ private:
             throw std::logic_error("actor graph heap is retiring or executing destructor glue");
     }
 
+    // Caller must hold the returned mutation guard until *all* writes
+    // and destructor callbacks have completed. A read/FFI/continuation
+    // lease cannot be raced by a mutation admitted on another carrier.
+    ActorHeapBorrowGate::Mutation require_mutation_access(ActorHeapIdentity actor) {
+        require_open_access(actor);
+        auto mutation = borrow_gate_.begin_mutation(actor);
+        if (!mutation) throw std::logic_error(
+            "actor graph mutation conflicts with live loans, another writer or retirement");
+        return std::move(*mutation);
+    }
+
     Slot& require_node(Handle id) {
         if (id.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
         if (id.slot >= NodeCapacity) throw std::logic_error("invalid actor graph slot");
@@ -121,7 +132,14 @@ public:
     ActorOwnedGraphHeap& operator=(const ActorOwnedGraphHeap&) = delete;
     ActorOwnedGraphHeap(ActorOwnedGraphHeap&&) = delete;
     ActorOwnedGraphHeap& operator=(ActorOwnedGraphHeap&&) = delete;
-    ~ActorOwnedGraphHeap() { erase_all(); }
+    // A heap with outstanding external leases cannot be destroyed safely:
+    // the lease holds a pointer to this gate and might still dereference the
+    // graph. Deliberately terminate instead of reclaiming dangling storage.
+    // Normal production cleanup must use retire() after a joined carrier.
+    ~ActorOwnedGraphHeap() noexcept {
+        if (!borrow_gate_.seal_and_quiesced(owner_)) std::terminate();
+        erase_all();
+    }
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
     ActorHeapIdentity owner() const noexcept { return owner_; }
@@ -143,7 +161,7 @@ public:
 
     std::optional<Handle> allocate(ActorHeapIdentity actor, const void* bytes,
                                    std::size_t length) {
-        require_open_access(actor);
+        auto mutation = require_mutation_access(actor);
         if (length > NodeBytes || (length && bytes == nullptr))
             throw std::invalid_argument("invalid actor graph payload");
         for (std::size_t i = 0; i < NodeCapacity; ++i) {
@@ -177,7 +195,7 @@ public:
                       "actor heap constructors must not throw");
         static_assert(std::is_nothrow_destructible<T>::value,
                       "actor heap drop glue must not throw");
-        require_open_access(actor);
+        auto mutation = require_mutation_access(actor);
         for (std::size_t i = 0; i < NodeCapacity; ++i) {
             Slot& slot = slots_[i];
             if (slot.live || slot.generation == std::numeric_limits<std::uint64_t>::max())
@@ -209,7 +227,7 @@ public:
     }
 
     void write(ActorHeapIdentity actor, Handle id, const void* bytes, std::size_t length) {
-        require_open_access(actor);
+        auto mutation = require_mutation_access(actor);
         Slot& slot = require_node(id);
         if (slot.drop) throw std::logic_error("owned objects cannot be overwritten as bytes");
         if (length > NodeBytes || (length && !bytes))
@@ -220,7 +238,7 @@ public:
     }
 
     bool link(ActorHeapIdentity actor, Handle source, Handle target) {
-        require_open_access(actor);
+        auto mutation = require_mutation_access(actor);
         Slot& from = require_node(source);
         (void)require_node(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
@@ -245,7 +263,7 @@ public:
     // Invalidating a node also purges incoming non-owning edges, to avoid
     // dangling links consuming a bounded edge budget across slot reuse.
     void remove(ActorHeapIdentity actor, Handle id) {
-        require_open_access(actor);
+        auto mutation = require_mutation_access(actor);
         Slot& deleted = require_node(id);
         if (deleted.generation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor graph node generation exhausted");
