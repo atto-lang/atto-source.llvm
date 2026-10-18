@@ -45,23 +45,29 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="ores-otp-native-reject-") as root:
         root = pathlib.Path(root)
-        for module in MODULES:
-            fixture = root / (module + ".ores")
-            alias = "".join(part.capitalize() for part in module.split("_"))
+        # Canonical portable otp/* and draft Java std/otp/* must BOTH remain
+        # fail-closed until native typed module/linker lowering exists.
+        # Also reject unknown and traversal path variants without emitting IR.
+        paths = [prefix + module for prefix in ("otp/", "std/otp/")
+                 for module in MODULES]
+        paths.extend(("otp/release", "otp/gen_server/../registry",
+                      "std/otp/ets", "std/otp/a/../../core"))
+        for ordinal, import_path in enumerate(paths):
+            fixture = root / ("case_" + str(ordinal) + ".ores")
             fixture.write_text(
-                'import module ' + alias + ' from "std/otp/' + module + '";\n'
+                'import module OtpCase from "' + import_path + '";\n'
                 'pub fnc main(): int { return 0; }\n',
                 encoding="utf-8",
             )
             result = run([args.compiler, str(fixture)])
             require(result.returncode == 1,
-                    module + ": unsupported import must exit exactly 1")
+                    import_path + ": unsupported import must exit exactly 1")
             require(not result.stdout,
-                    module + ": compiler emitted LLVM IR after rejected import")
+                    import_path + ": compiler emitted LLVM IR after rejected import")
             require(DIAGNOSTIC in result.stderr,
-                    module + ": explicit import diagnostic missing: " + result.stderr)
+                    import_path + ": explicit import diagnostic missing: " + result.stderr)
 
-    print("OTP_STDLIB_NATIVE_FAIL_CLOSED_6_PASS")
+    print("OTP_STDLIB_NATIVE_FAIL_CLOSED_16_PASS")
 
 
 if __name__ == "__main__":
