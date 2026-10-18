@@ -25,7 +25,8 @@ def encode(actor_id, epoch, hashes, state):
     body = MAGIC + struct.pack('>I', 1) + actor_id.bytes + struct.pack('>Q', epoch)
     body += b''.join(bytes.fromhex(h) for h in hashes)
     body += struct.pack('>I', len(state)) + state
-    assert len(body) == HEADER + len(state)
+    if len(body) != HEADER + len(state):
+        raise AssertionError('encoder size mismatch')
     return body + hashlib.sha256(body).digest()
 
 
@@ -53,13 +54,16 @@ def run_tests():
     for i in range(1024):
         data = rng.randbytes(rng.randrange(0, 500))
         frame = encode(ID, 42, DIGESTS, data)
-        assert decode(frame, ID, 42, DIGESTS) == data
+        if decode(frame, ID, 42, DIGESTS) != data:
+            raise AssertionError('round-trip mismatch')
         checks += 1
     golden = encode(ID, 42, DIGESTS, b'\x0a\xff')
     # Golden fixture is deliberately pinned for Java/C++ parity reviews.
     print('checkpoint_v1_golden_sha256=' + hashlib.sha256(golden).hexdigest())
-    assert len(golden) == 202
-    assert decode(golden, ID, 42, DIGESTS) == b'\x0a\xff'
+    if len(golden) != 202:
+        raise AssertionError('golden size mismatch')
+    if decode(golden, ID, 42, DIGESTS) != b'\x0a\xff':
+        raise AssertionError('golden content mismatch')
     checks += 2
     for i in range(len(golden)):
         changed = bytearray(golden)
@@ -87,7 +91,8 @@ def run_tests():
         except ValueError:
             checks += 1
     large = bytes(MAX)
-    assert len(decode(encode(ID, 42, DIGESTS, large), ID, 42, DIGESTS)) == MAX
+    if len(decode(encode(ID, 42, DIGESTS, large), ID, 42, DIGESTS)) != MAX:
+        raise AssertionError('max-size round-trip mismatch')
     checks += 1
     print('PASS: ' + str(checks) + ' independent wire checks (model-only)')
 
