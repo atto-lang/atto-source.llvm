@@ -7,9 +7,10 @@ This slice advances [issue #612](https://github.com/ores-truffle-oreslang/oresla
 - `FreestandingActorKernel.c/.h` use only `<stdint.h>`. The caller supplies **zero-initialized** `OresKernel` storage. There are no allocator, libc, pthread, syscall, POSIX, GC, or native runtime dependencies.
 - A **single trusted cooperative executor** drives one event per `ores_kernel_tick`. It is not concurrent, interrupt-safe, or currently preemptive. No anonymous worker threads are created.
 - At most **8 actor slots**, **16 pending i64 messages per slot**, and **4 actor-local u64 fields**. These are prototype capacity constants, not yet profile-dependent budgets.
-- Per-slot monotonic generation refs reject stale sends, stops and snapshots; generation wrap permanently exhausts a slot. Reinitializing CONTROL advances generations; reset while a turn executes is rejected.
+- Per-slot monotonic generations **and a local owner pointer** reject stale and cross-kernel refs for send/stop/snapshot, including two kernels with the same slot and generation. Generation wrap permanently exhausts a slot. Reinitializing CONTROL advances generations; reset while a turn executes is rejected. The owner pointer is a process-local C identity check, **not an unforgeable permission token, guest ActorRef, or cross-process wire encoding**.
 - Calls to spawn/send/stop/snapshot from a running handler are rejected. Actor handlers cannot asynchronously await or call actor-graph operations yet.
-- Stop prevents new messages but drains admitted ones before retirement; double-stop and stale references fail closed. On handler failure, that actor's mailbox and private fields are cleared, the slot is retired, and a fault counter is incremented with saturation.
+- Stop prevents new messages but drains admitted ones before retirement; double-stop and stale references fail closed. On handler failure or corrupt queue metadata (out-of-bounds head, length, invalid handler or closing state), that actor's mailbox and private fields are cleared, the slot is retired, and a fault counter is incremented with saturation. The processed counter also saturates instead of wrapping.
+- Retirement uses volatile scalar writes for actor-owned fields and mailbox payloads, retaining explicit zeroization under optimizations. This does **not** prove that stale CPU registers, cached copies, DMA, arbitrary C aliases or external hardware buffers were scrubbed.
 - Snapshot only exports processed count and last scalar result. The callback field pointer is not exported by the API, but isolation is **logical**, not MPU-enforced: a native C handler can still form or retain raw pointers. This is not yet an adversarial untrusted actor sandbox.
 
 ## Run narrow host and ARM checks
@@ -27,7 +28,7 @@ clang --target=thumbv7m-none-eabi -mcpu=cortex-m3 -mthumb \
 readelf -Ws /tmp/ores-freestanding-arm.o
 ```
 
-The checked-in CMake target `freestanding_actor_kernel_bounded_host` is host-only and forces assertions on even in Release builds. Tests cover actor-private state, round-robin mailboxes, capacity, stop/drain, stale refs, reset, handler fault, and reentrancy. The ARM object was independently checked to contain **no named undefined symbols**, but an object is not a bootable image.
+The checked-in CMake targets `freestanding_actor_kernel_bounded_host` and `freestanding_actor_kernel_model_100k` are host-only and force assertions on even in Release builds. The first exercises actor-private state, round-robin mailboxes, capacity, stop/drain, stale/foreign refs, reset, malformed queue metadata, counter saturation, handler faults, and reentrancy. The second compares 100,000 deterministically generated actor operations with an independent bounded-mailbox model, including stale refs and full post-operation state invariants. The ARM object was independently checked to contain **no named undefined symbols**, but an object is not a bootable image.
 
 ## What is deliberately NOT proven
 
