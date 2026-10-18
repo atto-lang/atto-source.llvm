@@ -202,3 +202,35 @@ cannot be restored before OR after frame retirement, envelope receiving
 the published bit before guest code, and partial fanout preserving
 admission classifications. Exact-tree compiler/runtime executions are
 separate from structural/static source assertions.
+
+## Exclusive route-frame mailbox publication (2026-10-17 hardening)
+
+Each live routing frame has one **VM-only atomic admission state**:
+`FREE = 0`, `CLAIMED = 1`, `PUBLISHED = 2`.
+A sender must acquire the exclusive `FREE → CLAIMED` transition
+before fallible DATA preparation. Competing simultaneous sends of one
+sealed frame fail closed without duplicate mailbox DATA or additional
+actor work. A definite prepublication rejection performs
+`CLAIMED → FREE`, preserving the original route/return right when
+the caller owns a verified failed-admission result.
+
+A successful bounded mailbox enqueue (the **linearization point**) is
+immediately followed by `PUBLISHED = 2`, without allocation, a
+fallible session/epoch check, callback, monitor acquisition or
+potentially throwing bookkeeping between `tryWrite` and the marker.
+`PUBLISHED` is monotonic. Any later runtime error is postpublication
+and must not revoke accepted envelope ownership, issue a negative
+admission receipt, restore a reverse source, or authorize retry.
+
+Root ingress is also subject to this rule: a postpublication failure
+must not unconditionally retire the accepted ingress frame or mislead
+the supervisor into re-ingressing the same DATA. A fatal `Error` must
+not be hidden as a recoverable rejection.
+
+Cross-backend stress vectors: eight simultaneous claimants yield
+exactly one reservation; abort restores exactly one retryable claim;
+successful enqueue forbids all subsequent claims; publisher faults
+both before and after the actual mailbox enqueue produce distinguishable
+admission outcomes; sibling-frame rollback stays identity-checked.
+A test that imports only a subset of identical Git blobs is evidence
+for that subset, **never proof of a complete exact-tree build**.
