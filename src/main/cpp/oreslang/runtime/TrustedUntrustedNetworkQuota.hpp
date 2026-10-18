@@ -75,7 +75,17 @@ public:
             std::uint8_t expected = 0;
             return state_.compare_exchange_strong(expected, 1);
         }
-        bool abort_before_dispatch(std::uint64_t trusted_nanos) noexcept {
+        // Cancellation of a published admission releases the active slot,
+        // but never the start-rate token: delayed refunds create burst credit.
+        bool abort_before_dispatch(std::uint64_t /*trusted_nanos*/) noexcept {
+            std::uint8_t expected = 0;
+            if (!state_.compare_exchange_strong(expected, 2)) return false;
+            owner_->release(kind_);
+            return true;
+        }
+        // Gate-internal rollback, only while a partial three-scope admission
+        // remains unpublished behind the host's atomic admission lock.
+        bool rollback_unpublished(std::uint64_t trusted_nanos) noexcept {
             std::uint8_t expected = 0;
             if (!state_.compare_exchange_strong(expected, 2)) return false;
             owner_->refund_unsent(kind_, trusted_nanos);
