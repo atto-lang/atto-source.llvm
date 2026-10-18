@@ -59,6 +59,9 @@ private:
         std::size_t users = 0;
         bool frozen = false;
         bool publishing = false;
+        // Last CONTROL ticket was abandoned during a publication. If that
+        // publication throws, its owner must release the orphaned freeze.
+        bool abandon_pending = false;
         bool closed = false;
 
         State(ActorHeapIdentity identity, Shape actor_shape,
@@ -155,10 +158,16 @@ public:
             std::lock_guard<std::mutex> lock(state->mutex);
             // Unwind / abandoned upgrade must never seal actor DATA forever.
             // Do not race an in-progress publication or override terminal close.
-            if (!state->closed && !state->publishing && state->frozen
+            if (!state->closed && state->frozen
                 && state->ticket_epoch == epoch_) {
-                state->frozen = false;
-                state->cv.notify_all();
+                if (state->publishing) {
+                    // The publisher still owns the commit decision. Defer
+                    // freeze cleanup to its success/failure finalizer.
+                    state->abandon_pending = true;
+                } else {
+                    state->frozen = false;
+                    state->cv.notify_all();
+                }
             }
         }
     };
@@ -214,6 +223,7 @@ public:
         if (state->ticket_epoch == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor upgrade token sequence exhausted");
         state->frozen = true;
+        state->abandon_pending = false;
         return Ticket(state, ++state->ticket_epoch, expected_revision);
     }
 
@@ -236,6 +246,7 @@ public:
         if (state->closed)
             throw std::logic_error("actor hot-upgrade gate is closed");
         state->frozen = false;
+        state->abandon_pending = false;
     }
 
     // Code-only publication: any ABI/shape drift, outstanding pin or stale
@@ -295,6 +306,9 @@ public:
                 std::lock_guard<std::mutex> lock(state->mutex);
                 state->publishing = false;
                 close_slot = state->closed;
+                if (state->abandon_pending && !close_slot)
+                    state->frozen = false;
+                state->abandon_pending = false;
                 state->cv.notify_all();
             }
             // Cleanup callback can call close() while publication is active.
@@ -308,6 +322,7 @@ public:
             state->publishing = false;
             close_slot = state->closed;
             if (!close_slot) state->frozen = false;
+            state->abandon_pending = false;
             state->cv.notify_all();
         }
         // If a retiring old image requested terminal close from its
