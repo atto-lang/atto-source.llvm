@@ -92,6 +92,14 @@ This is not a static-linking or cross-compilation guarantee, and it does not
 make Spin compile: imports, actors, channels and async HTTP still require guest
 lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
 
+## Native HTTP actor integration
+
+An experimental same-process HTTP adapter now dispatches every valid request
+through the native bounded mailbox to an LLVM-compiled scalar Oreslang actor.
+It uses kqueue/epoll, actor-owned heaps, generation-fenced exchange ownership,
+keep-alive and a sustained benchmark. It does **not** compile the Spin framework
+or its async/OTel modules. See [build, ownership and limits](examples/native-http/README.md).
+
 ## Experimental Cortex-M3 native AOT (scalar subset)
 
 `oreslang-llvmc --target=thumbv7m-none-eabi` now admits a deliberately narrow

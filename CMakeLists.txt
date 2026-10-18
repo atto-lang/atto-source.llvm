@@ -76,6 +76,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_state_rw_critical_using_admission
         PROPERTIES TIMEOUT 60)
 
+    add_executable(oreslang-native-http-exchange-test tests/native_http_exchange_test.cpp)
+    target_include_directories(oreslang-native-http-exchange-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-http-exchange-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-http-exchange-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_http_exchange_generation_ownership COMMAND oreslang-native-http-exchange-test)
+    set_tests_properties(native_http_exchange_generation_ownership PROPERTIES TIMEOUT 20)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
@@ -460,6 +467,20 @@ if(BUILD_TESTING)
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(native_source_scalar_while_compiler_aot_resume
         PROPERTIES TIMEOUT 120)
+
+    if(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        foreach(mode IN ITEMS release sanitizer)
+            set(native_http_extra)
+            if(mode STREQUAL "sanitizer")
+                set(native_http_extra --sanitize)
+            endif()
+            add_test(NAME native_http_compiled_actor_${mode}
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_http_build_and_test.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}"
+                    --cxx "${ORE_RT_AOT_CXX}" --root "${CMAKE_CURRENT_SOURCE_DIR}" ${native_http_extra})
+            set_tests_properties(native_http_compiled_actor_${mode} PROPERTIES TIMEOUT 180)
+        endforeach()
+    endif()
 
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
