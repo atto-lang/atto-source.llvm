@@ -72,7 +72,7 @@ public:
         }
         expect("end");
         while (!end()) parseFunction();
-        if (!mainSeen_ || plan_.returnCalls.empty() || plan_.functions.empty())
+        if (!mainSeen_ || unresolved_.empty() || plan_.functions.empty())
             fail("native enum AOT requires main, specialized functions and calls");
         const types::case_overloads::Registry registry {
             {plan_.enumId, {plan_.enumId, caseNames(), true}}
@@ -149,7 +149,7 @@ private:
             }
             token_.text = std::string(source_.substr(start, pos_ - start));
         } else {
-            if (std::string_view("(){}.,;:=+").find(first) == std::string_view::npos)
+            if (std::string_view("(){}.,;:=+-").find(first) == std::string_view::npos)
                 fail("unsupported character or comment in static AOT subset");
             token_.text.assign(1, static_cast<char>(first));
             ++pos_;
