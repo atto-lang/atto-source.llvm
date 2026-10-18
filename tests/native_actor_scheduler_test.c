@@ -37,6 +37,9 @@ int main(void) {
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
         check(refs[a].scheduler_domain && ores_native_actor_scheduler_poll_ready(scheduler, refs[a]));
+        OresNativeActorTerminalState premature = {0};
+        check(!ores_native_actor_scheduler_terminal_state(
+            scheduler, refs[a], &premature));
         check(!ores_native_actor_scheduler_spawn(scheduler, (size_t)a).scheduler_domain);
     }
     for (int n = 0; n < EACH; ++n)
@@ -54,6 +57,29 @@ int main(void) {
         check(ores_native_actor_scheduler_poll_done(scheduler, refs[a]));
         check(!ores_native_actor_scheduler_poll_ready(scheduler, refs[a]));
         check(!ores_native_actor_scheduler_send(scheduler, refs[a], 999));
+
+        OresNativeActorTerminalState terminal = {0};
+        OresNativeActorTerminalState repeated = {0};
+        check(ores_native_actor_scheduler_terminal_state(
+            scheduler, refs[a], &terminal));
+        check(terminal.actor.scheduler_domain == refs[a].scheduler_domain);
+        check(terminal.actor.actor_slot == refs[a].actor_slot);
+        check(terminal.actor.generation == refs[a].generation);
+        check(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+        check(terminal.accepted_user_messages == EACH);
+        check(terminal.processed_user_messages == EACH);
+        check(terminal.abandoned_user_messages == 0);
+        check(terminal.abandoned_control_messages == 0);
+        check(ores_native_actor_scheduler_terminal_state(
+            scheduler, refs[a], &repeated));
+        check(repeated.kind == terminal.kind);
+        check(repeated.accepted_user_messages == terminal.accepted_user_messages);
+        check(repeated.processed_user_messages == terminal.processed_user_messages);
+
+        OresNativeActorRef stale_terminal = refs[a];
+        ++stale_terminal.generation;
+        check(!ores_native_actor_scheduler_terminal_state(
+            scheduler, stale_terminal, &repeated));
     }
     ores_native_actor_scheduler_retire(scheduler);
     check(!ores_native_actor_scheduler_submit(scheduler, 0, 999));
@@ -84,12 +110,47 @@ int main(void) {
           == ORES_NATIVE_SEND_TERMINATED);
     check(!ores_native_actor_scheduler_poll_ready(scheduler, one));
     check(!ores_native_actor_scheduler_poll_done(scheduler, one));
+    OresNativeActorTerminalState pressure_terminal = {0};
+    check(!ores_native_actor_scheduler_terminal_state(
+        scheduler, one, &pressure_terminal));
     ores_native_actor_scheduler_retire(scheduler);
     check(!ores_native_actor_scheduler_try_destroy(scheduler));
     atomic_store(&pressure.hold, 0);
     check(ores_native_actor_scheduler_drain(scheduler));
     check(ores_native_actor_scheduler_completed(scheduler) == 1);
     check(ores_native_actor_scheduler_poll_done(scheduler, one));
+    check(ores_native_actor_scheduler_terminal_state(
+        scheduler, one, &pressure_terminal));
+    check(pressure_terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+    check(pressure_terminal.accepted_user_messages == 1);
+    check(pressure_terminal.processed_user_messages == 1);
+    check(pressure_terminal.abandoned_user_messages == 0);
+    check(pressure_terminal.abandoned_control_messages == 0);
+    check(ores_native_actor_scheduler_try_destroy(scheduler));
+
+    /* Scheduler-wide retirement has a distinct retained classification. */
+    State runtime_retire = {0};
+    scheduler = ores_native_actor_scheduler_open(1, 4, 1, run, &runtime_retire);
+    check(scheduler != NULL);
+    OresNativeActorRef runtime_actor =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    check(runtime_actor.scheduler_domain != 0);
+    for (uint64_t value = 0; value < 3; ++value)
+        check(ores_native_actor_scheduler_try_send(
+            scheduler, runtime_actor, value) == ORES_NATIVE_SEND_ACCEPTED);
+    check(ores_native_actor_scheduler_drain(scheduler));
+    OresNativeActorTerminalState runtime_terminal = {0};
+    check(!ores_native_actor_scheduler_terminal_state(
+        scheduler, runtime_actor, &runtime_terminal));
+    ores_native_actor_scheduler_retire(scheduler);
+    check(ores_native_actor_scheduler_poll_done(scheduler, runtime_actor));
+    check(ores_native_actor_scheduler_terminal_state(
+        scheduler, runtime_actor, &runtime_terminal));
+    check(runtime_terminal.kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED);
+    check(runtime_terminal.accepted_user_messages == 3);
+    check(runtime_terminal.processed_user_messages == 3);
+    check(runtime_terminal.abandoned_user_messages == 0);
+    check(runtime_terminal.abandoned_control_messages == 0);
     check(ores_native_actor_scheduler_try_destroy(scheduler));
     puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3");
     return 0;
