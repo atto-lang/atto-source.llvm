@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
         // constraints before parsing or emitting LLVM IR.
-        if (text.find("// ores:") != std::string::npos) {
+        if (oreslang::enum_aot::hasUnverifiedEnvironmentDirective(text)) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
         if (experimental_enum_aot) {
