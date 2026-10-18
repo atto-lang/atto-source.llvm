@@ -181,16 +181,42 @@ publish/fail path releases the actor mutex. A concurrent terminal close must
 not reopen `frozen` or permit another turn, even if a code revision was
 already atomically installed before shutdown.
 
-The existing native code-slot and actor-turn native tests passed unchanged
-against this gate in the exact-Git-blob private mirror:
-https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39092504396
-(GCC -O2, Clang ASan+UBSan). A **dedicated callback-reentry runtime test**
-and actual dynamically loaded executable-image teardown remain unverified.
+### Exact-source CI verification (October 18, 2026)
 
-`native_actor_code_execution_test.cpp` additionally defines three
-statically compiled native callable bodies and invokes them through pinned
-actor-generation admission, including parallel callback dispatch. This is
-stronger than string-only image labels but still does **not** establish
-Oreslang-source lowering, actor scheduler single-flight, dynamic AOT loading,
-LLVM ORC JIT, or an untrusted hardware/process isolation boundary. It has
-not yet passed an Actions compile/run and is not admissible CI evidence.
+[Private-carrier run #39138131052](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39138131052)
+**passed both GCC C++17 -O2 and Clang C++17 ASan+UBSan** with source Git-blob
+SHA verification before compiling. Both jobs executed four binaries:
+
+1. `native_supervisor_code_slot_test.cpp`: copy-failure injection,
+   image-wrapper destructor-before-reclaim ordering, and revision leases.
+2. `native_actor_hot_upgrade_gate_test.cpp`: admission/freeze,
+   quiescence, concurrent turns, abandoned ticket recovery, failure
+   during callback copying, and abandonment during active publication.
+3. `native_actor_code_execution_test.cpp`: actually invokes three
+   statically compiled native function-pointer revisions through generation
+   pins (including 1,600 concurrent calls per actor kind).
+4. `native_actor_hot_upgrade_reentrancy_test.cpp`: callback-triggered
+   terminal `close()` during retirement, and 256 concurrent close/publish
+   interleavings. This fourth binary is registered in CTest with timeout.
+
+The workflow archived a manifest and step-outcome report **for each compiler**
+as GitHub Actions artifacts. Source PR head at test time includes
+`NativeActorHotUpgradeGate.hpp` blob
+`7383a51eda7db2e8869e8053379481f932906fd3`,
+gate test blob `f8f7caa5bca6c697545dfd132a656d34687b5993`,
+static-callable test blob `b48d857df182c8dbf44dd5804a63813e233c3ab7`,
+and reentrancy test blob `37eddb2fc1934882ff1d1cd0aded972fb4e7db41`.
+
+The ticket now has `abandon()` for explicit CONTROL release. If the
+last ticket goes away while `promote()` is publishing, the publisher owns
+deferred freeze cleanup: failure reopens DATA; successful publication
+commits normally; terminally closed actors stay closed. Cleanup actions
+do not interrupt an active publisher.
+
+**Scope limit:** These are host-only native tests of a trusted code-image
+substrate, **not** Oreslang `.ores` compiler lowering or a runtime-bound
+`await`/FFI continuation. Static AOT function pointer tests do not load
+new PIC code or exercise ORC JIT. Host-only `untrusted` enum coverage is
+not a sandbox or a second Graal isolate. Real loader/callback failure
+quarantine and full source-repository CI are still required; retain DRAFT.
+
