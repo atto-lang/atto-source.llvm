@@ -48,6 +48,10 @@ using ActorHandler = ActorStep (*)(void* actor_state, ActorMessage message,
 // exactly one actor and one in-flight logical turn (not multi-actor fairness).
 using ActorHandlerV2 = ActorStep (*)(void* actor_state, ActorMessage message,
                                     ResumeCause cause, std::int64_t io_result) noexcept;
+// Optional generated-frame cleanup. It runs at most once, on the actor carrier
+// thread, when shutdown/protocol failure abandons a logical turn that already
+// entered user code. Queued envelopes that never started have no frame to clean.
+using ActorCancelHandler = void (*)(void* actor_state, ActorMessage message) noexcept;
 // The IO callback runs on a separate broker thread, with separate owned IO
 // state: it must NOT dereference the actor's private heap or use the carrier.
 // It must periodically check the cancellation flag and use bounded/nonblocking
@@ -66,6 +70,7 @@ struct CarrierStats {
     std::uint64_t actor_thread_tag = 0;
     std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
     std::uint64_t cooperations = 0;      // physical handoffs, not completed turns
+    std::uint64_t cancel_cleanups = 0;    // generated-frame cancellation hooks run
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -129,6 +134,7 @@ public:
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
         std::optional<ActorHeapIdentity> heap_owner; // minted at supervisor admission
+        ActorCancelHandler cancel_handler = nullptr; // V2 continuation frames only
         // Optional externally owned supervisor components; must outlive join.
         oreslang::SupervisorControlTurn* supervisor_control = nullptr;
         oreslang::SupervisorControlTurn::Hooks* supervisor_hooks = nullptr;
@@ -174,6 +180,7 @@ private:
     void actor_loop() noexcept;
     void broker_loop() noexcept;
     void run_handler(ActorMessage, ResumeCause cause, std::int64_t result) noexcept;
+    void cancel_active_turn() noexcept;
     void wait_actor() noexcept;
     bool has_input_ready() const noexcept;
     bool pop_next_input(ActorMessage& message) noexcept;
@@ -213,6 +220,10 @@ private:
     std::thread broker_thread_;
     // Owned/exclusively accessed by carrier:
     bool pending_ = false;
+    // True from initial handler entry until DONE or carrier-thread cancellation
+    // cleanup. This covers invalid protocol returns and stop races that happen
+    // before pending_/cooperating_ are published.
+    bool turn_active_ = false;
     // CPU-cooperating turn remains the unique logical owner and outranks
     // subsequent mailbox messages, but never urgent supervisor CONTROL.
     bool cooperating_ = false;
@@ -221,6 +232,6 @@ private:
     // Atomic telemetry allows reads without touching actor-local state.
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
         parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},
-        abandoned_on_stop_{0}, cooperations_{0};
+        abandoned_on_stop_{0}, cooperations_{0}, cancel_cleanups_{0};
 };
 } // namespace oreslang::runtime
