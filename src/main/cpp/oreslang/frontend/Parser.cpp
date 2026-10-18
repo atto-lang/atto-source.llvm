@@ -279,6 +279,8 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (token_.text == "requires" || token_.text == "with")
+            fail("native actor requires/with clauses need verified capability/effect lowering");
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
         require("as");
