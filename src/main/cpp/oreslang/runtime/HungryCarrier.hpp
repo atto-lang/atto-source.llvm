@@ -70,7 +70,7 @@ struct CarrierStats {
     std::uint64_t actor_thread_tag = 0;
     std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
     std::uint64_t cooperations = 0;      // physical handoffs, not completed turns
-    std::uint64_t cancel_cleanups = 0;    // generated-frame cancellation hooks run
+    std::uint64_t cancel_callbacks = 0;    // generated-frame cancellation hooks run
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -232,6 +232,6 @@ private:
     // Atomic telemetry allows reads without touching actor-local state.
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
         parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},
-        abandoned_on_stop_{0}, cooperations_{0}, cancel_cleanups_{0};
+        abandoned_on_stop_{0}, cooperations_{0}, cancel_callbacks_{0};
 };
 } // namespace oreslang::runtime
