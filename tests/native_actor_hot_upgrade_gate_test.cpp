@@ -120,9 +120,53 @@ static void terminal_close_preserves_old_pin() {
     check(cleaned == 1, "last old-code pin did not reclaim image");
 }
 
+static void racing_turn_admission_vs_upgrade_freeze() {
+    // Linearization proof under racing admission: a pin admitted before the
+    // freeze must be counted, or a later pin must be rejected. Never neither.
+    for (std::uint64_t iteration = 1; iteration <= 200; ++iteration) {
+        const ActorHeapIdentity id{55, 8800 + iteration, 1};
+        std::atomic<int> reclaimed{0};
+        Gate gate(id, shape(Gate::Kind::trusted_private), "v1",
+                  [&] { ++reclaimed; });
+        std::atomic<bool> start{false}, release{false};
+        std::atomic<bool> entered{false}, rejected{false};
+        std::thread caller([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try {
+                auto pin = gate.pin(id);
+                entered.store(true, std::memory_order_release);
+                while (!release.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                check(pin.descriptor().revision == 1,
+                      "racing turn read a revised code generation");
+                pin.close();
+            } catch (const std::logic_error&) {
+                rejected.store(true, std::memory_order_release);
+            }
+        });
+        start.store(true, std::memory_order_release);
+        auto ticket = gate.freeze(id, 1);
+        const bool quiet_at_freeze = gate.quiesced(ticket);
+        release.store(true, std::memory_order_release);
+        caller.join();
+        check(entered.load() != rejected.load(),
+              "racing turn was neither admitted nor rejected exactly once");
+        check(!quiet_at_freeze || rejected.load(),
+              "freeze falsely reported quiescence with an active turn");
+        check(gate.quiesced(ticket), "racing actor pin did not drain");
+        check(gate.promote(ticket, shape(Gate::Kind::trusted_private), "v2",
+                           [&] { ++reclaimed; }).revision == 2,
+              "race-free upgrade did not publish");
+        gate.close();
+        check(reclaimed == 2, "racing upgrade leaked/reclaimed code twice");
+    }
+}
+
 int main() {
     actor_code_only_upgrade(Gate::Kind::trusted_shared);
     actor_code_only_upgrade(Gate::Kind::trusted_private);
     actor_code_only_upgrade(Gate::Kind::untrusted);
     terminal_close_preserves_old_pin();
+    racing_turn_admission_vs_upgrade_freeze();
 }
