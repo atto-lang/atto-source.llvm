@@ -225,7 +225,100 @@ static void restore_callback_does_not_admit_data() {
     actor.close();
     require(old == 1 && next == 1, "restore probe leaked a code generation");
 }
+static void suspended_continuation_pins_old_generation() {
+    const ActorHeapIdentity id{86, 9, 1};
+    std::atomic<int> old_cleanup{0}, denied_cleanup{0}, new_cleanup{0};
+    Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                      17, &sha, [&] { ++old_cleanup; });
+    auto continuation = actor.suspend_code();
+    require(continuation.descriptor().revision == 1
+            && continuation.manifest().code_digest[0] == 0xaa,
+            "continuation captured the wrong code generation");
+    require(!actor.try_upgrade(1, version(0xbb, v2), identity,
+                               [&] { ++denied_cleanup; }),
+            "upgrade ignored a suspended frame's live code lease");
+    require(denied_cleanup == 1 && old_cleanup == 0,
+            "failed upgrade reclaimed pinned code");
+
+    std::atomic<int64_t> result{0};
+    std::thread worker([lease = std::move(continuation), &result]() mutable {
+        result.store(lease.invoke_pinned(40, -5), std::memory_order_release);
+        require(lease.descriptor().revision == 1, "carrier transfer changed revision");
+        lease.release();
+    });
+    worker.join();
+    require(result.load(std::memory_order_acquire) == 35,
+            "transferred continuation executed wrong native generation");
+    require(actor.try_upgrade(1, version(0xbb, v2), identity,
+                              [&] { ++new_cleanup; }),
+            "last suspended lease failed to unlock code publication");
+    require(old_cleanup == 1 && actor.current().revision == 2,
+            "last-lease reclamation or promotion failed");
+
+    // A pinned continuation may outlive the terminal coordinator wrapper,
+    // but must never access its actor-owned state after owner teardown.
+    auto final_code = actor.suspend_code();
+    actor.close();
+    require(new_cleanup == 0 && final_code.invoke_pinned(40, -5) == 45,
+            "terminal actor close unloaded live old native code");
+    final_code.release();
+    require(new_cleanup == 1, "last lease did not reclaim terminal image");
+}
+static void concurrent_checkpoint_snapshot_and_upgrade() {
+    for (int round = 0; round < 128; ++round) {
+        const ActorHeapIdentity id{87, static_cast<std::uint64_t>(round + 1), 1};
+        std::atomic<int> prior_cleanup{0}, next_cleanup{0};
+        Coordinator actor(id, actor_id(), shape(), version(0xaa, v1),
+                          11, &sha, [&] { ++prior_cleanup; });
+        std::atomic<bool> go{false}, finished{false};
+        std::atomic<int> snapshots{0};
+        std::exception_ptr thread_error;
+        std::thread reader([&] {
+            try {
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                while (!finished.load(std::memory_order_acquire)) {
+                    try {
+                        const auto frame = actor.snapshot_frame();
+                        const auto code = frame[36];
+                        const auto expected = version(code, v1).manifest;
+                        const auto state = Wire::decode(frame, expected, &sha);
+                        require(state.state_bytes.size() == 8, "snapshot lost scalar state");
+                        require(code == 0xaa || code == 0xbb,
+                                "snapshot contained an uncommitted code image");
+                        ++snapshots;
+                    } catch (const std::logic_error&) {
+                        // The gate blocks new snapshot/pins during CONTROL freeze.
+                    }
+                }
+            } catch (...) { thread_error = std::current_exception(); }
+        });
+        go.store(true, std::memory_order_release);
+        bool updated = false;
+        for (int attempt = 0; attempt < 500 && !updated; ++attempt) {
+            try {
+                updated = actor.try_upgrade(1, version(0xbb, v2), identity,
+                                            [&] { ++next_cleanup; });
+            } catch (const std::logic_error&) {
+                // A committed promotion races current read, so treat a
+                // distinct revision as success, not an unbounded retry.
+                updated = actor.current().revision == 2;
+            }
+            if (!updated) std::this_thread::yield();
+        }
+        finished.store(true, std::memory_order_release);
+        reader.join();
+        if (thread_error) std::rethrow_exception(thread_error);
+        require(updated && actor.current().revision == 2,
+                "concurrent snapshot prevented publication");
+        actor.close();
+        require(prior_cleanup == 1 && next_cleanup >= 1,
+                "concurrent checkpoint leaked native image cleanup");
+    }
+}
 int main() {
+    suspended_continuation_pins_old_generation();
+    concurrent_checkpoint_snapshot_and_upgrade();
     initial_image_admission_fail_closed();
     restore_callback_does_not_admit_data();
     transaction_and_rollback();
