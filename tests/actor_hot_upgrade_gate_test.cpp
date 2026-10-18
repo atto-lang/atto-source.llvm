@@ -91,5 +91,40 @@ int main() {
         }
         lease.close();
     }
+    {
+        // Abandoning a prepared token due to an exception must auto-abort.
+        ActorHotUpgradeGate gate(15, image('a'));
+        {
+            auto abandoned = gate.prepare(image('b'));
+            assert(gate.frozen());
+        }
+        assert(!gate.frozen() && gate.pins() == 0);
+        auto ready = gate.pin();
+        assert(gate.permits(ready));
+        ready.close();
+
+        // Move assignment must auto-abort the ticket being overwritten and
+        // transfer exactly one active authority to the recipient.
+        ActorHotUpgradeGate first(16, image('a'));
+        ActorHotUpgradeGate second(17, image('a'));
+        auto old = first.prepare(image('b'));
+        auto newer = second.prepare(image('c'));
+        old = std::move(newer);
+        assert(!first.frozen());
+        assert(second.frozen());
+        assert(second.publish(old));
+        assert(!second.frozen() && second.epoch() == 2);
+    }
+    {
+        ActorHotUpgradeGate gate(18, image('a'));
+        try {
+            auto unfinished = gate.prepare(image('b'));
+            throw std::runtime_error("injected upgrade failure");
+        } catch (const std::runtime_error&) {}
+        assert(!gate.frozen());
+        auto followup = gate.prepare(image('c'));
+        assert(gate.publish(followup));
+        assert(gate.epoch() == 2);
+    }
     return 0;
 }
