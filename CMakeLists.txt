@@ -1905,3 +1905,16 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only variant-aware static overload proof (NOT guest source execution).
+if(BUILD_TESTING)
+    add_executable(oreslang-enum-variant-policy-test
+        tests/enum_variant_overload_policy_test.cpp)
+    target_include_directories(oreslang-enum-variant-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-enum-variant-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_variant_static_proof
+        COMMAND oreslang-enum-variant-policy-test)
+    set_tests_properties(native_enum_variant_static_proof PROPERTIES TIMEOUT 15)
+endif()
