@@ -45,27 +45,32 @@ public:
     // may be released from a completion carrier different from the acquirer.
     class LifetimePin final {
         friend class SharedDomainArena;
-        SharedDomainArena* arena_ = nullptr;
+        // A completion token may receive duplicate terminal callbacks on
+        // different OS carriers. Atomically consume its one owner pointer.
+        std::atomic<SharedDomainArena*> arena_{nullptr};
         explicit LifetimePin(SharedDomainArena& arena) : arena_(&arena) {}
         void reset() noexcept {
-            auto* arena = std::exchange(arena_, nullptr);
+            auto* arena = arena_.exchange(nullptr, std::memory_order_acq_rel);
             if (arena) arena->release_lifetime_pin();
         }
     public:
         LifetimePin(const LifetimePin&) = delete;
         LifetimePin& operator=(const LifetimePin&) = delete;
         LifetimePin(LifetimePin&& other) noexcept
-            : arena_(std::exchange(other.arena_, nullptr)) {}
+            : arena_(other.arena_.exchange(nullptr, std::memory_order_acq_rel)) {}
         LifetimePin& operator=(LifetimePin&& other) noexcept {
             if (this != &other) {
                 reset();
-                arena_ = std::exchange(other.arena_, nullptr);
+                arena_.store(other.arena_.exchange(nullptr,
+                    std::memory_order_acq_rel), std::memory_order_release);
             }
             return *this;
         }
         ~LifetimePin() noexcept { reset(); }
         void release() noexcept { reset(); }
-        bool live() const noexcept { return arena_ != nullptr; }
+        bool live() const noexcept {
+            return arena_.load(std::memory_order_acquire) != nullptr;
+        }
     };
     // Grants and handles are capabilities, not serializable coordinates.
     // Raw aggregate fields previously let trusted-but-unprivileged host code
@@ -189,7 +194,7 @@ public:
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
         if (closing_.load(std::memory_order_acquire) || control_issued_)
             throw std::logic_error("shared region control unavailable");
-        control_issued_ = true;
+        control_issued_.store(true, std::memory_order_release);
         return Control(*this, identity_);
     }
     SharedDomainArena(const SharedDomainArena&) = delete;
@@ -210,6 +215,12 @@ public:
         validate_control(control);
         if (closing_.load(std::memory_order_acquire) || !actor || !incarnation || (!allow_read && !allow_write))
             throw std::logic_error("invalid shared region grant");
+        // A restarted incarnation must not gain a second live membership
+        // while its predecessor is still authorized for this domain.
+        for (const auto& member : members_) {
+            if (member.active && member.actor == actor)
+                throw std::logic_error("overlapping shared region actor incarnation");
+        }
         for (std::size_t i = 0; i < Members; ++i) {
             auto& m = members_[i];
             if (!m.active && m.generation != 0) {
@@ -309,7 +320,7 @@ private:
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
     std::atomic<std::size_t> lifetime_pins_{0};
-    bool control_issued_ = false;
+    std::atomic<bool> control_issued_{false};
     bool retired_ = false;
     std::array<Slot, Slots> slots_{};
     std::array<Member, Members> members_{};
@@ -318,7 +329,8 @@ private:
         for (std::size_t i = 0; i < N; ++i) p[i] = 0;
     }
     void validate_control(const Control& control) const {
-        if (!control_issued_ || control.arena_ != this ||
+        if (!control_issued_.load(std::memory_order_acquire)
+                || control.arena_ != this ||
             control.domain_ != identity_)
             throw std::logic_error("foreign or stale shared region control");
     }
