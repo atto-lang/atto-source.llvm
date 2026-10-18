@@ -211,8 +211,12 @@ A sender must acquire the exclusive `FREE → CLAIMED` transition
 before fallible DATA preparation. Competing simultaneous sends of one
 sealed frame fail closed without duplicate mailbox DATA or additional
 actor work. A definite prepublication rejection performs
-`CLAIMED → FREE`, preserving the original route/return right when
-the caller owns a verified failed-admission result.
+`CLAIMED → FREE` **only when that particular send successfully
+acquired the claim**. A losing competitor's error/finally cleanup
+MUST NOT release the current publisher's claim. Track acquisition
+locally on each send attempt, not merely via the frame's global state.
+This preserves the original route/return right when the caller owns
+a verified failed-admission result.
 
 A successful bounded mailbox enqueue (the **linearization point**) is
 immediately followed by `PUBLISHED = 2`, without allocation, a
