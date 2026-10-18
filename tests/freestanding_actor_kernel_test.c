@@ -29,6 +29,15 @@ int main(void){
     int64_t last;
     assert(ores_kernel_init(&vm)==ORES_KERNEL_OK);
     assert(ores_kernel_spawn(&vm,accumulate,&a)==ORES_KERNEL_OK);
+    /* Slot+generation collisions must not permit foreign actor access. */
+    OresKernel foreign_vm = {0};
+    OresKernelRef foreign_ref;
+    assert(ores_kernel_init(&foreign_vm)==ORES_KERNEL_OK);
+    assert(ores_kernel_spawn(&foreign_vm,accumulate,&foreign_ref)==ORES_KERNEL_OK);
+    assert(foreign_ref.slot==a.slot && foreign_ref.generation==a.generation);
+    assert(ores_kernel_send(&vm,foreign_ref,7)==ORES_KERNEL_INVALID);
+    assert(ores_kernel_stop(&foreign_vm,a)==ORES_KERNEL_INVALID);
+    assert(ores_kernel_snapshot(&vm,foreign_ref,&done,&last)==ORES_KERNEL_INVALID);
     assert(ores_kernel_spawn(&vm,accumulate,&b)==ORES_KERNEL_OK);
     assert(ores_kernel_send(&vm,a,1)==ORES_KERNEL_OK);
     assert(ores_kernel_send(&vm,b,10)==ORES_KERNEL_OK);
