@@ -1942,3 +1942,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Host-only, static 32-bit nullary enum tag layout / wire schema ABI proof.
+# Does not admit or execute guest enum source until the native checker/codegen
+# can prove exact nominal identities and emit tagged guest values.
+if(BUILD_TESTING)
+    add_executable(oreslang-enum-tag32-layout-test
+        tests/native_enum_tag32_layout_test.cpp)
+    target_include_directories(oreslang-enum-tag32-layout-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-enum-tag32-layout-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_tag32_aot_layout
+        COMMAND oreslang-enum-tag32-layout-test)
+    set_tests_properties(native_enum_tag32_aot_layout PROPERTIES TIMEOUT 15)
+endif()
