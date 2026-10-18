@@ -1,12 +1,14 @@
 #include "oreslang/runtime/ActorOwnedGraphHeap.hpp"
 #include "oreslang/runtime/HungryCarrier.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -86,6 +88,49 @@ static void cycles_reclaim_without_gc() {
 // Every distinct C++ heap template specialization must share a single
 // numeric identity namespace. Re-encoding a handle into a different layout
 // cannot trick its recipient into treating a foreign slot as its own.
+static void heap_identity_never_wraps_and_remains_unique_under_races() {
+    using oreslang::runtime::detail::ActorGraphHeapIdSource;
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    std::atomic<std::uint64_t> near_exhausted{max - 1};
+    check(ActorGraphHeapIdSource::mint_from(near_exhausted) == max - 1,
+          "penultimate heap ID unavailable");
+    check(ActorGraphHeapIdSource::mint_from(near_exhausted) == max,
+          "last valid heap ID unavailable");
+    bool denied = false;
+    try { (void)ActorGraphHeapIdSource::mint_from(near_exhausted); }
+    catch (const std::overflow_error&) { denied = true; }
+    check(denied && near_exhausted.load() == 0,
+          "exhausted ID source wrapped around and could resurrect old handles");
+
+    using Small = ActorOwnedGraphHeap<2, 8, 1>;
+    using Large = ActorOwnedGraphHeap<8, 64, 4>;
+    const ActorHeapIdentity owner{90, 29, 4};
+    std::array<std::uint64_t, 4096> ids{};
+    std::array<std::thread, 8> workers;
+    std::atomic<bool> start{false};
+    for (std::size_t thread = 0; thread < workers.size(); ++thread) {
+        workers[thread] = std::thread([&, thread] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (std::size_t i = thread * 512; i < (thread + 1) * 512; ++i) {
+                if (i % 2 == 0) {
+                    Small heap(owner);
+                    ids[i] = heap.heap_id();
+                } else {
+                    Large heap(owner);
+                    ids[i] = heap.heap_id();
+                }
+            }
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& thread : workers) thread.join();
+    std::sort(ids.begin(), ids.end());
+    check(ids.front() != 0 &&
+          std::adjacent_find(ids.begin(), ids.end()) == ids.end(),
+          "cross-layout concurrent graph construction reused a heap identity");
+}
+
 static void heap_identity_unique_across_graph_specializations() {
     using Small = ActorOwnedGraphHeap<2, 8, 1>;
     using Large = ActorOwnedGraphHeap<8, 64, 4>;
@@ -503,6 +548,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 }
 
 int main() {
+    heap_identity_never_wraps_and_remains_unique_under_races();
     heap_identity_unique_across_graph_specializations();
     concurrent_graph_read_write_links_are_exclusive();
     concurrent_retirement_drops_once();
