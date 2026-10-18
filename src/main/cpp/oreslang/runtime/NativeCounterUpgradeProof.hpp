@@ -156,6 +156,11 @@ public:
                 {header, scalar(state.value())}, sha256_);
             auto verified = ActorCheckpointEnvelopeV1::decode(frame, header, sha256_);
             const std::int64_t restored = restore(read_scalar(verified.state_bytes));
+            // Exact-schema v1 does not authorize state migrations: an
+            // initialized replacement must contain the same scalar bits.
+            if (restored != state.value())
+                throw std::logic_error(
+                    "same-schema counter restore changed persistent actor state");
             auto next_version = std::make_shared<Version>(restored, next);
 
             // Pin admission remains frozen by ActorHotUpgradeGate::prepare.
