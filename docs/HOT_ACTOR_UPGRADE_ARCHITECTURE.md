@@ -650,3 +650,134 @@ receipts; aggregate/cyclic persistent state; signed executable provenance;
 and a real LLVM compiler-generated actor image using the same route/checkpoint
 transaction. Exact-head Maven/Graal/native integration CI remains required
 before merge.
+
+
+## Sixth audit slice: stable logical route across distinct OresContext generations
+
+Java now has a host/supervisor-only cross-context source actor route built on
+HotReloadManager generations. This is the first draft path that keeps one
+logical actor identity while replacing its physical ActorRuntime/ActorRef and
+OresContext.
+
+### Logical identity versus physical route
+
+`LogicalSourceActorRouterV1` owns a stable UUID and logical actor
+incarnation. A transparent code hot replacement **does not** increment actor
+incarnation. Instead it advances a separate monotonic `routeEpoch`.
+Physical ActorRef generation/runtime ids still change and remain stale after
+publication. Crash/restart semantics must use incarnation later; code-route
+replacement must not be conflated with restart identity.
+
+V1 is deliberately a blocking **host** surface. `LogicalActorRef.send`
+linearizes route lookup and physical mailbox admission under the route monitor.
+If migration owns the route, host callers wait until rollback or publication.
+Actor/scheduler carriers are rejected from this blocking API. No raw mutable
+message graph is buffered outside ActorRuntime transport.
+
+### HotReloadManager actor-only staging
+
+`stageActorGeneration` validates source into a fresh restricted Context
+without making it the generic active route. `Generation.linkActorGeneration`
+uses the repository's existing internal LINK_ONLY control path to link
+declarations without module initialization/main. A linked actor generation
+cannot later run generic init/main while a logical actor route pins it.
+
+Each live logical route owns an `ActorRouteLease`. Pin acquisition is
+linearized under manager -> generation lock order against retire. Therefore:
+- `HotReloadManager.retire(id)` cannot close an active actor generation;
+- direct `Generation.close()` cannot close a pinned generation;
+- manager shutdown refuses while logical actor route pins remain;
+- old generation pins are released only after physical actor finalization;
+- unpublished candidate actors that fail rollback remain quarantined/pinned
+  until their physical finalization can be proved.
+
+### Cross-context transfer transaction
+
+The old runtime's `tryBeginSourceActorTransfer` freezes user ingress, proves
+scheduler/resource quiescence, validates that v1 has no parent/supervision
+lineage, ActorGroup ownership/membership, unread output, or pending output
+reader, snapshots compiler-owned state, and wraps it in the canonical actor
+checkpoint bound to stable logical UUID/incarnation and old receipts.
+
+The target runtime claims the transfer exactly once, validates code changed but
+state/message/capability receipts remain compatible, restores the checkpoint
+into a fresh physical actor owned by the target OresContext, and marks that
+physical actor ready **without rerunning on_start**. The logical route is then
+published to the candidate. Only after publication is the old physical actor
+stopped.
+
+Rollback is fail-closed: old ingress does not reopen until any staged candidate
+has physically terminated. After publication, failure of stale-actor stop no
+longer releases the old ingress fence in a finally block; stale physical
+ingress remains sealed for supervisor recovery. The new logical route remains
+authoritative after commit even if old-generation cleanup is delayed.
+
+### Parent-visible outputs
+
+V1 does not rebind output subscriptions. Migration refuses while the old
+physical output queue contains values or while the channel has pending reader
+registrations. Logical output registration itself occurs while holding the
+route monitor, preventing a reader from registering against the old stream
+after migration has observed zero registrations.
+
+### Real Java cross-context tests
+
+`LogicalSourceActorCrossContextUpgradeTest` stages genuine Oreslang Counter
+v1/v2 source in distinct HotReloadManager OresContexts and checks:
+- distinct physical runtime/context and ActorRef identities;
+- stable logical UUID + incarnation across transparent replacement;
+- route epoch 1 -> 2;
+- state 42 restored into v2 without v2 on_start setting 999;
+- changed v2 behavior produces 43/45;
+- old generation can retire after physical finalization while the logical
+  route continues;
+- schema incompatibility rolls back to the exact old route;
+- unread outputs and pending output readers block migration;
+- ActorGroup membership blocks migration until released;
+- foreign HotReloadManager candidates are rejected;
+- active generation retire/close/manager-close and generic start are denied.
+
+These JUnit/Graal tests are committed but still require an actual exact-head
+Maven/JDK21/Graal runner.
+
+### Independent route oracles
+
+Two source-independent models now enforce the route contract with explicit
+checks that remain active under `python -O`:
+
+1. `tests/logical_actor_route_upgrade_model.py`,
+   exact Git blob `699c010d1402e5702e1a80628241c0dbf93e6df9`.
+   Exact local execution PASS in normal Python and PASS under `python -O`:
+   **320,000 transitions per mode**, 12 committed upgrades, 21,407 rollbacks
+   and 5,090 stale-physical send rejections.
+
+2. `tests/logical_actor_cross_context_route_model.py`,
+   exact Git blob `225c7fa36399fb4cc543d8a4d8afc54a102cb130`.
+   Exact local execution PASS in normal Python and PASS under `python -O`:
+   **160,000 transitions per mode**, 44 commits, 18 rollbacks and 160,000
+   active-generation retirement denials.
+
+The second model was corrected during audit to keep logical incarnation stable
+and advance a route epoch; older modeling that incremented incarnation for a
+transparent code replacement was semantically wrong.
+
+### Remaining production gates
+
+This remains v1 and intentionally excludes:
+- guest-visible/nonblocking logical routing;
+- parent/child supervision lineage migration;
+- ActorGroup ownership/membership migration;
+- output-stream rebinding;
+- cross-manager/process/network routing;
+- compiler-derived required effect/capability receipts;
+- aggregate/cyclic actor state beyond the current canonical scalar subset;
+- schema migrations;
+- authenticated source/native executable + dependency provenance;
+- automatic generation leases in every timer/FFI/GPU/shared-memory broker;
+- real LLVM-generated .ores actor restoration/publication through the same
+  logical route protocol.
+
+Current source-owned Actions still create jobs with zero executed steps, so
+those jobs are neither pass evidence nor meaningful code-failure evidence.
+Private cross-org source mirroring remains disallowed while the reviewed
+destination allowlist is empty.
