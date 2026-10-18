@@ -40,7 +40,6 @@ public:
     public:
         Permit(const Permit&) = default;
         Permit& operator=(const Permit&) = default;
-        std::uint64_t domain_id() const noexcept { return grant_.domain_id(); }
     };
 
     struct Request final {
