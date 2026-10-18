@@ -1,11 +1,15 @@
 #include <stdexcept>
 
-extern "C" bool oreslang_bool_shadow_probe(bool, bool)
-    asm("BoolShadow.probe");
+extern "C" bool oreslang_bool_shadow_unqualified(bool, bool)
+    asm("BooleanOps.probe_unqualified");
+extern "C" bool oreslang_bool_shadow_qualified(bool, bool)
+    asm("BooleanOps.probe_qualified");
 
 int main() {
-    if (oreslang_bool_shadow_probe(false, true) ||
-            !oreslang_bool_shadow_probe(true, false))
-        throw std::runtime_error(
-            "user-defined And was replaced by compiler intrinsic");
+    for (auto probe : {oreslang_bool_shadow_unqualified,
+                       oreslang_bool_shadow_qualified}) {
+        if (probe(false, true) || !probe(true, false))
+            throw std::runtime_error(
+                "user-defined BooleanOps.And was replaced by compiler intrinsic");
+    }
 }
