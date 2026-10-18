@@ -85,17 +85,17 @@ int main() {
             "fnc classify(Foo.A x): int { return 1; }\n"
             "fnc main(): int { return classify(Foo.A) + classify(Foo.A) + 1; }");
 
-    rejects("define enum enum as A, B end\\n"
-            "fnc classify(enum.A x): int { return 10; }\\n"
+    rejects("define enum enum as A, B end\n"
+            "fnc classify(enum.A x): int { return 10; }\n"
             "fnc main(): int { return classify(enum.A); }");
-    rejects("define enum Foo as int, B end\\n"
-            "fnc classify(Foo.B x): int { return 10; }\\n"
+    rejects("define enum Foo as int, B end\n"
+            "fnc classify(Foo.B x): int { return 10; }\n"
             "fnc main(): int { return classify(Foo.B); }");
-    rejects("define enum Foo.Bar as A, B end\\n"
-            "fnc classify(Foo.Bar.A x): int { return 10; }\\n"
+    rejects("define enum Foo.Bar as A, B end\n"
+            "fnc classify(Foo.Bar.A x): int { return 10; }\n"
             "fnc main(): int { return classify(Foo.Bar.A); }");
-    rejects("define enum Foo as A, B end\\n"
-            "fnc int(Foo.A x): int { return 10; }\\n"
+    rejects("define enum Foo as A, B end\n"
+            "fnc int(Foo.A x): int { return 10; }\n"
             "fnc main(): int { return int(Foo.A); }");
     std::puts("PASS: compiled original native enum AOT frontend policy header");
 }
