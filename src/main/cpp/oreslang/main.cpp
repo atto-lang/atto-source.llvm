@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
             }
             // This path is opt-in, never falls back to the i64-only parser,
             // and never promotes rejected enum source into interpreter mode.
-            const oreslang::enum_aot::Plan plan = oreslang::enum_aot::parse(text);
+            const oreslang::enum_aot::VerifiedPlan plan = oreslang::enum_aot::parseVerified(text);
             std::cout << oreslang::emit_verified_enum_aot_ir(plan);
             std::cout.flush();
             if (coreLog) coreLog->dump(stderr);
