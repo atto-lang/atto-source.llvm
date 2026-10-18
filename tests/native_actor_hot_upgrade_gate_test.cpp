@@ -18,7 +18,6 @@ static void denied(Fn fn, const char* why) {
     bool rejected = false;
     try { fn(); }
     catch (const std::logic_error&) { rejected = true; }
-    catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, why);
 }
 static Gate::Shape shape(Gate::Kind kind) {
