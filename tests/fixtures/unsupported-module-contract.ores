@@ -1,0 +1,5 @@
+define contract Api as
+  fnc ping(): int;
+end
+
+pub fnc main(): int { return 0; }
