@@ -401,6 +401,24 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
+    // The real compiled cooperative scalar frame must cross the same reusable
+    // suspension boundary as future await/select/readch lowering. Its sole
+    // frame-owned scalar remains owned, but no lexical/shared/exclusive loan
+    // may survive the physical carrier handoff. The narrow grammar currently
+    // cannot create such a loan; keeping Suspend in this source-to-MIR path
+    // prevents later grammar expansion from silently bypassing the invariant.
+    for (const auto& loop : program.cooperative_loops) {
+        ownership::Graph suspension;
+        suspension.entry = {{loop.variable,
+            {ownership::kOwned, 0, false}}};
+        suspension.blocks = {{{
+            {ownership::Operation::Kind::Read, loop.variable},
+            {ownership::Operation::Kind::Suspend, ""},
+            {ownership::Operation::Kind::Read, loop.variable}
+        }, {}}};
+        ownership::verify(suspension);
+    }
+
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
