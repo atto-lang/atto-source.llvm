@@ -99,6 +99,10 @@ int main() {
     const std::vector<Signature> tooMany(MaxCandidates+1, aa);
     rejects([&] { checkFamily(tooMany, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root. Foo")})}, registry); });
+    rejects([&] { checkFamily({f({Parameter::whole(
+            std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo")})}, registry); });
+    rejects([&] { checkFamily({f({Parameter::selectedCase("root.Foo",
+            std::string("A") + std::string({char(0xe2),char(0x80),char(0x8d)}))})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root.\xED\xA0\x80")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root.\xC0\x80")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root.\xF4\x90\x80\x80")})}, registry); });
