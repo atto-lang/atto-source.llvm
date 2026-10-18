@@ -201,10 +201,11 @@ int main() {
         expect(ticket.has_value(), "admit readiness/cancel/stop watch");
 
         std::atomic<bool> cancelled_won{false};
+        std::atomic<bool> write_succeeded{false};
         std::thread writer([&] {
             const char byte = 'x';
-            expect(::write(pipe_ends[1], &byte, 1) == 1,
-                   "write one readiness byte");
+            write_succeeded.store(::write(pipe_ends[1], &byte, 1) == 1,
+                                  std::memory_order_release);
         });
         std::thread canceller([&] {
             cancelled_won.store(contender.try_cancel(*ticket),
@@ -214,6 +215,8 @@ int main() {
         writer.join();
         canceller.join();
         stopper.join();
+        expect(write_succeeded.load(std::memory_order_acquire),
+               "readiness producer could not write to nonblocking pipe");
 
         auto terminal = until_completion(contender);
         expect(terminal.has_value() && terminal->ticket.value == ticket->value,
