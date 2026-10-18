@@ -1501,6 +1501,10 @@ private:
                     validate_expression(*arg, parameters, functions);
                 return;
             case Expression::Kind::Call: {
+                if (expr.name.rfind("BooleanOps.", 0) == 0 &&
+                        bool_parameters.count("BooleanOps") != 0)
+                    throw std::runtime_error(
+                        "native BooleanOps builtin namespace is shadowed by a bool parameter");
                 const auto family = functions.find(expr.name);
                 if (boolean_intrinsic_name(expr.name) && family == functions.end()) {
                     if (!expr.argument_names.empty() &&
