@@ -20,6 +20,43 @@ their public actor identity. Generation labels fence code, frames, callbacks
 and remote replies. The actor heap incarnation is a separate identity: code
 replacement alone must not reset an actor's arena or release borrows.
 
+## Explicit physical-isolation tier required for production upgrades
+
+Actor kind and placement are orthogonal. A native actor-local heap or arena
+proves ownership and deterministic reclamation, **not** that arbitrary
+machine code is unable to corrupt another actor's memory. An Erlang/BEAM
+process similarly has a private garbage-collected heap but is not normally
+a separate OS process. The runtime must record a verified placement tier
+with every actor incarnation, code image and upgrade receipt.
+
+- SHARED: trusted same-address-space guest with actor-local mutable storage;
+  explicit shared-domain references require versioned ownership/lease checks.
+- PRIVATE: trusted actor-local owned heap, no implicit OS sandbox. A request
+  for a protected ISOACTOR must additionally require a verified protected
+  process/isolate backend; the name PRIVATE alone does not attest protection.
+- UNTRUSTED: do not load arbitrary native object/JIT code inside the trusted
+  supervisor. A distinct sandbox must mediate capability grants and all I/O;
+  pooled untrusted guests are not isolated **from each other** by the sandbox
+  boundary alone. A per-actor hostile-code containment promise requires
+  separate verified guest sandbox isolation for every actor.
+
+**Release-code strategy:** support an offline authenticated PIC/AOT artifact
+and a trusted LLVM ORC JIT candidate through one versioned loader interface.
+The code revision owns its loader/ORC resource tracker, and a supervisor
+owns immutable origin/manifest verification before ANY untrusted native
+constructors or machine instructions execute. Raw dlopen of an untrusted
+shared object is therefore not a safe authentication preflight. Unload is
+deferred until DATA, CONTROL, await, FFI, DMA, shared lease, unwind and
+scheduler-return code pins have all retired. If a deadline expires, retain
+the old executable in quarantine instead of force unloading it.
+
+**Conformance required:** test the same source-level actor upgrade against
+(A) signed AOT->AOT, (B) trusted AOT->ORC JIT, (C) ORC JIT->AOT and
+(D) interpreter guest fallback, preserving ActorId/route epoch/typed state,
+without accepting new work on retired code. The current host tests run
+static native callbacks and separately trusted PIC fixtures; none of these
+four complete source-level paths is yet certified.
+
 ## Hot reload without mandatory JIT
 
 - An AOT actor can keep running its compiled version while a supervisor routes
