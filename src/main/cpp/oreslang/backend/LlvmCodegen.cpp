@@ -275,8 +275,8 @@ std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
     // This API receives an ordinary C++ Plan aggregate, not an unforgeable
     // typechecker token. Revalidate its declaration and call provenance
     // BEFORE LLVM IR emission, including when invoked outside main.cpp.
-    if (plan.enumId != "local_unit.__root__.Foo" &&
-        (plan.enumId.rfind("local_unit.__root__.", 0) != 0)) {
+    if (plan.enumId.rfind("local_unit.__root__.", 0) != 0 ||
+        plan.enumId.size() <= std::string("local_unit.__root__.").size()) {
         throw std::invalid_argument("native enum AOT requires resolved local root enum");
     }
     if (plan.cases.empty() || plan.cases.size() > types::case_overloads::MaxCases ||
