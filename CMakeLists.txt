@@ -131,6 +131,16 @@ if(BUILD_TESTING)
             -p test_enum_case_overlap_model.py -v)
     set_tests_properties(native_enum_case_exhaustive_relation_python
         native_enum_case_exhaustive_relation_python_O PROPERTIES TIMEOUT 20)
+    add_test(NAME native_enum_case_eos2_abi_golden_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v2"
+            -p test_enum_case_slot_abi_vectors.py -v)
+    add_test(NAME native_enum_case_eos2_abi_golden_python_O
+        COMMAND "${Python3_EXECUTABLE}" -B -O -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v2"
+            -p test_enum_case_slot_abi_vectors.py -v)
+    set_tests_properties(native_enum_case_eos2_abi_golden_python
+        native_enum_case_eos2_abi_golden_python_O PROPERTIES TIMEOUT 20)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
