@@ -70,6 +70,14 @@ int main() {
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",1},{"A",2}}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"Bad.Name",1}}); });
+    // Java's staged nullary AOT plan enforces the same ASCII-only portability
+    // subset; the wider Unicode source grammar is not downgraded silently.
+    rejected([&] { (void)EnumTag32Layout("root.Caf" +
+            std::string({char(0xc3), char(0xa9)}), cases); });
+    rejected([&] { (void)EnumTag32Layout("unit.Foo", {{
+            std::string("St") + std::string({char(0xc3), char(0xa9)}), 1}}); });
+    const EnumTag32Layout portable("unit._Foo42", cases, true);
+    REQUIRE(portable.exported());
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",0}}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",-1}}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",1},{"B",1}}); });
