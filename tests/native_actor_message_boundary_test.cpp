@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <string>
 #include <type_traits>
 
@@ -42,6 +43,26 @@ int main() {
     assert(!delivery->acknowledge());
     assert(data.used_frames() == 0);
     data.close();
+
+    bool nonfinite_denied = false;
+    try {
+        ActorDataLane bad(1, 32);
+        (void)bad.offer(ActorDataValue(
+            std::numeric_limits<double>::infinity()), 8);
+    } catch (const std::invalid_argument&) {
+        nonfinite_denied = true;
+    }
+    assert(nonfinite_denied);
+
+    bool utf8_denied = false;
+    try {
+        ActorDataLane bad(1, 32);
+        (void)bad.offer(ActorDataValue(
+            std::string("\xC0\xAF", 2)), 8);
+    } catch (const std::invalid_argument&) {
+        utf8_denied = true;
+    }
+    assert(utf8_denied);
 
     bool null_root_denied = false;
     try {

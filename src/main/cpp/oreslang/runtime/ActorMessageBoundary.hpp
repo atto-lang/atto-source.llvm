@@ -1,6 +1,7 @@
 #pragma once
 #include "oreslang/runtime/PersistentActorMap.hpp"
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -103,6 +104,43 @@ public:
 using ActorDataValue = std::variant<
     bool, std::int64_t, double, std::string, PersistentActorMap::MapRef>;
 
+inline void validateActorData(const ActorDataValue& value) {
+    if (auto number = std::get_if<double>(&value)) {
+        if (!std::isfinite(*number))
+            throw std::invalid_argument("nonfinite DATA float");
+        return;
+    }
+    if (auto text = std::get_if<std::string>(&value)) {
+        const auto& s = *text;
+        for (std::size_t i = 0; i < s.size();) {
+            const auto a = static_cast<unsigned char>(s[i]);
+            if (a <= 0x7f) { ++i; continue; }
+            int trailing = 0;
+            if (a >= 0xc2 && a <= 0xdf) trailing = 1;
+            else if (a >= 0xe0 && a <= 0xef) trailing = 2;
+            else if (a >= 0xf0 && a <= 0xf4) trailing = 3;
+            else throw std::invalid_argument("invalid UTF-8 DATA string");
+            if (static_cast<std::size_t>(trailing) > s.size() - i - 1)
+                throw std::invalid_argument("truncated UTF-8 DATA string");
+            const auto b = static_cast<unsigned char>(s[i + 1]);
+            if (b < 0x80 || b > 0xbf ||
+                (a == 0xe0 && b < 0xa0) || (a == 0xed && b > 0x9f) ||
+                (a == 0xf0 && b < 0x90) || (a == 0xf4 && b > 0x8f))
+                throw std::invalid_argument("invalid UTF-8 DATA string");
+            for (int j = 2; j <= trailing; ++j) {
+                const auto c = static_cast<unsigned char>(s[i + j]);
+                if (c < 0x80 || c > 0xbf)
+                    throw std::invalid_argument("invalid UTF-8 DATA string");
+            }
+            i += static_cast<std::size_t>(trailing + 1);
+        }
+        return;
+    }
+    if (auto root = std::get_if<PersistentActorMap::MapRef>(&value);
+        root && !*root)
+        throw std::invalid_argument("null persistent DATA root");
+}
+
 class ActorDataLane final {
     struct Frame {
         std::uint64_t id;
@@ -163,9 +201,7 @@ public:
 
     bool offer(const ActorDataValue& value, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("DATA byte charge required");
-        if (auto root = std::get_if<PersistentActorMap::MapRef>(&value);
-            root && !*root)
-            throw std::invalid_argument("null persistent DATA root");
+        validateActorData(value);
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("DATA lane closed");
         if (state_->next_id == 0)
