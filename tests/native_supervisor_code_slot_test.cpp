@@ -194,16 +194,61 @@ int main(){
     supervisors.install_policy(daddy, installed);
     check(supervisors.policy_revision(daddy).revision==1,
           "native registry did not attach supervisor code");
+
+    // Once installed, possession of the shared_ptr is not CONTROL authority.
+    bool denied_direct=false;
+    try { (void)installed->current(); }
+    catch (const std::logic_error&) { denied_direct=true; }
+    check(denied_direct, "bound slot leaked direct current authority");
+    denied_direct=false;
+    try { (void)installed->pin(); }
+    catch (const std::logic_error&) { denied_direct=true; }
+    check(denied_direct, "bound slot leaked direct pin authority");
+
+    std::atomic<int> unauthorized_reclaims{0};
+    denied_direct=false;
+    try {
+        (void)installed->activate(
+            1, "abi-root", "forged-direct",
+            [&]{ ++unauthorized_reclaims; });
+    } catch (const std::logic_error&) { denied_direct=true; }
+    check(denied_direct && unauthorized_reclaims==1,
+          "bound slot admitted direct activation or leaked rejected image");
+
+    denied_direct=false;
+    try { installed->close(); }
+    catch (const std::logic_error&) { denied_direct=true; }
+    check(denied_direct && supervisors.policy_revision(daddy).revision==1,
+          "bound slot leaked direct close authority");
+
     bool denied_slot_reuse=false;
     try { supervisors.install_policy(root, installed); }
     catch (const std::logic_error&) { denied_slot_reuse=true; }
     check(denied_slot_reuse, "one native code slot attached to two supervisors");
-    installed->activate(1, "abi-root", "Daddy-live-v2", [&]{reclaimed++;});
+
+    // Same numeric supervisor IDs in a second registry are still foreign.
+    NativeSupervisorRegistry foreign_supervisors(43, 8, 8);
+    auto foreign_daddy =
+        foreign_supervisors.create_child(foreign_supervisors.root());
+    check(foreign_daddy.id()==daddy.id(),
+          "test setup did not create same numeric supervisor ID");
+    bool denied_foreign=false;
+    try { (void)supervisors.policy_revision(foreign_daddy); }
+    catch (const std::invalid_argument&) { denied_foreign=true; }
+    check(denied_foreign,
+          "same numeric supervisor ID crossed registry authority domain");
+
+    check(supervisors.activate_policy(
+              daddy, 1, "abi-root", "Daddy-live-v2",
+              [&]{reclaimed++;}).revision==2,
+          "owner-authorized native policy activation failed");
+    check(supervisors.pin_policy(daddy).code()=="Daddy-live-v2",
+          "owner-authorized native policy pin returned wrong generation");
     check(supervisors.policy_revision(daddy).revision==2,
           "native registry did not observe activated policy revision");
     check(group->group_id()==group_id && group->supervisor_id()==supervisor_id,
           "native registry policy activation changed group/supervisor identity");
-    installed->close();
+    supervisors.close_policy(daddy);
     // This registry slot is independent from the direct slot exercised below.
     reclaimed.store(0);
     {
