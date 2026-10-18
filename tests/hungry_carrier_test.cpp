@@ -155,6 +155,78 @@ static void test_cpu_affinity_fails_closed() {
     actor.join();
     check(!actor.producer_handle().try_send({1, 1}), "failed admission must not accept messages");
 }
+struct CancelHookState {
+    std::atomic<int> initials{0};
+    std::atomic<int> resumes{0};
+    std::atomic<int> cleanups{0};
+    std::atomic<int> violations{0};
+    HungryCarrier::NativeHeap::Handle owned{};
+};
+static ActorStep cancel_hook_handler(void* raw, ActorMessage message,
+                                     ResumeCause cause, std::int64_t io) noexcept {
+    auto& state = *static_cast<CancelHookState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1 || io != 0) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    if (cause == ResumeCause::initial) {
+        if (state.initials.fetch_add(1) != 0) state.violations.fetch_add(1);
+        auto handle = heap->allocate(sizeof(std::uint64_t));
+        std::uint64_t value = 0xCACE11EDULL;
+        if (!handle || !heap->write(*handle, 0, &value, sizeof(value))) {
+            state.violations.fetch_add(1);
+            return {};
+        }
+        state.owned = *handle;
+    } else if (cause == ResumeCause::cpu) {
+        state.resumes.fetch_add(1);
+    } else {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    return {StepKind::cooperate, 0, 0};
+}
+static void cancel_hook_cleanup(void* raw, ActorMessage message) noexcept {
+    auto& state = *static_cast<CancelHookState*>(raw);
+    auto* heap = HungryCarrier::active_heap();
+    if (!heap || message.id != 1 || !state.owned.heap ||
+            !heap->release(state.owned))
+        state.violations.fetch_add(1);
+    state.cleanups.fetch_add(1);
+}
+static void test_cancel_hook_runs_once_on_actor_thread() {
+    CancelHookState state;
+    HungryCarrier::Options options{};
+    options.cancel_handler = cancel_hook_cleanup;
+    HungryCarrier actor(&state, cancel_hook_handler, nullptr, io_double, options);
+    actor.start();
+    check(actor.producer_handle().try_send({1, 0}),
+          "cancel-hook logical turn was not accepted");
+    check(until([&] { return state.resumes.load() >= 32; }, 2s),
+          "cancel-hook continuation did not cooperate");
+    actor.request_stop();
+    actor.join();
+    const auto stats = actor.stats();
+    check(state.initials.load() == 1 && state.cleanups.load() == 1,
+          "active logical turn cancellation hook was not exactly once");
+    check(state.violations.load() == 0 && stats.cancel_cleanups == 1,
+          "cancel cleanup lacked actor heap authority or was miscounted");
+    check(stats.completed == 0 && stats.abandoned_on_stop == 1,
+          "canceled continuation was incorrectly completed");
+    actor.join();
+    check(state.cleanups.load() == 1 && actor.stats().cancel_cleanups == 1,
+          "repeated lifecycle join ran cancellation cleanup twice");
+
+    State legacy;
+    HungryCarrier::Options invalid{};
+    invalid.cancel_handler = cancel_hook_cleanup;
+    bool rejected = false;
+    try { HungryCarrier bad(&legacy, handle, nullptr, io_double, invalid); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "legacy handler silently accepted generated-frame cancel hook");
+}
+
 static void test_fixed_arena_bounds_and_alignment() {
     FixedArena<128> arena;
     auto* number = arena.emplace<std::uint64_t>(42);
@@ -594,6 +666,7 @@ int main() {
     try {
         test_bounded_queue_head_readiness();
         test_fixed_arena_bounds_and_alignment();
+        test_cancel_hook_runs_once_on_actor_thread();
         test_actor_heap_bound_to_carrier_across_await();
         test_150ms_await_serial_and_same_carrier();
         test_actual_socket_io_off_carrier();
