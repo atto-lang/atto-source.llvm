@@ -1995,3 +1995,23 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Native IPC receipt correlation is host-side only: no remote actor execution
+# or Java/LLVM guest-parity claim. This test runs without an external transport.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-ipc-receipt-ledger-test
+        tests/native_ipc_receipt_ledger_test.cpp)
+    target_include_directories(oreslang-native-ipc-receipt-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ipc-receipt-ledger-test PRIVATE
+        Threads::Threads)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(oreslang-native-ipc-receipt-ledger-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    endif()
+    add_test(NAME native_ipc_receipt_ledger_reference
+        COMMAND oreslang-native-ipc-receipt-ledger-test)
+    set_tests_properties(native_ipc_receipt_ledger_reference
+        PROPERTIES TIMEOUT 30)
+endif()
