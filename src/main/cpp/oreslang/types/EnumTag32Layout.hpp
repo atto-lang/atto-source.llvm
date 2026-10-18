@@ -35,6 +35,7 @@ inline void simple(const std::string& name) {
 
 inline void qualified(const std::string& identity) {
     need(!identity.empty(), "missing resolved nominal enum identity");
+    need(identity.size() <= 512, "resolved enum identity exceeds canonical ABI byte limit");
     std::size_t pos = 0;
     unsigned components = 0;
     while (true) {
