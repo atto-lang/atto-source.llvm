@@ -69,6 +69,10 @@ public:
 
     /** Never called on a reactor's own thread; runtime does not expose callbacks. */
     void stop() noexcept {
+        // Only one host teardown caller may examine/join std::thread. The
+        // reactor state mutex alone cannot protect joinable()/join() because
+        // it must be released while the worker drains and exits.
+        std::lock_guard<std::mutex> teardown_lock(stop_mu_);
         // Linearize shutdown against cancellation/readiness ownership. Once
         // closed_ is published under mu_, no later cancellation may convert a
         // shutdown-fenced watch into a successful cancelled completion.
@@ -250,8 +254,11 @@ private:
         // A terminal epoll failure must not strand accepted operations.
         // Publish exactly one stopped result for each outstanding ticket even
         // when no external host subsequently calls stop().
-        closed_.store(true, std::memory_order_release);
         std::lock_guard<std::mutex> terminal_lock(mu_);
+        // Fatal epoll termination has the same admission/cancellation fence
+        // as explicit stop(). No late cancellation can win after this state
+        // transition is published.
+        closed_.store(true, std::memory_order_release);
         for (std::size_t i = 0; i < capacity; ++i) {
             auto& item = slots_[i];
             if (item.state != State::active) continue;
@@ -272,6 +279,9 @@ private:
     std::atomic<bool> closed_{false};
     std::thread thread_;
     bool started_ = false;
+    // Separate host lifecycle serialization so two stop() callers never race
+    // std::thread::joinable()/join() or cleanup the same join handle.
+    std::mutex stop_mu_;
     mutable std::mutex mu_;
     std::array<Slot, capacity> slots_{};
     std::array<Completion, capacity> completions_{};
