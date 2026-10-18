@@ -5,7 +5,11 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <tuple>
 #include <stdexcept>
 #include <utility>
 
@@ -14,7 +18,130 @@ namespace oreslang::runtime {
 class HungryCarrier;
 
 /**
- * Minted only after HungryCarrier::join() has stopped actor and broker,
+ * Actor-generation-wide physical retirement cohort. A trusted supervisor
+ * creates exactly one live cohort for an ActorHeapIdentity and fixes the
+ * number of physical execution lanes before those lanes are admitted.
+ *
+ * Each HungryCarrier registers exactly once and acknowledges join exactly once.
+ * A proof exists only after every expected lane has registered+joined and no
+ * lane reported unclean frame cancellation. The weak global registry rejects
+ * a second live cohort for the same actor generation; heaps/proofs retain the
+ * cohort so stale generations cannot be silently reused while capabilities live.
+ */
+class ActorHeapRetirementCohort final {
+    friend class HungryCarrier;
+    using Key = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
+
+    ActorHeapIdentity owner_;
+    std::uint64_t cohort_id_;
+    std::size_t expected_lanes_;
+    std::atomic<std::size_t> registered_lanes_{0};
+    std::atomic<std::size_t> joined_lanes_{0};
+    std::atomic<bool> cleanup_failed_{false};
+
+    ActorHeapRetirementCohort(ActorHeapIdentity owner, std::uint64_t id,
+                              std::size_t expected) noexcept
+        : owner_(owner), cohort_id_(id), expected_lanes_(expected) {}
+
+    static std::mutex& registry_mutex();
+    static std::map<Key, std::weak_ptr<ActorHeapRetirementCohort>>& registry();
+    static std::atomic<std::uint64_t>& next_id();
+    static std::uint64_t mint_id();
+
+    bool register_lane() noexcept {
+        auto current = registered_lanes_.load(std::memory_order_acquire);
+        for (;;) {
+            if (current >= expected_lanes_) return false;
+            if (registered_lanes_.compare_exchange_weak(
+                    current, current + 1,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return true;
+        }
+    }
+
+    void acknowledge_lane(bool cleanup_ok) noexcept {
+        if (!cleanup_ok)
+            cleanup_failed_.store(true, std::memory_order_release);
+        const auto before = joined_lanes_.fetch_add(1, std::memory_order_acq_rel);
+        const auto registered = registered_lanes_.load(std::memory_order_acquire);
+        if (before >= expected_lanes_ || before >= registered)
+            cleanup_failed_.store(true, std::memory_order_release);
+    }
+
+public:
+    static std::shared_ptr<ActorHeapRetirementCohort> create(
+        ActorHeapIdentity owner, std::size_t expected_lanes);
+
+    ActorHeapIdentity owner() const noexcept { return owner_; }
+    std::uint64_t cohort_id() const noexcept { return cohort_id_; }
+    std::size_t expected_lanes() const noexcept { return expected_lanes_; }
+    std::size_t registered_lanes() const noexcept {
+        return registered_lanes_.load(std::memory_order_acquire);
+    }
+    std::size_t joined_lanes() const noexcept {
+        return joined_lanes_.load(std::memory_order_acquire);
+    }
+    bool cleanup_failed() const noexcept {
+        return cleanup_failed_.load(std::memory_order_acquire);
+    }
+    bool ready_for_retirement() const noexcept {
+        return !cleanup_failed()
+            && registered_lanes() == expected_lanes_
+            && joined_lanes() == expected_lanes_;
+    }
+    // Strong enough for destructor-time reclamation after partial startup:
+    // every lane that ever registered has joined and cleanup remained proven.
+    bool safe_for_bound_heap_destruction() const noexcept {
+        return !cleanup_failed() && joined_lanes() == registered_lanes();
+    }
+};
+
+inline std::mutex& ActorHeapRetirementCohort::registry_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+inline std::map<ActorHeapRetirementCohort::Key,
+                std::weak_ptr<ActorHeapRetirementCohort>>&
+ActorHeapRetirementCohort::registry() {
+    static std::map<Key, std::weak_ptr<ActorHeapRetirementCohort>> values;
+    return values;
+}
+inline std::atomic<std::uint64_t>& ActorHeapRetirementCohort::next_id() {
+    static std::atomic<std::uint64_t> value{1};
+    return value;
+}
+inline std::uint64_t ActorHeapRetirementCohort::mint_id() {
+    auto candidate = next_id().load(std::memory_order_relaxed);
+    for (;;) {
+        if (candidate == 0)
+            throw std::overflow_error("actor retirement cohort identity exhausted");
+        if (next_id().compare_exchange_weak(candidate, candidate + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return candidate;
+    }
+}
+inline std::shared_ptr<ActorHeapRetirementCohort>
+ActorHeapRetirementCohort::create(
+        ActorHeapIdentity owner, std::size_t expected_lanes) {
+    if (!owner.runtime || !owner.actor || !owner.epoch ||
+            expected_lanes == 0 || expected_lanes > 64)
+        throw std::invalid_argument("invalid actor retirement cohort");
+    const Key key{owner.runtime, owner.actor, owner.epoch};
+    std::lock_guard<std::mutex> lock{registry_mutex()};
+    auto& values = registry();
+    if (const auto found = values.find(key); found != values.end()) {
+        if (found->second.lock())
+            throw std::logic_error("actor generation already has a live retirement cohort");
+        values.erase(found);
+    }
+    auto cohort = std::shared_ptr<ActorHeapRetirementCohort>(
+        new ActorHeapRetirementCohort(owner, mint_id(), expected_lanes));
+    values.emplace(key, cohort);
+    return cohort;
+}
+
+/**
+ * Minted only after every lane in one ActorHeapRetirementCohort has joined,
  * closed ingress, drained every outstanding producer call, and either no
  * logical frame was abandoned or its carrier-thread cancellation/drop callback
  * explicitly acknowledged cleanup. Missing/failed frame cleanup blocks proof
@@ -25,10 +152,14 @@ class HungryCarrier;
  */
 class CarrierRetirementProof final {
     friend class HungryCarrier;
-    ActorHeapIdentity owner_;
-    explicit CarrierRetirementProof(ActorHeapIdentity owner) : owner_(owner) {}
+    std::shared_ptr<ActorHeapRetirementCohort> cohort_;
+    explicit CarrierRetirementProof(
+            std::shared_ptr<ActorHeapRetirementCohort> cohort) noexcept
+        : cohort_(std::move(cohort)) {}
 public:
-    ActorHeapIdentity owner() const noexcept { return owner_; }
+    ActorHeapIdentity owner() const noexcept { return cohort_->owner(); }
+    std::uint64_t cohort_id() const noexcept { return cohort_->cohort_id(); }
+    std::size_t lanes() const noexcept { return cohort_->expected_lanes(); }
 };
 
 /**
