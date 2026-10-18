@@ -33,12 +33,12 @@ The checked-in CMake targets `freestanding_actor_kernel_bounded_host` and `frees
 ## What is deliberately NOT proven
 
 1. No source-defined Oreslang actor is yet linked or executed through this kernel. Existing hosted `SourceActorBootstrap.c` still uses `pthread`, `calloc`, and `free`; it must not be used to claim freestanding parity.
-2. No QEMU boot/positive/negative case is yet present for the actor runtime. The previously verified no-libc QEMU test in LLVM PR #580 is **scalar guest code only**.
-3. No linker-map RAM/stack/flash accounting, arena allocator provenance, MPU enforcement, hard real-time guarantees, class fields, actor group operations, supervisor restart, or hot-reload integration.
+2. Cortex-M QEMU now executes **C-defined** actor handlers from this kernel, but **no compiler-generated Oreslang actor** has been linked to or run through the freestanding runtime. LLVM PR #580 independently verifies source-compiled scalar guest code.
+3. The linker checks the Cortex-M memory map and reserves 4 KiB of stack, but detailed worst-case stack/RAM accounting, arena provenance, MPU enforcement, hard real-time guarantees, class fields, actor groups, supervisor restart, and hot reload remain unverified.
 
 ## Required follow-up
 
-Build a freestanding `SourceActorBootstrap` adapter that binds compiler-emitted constructors and message handlers to owned static arenas; preserve the strict `core / alloc / actor / std` layering. Add Cortex-M reset/vector and RAM initialization, link the actual source-compiled program without libc, execute positive/overflow/stale-ref/fault cases under QEMU, and prove the final ELF's undefined-symbol and memory budgets. Keep this PR draft until then.
+Build a freestanding `SourceActorBootstrap` adapter that binds compiler-emitted constructors and message handlers to owned static arenas, preserving strict `core / alloc / actor / std` layering. Repeat the now-passing Cortex-M QEMU positive/negative tests using **source-compiled Oreslang actors**, then establish provenance-enforced actor state, MPU/interrupt constraints and explicit worst-case RAM/stack budgets. Keep this PR draft until then.
 
 ## Standalone Cortex-M C-kernel firmware integration evidence (2026-10-18)
 
@@ -59,12 +59,21 @@ source commit `db7badfe84bc7fca71b8fa4d7ecd6d06be658a84`.
 [Evidence artifact](https://github.com/claritas-viz/claritas-sync/actions/runs/39146202030/artifacts/12142903139)
 is temporary and private.
 
-Separately, a local Clang/LLD build linked the same C kernel/firmware with a
-Cortex-M3 vector table, startup BSS zeroing and `.data` copying into a
-standalone ARM ELF without unresolved symbols. **That ELF was not executed by
-QEMU in this iteration**, so startup, semihosting and actual MCU actor scheduling
-are still unverified in an emulator. The separate startup/linker fixture is
-not yet committed to GitHub.
+**QEMU milestone (2026-10-18):** the checked-in startup assembly,
+linker script, and `tests/freestanding_actor_kernel_qemu.py` now build ELF32
+no-libc binaries for `lm3s6965evb`, initialize BSS and `.data` at reset,
+validate the vector/Thumb entry and memory segments, and boot both C-kernel
+variants. [Private exact-source run #39148351438](https://github.com/claritas-viz/claritas-sync/actions/runs/39148351438)
+returned **0** for the positive firmware and **1** for the deliberately
+failing firmware, both with the expected semihosting output. The test also
+passed 2/2 host CTests, 100,000 model operations, ASan/UBSan and checks
+of eight exact source Git blob hashes. [Evidence artifact](https://github.com/claritas-viz/claritas-sync/actions/runs/39148351438/artifacts/12144655481)
+is private and temporary.
+
+The CMake test `freestanding_actor_kernel_cortexm_qemu_positive_negative`
+is registered when clang, readelf and QEMU are available. CI requiring Cortex-M
+runtime verification should set `-DORE_REQUIRE_CORTEXM_QEMU=ON` to **fail
+configuration** rather than quietly skip the gate if a tool is missing.
 
 The C actor handler is hand-authored, **not compiler-generated Oreslang actor
 code**. No claim of source-actor semantics, Oreslang actor ABI integration,
