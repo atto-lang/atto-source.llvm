@@ -102,36 +102,48 @@ struct TrackedImage final {
     ~TrackedImage() noexcept { if (live) --*live; }
 };
 static void exercise_destructor_before_image_unload() {
-    auto live = std::make_shared<std::atomic<int>>(0);
     std::atomic<int> callbacks{0}, wrong_order{0};
-    auto cleanup = [&] {
-        ++callbacks;
-        if (live->load() != 0) ++wrong_order;
+    auto new_counter = [] { return std::make_shared<std::atomic<int>>(0); };
+    auto cleanup = [&](std::shared_ptr<std::atomic<int>> alive) {
+        return [&, alive] {
+            ++callbacks;
+            if (alive->load() != 0) ++wrong_order;
+        };
     };
+    const auto v1 = new_counter();
     {
-        NativeSupervisorCodeSlot<TrackedImage> slot("actor-abi", TrackedImage(live),
-                                                     cleanup);
-        check(live->load() == 1, "initial generation wrapper not retained");
+        NativeSupervisorCodeSlot<TrackedImage> slot("actor-abi", TrackedImage(v1),
+                                                     cleanup(v1));
+        check(v1->load() == 1, "initial generation wrapper not retained");
+        auto stale = new_counter();
         bool denied = false;
-        try { slot.activate(0, "actor-abi", TrackedImage(live), cleanup); }
+        try { slot.activate(0, "actor-abi", TrackedImage(stale), cleanup(stale)); }
         catch (const std::logic_error&) { denied = true; }
-        check(denied && live->load() == 1, "stale code wrapper not destroyed");
+        check(denied && stale->load() == 0, "stale code wrapper not destroyed");
+        auto invalid = new_counter();
         denied = false;
-        try { slot.activate(1, "", TrackedImage(live), cleanup); }
+        try { slot.activate(1, "", TrackedImage(invalid), cleanup(invalid)); }
         catch (const std::invalid_argument&) { denied = true; }
-        check(denied && live->load() == 1, "invalid ABI code wrapper not destroyed");
-        check(slot.activate(1, "actor-abi", TrackedImage(live), cleanup).revision == 2,
+        check(denied && invalid->load() == 0, "invalid ABI wrapper not destroyed");
+        const auto v2 = new_counter();
+        check(slot.activate(1, "actor-abi", TrackedImage(v2), cleanup(v2)).revision == 2,
               "valid tracked upgrade failed");
-        check(live->load() == 1, "previous accepted code wrapper was not destroyed");
+        check(v1->load() == 0 && v2->load() == 1,
+              "previous accepted code wrapper not destroyed");
         slot.close();
+        check(v2->load() == 0, "closed generation wrapper not destroyed");
     }
-    check(callbacks == 4 && wrong_order == 0 && live->load() == 0,
+    check(callbacks == 4 && wrong_order == 0,
           "native image unloaded before Policy destruction or leaked");
-    // Initial construction with invalid ABI owns its cleanup, too.
+    // Invalid initial admission must own and discharge its resource.
+    auto invalid_initial = new_counter();
     bool denied = false;
-    try { NativeSupervisorCodeSlot<TrackedImage> bad("", TrackedImage(live), cleanup); }
-    catch (const std::invalid_argument&) { denied = true; }
-    check(denied && callbacks == 5 && wrong_order == 0 && live->load() == 0,
+    try {
+        NativeSupervisorCodeSlot<TrackedImage> bad(
+            "", TrackedImage(invalid_initial), cleanup(invalid_initial));
+    } catch (const std::invalid_argument&) { denied = true; }
+    check(denied && callbacks == 5 && wrong_order == 0
+          && invalid_initial->load() == 0,
           "rejected initial admission leaked or unloaded a live image wrapper");
 }
 
