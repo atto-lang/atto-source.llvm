@@ -290,3 +290,34 @@ have not been executed through full Maven on the exact PR head. Neither
 source repository currently offers usable Actions runner execution; the
 private-source cross-org export policy presently authorizes no destination
 and must not be bypassed by mirroring a Git tree. Stay in DRAFT.
+
+
+## Third audit pass: native checkpoint parity and Java resource leases
+
+Both draft branches incorporated latest main via audited two-parent commits.
+The Java companion now offers a trusted package-private external callback
+lease registered under the actor's lifecycle monitor. While a lease is live,
+the supervisor's scheduler-drained observation stays false. A frozen actor
+rejects newly registered external work. Duplicate release, stale freeze
+tokens, actor shutdown and foreign-runtime access are covered by new JUnit
+regressions, which still require exact-head Maven/JDK25 execution.
+
+LLVM now implements the independent C++17 host-only
+`ActorCheckpointEnvelopeV1.hpp`. It encodes and decodes the same canonical
+big-endian actor UUID, positive signed-int64 incarnation, four digests,
+1 MiB-bounded byte payload and SHA-256 trailer as the Java/Python v1 format.
+SHA-256 comes from an explicitly injected trusted provider, not from a new
+freestanding-core dependency. The optional OpenSSL CTest verifies the same
+202-byte golden format and negative identity, corruption and length cases.
+
+Exact native Git blobs `93785beee271551afb44dbd668403e732fd32ae2`
+(header) and `3e7233df8ba3e1c49b68315c3a8aed09c59226f9` (CTest
+source) passed local Clang17 warnings-as-errors, ASan+UBSan with leak
+detection, and 50 consecutive additional optimized executions.
+
+This is a validated host checkpoint **format**, not real Oreslang actor state
+serialization, cryptographic source authorization or native executable swap.
+External-resource capture is not automatic; all runtime brokers must
+participate before any image or arena may be retired. The draft must remain
+unmerged until full exact-head integration and independent source-CI
+authorization succeed.
