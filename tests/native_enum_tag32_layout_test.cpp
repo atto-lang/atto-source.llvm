@@ -7,7 +7,7 @@
 #include <vector>
 
 #define REQUIRE(expr) do { if (!(expr)) { \
-    std::fprintf(stderr, "enum tag32 layout failed: %s at %s:%d\\n", \
+    std::fprintf(stderr, "enum tag32 layout failed: %s at %s:%d\n", \
                  #expr, __FILE__, __LINE__); std::abort(); \
 } } while (false)
 
