@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <type_traits>
 
 #define REQUIRE(condition) do { if (!(condition)) { \
     std::fprintf(stderr, "native enum AOT parser failed: %s at %s:%d\n", \
@@ -35,6 +36,20 @@ std::string fixture(int a = 1, int b = 2, const std::string& first = "10",
 }
 }
 int main() {
+    using oreslang::enum_aot::Plan;
+    using oreslang::enum_aot::VerifiedPlan;
+    static_assert(!std::is_constructible_v<VerifiedPlan, Plan&&>,
+                  "an arbitrary mutable plan must not forge a compiler seal");
+    static_assert(!std::is_copy_constructible_v<VerifiedPlan>,
+                  "the compiler seal cannot be copied");
+    static_assert(!std::is_move_constructible_v<VerifiedPlan>,
+                  "the compiler seal cannot be moved");
+    static_assert(std::is_const_v<std::remove_reference_t<
+        decltype(std::declval<const VerifiedPlan&>().readOnly())>>,
+        "the sealed source plan must expose only const data");
+    const VerifiedPlan sealed = oreslang::enum_aot::parseVerified(fixture());
+    REQUIRE(oreslang::enum_aot::checkedNativeExit(sealed.readOnly()) == 10);
+
     auto plan = oreslang::enum_aot::parse(fixture());
     oreslang::enum_aot::validatePlan(plan);
     auto expectForgedRejected = [&](const oreslang::enum_aot::Plan& tampered) {
