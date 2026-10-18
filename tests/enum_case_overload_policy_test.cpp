@@ -107,7 +107,7 @@ int main() {
         std::string bytes;
         for (char c : excessiveUtf8) {
             (void)c;
-            bytes += "\\xc3\\xa9";
+            bytes += std::string({char(0xc3), char(0xa9)});
         }
         return bytes;
     }();
@@ -125,12 +125,12 @@ int main() {
         oversizedRegistry.emplace(id, EnumInfo{id, {"A"}, true});
     }
     rejects([&] { checkFamily({f({count})}, oversizedRegistry); });
-    rejects([&] { checkFamily({f({Parameter::whole("root. Foo")})}, registry); });
+    rejects([&] { identifier("root. Foo"); });
     for (const std::string& bytes : {
-            std::string("\\xc2\\xa0"), std::string("\\xe2\\x80\\x87"),
-            std::string("\\xe2\\x80\\xaf")}) {
-        rejects([&] { checkFamily(
-            {f({Parameter::whole("root." + bytes + "Foo")})}, registry); });
+            std::string({char(0xc2), char(0xa0)}),
+            std::string({char(0xe2), char(0x80), char(0x87)}),
+            std::string({char(0xe2), char(0x80), char(0xaf)})}) {
+        rejects([&] { identifier("root." + bytes + "Foo"); });
     }
     rejects([&] { checkFamily({f({Parameter::whole(
             std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo")})}, registry); });
@@ -139,7 +139,9 @@ int main() {
     rejects([&] { checkFamily({f({Parameter::whole("root.\xED\xA0\x80")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root.\xC0\x80")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("root.\xF4\x90\x80\x80")})}, registry); });
-    rejects([&] { checkFamily({f({Parameter::whole("root.\x00")})}, registry); });
+    // C-string literals truncate at NUL; force a truly embedded NUL.
+    const std::string embeddedNul = std::string("root.") + char(0) + "Foo";
+    rejects([&] { identifier(embeddedNul); });
     rejects([&] { (void)f({a},static_cast<Domain>(99)).symbolId(); });
     rejects([&] { checkFamily({f({Parameter{static_cast<Kind>(99),"root.Foo",""}})}, registry); });
     // Host source-free proof only. No native guest enum syntax is accepted.
