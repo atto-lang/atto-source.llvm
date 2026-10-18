@@ -47,6 +47,28 @@ CASES = {
         "pub fnc main(int value): int { return structural; }",
         "expected int expression",
     ),
+    # External actor / FFI syntax is reserved even before native lowering.
+    "ipc-function": (
+        "pub fnc ipc(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "ffi-parameter": (
+        "pub fnc main(int ffi): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "extern-expression": (
+        "pub fnc main(): int { return extern; }",
+        "expected int expression",
+    ),
+    "ipc-actor-declaration": (
+        "define ipc actor Worker as let value: int = 0; pub on_message(int message): int { return message; } end",
+        "native ipc actor requires authenticated artifact/process transport lowering",
+    ),
+    "ffi-actor-declaration": (
+        "define ffi actor Worker as let value: int = 0; pub on_message(int message): int { return message; } end",
+        "native ffi actor requires compiler-owned ForeignDecl and ABI receipt lowering",
+    ),
+
     # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
