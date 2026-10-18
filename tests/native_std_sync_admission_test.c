@@ -35,8 +35,33 @@ static void end_retry(ores_std_sync_gate* gate, ores_std_ticket t) {
     assert(rc == ORES_STD_SYNC_GRANTED);
 }
 
-static void test_mutex_fifo_and_cancellation(void) {
+static void test_scope_reincarnation(void) {
     ores_std_sync_gate gate = ORES_STD_MUTEX_INIT;
+    assert(ores_std_request(&gate, ORES_STD_WRITE).code == ORES_STD_SYNC_INVALID);
+    assert(ores_std_bind_scope(&gate, 1001u) == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_bind_scope(&gate, 1002u) == ORES_STD_SYNC_INVALID);
+    ores_std_sync_result a=ores_std_request(&gate, ORES_STD_WRITE);
+    assert(a.code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_release(&gate,a.ticket).code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_seal(&gate).code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_quiescent(&gate) == ORES_STD_SYNC_GRANTED);
+    /* Trusted reuse only AFTER completed teardown and all callbacks stopped.
+     * Recreate a new object incarnation at the same storage address. */
+    gate.scope_generation = 2002u;
+    gate.next_sequence = 0;
+    gate.sealed = false;
+    gate.exhausted = false;
+    ores_std_sync_result b=ores_std_request(&gate, ORES_STD_WRITE);
+    assert(b.code == ORES_STD_SYNC_GRANTED);
+    assert(b.ticket.sequence == a.ticket.sequence);
+    assert(b.ticket.scope == a.ticket.scope);
+    assert(b.ticket.scope_generation != a.ticket.scope_generation);
+    assert(ores_std_start(&gate,a.ticket) == ORES_STD_SYNC_STALE);
+    assert(ores_std_release(&gate,a.ticket).code == ORES_STD_SYNC_STALE);
+    assert(ores_std_release(&gate,b.ticket).code == ORES_STD_SYNC_GRANTED);
+}
+static void test_mutex_fifo_and_cancellation(void) {
+    ores_std_sync_gate gate = ORES_STD_MUTEX_INIT_SCOPE(1u);
     ores_std_sync_result a = ores_std_request(&gate, ORES_STD_WRITE);
     ores_std_sync_result b = ores_std_request(&gate, ORES_STD_WRITE);
     ores_std_sync_result c = ores_std_request(&gate, ORES_STD_WRITE);
@@ -62,7 +87,7 @@ static void test_mutex_fifo_and_cancellation(void) {
     woke = ores_std_release(&gate,d.ticket);
     assert(woke.admitted_count == 0);
     assert(ores_std_release(&gate,d.ticket).code == ORES_STD_SYNC_STALE);
-    ores_std_sync_gate foreign = ORES_STD_MUTEX_INIT;
+    ores_std_sync_gate foreign = ORES_STD_MUTEX_INIT_SCOPE(1u);
     ores_std_sync_result x = ores_std_request(&foreign, ORES_STD_WRITE);
     assert(ores_std_start(&gate,x.ticket) == ORES_STD_SYNC_STALE);
     assert(ores_std_release(&gate,x.ticket).code == ORES_STD_SYNC_STALE);
@@ -70,7 +95,7 @@ static void test_mutex_fifo_and_cancellation(void) {
 }
 
 static void test_rw_fairness_and_wake_cohorts(void) {
-    ores_std_sync_gate gate = ORES_STD_RW_INIT;
+    ores_std_sync_gate gate = ORES_STD_RW_INIT_SCOPE(1u);
     ores_std_sync_result a = ores_std_request(&gate,ORES_STD_READ);
     ores_std_sync_result b = ores_std_request(&gate,ORES_STD_READ);
     ores_std_sync_result w = ores_std_request(&gate,ORES_STD_WRITE);
@@ -104,7 +129,7 @@ static void test_rw_fairness_and_wake_cohorts(void) {
 }
 
 static void test_seal_and_physical_quiescence(void) {
-    ores_std_sync_gate gate = ORES_STD_MUTEX_INIT;
+    ores_std_sync_gate gate = ORES_STD_MUTEX_INIT_SCOPE(1u);
     ores_std_sync_result active = ores_std_request(&gate, ORES_STD_WRITE);
     ores_std_sync_result queued = ores_std_request(&gate, ORES_STD_WRITE);
     assert(active.code == ORES_STD_SYNC_GRANTED);
@@ -125,7 +150,7 @@ static void test_seal_and_physical_quiescence(void) {
     assert(ores_std_quiescent(&gate) == ORES_STD_SYNC_GRANTED);
     assert(ores_std_ready_to_suspend(&gate, active.ticket) == ORES_STD_SYNC_GRANTED);
 
-    ores_std_sync_gate rw = ORES_STD_RW_INIT;
+    ores_std_sync_gate rw = ORES_STD_RW_INIT_SCOPE(1u);
     ores_std_sync_result r1=ores_std_request(&rw, ORES_STD_READ);
     ores_std_sync_result r2=ores_std_request(&rw, ORES_STD_READ);
     ores_std_sync_result w=ores_std_request(&rw, ORES_STD_WRITE);
@@ -154,7 +179,7 @@ static void *start_during_stop(void* payload) {
 }
 static void test_stop_vs_start_race(void) {
     for(int i=0;i<500;++i) {
-        stop_race race={ORES_STD_MUTEX_INIT,{0},ATOMIC_VAR_INIT(false),ORES_STD_SYNC_INVALID};
+        stop_race race={ORES_STD_MUTEX_INIT_SCOPE(1u),{0},ATOMIC_VAR_INIT(false),ORES_STD_SYNC_INVALID};
         ores_std_sync_result r=ores_std_request(&race.gate,ORES_STD_WRITE);
         assert(r.code == ORES_STD_SYNC_GRANTED);
         race.ticket=r.ticket;
@@ -179,8 +204,8 @@ static void test_stop_vs_start_race(void) {
     }
 }
 
-static ores_std_sync_gate mutex = ORES_STD_MUTEX_INIT;
-static ores_std_sync_gate rw = ORES_STD_RW_INIT;
+static ores_std_sync_gate mutex = ORES_STD_MUTEX_INIT_SCOPE(1u);
+static ores_std_sync_gate rw = ORES_STD_RW_INIT_SCOPE(1u);
 static uint64_t mutex_counter, writer_counter;
 static atomic_uint overlap = ATOMIC_VAR_INIT(0u);
 
@@ -222,6 +247,7 @@ static void *rw_writer(void* unused) {
 }
 
 int main(void) {
+    test_scope_reincarnation();
     test_mutex_fifo_and_cancellation();
     test_rw_fairness_and_wake_cohorts();
     test_seal_and_physical_quiescence();
