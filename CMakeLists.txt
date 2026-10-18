@@ -1957,3 +1957,17 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_hot_aot_pic_loader_host_only
         PROPERTIES TIMEOUT 20)
 endif()
+
+# Independent, source-free canonical checkpoint wire oracle with normal and
+# optimized Python semantics. This is NOT guest compiler state migration.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME actor_checkpoint_v1_wire_oracle
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_checkpoint_v1_wire.py")
+    add_test(NAME actor_checkpoint_v1_wire_oracle_optimized
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_checkpoint_v1_wire.py")
+    set_tests_properties(actor_checkpoint_v1_wire_oracle
+        actor_checkpoint_v1_wire_oracle_optimized PROPERTIES TIMEOUT 20)
+endif()
