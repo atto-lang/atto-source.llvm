@@ -8,12 +8,15 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 head_sha="$(git rev-parse --verify HEAD)"
 tree_sha="$(git rev-parse --verify "HEAD^{tree}")"
-# An immutable HEAD check alone is not evidence of the tested bytes if the
-# checkout is dirty or contains untracked source shadowing tracked headers.
-if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-  printf 'Refusing exact-head test: checkout has modified or untracked files\n' >&2
-  exit 2
-fi
+# An immutable commit/tree does not prove a matching worktree: local Git config
+# and index bits can conceal chmod, ignored inputs and source mutations.
+# This helper uses NUL-framed Git output, forces fileMode/fsmonitor overrides,
+# and admits only ignored build/cache output directories at the repository root.
+command -v python3 >/dev/null || { printf 'Python 3 required for NIO source-integrity gate\n' >&2; exit 2; }
+verify_exact_worktree() {
+  python3 -I scripts/verify-native-nio-source-local.py "$head_sha" "$tree_sha"
+}
+verify_exact_worktree
 if [[ -n "${ORES_NIO_EXPECT_HEAD:-}" && "$head_sha" != "$ORES_NIO_EXPECT_HEAD" ]]; then
   printf 'Exact-head mismatch: expected %s, checked out %s\n' "$ORES_NIO_EXPECT_HEAD" "$head_sha" >&2
   exit 2
@@ -63,6 +66,7 @@ for toolchain in gcc clang; do
       timeout 60s "$dest/$fixture"
     printf 'PASS: %s %s (ASan+UBSan)\n' "$toolchain" "$fixture"
   done
+  verify_exact_worktree
 done
 
 # Independent source parser admission for @ActorMaxThreads(LOW) and rejection
@@ -80,4 +84,8 @@ for toolchain in gcc clang; do
   UBSAN_OPTIONS=halt_on_error=1 \
     timeout 30s "$tmp/actor-max-threads-$toolchain"
   printf 'PASS: %s typed actor-thread frontend admission (ASan+UBSan)\n' "$toolchain"
+  verify_exact_worktree
 done
+
+# Final source identity must match the exact tree that passed admission.
+verify_exact_worktree
