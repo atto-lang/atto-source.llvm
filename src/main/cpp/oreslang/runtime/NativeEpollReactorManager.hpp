@@ -200,11 +200,10 @@ private:
                      claim.access_mode == access_mode)) return std::nullopt;
         }
         auto count = started_.load(std::memory_order_relaxed);
-        // Once a realtime reactor enters its first accepted readiness
-        // operation, no later host FD creation/duplication may occur. Existing
-        // pre-minted handles remain usable for signal/drain/watch/retirement.
-        if (profile_ == Profile::preallocated_rt)
-            owned_bootstrap_sealed_ = true;
+        // Do not seal a preallocated RT profile merely because validation
+        // passed: epoll admission may still fail due to an unsupported FD,
+        // per-reactor contention or exhausted capacity. Commit the seal only
+        // after a tracked readiness ticket is successfully published.
         if (count == 0) {
             if (profile_ != Profile::throughput || !reactors_[0]->start())
                 return std::nullopt;
@@ -225,6 +224,10 @@ private:
                     if (claim.occupied) continue;
                     claim = FdClaim{true, fd, stream_identity, identity.st_dev,
                                     identity.st_ino, access_mode, result, owner};
+                    // The manager lock covers both the ownership table and
+                    // the bootstrap phase; no creator can race this barrier.
+                    if (profile_ == Profile::preallocated_rt)
+                        owned_bootstrap_sealed_ = true;
                     return result;
                 }
                 (void)reactors_[index]->try_cancel(*token);

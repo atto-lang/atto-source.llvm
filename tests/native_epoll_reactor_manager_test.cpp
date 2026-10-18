@@ -227,19 +227,64 @@ int main() {
         }
         check(alias_completed);
         check(manager.close_owned_eventfd(*one));
-        auto replacement = manager.open_owned_eventfd();
-        check(replacement.has_value());
-        check(!manager.signal_owned_eventfd(*one)); // stale reused slot generation
+        // RT bootstrap has already been sealed. Reuse is tested separately
+        // in an unsealed throughput manager; creating here must fail closed.
+        check(!manager.open_owned_eventfd().has_value());
+        check(!manager.signal_owned_eventfd(*one));
         check(!manager.try_watch(*one, EPOLLIN).has_value());
         check(!manager.close_owned_eventfd(*one));
-        check(manager.signal_owned_eventfd(*replacement));
-        check(manager.close_owned_eventfd(*replacement));
         manager.stop();
         while (manager.try_pop().has_value()) { }
         check(manager.close_owned_eventfd(*alias));
         check(!manager.close_owned_eventfd(*alias));
         check(manager.close_owned_eventfd(*two));
         check(!manager.open_owned_eventfd().has_value()); // retired manager
+    }
+    {
+        // Failed validation cannot seal the RT mint phase before a ticket
+        // exists. Actual successful registration must seal it precisely once.
+        NativeEpollReactorManager manager(1,
+            NativeEpollReactorManager::Profile::preallocated_rt, 1);
+        auto first = manager.open_owned_eventfd();
+        check(first.has_value());
+        check(!manager.try_watch(*first, 0).has_value());
+        auto second = manager.open_owned_eventfd();
+        check(second.has_value());
+        check(!manager.try_watch(*first, 0xffffffffu).has_value());
+        auto watch = manager.try_watch(*first, EPOLLIN);
+        check(watch.has_value());
+        check(!manager.open_owned_eventfd().has_value());
+        manager.stop();
+        auto terminal = manager.try_pop();
+        check(terminal.has_value() &&
+              terminal->event.ticket.value == watch->ticket.value &&
+              terminal->event.outcome == NativeEpollReactor::Outcome::stopped);
+        check(manager.close_owned_eventfd(*first));
+        check(manager.close_owned_eventfd(*second));
+    }
+    {
+        // Reuse a retired slot while bootstrap is still open, so stale keys
+        // cannot authenticate against its replacement, even after FD-number
+        // and registry-slot reuse. RT bootstrap MUST NOT allow this after seal.
+        NativeEpollReactorManager manager(1);
+        auto first = manager.open_owned_eventfd();
+        check(first.has_value());
+        check(manager.close_owned_eventfd(*first));
+        auto replacement = manager.open_owned_eventfd();
+        check(replacement.has_value());
+        check(!manager.signal_owned_eventfd(*first));
+        check(!manager.drain_owned_eventfd(*first));
+        check(!manager.try_watch(*first, EPOLLIN).has_value());
+        check(!manager.close_owned_eventfd(*first));
+        check(manager.signal_owned_eventfd(*replacement));
+        auto watch = manager.try_watch(*replacement, EPOLLIN);
+        check(watch.has_value());
+        check(!manager.close_owned_eventfd(*replacement));
+        manager.stop();
+        auto terminal = manager.try_pop();
+        check(terminal.has_value() &&
+              terminal->event.ticket.value == watch->ticket.value);
+        check(manager.close_owned_eventfd(*replacement));
     }
     {
         // A copied capability must not authenticate against another manager,
