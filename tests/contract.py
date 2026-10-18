@@ -150,16 +150,27 @@ def main():
     if args.experimental_owned_int:
         cmd.append("--experimental-owned-int")
     cmd.append(args.fixture)
+    if args.diagnostic:
+        # A negative source must not leave IR, objects, cached code, or other
+        # files behind even when the compiler reports an error. An isolated cwd
+        # detects output artifacts without touching the source checkout.
+        with tempfile.TemporaryDirectory(prefix="oreslang-rejected-source-") as directory:
+            isolated_cmd = [*cmd[:-1], str(pathlib.Path(args.fixture).resolve())]
+            compile_result = subprocess.run(
+                isolated_cmd, cwd=directory, capture_output=True,
+                text=True, check=False, timeout=20
+            )
+            require(compile_result.returncode == 1,
+                    f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
+            require(args.diagnostic in compile_result.stderr,
+                    "expected compiler diagnostic was absent")
+            require(not compile_result.stdout, "compiler emitted stdout after rejection")
+            require(not any(pathlib.Path(directory).iterdir()),
+                    "compiler emitted filesystem artifacts after rejection")
+        return
     compile_result = subprocess.run(
         cmd, capture_output=True, text=True, check=False, timeout=20
     )
-    if args.diagnostic:
-        require(compile_result.returncode == 1,
-                f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
-        require(args.diagnostic in compile_result.stderr,
-                "expected compiler diagnostic was absent")
-        require(not compile_result.stdout, "compiler emitted stdout after rejection")
-        return
     require(compile_result.returncode == 0,
             f"compiler failed with exit code {compile_result.returncode}")
     require(compile_result.stdout.startswith("; ModuleID"),
