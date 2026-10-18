@@ -66,9 +66,27 @@ class SupervisorControlEvent final {
         : actor_(actor), generation_(generation), kind_(kind) {}
 public:
     SupervisorControlEvent() = delete;
+    SupervisorControlEvent(const SupervisorControlEvent&) = delete;
+    SupervisorControlEvent& operator=(const SupervisorControlEvent&) = delete;
+    SupervisorControlEvent(SupervisorControlEvent&& other) noexcept
+        : actor_(other.actor_), generation_(other.generation_), kind_(other.kind_) {
+        other.actor_ = 0;
+        other.generation_ = 0;
+    }
+    SupervisorControlEvent& operator=(SupervisorControlEvent&& other) noexcept {
+        if (this != &other) {
+            actor_ = other.actor_;
+            generation_ = other.generation_;
+            kind_ = other.kind_;
+            other.actor_ = 0;
+            other.generation_ = 0;
+        }
+        return *this;
+    }
     std::uint64_t actor() const noexcept { return actor_; }
     std::uint64_t generation() const noexcept { return generation_; }
     ControlKind kind() const noexcept { return kind_; }
+    bool valid() const noexcept { return actor_ != 0 && generation_ != 0; }
 };
 
 class SupervisorControlFactory final {
@@ -145,6 +163,9 @@ public:
 
     bool offer(ActorDataValue value, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("DATA byte charge required");
+        if (auto root = std::get_if<PersistentActorMap::MapRef>(&value);
+            root && !*root)
+            throw std::invalid_argument("null persistent DATA root");
         std::lock_guard<std::mutex> guard(state_->lock);
         if (state_->closed) throw std::logic_error("DATA lane closed");
         if (state_->next_id == 0)
@@ -172,19 +193,31 @@ public:
         return state_->used_frames;
     }
 
+    void close() {
+        std::lock_guard<std::mutex> guard(state_->lock);
+        state_->closed = true;
+        if (state_->used_frames != 0)
+            throw std::logic_error("DATA lane has unacknowledged deliveries");
+    }
+
 private:
     std::shared_ptr<State> state_;
 };
 
 class SupervisorControlLane final {
 public:
-    explicit SupervisorControlLane(std::size_t capacity)
-        : capacity_(capacity) {
-        if (!capacity) throw std::invalid_argument("CONTROL capacity required");
+    SupervisorControlLane(std::uint64_t actor, std::uint64_t generation,
+                          std::size_t capacity)
+        : actor_(actor), generation_(generation), capacity_(capacity) {
+        if (!actor_ || !generation_ || !capacity_)
+            throw std::invalid_argument("CONTROL target/capacity required");
     }
 
     bool publish(SupervisorControlEvent event) {
         std::lock_guard<std::mutex> guard(lock_);
+        if (!event.valid() || event.actor() != actor_ ||
+            event.generation() != generation_)
+            throw std::logic_error("stale/foreign CONTROL authority");
         if (queue_.size() >= capacity_) return false;
         queue_.push_back(std::move(event));
         return true;
@@ -199,6 +232,7 @@ public:
     }
 
 private:
+    std::uint64_t actor_, generation_;
     std::size_t capacity_;
     std::mutex lock_;
     std::deque<SupervisorControlEvent> queue_;
