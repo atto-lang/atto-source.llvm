@@ -7,8 +7,8 @@ import re
 import sys
 from pathlib import Path
 
-UNPROVEN = re.compile(r"!(?:tbaa(?:\\.struct)?|alias\\.scope|noalias|llvm\\.loop)\\b|\\bnoalias\\b")
-FAST_MATH = re.compile(r"\\b(?:fadd|fsub|fmul|fdiv|frem|fcmp)\\s+(?:fast|nnan|ninf|nsz|arcp|contract|afn|reassoc)\\b")
+UNPROVEN = re.compile(r"!(?:tbaa(?:\.struct)?|alias\.scope|noalias|llvm\.loop)\b|\bnoalias\b")
+FAST_MATH = re.compile(r"\b(?:fadd|fsub|fmul|fdiv|frem|fcmp)\s+(?:fast|nnan|ninf|nsz|arcp|contract|afn|reassoc)\b")
 
 
 class UnsafeOptimizationMetadata(ValueError):
@@ -29,7 +29,7 @@ def inspect(ir):
         if FAST_MATH.search(line):
             findings.append(f"line {line_number}: floating-point fast-math requires explicit semantics")
     if findings:
-        raise UnsafeOptimizationMetadata("\\n".join(findings))
+        raise UnsafeOptimizationMetadata("\n".join(findings))
     return {"status": "UNPROVEN_OPTIMIZATIONS_ABSENT", "lines_checked": len(ir.splitlines()),
             "actual_vectorization_verified": False, "alias_disjointness_verified": False}
 
