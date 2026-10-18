@@ -49,14 +49,14 @@ static void request_rate_and_failed_connect_release() {
 
     std::vector<TrustedUntrustedNetworkQuota::Lease> sockets;
     for (int i = 0; i < 10; ++i) {
-        auto s = quota.try_open_tcp();
+        auto s = quota.try_open_tcp(static_cast<std::uint64_t>(i) * 100000000ULL);
         check(s.status == Status::admitted);
         sockets.emplace_back(std::move(s.lease));
     }
-    check(quota.try_open_tcp().status == Status::too_many_connections);
+    check(quota.try_open_tcp(900000000ULL).status == Status::too_many_connections);
     sockets[0].release();
     sockets[0].release();
-    auto failed = quota.try_open_tcp();
+    auto failed = quota.try_open_tcp(900000000ULL);
     check(failed.status == Status::admitted);
     failed.lease.release();
     for (auto& s : sockets) s.release();
@@ -64,7 +64,9 @@ static void request_rate_and_failed_connect_release() {
 }
 
 static void concurrent_tcp_open_is_bounded() {
-    TrustedUntrustedNetworkQuota quota({}, 0);
+    TrustedUntrustedNetworkQuota::Policy policy{};
+    policy.tcp_burst = 10; // isolate simultaneous socket cap from dial rate
+    TrustedUntrustedNetworkQuota quota(policy, 0);
     std::atomic<bool> start{false}, release{false};
     std::atomic<int> ready{0}, finished{0}, admitted{0};
     std::vector<std::thread> threads;
@@ -72,7 +74,7 @@ static void concurrent_tcp_open_is_bounded() {
         threads.emplace_back([&] {
             ready.fetch_add(1);
             while (!start.load()) std::this_thread::yield();
-            auto attempt = quota.try_open_tcp();
+            auto attempt = quota.try_open_tcp(0);
             if (attempt.status == Status::admitted) ++admitted;
             ++finished;
             while (!release.load()) std::this_thread::yield();
@@ -84,17 +86,31 @@ static void concurrent_tcp_open_is_bounded() {
     check(admitted.load() == 10);
     check(quota.tcp_connections() == 10);
     quota.close();
-    check(quota.try_open_tcp().status == Status::closed);
+    check(quota.try_open_tcp(0).status == Status::closed);
     release = true;
     for (auto& t : threads) t.join();
     check(quota.tcp_connections() == 0);
+}
+
+static void connection_attempt_churn_is_rate_limited() {
+    TrustedUntrustedNetworkQuota quota({}, 0);
+    auto a = quota.try_open_tcp(0);
+    auto b = quota.try_open_tcp(0);
+    check(a.status == Status::admitted && b.status == Status::admitted);
+    a.lease.release();
+    b.lease.release(); // failures still spend dial tokens
+    check(quota.tcp_connections() == 0);
+    check(quota.try_open_tcp(0).status == Status::rate_limited);
+    auto c = quota.try_open_tcp(100000000ULL);
+    check(c.status == Status::admitted);
+    c.lease.release();
 }
 
 static void invalid_policy_fails_closed() {
     TrustedUntrustedNetworkQuota::Policy p;
     p.max_tcp_connections = 0;
     TrustedUntrustedNetworkQuota invalid(p, 0);
-    check(invalid.try_open_tcp().status == Status::invalid_policy);
+    check(invalid.try_open_tcp(0).status == Status::invalid_policy);
     check(invalid.try_start_http(0).status == Status::invalid_policy);
 }
 
@@ -102,6 +118,7 @@ int main() {
     http_in_flight_is_distinct_from_start_rate();
     request_rate_and_failed_connect_release();
     concurrent_tcp_open_is_bounded();
+    connection_attempt_churn_is_rate_limited();
     invalid_policy_fails_closed();
     std::cout << "UNTRUSTED_NETWORK_QUOTA_HOST_ONLY_PASS\n";
 }
