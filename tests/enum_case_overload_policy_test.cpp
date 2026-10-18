@@ -98,6 +98,12 @@ int main() {
     rejects([&] { checkFamily({f(oversize)}, registry); });
     const std::vector<Signature> tooMany(MaxCandidates+1, aa);
     rejects([&] { checkFamily(tooMany, registry); });
+    Registry oversizedRegistry;
+    for (std::size_t i = 0; i <= MaxEnums; ++i) {
+        std::string id = "root.E" + std::to_string(i);
+        oversizedRegistry.emplace(id, EnumInfo{id, {"A"}, true});
+    }
+    rejects([&] { checkFamily({f({count})}, oversizedRegistry); });
     rejects([&] { checkFamily({f({Parameter::whole("root. Foo")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole(
             std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo")})}, registry); });
