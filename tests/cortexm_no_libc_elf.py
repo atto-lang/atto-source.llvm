@@ -112,6 +112,7 @@ def verify_vector_table(elf_path):
            "expected ET_EXEC standalone firmware")
     verify(struct.unpack_from("<H", raw, 18)[0] == 40,
            "expected EM_ARM firmware")
+    entry = struct.unpack_from("<I", raw, 24)[0]
     phoff = struct.unpack_from("<I", raw, 28)[0]
     phentsize, count = struct.unpack_from("<HH", raw, 42)
     verify(phentsize >= 32 and 0 < count <= 32,
@@ -119,33 +120,52 @@ def verify_vector_table(elf_path):
     verify(phoff <= len(raw) and count <= (len(raw)-phoff)//phentsize,
            "ELF program headers exceed file bounds")
     flash_load = False
+    seen_loads = []
+    executable = []
+    reset_address = None
     for i in range(count):
         off = phoff + i * phentsize
-        kind, file_off, vaddr, paddr, filesz, memsz = struct.unpack_from(
-            "<IIIIII", raw, off)
+        kind, file_off, vaddr, paddr, filesz, memsz, flags, alignment = (
+            struct.unpack_from("<IIIIIIII", raw, off))
         if kind != 1:  # PT_LOAD
             continue
         verify(file_off <= len(raw) and filesz <= len(raw)-file_off,
                "truncated firmware load segment")
         verify(memsz >= filesz, "firmware PT_LOAD memsz smaller than filesz")
-        verify((FLASH_BEGIN <= vaddr and vaddr + memsz <= FLASH_END)
-               or (RAM_BEGIN <= vaddr and vaddr + memsz <= RAM_END),
+        verify(paddr == vaddr,
+               "firmware physical load address differs from virtual address")
+        verify((FLASH_BEGIN <= paddr and paddr + memsz <= FLASH_END)
+               or (RAM_BEGIN <= paddr and paddr + memsz <= RAM_END),
                "ELF PT_LOAD outside physical Cortex-M3 board memory")
-        # No RAM initializers or zeroing runtime has been implemented.
-        # A scalar guest needing .data/.bss would otherwise link and
-        # silently run with undefined startup state.
-        if RAM_BEGIN <= vaddr < RAM_END:
+        verify(not (flags & 0x1 and flags & 0x2),
+               "writable executable ELF PT_LOAD is forbidden")
+        for other_start, other_end in seen_loads:
+            if memsz and other_end > other_start:
+                verify(paddr >= other_end or paddr + memsz <= other_start,
+                       "overlapping firmware PT_LOAD segments")
+        seen_loads.append((paddr, paddr + memsz))
+        if flags & 0x1 and filesz:
+            executable.append((vaddr, vaddr + filesz))
+        # Without .data copying and .bss zeroing in the minimal startup,
+        # RAM load segments cannot be treated as working freestanding code.
+        if RAM_BEGIN <= paddr < RAM_END:
             verify(memsz == 0,
                    "freestanding scalar startup cannot initialize RAM PT_LOAD")
-        if vaddr == FLASH_BEGIN:
+        if paddr == FLASH_BEGIN:
+            verify(not flash_load, "duplicate vector-table flash PT_LOAD")
             verify(filesz >= 8, "vector table is not part of the flash image")
             sp, reset = struct.unpack_from("<II", raw, file_off)
             verify(sp == RAM_END and sp % 8 == 0,
                    "reset stack pointer outside QEMU board RAM")
             verify(reset & 1 and FLASH_BEGIN < (reset & ~1) < FLASH_END,
                    "reset vector must be an in-flash Thumb code address")
+            reset_address = reset
             flash_load = True
     verify(flash_load, "no flash PT_LOAD contains the reset vector")
+    verify(entry == reset_address,
+           "ELF entry point must match the Thumb reset vector")
+    verify(any(lo <= (reset_address & ~1) < hi for lo, hi in executable),
+           "reset vector does not point into an executable load segment")
 
 def main():
     parser = argparse.ArgumentParser()
