@@ -303,8 +303,8 @@ private:
         else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
         require(")");
         if (max > 1)
-            fail("parallel actor threads require state effects and scheduler admission; "
-                 "max > 1 is not yet supported");
+            fail("parallel actor threads require compiler-proven per-turn actor state isolation, "
+                 "state effects and scheduler admission; max > 1 is not yet supported");
         return {1, max};
     }
 
