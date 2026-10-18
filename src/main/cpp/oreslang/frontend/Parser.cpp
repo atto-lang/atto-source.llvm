@@ -349,6 +349,7 @@ private:
                 // A leading bare 'self' is a construction-only receiver
                 // marker, erased before caller-visible arity selection.
                 const bool explicit_self = accept("self");
+                ctor.binds_self = explicit_self;
                 bool closed = accept(")");
                 if (!closed) {
                     if (explicit_self) require(",");
