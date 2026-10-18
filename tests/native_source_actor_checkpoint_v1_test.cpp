@@ -3,6 +3,7 @@
 #include <openssl/evp.h>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
