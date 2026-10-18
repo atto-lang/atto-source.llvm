@@ -144,14 +144,18 @@ static ActorStep cancellable_frame_handler(void* raw, ActorMessage message,
         state.violations.fetch_add(1);
     return {StepKind::cooperate, 0, 0};
 }
-static void cancel_compiled_frame(void* raw, ActorMessage message) noexcept {
+static bool cancel_compiled_frame(void* raw, ActorMessage message) noexcept {
     auto& state = *static_cast<CancelFrameState*>(raw);
-    if (message.id != 1 || HungryCarrier::active_heap() == nullptr ||
-            state.frame.state != 1)
-        state.violations.fetch_add(1);
+    bool ok = message.id == 1 && HungryCarrier::active_heap() != nullptr &&
+              state.frame.state == 1;
+    if (!ok) state.violations.fetch_add(1);
     oreslang_rt_scalar_frame_cancel(&state.frame);
-    if (state.frame.state != 3) state.violations.fetch_add(1);
+    if (state.frame.state != 3) {
+        state.violations.fetch_add(1);
+        ok = false;
+    }
     state.cleanups.fetch_add(1);
+    return ok;
 }
 static std::int64_t cancel_frame_no_io(void*, std::int64_t,
                                       const std::atomic<bool>&) noexcept {
