@@ -97,7 +97,7 @@ CASES = {
         "native Task block lowering unsupported",
     ),
     "task-valued-block": (
-        "pub fnc main(): int { let Task<int> t = nb { return 7; }; return 0; }",
+        "pub fnc main(): int { return nb { return 7; }; }",
         "native Task block lowering unsupported",
     ),
     "recover-statement": (
