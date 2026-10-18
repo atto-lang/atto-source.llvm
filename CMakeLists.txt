@@ -1994,3 +1994,22 @@ if(BUILD_TESTING)
         message(STATUS "OpenSSL Crypto unavailable: skipping host checkpoint checksum parity test")
     endif()
 endif()
+
+# Trusted-host scalar hot-upgrade transaction proof only. This exercises
+# real native generation leases, deterministic scalar checkpoint/restore and
+# rollback, not compiled .ores actor code or sandboxed AOT executable loading.
+if(BUILD_TESTING AND OpenSSL_FOUND)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-counter-upgrade-proof-test
+        tests/native_counter_hot_upgrade_proof_test.cpp)
+    target_include_directories(oreslang-native-counter-upgrade-proof-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-counter-upgrade-proof-test PRIVATE
+        OpenSSL::Crypto Threads::Threads)
+    target_compile_options(oreslang-native-counter-upgrade-proof-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_counter_hot_upgrade_transaction_host_only
+        COMMAND oreslang-native-counter-upgrade-proof-test)
+    set_tests_properties(native_counter_hot_upgrade_transaction_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
