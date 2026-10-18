@@ -52,7 +52,7 @@ When `qemu-system-arm` is available, CMake adds
 3. Requires both a clean emulator exit and the guest-derived
    `ORESLANG_BAREMETAL_GUEST_PASS value=31` marker.
 4. Rebuilds only the startup with a modified scalar input `9,5`, leaving
-   the Oreslang guest object unchanged. Requires the mismatch marker and
+   the Oreslang guest object unchanged. Requires a nonzero emulator exit, the mismatch marker, and
    absence of the success marker to reject a fake unconditional print.
 
 Run explicitly:
