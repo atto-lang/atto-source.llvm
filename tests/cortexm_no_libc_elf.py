@@ -342,6 +342,37 @@ def main():
                    and "ORESLANG_BAREMETAL_GUEST_PASS" not in neg_output,
                    "negative guest did not take mismatch branch: "
                    + str(neg_code) + " " + neg_output)
+            # Exercise *nonzero high halves* of both i64 arguments and the
+            # i64 return. 3*(2**32+9) + (2**32+4) = 4*2**32 + 31.
+            # The previous 9,4 case would not detect a lost high register.
+            wide_source = STARTUP
+            for old, new in (
+                    ("movs r1, #0", "movs r1, #1"),
+                    ("movs r3, #0", "movs r3, #1"),
+                    ("cmp r1, #0", "cmp r1, #4"),
+                    ("ORESLANG_BAREMETAL_GUEST_PASS value=31",
+                     "ORESLANG_BAREMETAL_GUEST_PASS value=17179869215")):
+                verify(wide_source.count(old) == 1,
+                       "wide AAPCS32 ABI fixture mismatch: " + old)
+                wide_source = wide_source.replace(old, new, 1)
+            (root / "startup-wide.S").write_text(wide_source)
+            run(common + ["-c", str(root / "startup-wide.S"), "-o",
+                          str(root / "startup-wide.o")])
+            wide_elf = root / "wide.elf"
+            run([args.clang, "--target=thumbv7m-none-eabi",
+                 "-fuse-ld=lld", "-nostdlib", "-nodefaultlibs",
+                 "-Wl,--no-undefined",
+                 str(root / "guest.o"), str(root / "startup-wide.o"),
+                 "-Wl,-T," + str(root / "linker.ld"),
+                 "-o", str(wide_elf)])
+            verify_vector_table(wide_elf)
+            wide_code, wide_output = qemu_execute(wide_elf)
+            verify(wide_code == 0 and
+                   "ORESLANG_BAREMETAL_GUEST_PASS value=17179869215"
+                   in wide_output and "ORESLANG_BAREMETAL_GUEST_FAIL"
+                   not in wide_output,
+                   "QEMU failed nonzero-high i64 argument/return case: " + wide_output)
+            print("Oreslang Cortex-M i64 high-register ABI proof PASS")
             print("Oreslang Cortex-M no-OS QEMU positive/negative guest PASS")
 
     print("Oreslang Cortex-M standalone no-libc ELF link and symbol gate PASS")
