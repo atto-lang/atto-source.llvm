@@ -95,6 +95,7 @@ public:
             return true;
         }
 
+        // Published cancellation releases credits, never future burst tokens.
         bool abort_before_dispatch(std::uint64_t trusted_nanos) noexcept {
             if (state_.load() != 0 || !gate_) return false;
             std::lock_guard<std::mutex> guard(gate_->lock_);
@@ -157,13 +158,13 @@ private:
         if (first.status != Status::admitted) return {first.status, Lease{}};
         auto second = admit(supervisor.quota_, now, http);
         if (second.status != Status::admitted) {
-            if (!first.lease.abort_before_dispatch(now)) std::abort();
+            if (!first.lease.rollback_unpublished(now)) std::abort();
             return {second.status, Lease{}};
         }
         auto third = admit(tenant.quota_, now, http);
         if (third.status != Status::admitted) {
-            if (!second.lease.abort_before_dispatch(now)
-                    || !first.lease.abort_before_dispatch(now)) std::abort();
+            if (!second.lease.rollback_unpublished(now)
+                    || !first.lease.rollback_unpublished(now)) std::abort();
             return {third.status, Lease{}};
         }
         // All three reservations now belong to one logical lease.
