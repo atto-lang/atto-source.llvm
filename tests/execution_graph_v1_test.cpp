@@ -93,6 +93,17 @@ int main() {
         });
         expect_fail([&] { (void) executorRejected.get(); }, "executor budget");
 
+        auto inlineRejected = over.submit_cpu([](std::function<void()> task) {
+            task();
+        });
+        expect_fail([&] { (void) inlineRejected.get(); }, "queued executor");
+
+        auto inlineThenThrow = plan.submit_cpu([](std::function<void()> task) {
+            task();
+            throw std::runtime_error("inline then rejected");
+        });
+        expect_fail([&] { (void) inlineThenThrow.get(); }, "inline then rejected");
+
         // Admission failures can occur after the external scheduler retained
         // the closure. That rejected task must be inert if delivered later.
         std::function<void()> orphan;
