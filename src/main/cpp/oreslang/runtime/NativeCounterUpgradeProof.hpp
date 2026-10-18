@@ -103,12 +103,11 @@ public:
     Image image() const { return gate_.image(); }
 
     std::int64_t value() const {
-        std::shared_ptr<Version> version;
-        {
-            std::lock_guard<std::mutex> guard(mutex_);
-            version = active_;
-        }
-        return version->state.snapshot().value();
+        // Hold the routing lock until the scalar snapshot is complete.
+        // Otherwise a concurrent commit can retire the copied old cell
+        // between routing lookup and snapshot, producing a false failure.
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_->state.snapshot().value();
     }
 
     void deliver(std::int64_t message) {
