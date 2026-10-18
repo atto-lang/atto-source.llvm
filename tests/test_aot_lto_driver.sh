@@ -33,12 +33,12 @@ export ORESLANG_LLVMC="$work/mock-compiler"
 printf 'previous executable\n' >"$work/app"
 # Baseline must not request LTO.
 : >"$MOCK_CLANG_LOG"
-ORESLANG_AOT_LTO=off "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
+ORESLANG_AOT_LTO=off bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
 ! grep -q -- '-flto' "$MOCK_CLANG_LOG"
 # Full and Thin modes run a toolchain probe plus final IR link.
 for mode in full thin; do
   : >"$MOCK_CLANG_LOG"
-  ORESLANG_AOT_LTO="$mode" "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
+  ORESLANG_AOT_LTO="$mode" bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
   if [[ "$mode" == full ]]; then
     grep -qx -- '-flto' "$MOCK_CLANG_LOG"
   else
@@ -48,11 +48,11 @@ for mode in full thin; do
 done
 # An unsupported option fails before publication, preserving existing output.
 printf 'preserved\n' >"$work/app"
-if MOCK_FAIL_LTO=1 ORESLANG_AOT_LTO=full "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
+if MOCK_FAIL_LTO=1 ORESLANG_AOT_LTO=full bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
   echo 'unexpected successful LTO fallback' >&2; exit 1
 fi
 [[ "$(cat "$work/app")" == preserved ]]
-if ORESLANG_AOT_LTO=bogus "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
+if ORESLANG_AOT_LTO=bogus bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"; then
   echo 'unexpected acceptance of unknown LTO mode' >&2; exit 1
 fi
 [[ "$(cat "$work/app")" == preserved ]]
