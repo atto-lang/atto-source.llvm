@@ -162,6 +162,91 @@ int main() {
         limited.complete(next_root);
     }
 
+    // A route frame is an exclusive, one-shot publication candidate.
+    // A rejected enqueue may release only the lease held by that sender,
+    // while an accepted enqueue irrevocably seals its frame identity.
+    {
+        ActorPipeRouteLedger publication(stages(), edges(), 30, 4);
+        auto origin = publication.ingress("source");
+        {
+            auto first = publication.claim_publication(origin);
+            rejected([&] { (void)publication.claim_publication(origin); },
+                     "second native publisher stole a live route claim");
+            check(!origin->published(), "uncommitted route was published");
+            // First lease's destructor, NOT the rejected contender,
+            // is solely responsible for freeing the claim.
+        }
+        {
+            auto retry = publication.claim_publication(origin);
+            retry.commit(); // successful mailbox tryWrite boundary
+            retry.abort();  // cannot undo already accepted data
+        }
+        check(origin->published(), "accepted native publication marker was lost");
+        rejected([&] { (void)publication.claim_publication(origin); },
+                 "published native route frame was replayed");
+        publication.complete(origin);
+        check(origin->published(),
+              "native route retirement incorrectly reset publication status");
+        publication.close();
+    }
+
+    // Eight contending host publishers must produce exactly one claim.
+    // Keep the successful lease alive until all losing contenders exit,
+    // otherwise later sequential reservations would be legal retries.
+    {
+        ActorPipeRouteLedger contested(stages(), edges(), 31, 4);
+        auto origin = contested.ingress("source");
+        std::atomic<int> ready{0};
+        std::atomic<int> attempted{0};
+        std::atomic<int> won{0};
+        std::atomic<int> denied{0};
+        std::atomic<bool> go{false};
+        std::vector<std::thread> contenders;
+        for (int t = 0; t < 8; ++t) {
+            contenders.emplace_back([&] {
+                ready.fetch_add(1, std::memory_order_acq_rel);
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                try {
+                    auto claim = contested.claim_publication(origin);
+                    won.fetch_add(1, std::memory_order_acq_rel);
+                    attempted.fetch_add(1, std::memory_order_acq_rel);
+                    while (attempted.load(std::memory_order_acquire) < 8)
+                        std::this_thread::yield();
+                    claim.commit();
+                } catch (const std::logic_error&) {
+                    denied.fetch_add(1, std::memory_order_acq_rel);
+                    attempted.fetch_add(1, std::memory_order_acq_rel);
+                }
+            });
+        }
+        while (ready.load(std::memory_order_acquire) != 8)
+            std::this_thread::yield();
+        go.store(true, std::memory_order_release);
+        for (auto& contender : contenders) contender.join();
+        check(won == 1 && denied == 7 && origin->published(),
+              "native competing publishers admitted duplicate correlation DATA");
+        contested.complete(origin);
+        check(contested.outstanding() == 0, "native claim leaked route credits");
+    }
+
+    // Claim leases only refund the frame they actually acquired; a
+    // failed contender never receives the authority to abort the winner.
+    {
+        ActorPipeRouteLedger rejected_send(stages(), edges(), 32, 3);
+        auto original = rejected_send.ingress("source");
+        auto winner = rejected_send.claim_publication(original);
+        rejected([&] { (void)rejected_send.claim_publication(original); },
+                 "losing sender received an abort-capable publication lease");
+        rejected([&] { (void)rejected_send.claim_publication(original); },
+                 "losing sender released winner's claim during cleanup");
+        winner.abort(); // actual owner receives definite rejection
+        auto retry = rejected_send.claim_publication(original);
+        retry.commit();
+        check(original->published(), "retry failed to commit accepted DATA");
+        rejected_send.complete(original);
+    }
+
     // Selection/retirement of 2000 independent child frames is synchronized.
     ActorPipeRouteLedger parallel(stages(), edges(), 9, 2001);
     const auto parent = parallel.ingress("source");
