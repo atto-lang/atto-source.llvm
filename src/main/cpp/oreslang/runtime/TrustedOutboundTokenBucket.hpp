@@ -44,9 +44,10 @@ public:
         return true;
     }
 
-    // Call only for an already charged send that did NOT become visible.
-    // Successful user message delivery never refunds rate/byte tokens.
-    bool refund_failed_send(std::uint64_t count, std::uint64_t trusted_nanos) noexcept {
+    // INTERNAL ONLY: reverse a tentative scope charge that was never published.
+    // Published reservations permanently spend start-rate tokens; otherwise
+    // late guest cancellation could mint capacity after the refill epoch.
+    bool rollback_unpublished(std::uint64_t count, std::uint64_t trusted_nanos) noexcept {
         if (!valid_ || count == 0 || count > burst_) return false;
         std::lock_guard<std::mutex> lock(mutex_);
         refill(trusted_nanos);
