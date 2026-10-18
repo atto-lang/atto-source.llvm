@@ -42,14 +42,16 @@ class NativeEnumGuestAot(unittest.TestCase):
             ll = pathlib.Path(temp) / "guest.ll"
             out = pathlib.Path(temp) / "guest"
             ll.write_text(ir, encoding="utf-8")
-            link = subprocess.run([self.clang, "-x", "ir", "-O0",
-                                   str(ll), "-o", str(out)],
-                                  capture_output=True, text=True, timeout=30,
-                                  check=False)
-            self.assertEqual(link.returncode, 0, link.stderr)
-            native = subprocess.run([str(out)], capture_output=True,
-                                    text=True, timeout=10, check=False)
-            self.assertEqual(native.returncode, 10, native.stderr)
+            for optimization in ("-O0", "-O2"):
+                with self.subTest(optimization=optimization):
+                    link = subprocess.run([self.clang, "-x", "ir", optimization,
+                                           str(ll), "-o", str(out)],
+                                          capture_output=True, text=True,
+                                          timeout=30, check=False)
+                    self.assertEqual(link.returncode, 0, link.stderr)
+                    native = subprocess.run([str(out)], capture_output=True,
+                                            text=True, timeout=10, check=False)
+                    self.assertEqual(native.returncode, 10, native.stderr)
 
     def test_retagging_changes_native_value_but_not_exact_dispatch(self):
         original = pathlib.Path(self.fixture).read_text(encoding="utf-8")
