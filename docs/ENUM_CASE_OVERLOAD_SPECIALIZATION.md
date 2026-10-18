@@ -27,6 +27,16 @@ For this staged v2 AST, wire tags are **positive, monotonically increasing signe
 
 The first executable milestone should support **nullary enum case values** with explicit nominal type refinement and static selection. In expression position `Foo.A` is intended to be a nullary **value**; the old #907 evaluator currently treats enum members as constructor callables even when payloadless, so it must be migrated deliberately. Future payload-bearing cases require an explicit constructor; an unloaded old runtime must never reinterpret nullary case values as callable targets. Preserve old wire tags and payload ownership through migration, or reject compatibility.
 
+## Nullary enum AOT schema v2: visibility and backend parity
+
+The staged **host-only**, non-executable Java `EnumTag32Plan` and native C++ `EnumTag32Layout` now encode *identical canonical schema bytes*: domain `ores-nullary-enum-tag32-schema-v2`, resolved fully qualified enum ID, `public`/`private` export visibility, decimal case count, then declaration-ordered case names and positive big-endian 32-bit wire tags. Text fields are UTF-8 framed with unsigned big-endian 32-bit byte lengths. Java hashes these exact bytes with SHA-256; native supplies the exact byte stream for the matching downstream hash. The previous `v1` digest **must not be accepted as a v2 cache hit**, even when the cases and tags are unchanged. Public/private visibility changes invalidate a cached AOT or import schema independently of wire-tag equality; runtime tags never choose overload targets.
+
+Cross-backend *staged nullary AOT identifiers* currently require the conservative ASCII lexical subset `[A-Za-z_][A-Za-z0-9_]*` for each nominal segment/case. The general Oreslang lexer is **not** being narrowed; Unicode source spellings must fail closed at the AOT compatibility boundary until the Java and native Unicode classifiers have an approved common canonicalization policy. This is an explicit parity limitation, not a claim that arbitrary Unicode guest cases execute.
+
+The versioned `contracts/v2/enum_tag32_schema_v2_vectors.json` and `test_enum_case_nullary_tag32.py` fixtures are byte-identical in **Java, LLVM, .NET, WASM and Forge**; their public/private SHA-256 goldens, positive/negative tag checks and invalidation semantics are compiler-host model requirements. The currently unimplemented .NET/WASM/Forge guest backends do not become executable by sharing these fixtures.
+
+**Executed evidence (not full compiler CI):** in an isolated local workspace, the exact Git blobs for Java `EnumAstIdentity.java` (`2a6ecea`), `EnumTag32Plan.java` (`068accb`), and C++ `EnumTag32Layout.hpp` (`9bf30ef`) were SHA-1-verified against their current source-repository Git blob IDs. The two Java classes compiled with **JDK 21** under `--release 21 -Xlint:all -Werror` and passed 5,000 private/public fingerprint cases and negative schema checks. The exact C++ header compiled and passed under **both GCC and Clang with ASan/UBSan**. The shared Python test blob (`17da647`) independently passed 3/3 locally. This only validates these isolated leaf implementations; it does **not** validate JDK25, Maven, TypeChecker, GraalVM guest execution, Native Image, LLVM code generation or whole-repository exact-head CI. Independently authored source-free funded Actions suite [run #39096343262](https://github.com/sagitta-stack/sagitta-infra/actions/runs/39096343262) also passed; it is not a source mirror.
+
 ## Admission: safe overlap lattice
 
 Resolve lexical owner, callable domain (MODULE, INSTANCE, STATIC), name, exact value arity, aliases, imports, and ownership first. `fnc` and `routine` occupy one MODULE domain. A same-arity family may vary only at **eligible enum positions**, and any unchanged ordinary positions must have precisely the same canonical declared type ID. No primitive/class/record/return/effect/generic-count overloading is introduced.
@@ -75,3 +85,47 @@ The source-owned `contracts/v2/test_enum_case_slot_abi_vectors.py` fixture was f
 Private source transfer into another GitHub organization is **not currently permitted**: security incident [platform-conformance #22](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/22) and follow-up private-carrier incident #77 remain unresolved. Destination privacy, runner capacity, or a matching Git tree are insufficient for export approval. Do not mirror private source without the protected, independently approved authorization process.
 
 **Current status:** the draft branches now include a real enum parser/AST, a source-AST-to-host-only proof adapter, Java/C++ static overload oracles, shared exhaustive finite relation fixtures, defensive type/ownership/runtime/optimizer rejection of unlinked enum AST, and native guest source fail-closed diagnostics. This is **not executable enum-case overloading**. The source-AST adapter derives tentative identities from source spellings, not typechecker-authenticated linked declarations; it is unsafe for runtime dispatch. Real TypeChecker/OwnershipChecker selected-call binding, enum values, virtual slot mapping, imports, LLVM guest lowering, and exact-tree test evidence remain mandatory. Java #1049's staged enum AST (`EnumCase(name,payload,int tag)`) and older Java #907's enum AST (`EnumVariant(name,record,long tag)`) are incompatible and require a reviewed semantic migration, never an old-branch wholesale overwrite.
+
+## 2026-10-17 AOT value representation and AST security follow-up
+
+This draft now has a **compiler-only nullary enum tag32 layout** derived from
+real parsed `Ast.EnumDecl` data through `EnumCaseSourceBindings.compileLocalProof`.
+For a locally resolved `Foo`, each nullary `Foo.A` is represented as its
+positive 32-bit declared wire tag in a statically typed i32 register. The
+compiler must retain the **nominal type identity separately**; numeric tag
+equality across two unrelated enums never establishes value or overload
+interchangeability. The tag is a *value*, never the runtime overload selector.
+
+Java `EnumTag32Plan` and LLVM `EnumTag32Layout.hpp` now share a canonical
+schema-byte encoding: SHA-256 over length-prefixed UTF-8 version, full
+qualified nominal ID, case count, and declaration-ordered case IDs with
+big-endian signed-positive i32 wire tags. This digest is for **AOT cache
+invalidation**, not callable ABI overload identity; it changes on wire tag,
+case, or enum identity modifications. The `eos2` overload symbol still keys
+on canonical enum/case *declaration* IDs, **not** numeric tags.
+
+The Java source AST now validates enum and named-pattern identifiers at direct
+record construction, not solely through the parser: scanner-compatible BMP
+identifier character rules, malformed Unicode/invisibles, pattern owner/case
+shape and 512-byte canonical symbol segments are checked before a proof may
+be constructed. This is a lexical hygiene gate, not a substitute for an
+authoritative import/typechecker resolver.
+
+The **first executable native-guest step remains unimplemented**:
+LLVM Parser.hpp has no enum/variant source AST or native enum-expression
+lowering; TypeChecker currently rejects enum declarations as syntax-only;
+there is no checked `Foo.A` to typed register to exact overload call pipeline.
+The new Java plan is only for fully nullary local enums, and native name
+parity currently covers ASCII IDs only. General payloads, imported enums,
+actor messages, inherited methods and Unicode cross-backend semantic parity
+must remain fail-closed.
+
+Local exact-blob isolated component results: Java `EnumAstIdentity` 33 checks
+and `EnumTag32Plan` 21 checks under JDK21 strict warnings; native
+`EnumTag32Layout.hpp` passed its golden/vector host smoke under Clang C++17
+debug and optimized, and GCC C++17 optimized `-Werror`. Canonical fixture
+`local_unit.__root__.Foo{A=5,B=17,C=31}` has schema SHA-256
+`d1348f4be12ad08ecddbd97fda273dcaf65b0c492958ef69f74e477f87112844`.
+**These tests do not establish Graal JDK25 guest execution, Native Image,
+LLVM native guest execution, CTest/ASan, or Actions success.**
+
