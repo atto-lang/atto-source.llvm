@@ -24,16 +24,19 @@ namespace detail {
 class ActorGraphHeapIdSource final {
     inline static std::atomic<std::uint64_t> next_{1};
 public:
-    static std::uint64_t mint() {
-        auto candidate = next_.load(std::memory_order_relaxed);
+    // Explicit counter argument makes the exhaustion boundary testable
+    // without perturbing the production-global ID source.
+    static std::uint64_t mint_from(std::atomic<std::uint64_t>& counter) {
+        auto candidate = counter.load(std::memory_order_relaxed);
         for (;;) {
             if (candidate == 0)
                 throw std::overflow_error("actor graph heap identity space exhausted");
-            if (next_.compare_exchange_weak(candidate, candidate + 1,
+            if (counter.compare_exchange_weak(candidate, candidate + 1,
                     std::memory_order_relaxed, std::memory_order_relaxed))
                 return candidate;
         }
     }
+    static std::uint64_t mint() { return mint_from(next_); }
 };
 } // namespace detail
 
