@@ -84,7 +84,7 @@ static void concurrent_tenant_cap_cannot_overspend() {
     auto p = policy();
     p.tcp_burst = 10;
     Gate::Scope child(gate, p, 0), supervisor(gate, p, 0), tenant(gate, p, 0);
-    std::atomic<int> ready{0}, accepted{0};
+    std::atomic<int> ready{0}, finished{0}, accepted{0};
     std::atomic<bool> start{false}, release{false};
     std::vector<std::thread> threads;
     for (int i = 0; i < 24; ++i) {
@@ -93,12 +93,13 @@ static void concurrent_tenant_cap_cannot_overspend() {
             while (!start.load()) std::this_thread::yield();
             auto attempt = gate.try_open_tcp(child, supervisor, tenant, 0);
             if (attempt.status == Status::admitted) ++accepted;
+            ++finished;
             while (!release.load()) std::this_thread::yield();
         });
     }
     while (ready.load() != 24) std::this_thread::yield();
     start = true;
-    while (accepted.load() < 10) std::this_thread::yield();
+    while (finished.load() != 24) std::this_thread::yield();
     check(accepted.load() == 10);
     release = true;
     for (auto& thread : threads) thread.join();
