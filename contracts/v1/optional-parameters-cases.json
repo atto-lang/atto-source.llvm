@@ -1320,6 +1320,83 @@
         }
       ],
       "error": "malformed underscore"
+    },
+    {
+      "id": "reject-omit-payload-side-effect",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit",
+          "expr": "effect()",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-omit-masquerading-as-None",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit",
+          "expr": "None"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-typed-underscore-payload",
+      "error": "underscore omission cannot carry a typed value",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "underscore",
+          "expr": "_",
+          "value_type": "string"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ]
+    },
+    {
+      "id": "reject-named-omit-payload",
+      "error": "omit marker cannot carry a value",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "b",
+          "kind": "omit",
+          "expr": "effect()"
+        },
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        }
+      ]
     }
   ],
   "overloads": [
