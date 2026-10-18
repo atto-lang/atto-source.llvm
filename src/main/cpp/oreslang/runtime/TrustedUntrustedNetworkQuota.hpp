@@ -173,9 +173,9 @@ private:
         --count;
         // Only the unconsumed, one-shot reservation may refund start-rate.
         if (kind == Kind::http) {
-            if (!http_start_.refund_failed_send(1, trusted_nanos)) std::abort();
+            if (!http_start_.rollback_unpublished(1, trusted_nanos)) std::abort();
         } else {
-            if (!tcp_start_.refund_failed_send(1, trusted_nanos)) std::abort();
+            if (!tcp_start_.rollback_unpublished(1, trusted_nanos)) std::abort();
         }
     }
 
