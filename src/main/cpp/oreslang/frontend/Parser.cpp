@@ -814,7 +814,8 @@ private:
         while (token_.text != "return") {
             if (token_.text == "do") {
                 Lexer next = lexer_;
-                if (next.next().text == "nb" && next.next().text == "{")
+                const auto first = next.next().text;
+                if ((first == "nb" || first == "task") && next.next().text == "{")
                     fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
             }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
@@ -1216,8 +1217,16 @@ private:
                 fail("native async task lambda lowering unsupported: owned captures and scheduler required");
             }
         }
+        if (token_.text == "task") {
+            Lexer next = lexer_;
+            if (next.next().text == "{")
+                fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
+        }
         if (token_.text == "nb") {
             Lexer next = lexer_;
+            if (next.next().text == "task") {
+                fail("nb task is not a language construct; use task {}, do task {}, or await task {}");
+            }
             if (next.next().text == "{")
                 fail("native Task block lowering unsupported: capture ownership, scheduler and cancellation required");
         }
