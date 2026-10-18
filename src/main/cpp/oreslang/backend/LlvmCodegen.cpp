@@ -270,6 +270,70 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
+
+std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
+    if (plan.functions.empty() || plan.returnCalls.empty()) {
+        throw std::invalid_argument("native enum AOT requires checked declarations and calls");
+    }
+    llvm::LLVMContext context;
+    llvm::Module module("oreslang.native.enum.case.aot", context);
+    llvm::IRBuilder<> builder(context);
+    llvm::Type* i64 = builder.getInt64Ty();
+    llvm::Type* i32 = builder.getInt32Ty();
+    llvm::FunctionType* exactType = llvm::FunctionType::get(i64, {i64}, false);
+    std::unordered_map<std::string, llvm::Function*> compiled;
+    for (const auto& source : plan.functions) {
+        if (source.signature.domain != types::case_overloads::Domain::Module ||
+            source.signature.params.size() != 1) {
+            throw std::invalid_argument("unproven enum AOT callable domain/arity");
+        }
+        const std::string symbol = source.signature.symbolId();
+        auto* native = llvm::Function::Create(exactType,
+            llvm::GlobalValue::ExternalLinkage, symbol, module);
+        if (!compiled.emplace(symbol, native).second ||
+            native->getName().str() != symbol) {
+            throw std::invalid_argument("native enum AOT symbol collision or rename");
+        }
+        llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", native);
+        builder.SetInsertPoint(entry);
+        // The first guest-AOT slice accepts only a source literal return.
+        // The function's source argument is a real native i64 tag parameter,
+        // but overload identity was chosen statically and does not inspect it.
+        builder.CreateRet(llvm::ConstantInt::getSigned(i64, source.returned));
+    }
+    llvm::Function* main = llvm::Function::Create(
+        llvm::FunctionType::get(i32, false),
+        llvm::GlobalValue::ExternalLinkage, "main", module);
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", main);
+    builder.SetInsertPoint(entry);
+    llvm::Value* accumulator = llvm::ConstantInt::get(i64, 0);
+    for (const auto& call : plan.returnCalls) {
+        auto fn = compiled.find(call.exactSymbol);
+        if (fn == compiled.end() || call.tag <= 0) {
+            throw std::invalid_argument("unresolved selected eos2 AOT target or enum tag");
+        }
+        llvm::Value* value = builder.CreateCall(
+            fn->second,
+            {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(call.tag))},
+            "enum.static.call");
+        accumulator = builder.CreateAdd(accumulator, value, "enum.static.sum");
+    }
+    // Native C process ABI returns i32; Oreslang i64 scalar results truncate
+    // only at this externally defined entrypoint boundary.
+    builder.CreateRet(builder.CreateTrunc(accumulator, i32, "exit.code"));
+    std::string diagnostics;
+    llvm::raw_string_ostream errors(diagnostics);
+    if (llvm::verifyModule(module, &errors)) {
+        errors.flush();
+        throw std::runtime_error("invalid native enum AOT LLVM module: " + diagnostics);
+    }
+    std::string ir;
+    llvm::raw_string_ostream output(ir);
+    module.print(output, nullptr);
+    output.flush();
+    return ir;
+}
+
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
