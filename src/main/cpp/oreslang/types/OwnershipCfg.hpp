@@ -51,7 +51,12 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive,
+        // Explicit MIR scheduling boundary: await/select/readch/writech,
+        // cooperative preemption, yield and continuation publication.
+        // A proven pinned-frame loan requires a *different* typed proof
+        // operation; a generic Suspend must reject all outstanding loans.
+        Suspend
     };
     Kind kind;
     std::string place;
@@ -119,6 +124,21 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    if (op.kind == Operation::Kind::Suspend) {
+        // A suspension site is a whole-activation lifetime fence, not a
+        // field operation. Silently accepting a named place could let the
+        // lowerer check only one of several active loans.
+        if (!op.place.empty() || op.loan_id)
+            violation(op.place, "suspend boundary must cover every CFG place");
+        for (const auto& [name, value] : state) {
+            if (value.shared_loans || value.exclusive_loan ||
+                    !value.shared_loan_ids.empty() || value.exclusive_loan_id)
+                violation(name, "borrow live across suspension boundary");
+        }
+        // Ownership state is unchanged; a retained owned value still needs
+        // a separately proven pinned-frame/arena lifetime at runtime.
+        return;
+    }
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -215,6 +235,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
