@@ -109,3 +109,56 @@ execution. Avoid accepting syntax as a placeholder noop.
 A CI pass proves only tests **actually executed on an exact, approved tree**.
 A zero-step GitHub Actions failure is no test evidence. Never copy private
 trees into an unapproved organization, even if it has available minutes.
+
+## Optional ActorGroup membership selector (v1 host extension)
+
+An ActorGroup is **not** an actor, implicit transport broker, replacement
+supervisor, source of new graph edges, or bearer authorization for returning
+DATA. A supervisor may bind one runtime-local ActorGroup to a checked
+routing generation; the graph-to-ActorId bindings are independently sealed.
+
+- The selected candidate set is `current_group_member_actor_ids ∩
+  current_source_outbound_graph_bound_actor_ids`. Compare actual ActorId
+  identities, not class names, group names, array offsets, string aliases,
+  or actor types. Creator membership alone must not imply delivery.
+- Read one immutable copy-on-write group membership snapshot per routing
+  attempt. Joins, leaves, termination, and group closure affect **future**
+  selections, never an already-published immutable route/return path.
+  Group-managed worker lifecycle and cooperative membership remain
+  distinct; closing a group must not stop unrelated membership-only actors.
+- `fanout` selects every eligible outbound edge in original DAG edge
+  order, with an independently bounded mailbox admission and a receipt
+  per attempted destination. Preserve the **original graph edge index** in
+  every receipt, even if a selection omitted earlier edges.
+- `selective_fanout` may only choose a nonempty subsequence of the
+  source's authorized outbound edges. Reject unknown targets, duplicate
+  branches, nonmember targets, and out-of-order/empty selections before
+  reserving child frames or publishing DATA.
+- `round_robin` retains a cursor over the fixed graph's full outbound
+  order and scans cyclically for the first currently eligible member.
+  A selected attempt advances the cursor even when mailbox admission
+  later fails. An empty membership intersection rejects without moving
+  the cursor or reserving a frame.
+- `forward_to` requires its connected target to be a current member.
+  Plain `forward` remains unambiguous only if exactly one target remains.
+  `forward_by_key` keeps its strict UTF-8 graph hash and rejects if the
+  designated actor has left; it must not silently remap persistent keys.
+- All selectors still enforce the scheduler-owned DATA turn, shared actor
+  eligibility, session/generation liveness, exact actor recipient binding,
+  STOP fencing and independent mailbox resource limits. The ActorGroup
+  does not grant cross-runtime or PRIVATE/UNTRUSTED mailbox authority.
+
+A **host group-selection implementation** does NOT by itself enable source
+`self.forward_all` or `self.forward_selected`. Guest fan-out requires a
+typed, immutable per-edge receipt vector that reports partial success
+without promising atomic multi-recipient delivery. Java currently has
+host group selection; LLVM, .NET, Wasm and Forge need matching executable
+tests before any capability/parity claim.
+
+Required group-conformance vectors: one-member fanout; unauthorized
+requested member rejection without consuming the source frame; membership
+join expanding fanout; selected second edge preserving original index;
+two eligible round-robin turns; terminated member skipped next turn; no
+out-of-graph delivery; no hidden replay after partial success; group close
+does not stop merely cooperating actors; and a reply from a previously
+admitted branch follows its sealed origin path after membership changes.
