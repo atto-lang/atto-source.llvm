@@ -372,7 +372,44 @@ static void graph_accounting_model_stress() {
     }
 }
 
+static void concurrent_retirement_drops_once() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 2>;
+    const ActorHeapIdentity owner{89, 29, 3};
+    Heap graph(owner);
+    std::atomic<int> drops{0};
+    const auto object = graph.emplace_owned<DroppableActorObject>(owner, &drops);
+    check(object.has_value(), "no tracked native object for retirement race");
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    carrier.start();
+    carrier.join();
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "joined actor failed to issue retirement authority");
+    std::atomic<bool> go{false};
+    std::atomic<int> successes{0};
+    std::atomic<int> denials{0};
+    auto retire_one = [&] {
+        while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+        try {
+            graph.retire(owner, *proof);
+            successes.fetch_add(1, std::memory_order_relaxed);
+        } catch (const std::logic_error&) {
+            denials.fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+    std::thread a(retire_one), b(retire_one);
+    go.store(true, std::memory_order_release);
+    a.join();
+    b.join();
+    check(successes.load(std::memory_order_relaxed) == 1 &&
+          denials.load(std::memory_order_relaxed) == 1,
+          "two supervisors both reclaimed or both denied actor retirement");
+    check(drops.load(std::memory_order_relaxed) == 1,
+          "native object destructor must run exactly once across double retirement");
+    check(graph.retired(), "successful actor reclamation did not publish retirement");
+}
+
 int main() {
+    concurrent_retirement_drops_once();
     graph_accounting_model_stress();
     standalone_borrow_gate_destruction_fail_closed();
     atomic_mutation_vs_loan_races();
