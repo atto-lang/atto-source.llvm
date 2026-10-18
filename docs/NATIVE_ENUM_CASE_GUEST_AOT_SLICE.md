@@ -109,3 +109,36 @@ CI is not an authorization to mirror private compiler source.
 4. Carry exact `eos2` symbol IDs across imported units with ABI digests.
 5. Implement exact-signature virtual root slots, payload ownership, actor
    messages and full frontend/backend AOT parity.
+
+## October 18 hardening: canonical plan invariant
+
+`enum_aot::validatePlan(const Plan&)` lives in the experimental frontend
+header and is invoked both after source parsing and on entry to the
+production LLVM emitter. It verifies root-local nominal identity, bounded
+and ordered positive wire tags, lexical declaration IDs, one compatible
+same-arity signature family, case-refined vs widened static call targets,
+matching refined-case wire values, exact `eos2` symbol selection, complete
+literal body definitions and safe native return arithmetic.
+
+The native `main` slice currently returns an operating-system exit status,
+not a general Oreslang i64 result. Only a mathematically checked sum within
+0..255 is emitted: intermediate signed-i64 overflow and exit-status
+truncation fail closed. Signed `INT64_MIN` is parsed by an unsigned-magnitude
+conversion to avoid undefined negation; the exact minimum is legal, and
+out-of-range negative/positive magnitudes are rejected.
+
+The directly included C++ harness
+`tests/native_enum_aot_slice_test.cpp` now covers cloned/forged schema,
+wrong exact `eos2` target, mismatched case tag, unknown refinement,
+invalid declaration identity, malformed/duplicate case tags, and i64
+boundary literals. The test is registered as
+`native_enum_source_aot_plan_integrity` in CTest; the real LLVM guest binary
+is registered as `native_enum_guest_aot_executable` when Clang is
+available. The CI workflow separately invokes the original source-header
+test and the executable guest test.
+
+**Evidence limit:** These new C++ tests and the rebuilt LLVM compiler have
+not executed in a trusted source runner as of this revision. Synthetic
+Sagitta contract tests previously passed but are not compiler validation.
+The PR remains draft until actual exact-head compilation, Clang execution,
+and negative regression checks pass.
