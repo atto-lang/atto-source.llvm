@@ -185,5 +185,52 @@ int main() {
         ::close(ends[0]);
         ::close(ends[1]);
     }
+    // Readiness, cancellation and shutdown each compete for one terminal
+    // ticket, but the outcome must have exactly one winner. In particular a
+    // late epoll event may not resurrect a cancelled or stopped watch.
+    for (int round = 0; round < 48; ++round) {
+        NativeEpollReactor contender;
+        expect(contender.start(), "start readiness/cancel/stop contender");
+        int pipe_ends[2]{-1, -1};
+        expect(::pipe(pipe_ends) == 0, "create readiness/cancel/stop pipe");
+        const int flags = ::fcntl(pipe_ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(pipe_ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make readiness/cancel/stop pipe nonblocking");
+        auto ticket = contender.try_watch(pipe_ends[0], EPOLLIN);
+        expect(ticket.has_value(), "admit readiness/cancel/stop watch");
+
+        std::atomic<bool> cancelled_won{false};
+        std::thread writer([&] {
+            const char byte = 'x';
+            expect(::write(pipe_ends[1], &byte, 1) == 1,
+                   "write one readiness byte");
+        });
+        std::thread canceller([&] {
+            cancelled_won.store(contender.try_cancel(*ticket),
+                                std::memory_order_release);
+        });
+        std::thread stopper([&] { contender.stop(); });
+        writer.join();
+        canceller.join();
+        stopper.join();
+
+        auto terminal = until_completion(contender);
+        expect(terminal.has_value() && terminal->ticket.value == ticket->value,
+               "terminal ticket must survive readiness/cancel/stop race");
+        if (cancelled_won.load(std::memory_order_acquire))
+            expect(terminal->outcome == NativeEpollReactor::Outcome::cancelled,
+                   "successful cancellation owns the terminal completion");
+        else
+            expect(terminal->outcome == NativeEpollReactor::Outcome::ready
+                   || terminal->outcome == NativeEpollReactor::Outcome::stopped,
+                   "readiness or shutdown must own the terminal completion");
+        expect(!contender.try_pop().has_value(),
+               "one watch must yield only one terminal completion");
+        expect(contender.pending() == 0, "race must reclaim the ticket");
+        expect(!contender.try_cancel(*ticket), "stale cancel must fail");
+        ::close(pipe_ends[0]);
+        ::close(pipe_ends[1]);
+    }
     return 0;
 }
