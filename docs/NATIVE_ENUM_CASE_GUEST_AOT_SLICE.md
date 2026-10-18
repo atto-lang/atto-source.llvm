@@ -244,3 +244,28 @@ empty. P0 source-export incidents #22 and #77 in the platform-conformance
 repository remain open and require independent security review. The
 availability of funded GitHub Actions minutes in a private destination is
 not authority to export the original private source tree.
+
+## Comment-header admission audit (2026-10-18)
+
+The native LLVM CLI and sealed library entry now share one
+`hasUnverifiedEnvironmentDirective` scanner, instead of separate exact
+substring checks. This rejects unverified capability headers even when
+spacing changes (`//ores:`, `//  ores :`, `//\tores:`) or overlapping
+slashes conceal them (`/// ores:`, `//// ores :`). The narrow parser
+would otherwise skip the entire line as a normal comment. Ordinary
+non-directive comments remain accepted.
+
+Both the actual C++ header harness and the Python LLVM guest smoke have
+negative regression cases. A Python test-only bug in the original use of
+`source.index("// ores:")` was fixed so spaced headers are tested rather
+than raising an unrelated ValueError.
+
+Isolated C++17 reproduction of this scanner passed Clang ASan/UBSan
+and strict GCC checks on 16 cases; this is not a whole-compiler build.
+
+Independent source-free funded `sagitta-stack/sagitta-infra` Actions
+[run #39150309144](https://github.com/sagitta-stack/sagitta-infra/actions/runs/39150309144)
+at synthetic head `4fdc9c875fc651b64aef6007648a13b4d2c9d278` reported 18
+passing Python tests in each of three modes (54 executions). No private
+Oreslang source was mirrored. Exact-source GCC/Clang, sanitizer and real
+Oreslang-to-native guest execution remain required and unexecuted.
