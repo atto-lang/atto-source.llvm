@@ -1993,3 +1993,10 @@ if(BUILD_TESTING)
         COMMAND oreslang-enum-source-aot-plan-test)
     set_tests_properties(native_enum_source_aot_plan_integrity PROPERTIES TIMEOUT 20)
 endif()
+
+if(BUILD_TESTING AND ORE_CLANG)
+    add_test(NAME native_enum_guest_aot_executable
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_enum_guest_aot.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/enum-aot-basic.ores")
+endif()
