@@ -2,9 +2,15 @@
 #include "oreslang/runtime/HungryCarrier.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using oreslang::runtime::ActorHeapIdentity;
 using oreslang::runtime::ActorOwnedGraphHeap;
@@ -181,7 +187,94 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     std::cout << "PASS deterministic native destructor glue and cyclic actor retirement\\n";
 }
 
+// A borrowed graph remains readable, but no writer may change a node or
+// retire it until all external FFI/continuation leases have been released.
+static void live_loans_fence_mutations_and_destructor() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 2>;
+    const ActorHeapIdentity owner{18, 19, 1};
+    std::atomic<int> drops{0};
+    Heap graph(owner);
+    std::uint64_t payload = 42;
+    const auto a = graph.allocate(owner, &payload, sizeof(payload)).value();
+    const auto b = graph.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    auto loan = graph.borrow(owner);
+    check(loan.has_value(), "external graph loan not acquired");
+    must_reject([&] { (void)graph.allocate(owner, &payload, sizeof(payload)); },
+                "allocation raced a live external graph loan");
+    must_reject([&] { (void)graph.emplace_owned<DroppableActorObject>(owner, &drops); },
+                "owned construction raced a live graph loan");
+    must_reject([&] { graph.write(owner, a, &payload, sizeof(payload)); },
+                "graph byte write raced a live graph loan");
+    must_reject([&] { (void)graph.link(owner, a, b); },
+                "graph link mutation raced a live loan");
+    must_reject([&] { graph.remove(owner, b); },
+                "destructor ran while a graph lease remained live");
+    check(drops.load(std::memory_order_relaxed) == 0,
+          "failed mutation unexpectedly invoked a destructor");
+    loan->reset();
+    graph.write(owner, a, &payload, sizeof(payload));
+    check(graph.link(owner, a, b), "mutation did not resume after lease end");
+    graph.remove(owner, b);
+    check(drops.load(std::memory_order_relaxed) == 1,
+          "delayed unique-owner destructor did not execute exactly once");
+
+    // Destruction of an unretired heap with active leases must fail closed.
+    // A lease contains a pointer to the gate and would otherwise become a
+    // dangling native pointer when heap storage is destroyed. Use a child
+    // to test the fatal invariant without killing the full native CTest.
+    const pid_t child = fork();
+    check(child >= 0, "fork failed for destructor lifetime gate");
+    if (child == 0) {
+        std::set_terminate([] { std::_Exit(86); });
+        auto* doomed = new Heap(owner);
+        auto still_live = doomed->borrow(owner);
+        if (!still_live) std::_Exit(87);
+        delete doomed; // expected: terminate before reclaim/free
+        std::_Exit(88); // forbidden success
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "child wait failed");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 86,
+          "live external graph loan did not prevent heap destruction");
+}
+
+static void atomic_mutation_vs_loan_races() {
+    const ActorHeapIdentity owner{18, 21, 4};
+    for (int n = 0; n < 128; ++n) {
+        oreslang::runtime::ActorHeapBorrowGate gate(owner);
+        std::atomic<bool> go{false};
+        std::atomic<int> examined{0};
+        std::atomic<int> winners{0};
+        std::thread reader([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            auto lease = gate.acquire(owner);
+            if (lease) winners.fetch_add(1, std::memory_order_relaxed);
+            examined.fetch_add(1, std::memory_order_release);
+            while (examined.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+        });
+        std::thread writer([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            auto mutation = gate.begin_mutation(owner);
+            if (mutation) winners.fetch_add(1, std::memory_order_relaxed);
+            examined.fetch_add(1, std::memory_order_release);
+            while (examined.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+        });
+        go.store(true, std::memory_order_release);
+        reader.join();
+        writer.join();
+        check(winners.load(std::memory_order_relaxed) == 1,
+              "a graph writer and external borrower both entered concurrently");
+        check(gate.seal_and_quiesced(owner), "borrow gate failed to drain");
+        check(!gate.acquire(owner).has_value(), "borrow after retirement accepted");
+        check(!gate.begin_mutation(owner).has_value(), "mutation after retirement accepted");
+    }
+}
+
 int main() {
+    atomic_mutation_vs_loan_races();
+    live_loans_fence_mutations_and_destructor();
     cycles_reclaim_without_gc();
     stale_generation_and_foreign_heap_rejected();
     bounded_capacity_and_purge();
