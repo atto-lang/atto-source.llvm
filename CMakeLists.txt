@@ -497,6 +497,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_ctest_manifest_harness_adversarial
         PROPERTIES TIMEOUT 30)
 
+    # `signature` is a source alias of `contract` in Java. Native guest
+    # compilation must reject either form until static conformance metadata
+    # is verified and lowered; no partial IR may escape these failures.
+    oreslang_contract_test(native_ml_signature_reject
+        native-signature-reject.ores
+        --diagnostic "native compile-time signature/contract requires verified conformance lowering")
+    oreslang_contract_test(native_ml_static_signature_reject
+        native-static-signature-reject.ores
+        --diagnostic "native static signature/contract requires verified conformance lowering")
+    oreslang_contract_test(native_ml_nested_signature_reject
+        native-module-signature-reject.ores
+        --diagnostic "native compile-time signature/contract requires verified conformance lowering")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
