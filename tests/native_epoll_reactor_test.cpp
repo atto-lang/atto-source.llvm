@@ -135,5 +135,40 @@ int main() {
     expect(!reactor.try_watch(accepted, EPOLLIN).has_value(), "admission fenced after shutdown");
     reactor.stop(); // idempotent host teardown must preserve terminal state
     ::close(accepted); ::close(client); ::close(server);
+
+    // Race two independent host teardown callers against one outstanding
+    // readiness ticket. The std::thread join handle has exactly one owner,
+    // and a stopped completion must not be duplicated by the second caller.
+    for (int round = 0; round < 24; ++round) {
+        NativeEpollReactor competing;
+        expect(competing.start(), "start concurrent-stop reactor");
+        int ends[2]{-1, -1};
+        expect(::pipe(ends) == 0, "create concurrent-stop pipe");
+        const int flags = ::fcntl(ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make concurrent-stop pipe nonblocking");
+        const auto ticket = competing.try_watch(ends[0], EPOLLIN);
+        expect(ticket.has_value(), "register stop-race ticket");
+
+        std::thread first([&] { competing.stop(); });
+        std::thread second([&] { competing.stop(); });
+        first.join();
+        second.join();
+
+        auto completion = until_completion(competing);
+        expect(completion.has_value()
+               && completion->ticket.value == ticket->value
+               && completion->outcome == NativeEpollReactor::Outcome::stopped,
+               "exactly one stopped completion after competing teardown");
+        expect(!competing.try_pop().has_value(),
+               "competing stop must not emit duplicate terminal completion");
+        expect(competing.pending() == 0, "stop-race completion must reclaim ticket");
+        expect(!competing.try_cancel(*ticket), "stop-race ticket cannot cancel after teardown");
+        expect(!competing.try_watch(ends[0], EPOLLIN).has_value(),
+               "stop-race reactor must reject late watch");
+        ::close(ends[0]);
+        ::close(ends[1]);
+    }
     return 0;
 }
