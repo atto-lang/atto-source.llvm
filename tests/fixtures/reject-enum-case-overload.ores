@@ -1,0 +1,6 @@
+define enum Foo as
+    A, B
+end
+
+pub fnc foo(Foo.A a, int b): void {}
+pub fnc foo(Foo.B a, int b): void {}
