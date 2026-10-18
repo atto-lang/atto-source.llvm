@@ -121,6 +121,16 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_enum_case_exhaustive_relation_python
+        COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v2"
+            -p test_enum_case_overlap_model.py -v)
+    add_test(NAME native_enum_case_exhaustive_relation_python_O
+        COMMAND "${Python3_EXECUTABLE}" -B -O -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v2"
+            -p test_enum_case_overlap_model.py -v)
+    set_tests_properties(native_enum_case_exhaustive_relation_python
+        native_enum_case_exhaustive_relation_python_O PROPERTIES TIMEOUT 20)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
