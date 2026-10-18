@@ -981,6 +981,12 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-dop-layout-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
+    add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
+    target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-dop-inverted-columns-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-dop-inverted-columns-test PRIVATE Threads::Threads)
+    add_test(NAME dop_inverted_columns_safe_handles COMMAND oreslang-dop-inverted-columns-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
