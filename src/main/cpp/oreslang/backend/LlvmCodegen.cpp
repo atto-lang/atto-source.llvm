@@ -272,6 +272,7 @@ llvm::Value* lower(const Expression& expr,
 
 
 std::string emit_verified_enum_aot_ir(const enum_aot::Plan& plan) {
+    enum_aot::validatePlan(plan); // Compiler-side sealed invariant, fail-closed.
     // This API receives an ordinary C++ Plan aggregate, not an unforgeable
     // typechecker token. Revalidate its declaration and call provenance
     // BEFORE LLVM IR emission, including when invoked outside main.cpp.
