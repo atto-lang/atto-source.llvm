@@ -1,0 +1,3 @@
+define static signature Factory as
+  fnc make(): int;
+end
