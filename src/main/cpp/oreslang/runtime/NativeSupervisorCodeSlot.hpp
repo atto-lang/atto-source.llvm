@@ -13,6 +13,8 @@
 
 namespace oreslang::runtime {
 
+class NativeSupervisorRegistry;
+
 /**
  * CONTROL-owned immutable supervisor code image pointer.
  *
@@ -99,34 +101,19 @@ public:
 
     NativeSupervisorCodeSlot(const NativeSupervisorCodeSlot&) = delete;
     NativeSupervisorCodeSlot& operator=(const NativeSupervisorCodeSlot&) = delete;
-    ~NativeSupervisorCodeSlot() { close(); }
+    ~NativeSupervisorCodeSlot() { close_unchecked(); }
 
     /**
-     * One slot may be installed on exactly one supervisor in one runtime
-     * registry. Same numeric supervisor IDs in another registry are not
-     * interchangeable.
+     * Standalone/uninstalled slots retain the direct host testing surface.
+     * Once a registry binds the slot, only that exact registry domain and
+     * supervisor may call the private bound operations below.
      */
-    void bind_owner(const void* runtime_domain, std::uint64_t supervisor_id) {
-        if (runtime_domain == nullptr || supervisor_id == 0)
-            throw std::invalid_argument("invalid supervisor code owner");
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("native supervisor code slot closed");
-        if (owner_domain_ != nullptr)
-            throw std::logic_error("native supervisor code slot already installed");
-        owner_domain_ = runtime_domain;
-        owner_supervisor_ = supervisor_id;
-    }
-
     Descriptor current() const {
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("native supervisor code slot closed");
-        return {current_->number, current_->abi};
+        return current_impl(nullptr, 0, false);
     }
 
     Lease pin() {
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (closed_) throw std::logic_error("native supervisor code slot closed");
-        return Lease(current_);
+        return pin_impl(nullptr, 0, false);
     }
 
     /** Atomic, ABI-exact publication of a fully prepared image.
@@ -139,6 +126,93 @@ public:
      */
     Descriptor activate(std::uint64_t expected_revision, std::string abi,
             Policy code, std::function<void()> reclaim) {
+        return activate_impl(nullptr, 0, false, expected_revision,
+                             std::move(abi), std::move(code),
+                             std::move(reclaim));
+    }
+
+private:
+    friend class NativeSupervisorRegistry;
+
+    /**
+     * One slot may be installed on exactly one supervisor in one runtime
+     * registry. Binding is deliberately private: callers holding only a slot
+     * pointer cannot mint CONTROL authority for themselves.
+     */
+    void bind_owner(const void* runtime_domain, std::uint64_t supervisor_id) {
+        if (runtime_domain == nullptr || supervisor_id == 0)
+            throw std::invalid_argument("invalid supervisor code owner");
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (closed_) throw std::logic_error("native supervisor code slot closed");
+        if (owner_domain_ != nullptr)
+            throw std::logic_error("native supervisor code slot already installed");
+        owner_domain_ = runtime_domain;
+        owner_supervisor_ = supervisor_id;
+    }
+
+    void require_access_locked(const void* runtime_domain,
+                               std::uint64_t supervisor_id,
+                               bool registry_authority) const {
+        if (owner_domain_ == nullptr) {
+            if (registry_authority)
+                throw std::logic_error(
+                    "unbound native supervisor code slot has no registry owner");
+            return;
+        }
+        if (!registry_authority
+            || runtime_domain != owner_domain_
+            || supervisor_id != owner_supervisor_) {
+            throw std::logic_error(
+                "bound native supervisor code slot requires exact owner authority");
+        }
+    }
+
+    Descriptor current_impl(const void* runtime_domain,
+                            std::uint64_t supervisor_id,
+                            bool registry_authority) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_access_locked(runtime_domain, supervisor_id, registry_authority);
+        if (closed_) throw std::logic_error("native supervisor code slot closed");
+        return {current_->number, current_->abi};
+    }
+
+    Lease pin_impl(const void* runtime_domain,
+                   std::uint64_t supervisor_id,
+                   bool registry_authority) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_access_locked(runtime_domain, supervisor_id, registry_authority);
+        if (closed_) throw std::logic_error("native supervisor code slot closed");
+        return Lease(current_);
+    }
+
+    Descriptor current_bound(const void* runtime_domain,
+                             std::uint64_t supervisor_id) const {
+        return current_impl(runtime_domain, supervisor_id, true);
+    }
+
+    Lease pin_bound(const void* runtime_domain,
+                    std::uint64_t supervisor_id) {
+        return pin_impl(runtime_domain, supervisor_id, true);
+    }
+
+    Descriptor activate_bound(const void* runtime_domain,
+                              std::uint64_t supervisor_id,
+                              std::uint64_t expected_revision,
+                              std::string abi,
+                              Policy code,
+                              std::function<void()> reclaim) {
+        return activate_impl(runtime_domain, supervisor_id, true,
+                             expected_revision, std::move(abi),
+                             std::move(code), std::move(reclaim));
+    }
+
+    Descriptor activate_impl(const void* runtime_domain,
+                             std::uint64_t supervisor_id,
+                             bool registry_authority,
+                             std::uint64_t expected_revision,
+                             std::string abi,
+                             Policy code,
+                             std::function<void()> reclaim) {
         // Callback ownership begins before ABI validation and allocation.
         // If moving/copying an image or allocating a generation throws, the
         // guard still schedules image unload exactly once, outside CONTROL.
@@ -156,6 +230,7 @@ public:
         Descriptor activated;
         {
             std::lock_guard<std::mutex> guard(mutex_);
+            require_access_locked(runtime_domain, supervisor_id, registry_authority);
             if (closed_) throw std::logic_error("native supervisor code slot closed");
             if (current_->number != expected_revision)
                 throw std::logic_error("stale native supervisor code revision");
@@ -185,16 +260,35 @@ public:
         return activated;
     }
 
+public:
     std::size_t live_revisions() const {
         std::lock_guard<std::mutex> guard(mutex_);
         prune_locked();
         return retained_.size();
     }
 
-    void close() noexcept {
+    /**
+     * Direct close is available only before registry installation. A holder of
+     * a shared_ptr to an installed slot must not be able to terminate another
+     * supervisor's executable policy.
+     */
+    void close() {
+        close_impl(nullptr, 0, false);
+    }
+
+private:
+    void close_bound(const void* runtime_domain,
+                     std::uint64_t supervisor_id) {
+        close_impl(runtime_domain, supervisor_id, true);
+    }
+
+    void close_impl(const void* runtime_domain,
+                    std::uint64_t supervisor_id,
+                    bool registry_authority) {
         std::shared_ptr<Generation> previous;
         {
             std::lock_guard<std::mutex> guard(mutex_);
+            require_access_locked(runtime_domain, supervisor_id, registry_authority);
             if (closed_) return;
             closed_ = true;
             previous = std::move(current_);
@@ -202,7 +296,23 @@ public:
         previous.reset();
     }
 
-private:
+    void close_unchecked() noexcept {
+        std::shared_ptr<Generation> previous;
+        try {
+            {
+                std::lock_guard<std::mutex> guard(mutex_);
+                if (closed_) return;
+                closed_ = true;
+                previous = std::move(current_);
+            }
+            previous.reset();
+        } catch (...) {
+            // Destruction cannot surface a CONTROL failure. Generation
+            // reclamation callbacks already fail closed/noexcept; a mutex
+            // failure here is process-integrity territory.
+        }
+    }
+
     void prune_locked() const {
         retained_.erase(std::remove_if(retained_.begin(), retained_.end(),
                 [](const auto& ref) { return ref.expired(); }), retained_.end());
