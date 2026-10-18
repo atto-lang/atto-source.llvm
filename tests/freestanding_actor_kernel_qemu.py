@@ -37,6 +37,7 @@ def verify_elf(image, readelf):
             and count <= (len(raw) - phoff)//phsize, "invalid program header table")
     executable = []
     loads = []
+    physical = []
     vector = None
     for index in range(count):
         typ, offset, vaddr, paddr, filesz, memsz, flags, _ = struct.unpack_from(
@@ -46,8 +47,15 @@ def verify_elf(image, readelf):
         require(offset <= len(raw) and filesz <= len(raw)-offset and filesz <= memsz,
                 "out-of-bounds ELF segment")
         require(not (flags & 1 and flags & 2), "writable executable load segment")
+        if filesz:
+            require(paddr < FLASH_END and paddr+filesz <= FLASH_END,
+                    "file-backed physical load outside board FLASH")
+            for first, last in physical:
+                require(not (paddr < last and first < paddr+filesz),
+                        "overlapping physical FLASH loads")
+            physical.append((paddr,paddr+filesz))
         if vaddr < FLASH_END:
-            require(vaddr+memsz <= FLASH_END and paddr+filesz <= FLASH_END,
+            require(vaddr+memsz <= FLASH_END,
                     "FLASH load outside board memory")
         elif RAM_BEGIN <= vaddr < RAM_END:
             require(vaddr+memsz <= RAM_END, "RAM load outside board memory")
