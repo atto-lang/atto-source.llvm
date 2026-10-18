@@ -294,10 +294,10 @@ private:
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
-        if (actor.fields.empty()) fail("actor requires at least one scalar field");
         if (token_.text == "receive" || at_private_abstract_member()) {
             fail("native actor receive/private abstract slots unsupported: ActorMail<T>, explicit/implicit Self receiver, originating-slot authority and trusted mailbox virtual dispatch lowering required; no IR may be emitted");
         }
+        if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
@@ -352,6 +352,9 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (token_.text == "extends") {
+            fail("native class inheritance/virtual slots unsupported: originating-declaration dispatch and override layout lowering required; no IR may be emitted");
+        }
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
