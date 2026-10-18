@@ -22,13 +22,16 @@
       "target": "fnc",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -43,11 +46,13 @@
       "args": [
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -61,11 +66,13 @@
       "target": "fnc",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -80,11 +87,13 @@
       "args": [
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         }
       ],
       "slots": [
@@ -99,15 +108,18 @@
       "args": [
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
           "label": "b",
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         },
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         }
       ],
       "slots": [
@@ -121,14 +133,17 @@
       "target": "fnc",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -142,15 +157,18 @@
       "target": "fnc",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "b",
-          "expr": "None"
+          "expr": "None",
+          "value_type": "Option<string>"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -164,15 +182,18 @@
       "target": "fnc",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "b",
-          "expr": "Some(\"x\")"
+          "expr": "Some(\"x\")",
+          "value_type": "Option<string>"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -187,11 +208,13 @@
       "args": [
         {
           "label": "a",
-          "expr": "7"
+          "expr": "7",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -206,11 +229,13 @@
       "args": [
         {
           "label": "c",
-          "expr": "effect_c()"
+          "expr": "effect_c()",
+          "value_type": "bool"
         },
         {
           "label": "a",
-          "expr": "effect_a()"
+          "expr": "effect_a()",
+          "value_type": "int"
         }
       ],
       "slots": [
@@ -223,13 +248,15 @@
       "id": "explicit-omit-middle",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "kind": "omit"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -252,7 +279,8 @@
       "args": [
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "b",
@@ -260,7 +288,8 @@
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -278,13 +307,16 @@
       "id": "explicit-none-is-supplied",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "None"
+          "expr": "None",
+          "value_type": "Option<string>"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -327,13 +359,15 @@
       ],
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "kind": "omit"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "slots": [
@@ -373,19 +407,23 @@
       ],
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "kind": "omit"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
-          "expr": "\"x\""
+          "expr": "\"x\"",
+          "value_type": "string"
         },
         {
-          "expr": "\"y\""
+          "expr": "\"y\"",
+          "value_type": "string"
         }
       ],
       "slots": [
@@ -403,6 +441,147 @@
         "provided",
         "rest_values"
       ]
+    },
+    {
+      "id": "rest-trailing-spread",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "explicit_omit",
+        "provided",
+        "rest_spread"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ]
+    },
+    {
+      "id": "rest-named-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true",
+        [
+          "...items"
+        ]
+      ],
+      "statuses": [
+        "provided",
+        "implicit_omit",
+        "provided",
+        "rest_pack"
+      ],
+      "evaluation_order": [
+        "3",
+        "true",
+        "items"
+      ]
+    },
+    {
+      "id": "required-Option-None",
+      "parameters": [
+        {
+          "name": "x",
+          "type": "Option<string>"
+        }
+      ],
+      "args": [
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        }
+      ],
+      "slots": [
+        "None"
+      ],
+      "statuses": [
+        "explicit_none"
+      ]
     }
   ],
   "rejects": [
@@ -410,10 +589,12 @@
       "id": "positional-cannot-skip-middle",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "missing"
@@ -422,7 +603,8 @@
       "id": "required-last-missing",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         }
       ],
       "error": "missing"
@@ -437,15 +619,18 @@
       "args": [
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "a",
-          "expr": "4"
+          "expr": "4",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "duplicate"
@@ -454,15 +639,18 @@
       "id": "positional-label-collision",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "a",
-          "expr": "4"
+          "expr": "4",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "duplicate"
@@ -472,15 +660,18 @@
       "args": [
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
           "label": "d",
-          "expr": "1"
+          "expr": "1",
+          "value_type": "int"
         }
       ],
       "error": "unknown"
@@ -490,10 +681,12 @@
       "args": [
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         }
       ],
       "error": "positional-after-named"
@@ -502,16 +695,20 @@
       "id": "excess-positional",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         },
         {
-          "expr": "9"
+          "expr": "9",
+          "value_type": "int"
         }
       ],
       "error": "extra"
@@ -521,7 +718,8 @@
       "args": [
         {
           "label": "b",
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         }
       ],
       "error": "missing"
@@ -530,18 +728,22 @@
       "id": "duplicate-interior",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "\"\""
+          "expr": "\"\"",
+          "value_type": "string"
         },
         {
           "label": "b",
-          "expr": "\"extra\""
+          "expr": "\"extra\"",
+          "value_type": "string"
         },
         {
           "label": "c",
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "duplicate"
@@ -553,10 +755,12 @@
           "kind": "omit"
         },
         {
-          "expr": "\"x\""
+          "expr": "\"x\"",
+          "value_type": "string"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "required"
@@ -565,13 +769,16 @@
       "id": "reject-void-literal",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "void"
+          "expr": "void",
+          "value_type": "void"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "void"
@@ -580,13 +787,16 @@
       "id": "reject-null-literal",
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "null"
+          "expr": "null",
+          "value_type": "null"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "null"
@@ -609,13 +819,16 @@
       ],
       "args": [
         {
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
-          "expr": "None"
+          "expr": "None",
+          "value_type": "Option<string>"
         },
         {
-          "expr": "true"
+          "expr": "true",
+          "value_type": "bool"
         }
       ],
       "error": "type mismatch"
@@ -636,7 +849,8 @@
       "args": [
         {
           "label": "a",
-          "expr": "3"
+          "expr": "3",
+          "value_type": "int"
         },
         {
           "label": "tags",
@@ -660,6 +874,205 @@
       ],
       "args": [],
       "error": "final"
+    },
+    {
+      "id": "reject-rest-spread-after-named",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "positional-after-named"
+    },
+    {
+      "id": "reject-rest-wrong-pack",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<int>"
+        }
+      ],
+      "error": "type mismatch"
+    },
+    {
+      "id": "reject-rest-pack-duplicate",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "items",
+          "value_type": "List<string>"
+        },
+        {
+          "label": "tags",
+          "kind": "pack",
+          "expr": "again",
+          "value_type": "List<string>"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "reject-rest-named-none",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "int"
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "a",
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "tags",
+          "expr": "None",
+          "value_type": "Option<string>"
+        }
+      ],
+      "error": "rest"
+    },
+    {
+      "id": "reject-spread-fixed-runtime",
+      "args": [
+        {
+          "expr": "3",
+          "value_type": "int"
+        },
+        {
+          "kind": "spread",
+          "expr": "items",
+          "value_type": "List<string>"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "error": "fixed"
+    },
+    {
+      "id": "reject-optional-rest",
+      "parameters": [
+        {
+          "name": "items",
+          "type": "string",
+          "rest": true,
+          "optional": true
+        }
+      ],
+      "args": [],
+      "error": "optional"
     }
   ],
   "overloads": [
