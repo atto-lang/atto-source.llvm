@@ -168,25 +168,44 @@ def main():
                    "unexpected hosted/runtime symbol: " + blocked)
 
         if args.qemu:
-            # On Cortex-M3 this ELF starts from its own vector table and reset
-            # handler. No Zephyr, kernel, libc, crt0 or platform actor runtime.
-            command = [args.qemu, "-M", "lm3s6965evb", "-cpu", "cortex-m3",
-                       "-nographic", "-monitor", "none", "-serial", "none",
-                       "-semihosting-config", "enable=on,target=native",
-                       "-kernel", str(elf)]
-            try:
-                completed = subprocess.run(command, capture_output=True,
-                                           text=True, timeout=20)
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError("QEMU did not finish: guest may have trapped or spun") from exc
-            output = completed.stdout + completed.stderr
-            verify(completed.returncode == 0,
-                   "QEMU guest failed to exit successfully: " + output)
-            verify("ORESLANG_BAREMETAL_GUEST_PASS value=31" in output,
-                   "QEMU did not observe the source-compiled guest result: " + output)
+            # The positive guest must return 3*9+4 = 31. The negative build
+            # changes an assembly input to 5 without changing the compiled
+            # guest: the same runtime must take the failure path instead of
+            # blindly producing the success token.
+            def qemu_execute(firmware):
+                command = [args.qemu, "-M", "lm3s6965evb", "-cpu", "cortex-m3",
+                           "-nographic", "-monitor", "none", "-serial", "none",
+                           "-semihosting-config", "enable=on,target=native",
+                           "-kernel", str(firmware)]
+                try:
+                    result = subprocess.run(command, capture_output=True,
+                                            text=True, timeout=20)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError("QEMU did not exit (guest trap/spin)") from exc
+                return result.returncode, result.stdout + result.stderr
+
+            code, output = qemu_execute(elf)
+            verify(code == 0 and "ORESLANG_BAREMETAL_GUEST_PASS value=31" in output,
+                   "source-compiled guest did not complete correctly: " + output)
             verify("ORESLANG_BAREMETAL_GUEST_FAIL" not in output,
-                   "guest reported a computed result mismatch: " + output)
-            print("Oreslang Cortex-M no-OS QEMU guest computation PASS: value=31")
+                   "positive guest reported result mismatch: " + output)
+
+            (root / "startup-negative.S").write_text(
+                STARTUP.replace("movs r1, #4", "movs r1, #5", 1))
+            run(common + ["-c", str(root / "startup-negative.S"), "-o",
+                          str(root / "startup-negative.o")])
+            negative_elf = root / "negative.elf"
+            run([args.clang, "--target=thumbv7m-none-eabi",
+                 "-fuse-ld=lld", "-nostdlib", "-nodefaultlibs",
+                 str(root / "guest.o"), str(root / "startup-negative.o"),
+                 "-Wl,-T," + str(root / "linker.ld"),
+                 "-o", str(negative_elf)])
+            neg_code, neg_output = qemu_execute(negative_elf)
+            verify("ORESLANG_BAREMETAL_GUEST_FAIL" in neg_output
+                   and "ORESLANG_BAREMETAL_GUEST_PASS" not in neg_output,
+                   "negative guest did not take mismatch branch: "
+                   + str(neg_code) + " " + neg_output)
+            print("Oreslang Cortex-M no-OS QEMU positive/negative guest PASS")
 
     print("Oreslang Cortex-M standalone no-libc ELF link and symbol gate PASS")
     if not args.qemu:
