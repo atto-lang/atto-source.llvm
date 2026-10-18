@@ -23,6 +23,11 @@ enum class Domain { Module, Instance, Static };
 enum class Kind { Fixed, Enum, Case };
 enum class Relation { Equal, LeftNarrower, RightNarrower, Disjoint, Invalid };
 
+inline bool fixedScalar(const std::string& name) {
+    return name == "bool" || name == "int"
+        || name == "string" || name == "float";
+}
+
 inline void identifier(const std::string& s) {
     if (s.empty()) throw std::invalid_argument("empty nominal identity");
     // Reject malformed UTF-8, embedded NUL, ASCII control and whitespace.
@@ -129,10 +134,8 @@ struct Signature {
         for (const Parameter& p : params) {
             if (p.kind == Kind::Fixed) {
                 identifier(p.identity);
-                if (!p.caseName.empty() || p.identity == "Any"
-                    || p.identity == "Unknown" || p.identity == "void"
-                    || p.identity == "null")
-                    throw std::invalid_argument("fixed parameter");
+                if (!p.caseName.empty() || !fixedScalar(p.identity))
+                    throw std::invalid_argument("unproven fixed parameter");
                 out += "F";
             } else if (p.kind == Kind::Enum || p.kind == Kind::Case) {
                 qualified(p.identity);
@@ -155,9 +158,8 @@ using Registry = std::unordered_map<std::string, EnumInfo>;
 inline void checkParameter(const Parameter& p, const Registry& registry) {
     if (p.kind == Kind::Fixed) {
         identifier(p.identity);
-        if (!p.caseName.empty() || p.identity == "Any" || p.identity == "Unknown"
-            || p.identity == "void" || p.identity == "null")
-            throw std::invalid_argument("ineligible fixed parameter");
+        if (!p.caseName.empty() || !fixedScalar(p.identity))
+            throw std::invalid_argument("unproven fixed parameter");
         return;
     }
     if (p.kind != Kind::Enum && p.kind != Kind::Case)
