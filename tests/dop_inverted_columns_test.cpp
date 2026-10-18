@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 #include <type_traits>
 
 using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
@@ -72,4 +73,31 @@ int main() {
         check(carried->span()[0] == 7.5f);
     }
     carried.reset();
+    // Differential/property-style stress: arbitrary swap-delete order must not
+    // change surviving logical rows or revive any stale handle.
+    Store fuzz;
+    struct Expected { Store::Handle handle; float x; std::int64_t y; bool z; };
+    std::vector<Expected> live;
+    std::uint64_t rng = 0x6a09e667f3bcc909ULL;
+    auto next = [&] { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; };
+    for (int step = 0; step < 3000; ++step) {
+        if (live.empty() || next() % 4 != 0) {
+            const auto x = static_cast<float>(step);
+            const auto y = static_cast<std::int64_t>(step) * -3;
+            const auto z = (step & 1) == 0;
+            live.push_back({fuzz.push(x, y, z), x, y, z});
+        } else {
+            const auto index = static_cast<std::size_t>(next() % live.size());
+            const auto victim = live[index].handle;
+            fuzz.erase_swap(victim);
+            expect<std::out_of_range>([&] { (void)fuzz.get<0>(victim); });
+            live.erase(live.begin() + static_cast<std::ptrdiff_t>(index));
+        }
+        check(fuzz.size() == live.size());
+        for (const auto& expected : live) {
+            check(fuzz.get<0>(expected.handle) == expected.x);
+            check(fuzz.get<1>(expected.handle) == expected.y);
+            check(fuzz.get<2>(expected.handle) == expected.z);
+        }
+    }
 }
