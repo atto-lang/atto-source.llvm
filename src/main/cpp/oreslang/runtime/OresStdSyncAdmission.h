@@ -23,7 +23,8 @@ typedef enum ores_std_sync_code {
     ORES_STD_SYNC_STALE = 4,
     ORES_STD_SYNC_EXECUTING = 5,
     ORES_STD_SYNC_EXHAUSTED = 6,
-    ORES_STD_SYNC_INVALID = 7
+    ORES_STD_SYNC_INVALID = 7,
+    ORES_STD_SYNC_CLOSED = 8
 } ores_std_sync_code;
 
 typedef enum ores_std_sync_kind {
@@ -63,6 +64,7 @@ struct ores_std_sync_gate {
     ores_core_rw_gate rw;
     uint64_t next_sequence;
     bool exhausted;
+    bool sealed;
     ores_std_slot slots[ORES_STD_SYNC_CAPACITY];
 };
 
@@ -159,7 +161,7 @@ static inline ores_core_sync_result ores_std_native_release(
 /* Called only while holding metadata. No queued reader may jump ahead of a
  * previously queued writer; an initial batch of queued readers may overlap. */
 static inline void ores_std_promote(ores_std_sync_gate* gate, ores_std_sync_result* out) {
-    if (gate->exhausted) return;
+    if (gate->exhausted || gate->sealed) return;
     for (;;) {
         ores_std_slot* next = ores_std_first_waiter(gate);
         if (!next || ores_std_has_active_writer(gate)) return;
@@ -191,7 +193,9 @@ static inline ores_std_sync_result ores_std_request(
     if (!ores_std_enter_metadata(gate)) return ores_std_empty(ORES_STD_SYNC_RETRY);
     ores_std_sync_result out = ores_std_empty(ORES_STD_SYNC_QUEUED);
     ores_std_slot* slot = ores_std_free_slot(gate);
-    if (gate->exhausted || gate->next_sequence == UINT64_MAX) {
+    if (gate->sealed) {
+        out.code = ORES_STD_SYNC_CLOSED;
+    } else if (gate->exhausted || gate->next_sequence == UINT64_MAX) {
         out.code = ORES_STD_SYNC_EXHAUSTED;
     } else if (!slot) {
         out.code = ORES_STD_SYNC_FULL;
@@ -227,7 +231,9 @@ static inline ores_std_sync_code ores_std_start(
     ores_std_slot* slot = ores_std_find(gate, ticket);
     ores_std_sync_code code = ORES_STD_SYNC_STALE;
     if (slot) {
-        code = slot->state == ORES_STD_ADMITTED
+        code = (gate->sealed && slot->state == ORES_STD_ADMITTED)
+            ? ORES_STD_SYNC_CLOSED :
+            slot->state == ORES_STD_ADMITTED
             ? ORES_STD_SYNC_GRANTED :
             slot->state == ORES_STD_WAITING ? ORES_STD_SYNC_QUEUED :
             ORES_STD_SYNC_EXECUTING;
@@ -274,5 +280,57 @@ static inline ores_std_sync_result ores_std_release(
     }
     ores_std_leave_metadata(gate);
     return out;
+}
+/* Supervisor STOP/PANIC: seal once, drain queued work and revoke dormant
+ * grants. A running callback retains its native borrow until it ends and
+ * releases normally. Scheduler dispatches all failed ticket results outside
+ * the metadata lock, then checks physical quiescence before teardown.
+ */
+static inline ores_std_sync_result ores_std_seal(ores_std_sync_gate* gate) {
+    if (!gate) return ores_std_empty(ORES_STD_SYNC_INVALID);
+    if (!ores_std_enter_metadata(gate)) return ores_std_empty(ORES_STD_SYNC_RETRY);
+    ores_std_sync_result out = ores_std_empty(ORES_STD_SYNC_GRANTED);
+    if (gate->sealed) {
+        out.code = ORES_STD_SYNC_CLOSED;
+    } else {
+        gate->sealed = true;
+        for (unsigned int i = 0; i < ORES_STD_SYNC_CAPACITY; i++) {
+            ores_std_slot* slot = &gate->slots[i];
+            if (slot->state == ORES_STD_WAITING ||
+                slot->state == ORES_STD_ADMITTED) {
+                bool good = slot->state == ORES_STD_WAITING ||
+                    ores_std_native_release(gate, slot) == ORES_CORE_SYNC_OK;
+                if (good) {
+                    out.failed[out.failed_count++] = slot->ticket;
+                    slot->state = ORES_STD_FREE;
+                }
+            }
+        }
+    }
+    ores_std_leave_metadata(gate);
+    return out;
+}
+/* No guest callback can be scheduled or reclaimed from a stale bool:
+ * physical callback retirement is a separate state from Future settlement. */
+static inline ores_std_sync_code ores_std_quiescent(ores_std_sync_gate* gate) {
+    if (!gate) return ORES_STD_SYNC_INVALID;
+    if (!ores_std_enter_metadata(gate)) return ORES_STD_SYNC_RETRY;
+    bool live = ores_std_has_any_active(gate) || ores_std_first_waiter(gate);
+    ores_std_sync_code code = (!live && gate->sealed)
+        ? ORES_STD_SYNC_GRANTED : ORES_STD_SYNC_EXECUTING;
+    ores_std_leave_metadata(gate);
+    return code;
+}
+/* Suspend gate for the same scoped logical continuation. If a ticket has
+ * any live admission, it still carries an active loan and cannot suspend. */
+static inline ores_std_sync_code ores_std_ready_to_suspend(
+        ores_std_sync_gate* gate, ores_std_ticket ticket) {
+    if (!gate || ticket.scope != gate || !ticket.sequence)
+        return ORES_STD_SYNC_INVALID;
+    if (!ores_std_enter_metadata(gate)) return ORES_STD_SYNC_RETRY;
+    ores_std_sync_code code = ores_std_find(gate, ticket)
+        ? ORES_STD_SYNC_EXECUTING : ORES_STD_SYNC_GRANTED;
+    ores_std_leave_metadata(gate);
+    return code;
 }
 #endif
