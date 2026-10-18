@@ -135,8 +135,32 @@ public:
     public:
         Ticket(const Ticket&) = delete;
         Ticket& operator=(const Ticket&) = delete;
-        Ticket(Ticket&&) noexcept = default;
-        Ticket& operator=(Ticket&&) noexcept = default;
+        Ticket(Ticket&& other) noexcept
+            : state_(std::move(other.state_)), epoch_(other.epoch_),
+              expected_revision_(other.expected_revision_) {}
+        Ticket& operator=(Ticket&& other) noexcept {
+            if (this != &other) {
+                release();
+                state_ = std::move(other.state_);
+                epoch_ = other.epoch_;
+                expected_revision_ = other.expected_revision_;
+            }
+            return *this;
+        }
+        ~Ticket() noexcept { release(); }
+    private:
+        void release() noexcept {
+            auto state = std::move(state_);
+            if (!state) return;
+            std::lock_guard<std::mutex> lock(state->mutex);
+            // Unwind / abandoned upgrade must never seal actor DATA forever.
+            // Do not race an in-progress publication or override terminal close.
+            if (!state->closed && !state->publishing && state->frozen
+                && state->ticket_epoch == epoch_) {
+                state->frozen = false;
+                state->cv.notify_all();
+            }
+        }
     };
 
 private:
@@ -222,15 +246,20 @@ public:
         // Own rejection cleanup before validating. The destructor executes
         // outside the actor gate lock, including on stale/foreign attempts.
         struct Candidate final {
+            struct Cleanup {
+                std::function<void()> callback;
+                explicit Cleanup(std::function<void()> action)
+                    : callback(std::move(action)) {}
+                ~Cleanup() noexcept {
+                    try { if (callback) callback(); } catch (...) {}
+                }
+            };
+            Cleanup cleanup; // Destroy last: unload only after code destructor.
             CodeImage code;
-            std::function<void()> reclaim;
-            Candidate(CodeImage image, std::function<void()> cleanup)
-                : code(std::move(image)), reclaim(std::move(cleanup)) {}
+            Candidate(CodeImage image, std::function<void()> action)
+                : cleanup(std::move(action)), code(std::move(image)) {}
             Candidate(const Candidate&) = delete;
             Candidate& operator=(const Candidate&) = delete;
-            ~Candidate() noexcept {
-                try { if (reclaim) reclaim(); } catch (...) {}
-            }
         };
         auto candidate = std::make_unique<Candidate>(
             std::move(candidate_code), std::move(reclaim));
@@ -252,9 +281,13 @@ public:
         try {
             // The underlying code-slot owns the callback after this call.
             // Reclamation callbacks are host-only and must enqueue cleanup.
+            // Compute potentially allocating ABI material before transferring
+            // either code or cleanup: argument evaluation order is not a
+            // portable ownership protocol.
+            auto abi = fingerprint(candidate_shape);
             published = state->code->activate(
-                ticket.expected_revision_, fingerprint(candidate_shape),
-                std::move(candidate->code), std::move(candidate->reclaim));
+                ticket.expected_revision_, std::move(abi),
+                std::move(candidate->code), std::move(candidate->cleanup.callback));
         } catch (...) {
             std::lock_guard<std::mutex> lock(state->mutex);
             state->publishing = false;
