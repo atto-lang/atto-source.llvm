@@ -18,6 +18,7 @@ namespace oreslang::types::case_overloads {
 constexpr std::size_t MaxArity = 64;
 constexpr std::size_t MaxCandidates = 128;
 constexpr std::size_t MaxCases = 1024;
+constexpr std::size_t MaxEnums = 4096;
 
 enum class Domain { Module, Instance, Static };
 enum class Kind { Fixed, Enum, Case };
@@ -215,6 +216,8 @@ inline void checkFamily(const std::vector<Signature>& family,
                         const Registry& registry) {
     if (family.empty() || family.size() > MaxCandidates)
         throw std::invalid_argument("family size");
+    if (registry.size() > MaxEnums)
+        throw std::invalid_argument("enum registry proof budget exceeded");
     for (const auto& entry : registry) {
         qualified(entry.first);
         const EnumInfo& e = entry.second;
