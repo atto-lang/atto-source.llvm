@@ -253,6 +253,7 @@ public:
             }
             if (accept("module")) {
                 program.module = identifier();
+                current_module_ = program.module;
                 accept("as");
                 wrapped_module = true;
             } else {
@@ -1312,19 +1313,33 @@ private:
             if (expr->kind == Expression::Kind::Variable && expr->name == "BooleanOps") {
                 if (double_colon)
                     fail("native BooleanOps qualification uses '.'");
+                const bool source_module = current_module_ == "BooleanOps";
                 const std::string member = identifier();
-                if (!boolean_intrinsic_name(member))
+                if (!source_module && !boolean_intrinsic_name(member))
                     fail("unknown native BooleanOps member '" + member + "'");
                 if (!accept("("))
                     fail("native BooleanOps member must be called, not read as a value");
                 auto call = make_expression(Expression::Kind::Call, offset);
                 call->name = "BooleanOps." + member;
+                bool named_seen = false;
+                std::unordered_set<std::string> labels;
                 if (!accept(")")) {
                     do {
-                        if (named_argument_ahead())
-                            fail("native Boolean intrinsics do not accept named arguments");
+                        if (named_argument_ahead()) {
+                            if (!source_module)
+                                fail("native Boolean intrinsics do not accept named arguments");
+                            std::string label = identifier();
+                            require(":");
+                            if (!labels.insert(label).second)
+                                fail("duplicate named argument '" + label + "'");
+                            named_seen = true;
+                            call->argument_names.push_back(std::move(label));
+                        } else {
+                            if (named_seen)
+                                fail("positional argument cannot follow named argument");
+                            call->argument_names.emplace_back();
+                        }
                         call->arguments.push_back(expression());
-                        call->argument_names.emplace_back();
                     } while (accept(","));
                     require(")");
                 }
@@ -1885,13 +1900,20 @@ private:
         // one wrapped source module, so publish qualified aliases only for that
         // exact module after the whole function table is known.
         if (program.module == "BooleanOps") {
-            for (const char* member : {"And", "Or", "Xor"}) {
+            std::vector<std::string> source_names;
+            source_names.reserve(program.functions.size());
+            for (const auto& fn : program.functions) source_names.push_back(fn.name);
+            std::sort(source_names.begin(), source_names.end());
+            source_names.erase(
+                std::unique(source_names.begin(), source_names.end()),
+                source_names.end());
+            for (const auto& member : source_names) {
                 const auto labels = functions.find(member);
                 if (labels != functions.end())
-                    functions.emplace(std::string("BooleanOps.") + member, labels->second);
+                    functions.emplace("BooleanOps." + member, labels->second);
                 const auto typed = typed_functions.find(member);
                 if (typed != typed_functions.end())
-                    typed_functions.emplace(std::string("BooleanOps.") + member, typed->second);
+                    typed_functions.emplace("BooleanOps." + member, typed->second);
             }
         }
 
@@ -2091,6 +2113,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    std::string current_module_;
     bool has_assert_import_ = false;
     bool experimental_rt_scalar_loop_;
 };
