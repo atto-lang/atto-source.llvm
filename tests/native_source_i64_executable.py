@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 BLOB = "bbc319c19ecd007109d33592e210091eb267e5a2"
+BYTES_SHA256 = "39bddbe558ad1c336271f91e6403c4555f2f16a7ed33a3355ee897721b6ab02a"
 CORPUS = Path(__file__).resolve().parents[1] / "contracts/v1/source-i64/portable-i64.v1.json"
 ADMITTED = ("precedence","grouping","signed-multiplication","subtraction")
 OTHERS = ("negative-result","max-minus-one","signed-minimum")
@@ -27,7 +28,8 @@ def run(argv):
 def verify_cases():
     raw=CORPUS.read_bytes()
     require(len(raw)<=8192 and
-            hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()==BLOB,
+            hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()==BLOB and
+            hashlib.sha256(raw).hexdigest()==BYTES_SHA256,
             "unreviewed portable source-i64 corpus")
     def nodups(pairs):
         d={}
@@ -92,7 +94,7 @@ def main():
             require(rejected.returncode!=0 and rejected.stdout==b"" and rejected.stderr,
                     "unsupported source generated native IR: "+expr)
     print(json.dumps({"kind":"native-llvm-compiled-os-exit-subset",
-                      "source_corpus_blob":BLOB,
+                      "source_corpus_blob":BLOB,"source_corpus_sha256":BYTES_SHA256,
                       "compiler_sha256":compiler_sha256,"clang_sha256":clang_sha256,
                       "executed_cases":len(observations),
                       "total_corpus_cases":7,"unexecuted_due_to_lossy_exit":list(OTHERS),
