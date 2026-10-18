@@ -27,14 +27,34 @@ command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit
 # Build beside the output so publication is atomic and errors preserve old output.
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
-# Probe the actual compiler+linker combination before touching the published output.
-# A missing LLD plugin or incompatible LLVM bitcode must be a hard error, never
-# an implicit fallback to a non-LTO link.
+# Check real cross-module linking, not just acceptance of an LTO flag.
+# This synthetic LLVM IR canary is NOT a claim of Oreslang module support.
 if [[ "$lto_mode" != off ]]; then
-  if ! printf 'int main(void){return 0;}\n' |
-    "$clang" -O2 "${lto_flags[@]}" -x c - -o "$work/lto-probe" >"$work/lto-probe.log" 2>&1; then
+  cat > "$work/lto-helper.ll" <<'ORES_LTO_HELPER'
+define i32 @ores_lto_helper(i32 %x) {
+entry:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+ORES_LTO_HELPER
+  cat > "$work/lto-main.ll" <<'ORES_LTO_MAIN'
+declare i32 @ores_lto_helper(i32)
+define i32 @main() {
+entry:
+  %result = call i32 @ores_lto_helper(i32 41)
+  %is_correct = icmp eq i32 %result, 42
+  %status = select i1 %is_correct, i32 0, i32 1
+  ret i32 %status
+}
+ORES_LTO_MAIN
+  if ! "$clang" -O2 "${lto_flags[@]}" -x ir "$work/lto-helper.ll" "$work/lto-main.ll" -o "$work/lto-probe" >"$work/lto-probe.log" 2>&1; then
     cat "$work/lto-probe.log" >&2
-    echo "Requested $lto_mode LTO is unsupported by CLANG/linker; aborting." >&2
+    echo "Requested $lto_mode LTO cannot link two LLVM IR units with this toolchain." >&2
+    exit 69
+  fi
+  if ! "$work/lto-probe" >"$work/lto-execution.log" 2>&1; then
+    cat "$work/lto-execution.log" >&2
+    echo "Requested $lto_mode LTO canary did not execute correctly on the host." >&2
     exit 69
   fi
 fi
