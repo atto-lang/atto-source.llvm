@@ -237,5 +237,44 @@ int main() {
         REQUIRE(rejected > 0);
         REQUIRE(accepted + rejected == 4096);
     }
+    // Metamorphic source-order proof: declaration sequence and numeric
+    // enum tags must never influence exact nominal call selection.
+    {
+        const std::string prefix = "define enum Foo as A = 17, B = 29 end\n";
+        const std::string a =
+            "fnc classify(Foo.A value): int { return 10; }\n";
+        const std::string b =
+            "fnc classify(Foo.B value): int { return 20; }\n";
+        const std::string parent =
+            "fnc classify(Foo value): int { return 0; }\n";
+        const std::string body =
+            "fnc main(): int { const Foo widened = Foo.B; "
+            "return classify(Foo.A) + classify(Foo.B) + classify(widened); }";
+        const auto original = oreslang::enum_aot::parseVerified(
+            prefix + a + b + parent + body);
+        REQUIRE(oreslang::enum_aot::checkedNativeExit(original.readOnly()) == 30);
+        REQUIRE(original.readOnly().returnCalls.size() == 3);
+        const std::string specialA = original.readOnly().returnCalls[0].exactSymbol;
+        const std::string specialB = original.readOnly().returnCalls[1].exactSymbol;
+        const std::string whole = original.readOnly().returnCalls[2].exactSymbol;
+        REQUIRE(specialA != specialB && specialA != whole && specialB != whole);
+        const std::string variants[] = {
+            prefix + b + parent + a + body,
+            prefix + parent + a + b + body,
+            prefix + a + parent + b + body,
+            "define enum Foo as A = 500, B = 901 end\n" + parent + b + a + body
+        };
+        for (const auto& source : variants) {
+            const auto certified = oreslang::enum_aot::parseVerified(source);
+            const auto& proof = certified.readOnly();
+            REQUIRE(oreslang::enum_aot::checkedNativeExit(proof) == 30);
+            REQUIRE(proof.returnCalls.size() == 3);
+            REQUIRE(proof.returnCalls[0].exactSymbol == specialA);
+            REQUIRE(proof.returnCalls[1].exactSymbol == specialB);
+            REQUIRE(proof.returnCalls[2].exactSymbol == whole);
+            REQUIRE(proof.returnCalls[0].tag != proof.returnCalls[1].tag);
+            REQUIRE(proof.returnCalls[1].tag == proof.returnCalls[2].tag);
+        }
+    }
     std::puts("PASS: compiled original native enum AOT frontend policy header");
 }
