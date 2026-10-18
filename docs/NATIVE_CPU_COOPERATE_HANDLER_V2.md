@@ -11,9 +11,18 @@ unfinished turn. The same frame and envelope are resumed as ResumeCause::cpu
 on a subsequent physical dispatch, with urgent supervisor CONTROL checked
 first. The owning actor state and frame remain local to one carrier thread.
 Invalid nonzero cooperation value/delay and unsupported status fail closed.
-Shutdown abandons the active logical turn and counts it without invoking the
-handler again after stop; an external lifetime owner must join and quiesce
-the actor before retiring or freeing its frame.
+Shutdown never resumes the ordinary handler after stop. A V2 continuation
+may instead install an explicit `ActorCancelHandler`; if a logical turn entered
+user code but did not return DONE, the actor carrier invokes that callback
+exactly once before publishing `stopped`. The callback runs on the same actor
+carrier with `HungryCarrier::active_heap()` authority, so compiler-generated
+frame cancellation/drop glue can release actor-owned resources without exposing
+them to the broker thread. Queued envelopes that never entered user code do not
+receive cancellation callbacks. DONE racing with STOP wins completion and does
+not receive cancellation. Telemetry counts callback invocation, not successful
+cleanup; generated callbacks remain responsible for fail-closed drop semantics.
+An external lifetime owner must still join and quiesce the actor before retiring
+or freeing its frame.
 
 This deliberately extends the existing **one-actor-per-HungryCarrier**
 contract. It is not multi-actor run-queue fairness, not a production
@@ -24,8 +33,11 @@ loop/rt-cooperate gates remain unchanged.
 The AOT integration test compiles a real .ores loop and lets the actual
 HungryCarrier worker resume each of 64 independent messages three times
 before completion. It verifies single-thread actor execution, mailbox
-ordering, no fake IO, stop during indefinite cooperation, and invalid legacy
-handler/protocol rejection. It tests -O2 and -O3/-DNDEBUG with live checks.
-Future work: general source actor frames on a single multi-actor carrier
-(#321), cancellation acknowledgement, pinned-loan admission (#45), and
-cross-backend fairness and latency.
+ordering, no fake IO, stop during indefinite cooperation, generated-frame
+cancellation, and invalid legacy handler/protocol rejection. The compiled
+scalar frame exports `oreslang_rt_scalar_frame_cancel`; the carrier integration
+checks that stop moves the active frame to CANCELLED exactly once. Separate
+native tests cover STOP-vs-DONE and invalid-protocol cleanup races. It tests
+-O2 and -O3/-DNDEBUG with live checks. Future work: owned fields inside real
+source actor frames, pinned-loan admission (#45), explicit cancellation/drop
+receipts, and cross-backend fairness and latency.
