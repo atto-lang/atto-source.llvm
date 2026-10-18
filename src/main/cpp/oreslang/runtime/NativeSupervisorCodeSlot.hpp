@@ -110,10 +110,24 @@ public:
         return Lease(current_);
     }
 
+    /** Atomic, ABI-exact publication of a fully prepared image.
+     *
+     * A rejected candidate owns its cleanup just like an accepted one.
+     * Construct the candidate before acquiring the slot lock so that
+     * reclamation (including allocator failures) cannot call back under
+     * the CONTROL activation mutex. A guest callable must never execute
+     * while this mutex is held.
+     */
     Descriptor activate(std::uint64_t expected_revision, std::string abi,
             Policy code, std::function<void()> reclaim) {
         if (abi.empty() || !reclaim)
             throw std::invalid_argument("invalid native supervisor code image");
+
+        // Resource ownership starts here, before any CAS/admission rejection.
+        // On stale revision, incompatible ABI, close, or live-cap failure the
+        // candidate is destroyed AFTER unwinding the scoped activation lock.
+        auto candidate = std::make_shared<Generation>(
+                0, std::move(abi), std::move(code), std::move(reclaim));
         std::shared_ptr<Generation> previous;
         Descriptor activated;
         {
@@ -123,21 +137,26 @@ public:
                 throw std::logic_error("stale native supervisor code revision");
             if (current_->number == UINT64_MAX)
                 throw std::overflow_error("native supervisor code revision space exhausted");
-            if (current_->abi != abi)
+            if (current_->abi != candidate->abi)
                 throw std::invalid_argument("native supervisor policy ABI migration required");
+
             prune_locked();
+            // The current revision is already included in retained_. If nobody
+            // else pins it, it will disappear after this activation, making
+            // room for the candidate even when the vector is at capacity.
             if (retained_.size() >= max_live_ && current_.use_count() > 1)
                 throw std::length_error("pinned native supervisor code revision cap exceeded");
-            auto next = std::make_shared<Generation>(
-                current_->number + 1, std::move(abi),
-                std::move(code), std::move(reclaim));
-            activated = {next->number, next->abi};
-            retained_.push_back(next);
+
+            // vector growth may throw; candidate cleanup still runs outside
+            // this mutex because candidate was declared before guard.
+            retained_.push_back(candidate);
+            candidate->number = current_->number + 1;
+            activated = {candidate->number, candidate->abi};
             previous = std::move(current_);
-            current_ = std::move(next);
+            current_ = candidate;
         }
-        // Release the old code outside the slot lock; reclamation callbacks
-        // must never run with the supervisor policy activation mutex held.
+        // Never reclaim code with a supervisor policy lock held. Old leases
+        // keep their exact revision alive until their last borrower exits.
         previous.reset();
         return activated;
     }
