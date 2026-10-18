@@ -39,8 +39,10 @@ class Model:
     committed_upgrades: int = 0
     rolled_back_upgrades: int = 0
     expected_sum: int = 0
-    accepted_tickets: list = field(default_factory=list)
-    processed_tickets: list = field(default_factory=list)
+    accepted_seen: set = field(default_factory=set)
+    processed_seen: set = field(default_factory=set)
+    last_accepted_ticket: int = 0
+    last_processed_ticket: int = 0
 
     def logical_send(self, delta):
         ticket = self.next_ticket
@@ -54,8 +56,11 @@ class Model:
         require(not physical.stopped, "logical route admitted to stopped physical actor")
         require(not physical.sealed, "logical route admitted to sealed physical actor")
         physical.queue.append((ticket, delta))
+        require(ticket not in self.accepted_seen, "duplicate logical send admission")
+        require(ticket > self.last_accepted_ticket, "logical send admission reordered")
+        self.accepted_seen.add(ticket)
+        self.last_accepted_ticket = ticket
         self.returned_sends += 1
-        self.accepted_tickets.append(ticket)
 
     def process_one(self):
         if not self.active.queue:
@@ -67,8 +72,12 @@ class Model:
         else:
             self.active.state += abs(delta)
             self.expected_sum += abs(delta)
+        require(ticket in self.accepted_seen, "processed message was never admitted")
+        require(ticket not in self.processed_seen, "duplicate message processing")
+        require(ticket > self.last_processed_ticket, "logical FIFO ordering changed")
+        self.processed_seen.add(ticket)
+        self.last_processed_ticket = ticket
         self.processed += 1
-        self.processed_tickets.append(ticket)
         return True
 
     def begin_upgrade(self):
@@ -119,13 +128,8 @@ class Model:
     def verify(self):
         require(self.logical_incarnation == 1, "transparent hot upgrade changed logical incarnation")
         require(self.route_epoch == self.committed_upgrades + 1, "route epoch drift")
-        require(self.returned_sends == len(self.accepted_tickets), "send return/admission mismatch")
-        require(len(set(self.accepted_tickets)) == len(self.accepted_tickets),
-                "duplicate logical send admission")
-        require(len(set(self.processed_tickets)) == len(self.processed_tickets),
-                "duplicate message processing")
-        require(set(self.processed_tickets).issubset(set(self.accepted_tickets)),
-                "processed message was never admitted")
+        require(self.returned_sends == len(self.accepted_seen), "send return/admission mismatch")
+        require(self.processed == len(self.processed_seen), "processed-ticket accounting mismatch")
         queued = sum(len(p.queue) for p in [self.active] + self.retired)
         require(self.returned_sends == self.processed + queued,
                 "accepted-message conservation violated")
@@ -170,8 +174,8 @@ def one(seed):
 
     require(not m.waiting, "final waiter leak")
     require(m.returned_sends == m.processed, "final accepted message lost")
-    require(m.processed_tickets == sorted(m.processed_tickets),
-            "logical FIFO ordering changed across route publication")
+    require(m.last_processed_ticket == m.returned_sends,
+            "logical FIFO/ticket sequence did not fully drain")
     require(m.active.state == m.expected_sum,
             "state/checkpoint evolution diverged from exactly-once delivery")
     m.verify()
