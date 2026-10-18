@@ -92,11 +92,21 @@ public:
     std::optional<Watch> try_watch(int fd, std::uint32_t events) noexcept {
         return try_watch_impl(fd, events, nullptr);
     }
+    // Trusted host calls this before guest work begins. Idempotent and
+    // nonparking; caller must observe true (a failed try-lock is NOT a seal).
+    // In preallocated RT mode the first valid watch also seals automatically.
+    bool seal_owned_bootstrap() noexcept {
+        std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
+        if (!guard.owns_lock()) return false;
+        owned_bootstrap_sealed_ = true;
+        return true;
+    }
     // Host bootstrap only: kernel creates a distinct eventfd and this manager
     // mints a private capability. These syscalls are NOT real-time guest work.
     std::optional<OwnedEventFd> open_owned_eventfd() noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock() || stopped_ || next_owner_ == UINT64_MAX ||
+        if (!guard.owns_lock() || stopped_ || owned_bootstrap_sealed_ ||
+                next_owner_ == UINT64_MAX ||
                 next_generation_ == UINT64_MAX) return std::nullopt;
         const auto index = free_owned_slot();
         if (index == owned_capacity) return std::nullopt;
@@ -110,8 +120,8 @@ public:
     // Host-only kernel dup: aliases inherit exactly the same owner ID.
     std::optional<OwnedEventFd> duplicate_owned_eventfd(OwnedEventFd key) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock() || stopped_ || next_generation_ == UINT64_MAX)
-            return std::nullopt;
+        if (!guard.owns_lock() || stopped_ || owned_bootstrap_sealed_ ||
+                next_generation_ == UINT64_MAX) return std::nullopt;
         const auto* source = lookup_owned(key);
         if (!source) return std::nullopt;
         const auto index = free_owned_slot();
@@ -190,6 +200,11 @@ private:
                      claim.access_mode == access_mode)) return std::nullopt;
         }
         auto count = started_.load(std::memory_order_relaxed);
+        // Once a realtime reactor enters its first accepted readiness
+        // operation, no later host FD creation/duplication may occur. Existing
+        // pre-minted handles remain usable for signal/drain/watch/retirement.
+        if (profile_ == Profile::preallocated_rt)
+            owned_bootstrap_sealed_ = true;
         if (count == 0) {
             if (profile_ != Profile::throughput || !reactors_[0]->start())
                 return std::nullopt;
@@ -348,5 +363,6 @@ private:
     std::atomic<std::size_t> next_completion_{0};
     mutable std::mutex mu_;
     bool stopped_ = false;
+    bool owned_bootstrap_sealed_ = false; // guarded by mu_
 };
 } // namespace oreslang::runtime

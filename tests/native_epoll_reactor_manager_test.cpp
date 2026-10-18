@@ -191,6 +191,11 @@ int main() {
         auto a = manager.try_watch(*one, EPOLLIN);
         auto b = manager.try_watch(*two, EPOLLIN);
         check(a.has_value() && b.has_value());
+        // Preallocated RT must automatically close the syscall-bearing FD
+        // creation phase when the first accepted operation is attempted.
+        check(!manager.open_owned_eventfd().has_value());
+        check(!manager.duplicate_owned_eventfd(*one).has_value());
+        check(manager.seal_owned_bootstrap()); // idempotent host operation
         check(!manager.try_watch(*alias, EPOLLIN).has_value());
         check(!manager.close_owned_eventfd(*one));
         check(manager.signal_owned_eventfd(*one));
@@ -250,6 +255,28 @@ int main() {
         check(source.close_owned_eventfd(*token));
         check(other.close_owned_eventfd(*foreign));
         check(!source.try_watch(*token, EPOLLIN).has_value());
+    }
+    {
+        // Explicit host bootstrap seal is enforceable in throughput mode too:
+        // no later kernel descriptors, but pre-minted capabilities still work.
+        NativeEpollReactorManager manager(1);
+        auto key = manager.open_owned_eventfd();
+        check(key.has_value());
+        check(manager.started_threads() == 0);
+        check(manager.seal_owned_bootstrap());
+        check(manager.seal_owned_bootstrap());
+        check(!manager.open_owned_eventfd().has_value());
+        check(!manager.duplicate_owned_eventfd(*key).has_value());
+        check(manager.started_threads() == 0);
+        auto watch = manager.try_watch(*key, EPOLLIN);
+        check(watch.has_value());
+        check(manager.close_owned_eventfd(*key) == false);
+        manager.stop();
+        auto terminal = manager.try_pop();
+        check(terminal.has_value() &&
+              terminal->event.ticket.value == watch->ticket.value &&
+              terminal->event.outcome == NativeEpollReactor::Outcome::stopped);
+        check(manager.close_owned_eventfd(*key));
     }
     {
         // Cold throughput admission must fail before spawning any pthread.
