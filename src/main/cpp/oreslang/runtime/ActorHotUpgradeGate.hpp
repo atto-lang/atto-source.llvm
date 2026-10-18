@@ -1,0 +1,214 @@
+#pragma once
+
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace oreslang::runtime {
+
+/**
+ * HOST-ONLY state-machine proof of actor hot-upgrade fencing, not a native
+ * executable-code loader or an integrated Oreslang source-actor scheduler.
+ * Callers must be trusted and obtain image/ABI hashes from a verified compiler.
+ */
+class ActorHotUpgradeGate final {
+public:
+    struct Image {
+        std::string code_sha256;
+        std::string state_sha256;
+        std::string message_abi_sha256;
+        std::string capability_sha256;
+
+        bool same_boundary(const Image& rhs) const noexcept {
+            return state_sha256 == rhs.state_sha256
+                && message_abi_sha256 == rhs.message_abi_sha256
+                && capability_sha256 == rhs.capability_sha256;
+        }
+    };
+
+private:
+    struct State {
+        State(std::uint64_t id, Image initial)
+            : actor_id(id), active(std::move(initial)) {}
+        std::mutex mutex;
+        const std::uint64_t actor_id;
+        Image active;
+        std::uint64_t epoch = 1;
+        std::uint64_t next_ticket = 1;
+        std::uint64_t pending_ticket = 0;
+        std::optional<Image> pending;
+        std::size_t pins = 0;
+        bool closed = false;
+    };
+
+    std::shared_ptr<State> state_;
+
+    static void check_digest(const std::string& value) {
+        if (value.size() != 64
+                || !std::all_of(value.begin(), value.end(),
+                    [](char c) { return (c >= '0' && c <= '9')
+                        || (c >= 'a' && c <= 'f'); }))
+            throw std::invalid_argument("expected canonical lowercase SHA-256");
+    }
+
+    static void validate(const Image& image) {
+        check_digest(image.code_sha256);
+        check_digest(image.state_sha256);
+        check_digest(image.message_abi_sha256);
+        check_digest(image.capability_sha256);
+    }
+
+public:
+    class Lease final {
+        friend class ActorHotUpgradeGate;
+        std::shared_ptr<State> state_;
+        std::uint64_t epoch_ = 0;
+        explicit Lease(std::shared_ptr<State> state, std::uint64_t epoch)
+            : state_(std::move(state)), epoch_(epoch) {}
+    public:
+        Lease() = default;
+        Lease(const Lease&) = delete;
+        Lease& operator=(const Lease&) = delete;
+        Lease(Lease&&) noexcept = default;
+        Lease& operator=(Lease&& rhs) noexcept {
+            if (this != &rhs) {
+                close();
+                state_ = std::move(rhs.state_);
+                epoch_ = rhs.epoch_;
+                rhs.epoch_ = 0;
+            }
+            return *this;
+        }
+        ~Lease() { close(); }
+
+        std::uint64_t epoch() const noexcept { return epoch_; }
+        void close() noexcept {
+            auto state = std::move(state_);
+            if (!state) return;
+            std::lock_guard<std::mutex> guard(state->mutex);
+            if (state->pins != 0) --state->pins;
+        }
+    };
+
+    class Candidate final {
+        friend class ActorHotUpgradeGate;
+        std::shared_ptr<State> state_;
+        std::uint64_t origin_epoch_ = 0;
+        std::uint64_t ticket_ = 0;
+        Candidate(std::shared_ptr<State> state, std::uint64_t epoch,
+                  std::uint64_t ticket)
+            : state_(std::move(state)), origin_epoch_(epoch), ticket_(ticket) {}
+    public:
+        Candidate(const Candidate&) = default;
+    };
+
+    explicit ActorHotUpgradeGate(std::uint64_t actor_id, Image initial) {
+        if (actor_id == 0) throw std::invalid_argument("actor id must be nonzero");
+        validate(initial);
+        state_ = std::make_shared<State>(actor_id, std::move(initial));
+    }
+    ActorHotUpgradeGate(const ActorHotUpgradeGate&) = delete;
+    ActorHotUpgradeGate& operator=(const ActorHotUpgradeGate&) = delete;
+    ~ActorHotUpgradeGate() { close(); }
+
+    std::uint64_t actor_id() const noexcept { return state_->actor_id; }
+    std::uint64_t epoch() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->epoch;
+    }
+    Image image() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->active;
+    }
+    std::size_t pins() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->pins;
+    }
+    bool frozen() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->pending.has_value();
+    }
+    bool retired() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->closed && state_->pins == 0;
+    }
+
+    Lease pin() {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        if (state_->closed || state_->pending)
+            throw std::logic_error("closed or upgrade-frozen actor");
+        if (state_->pins == std::numeric_limits<std::size_t>::max())
+            throw std::overflow_error("actor pins exhausted");
+        ++state_->pins;
+        return Lease(state_, state_->epoch);
+    }
+
+    bool permits(const Lease& lease) const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return lease.state_.get() == state_.get()
+            && lease.epoch_ == state_->epoch && !state_->closed;
+    }
+
+    Candidate prepare(Image proposed) {
+        validate(proposed);
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        if (state_->closed || state_->pending)
+            throw std::logic_error("closed or already upgrading actor");
+        if (!state_->active.same_boundary(proposed))
+            throw std::logic_error("actor state, message ABI or capability change denied");
+        if (state_->active.code_sha256 == proposed.code_sha256)
+            throw std::invalid_argument("identical image is not an upgrade");
+        if (state_->next_ticket == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("upgrade ticket exhaustion");
+        const auto ticket = state_->next_ticket++;
+        state_->pending_ticket = ticket;
+        state_->pending.emplace(std::move(proposed)); // owned copy; no mutable caller alias
+        return Candidate(state_, state_->epoch, ticket);
+    }
+
+    bool publish(const Candidate& proposed) {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        check_candidate(proposed);
+        if (state_->pins != 0) return false;
+        if (state_->epoch == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("actor upgrade epoch exhausted");
+        state_->active = std::move(*state_->pending);
+        state_->pending.reset();
+        state_->pending_ticket = 0;
+        ++state_->epoch;
+        return true;
+    }
+
+    void abort(const Candidate& proposed) {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        check_candidate(proposed);
+        state_->pending.reset();
+        state_->pending_ticket = 0;
+    }
+
+    void close() noexcept {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        state_->closed = true;
+        state_->pending.reset();
+        state_->pending_ticket = 0;
+        // Pins retain State ownership and release after this object's destruction.
+        // There is deliberately no native arena/code-page reclamation here.
+    }
+
+private:
+    void check_candidate(const Candidate& candidate) const {
+        if (state_->closed || candidate.state_.get() != state_.get()
+                || candidate.origin_epoch_ != state_->epoch
+                || candidate.ticket_ == 0
+                || candidate.ticket_ != state_->pending_ticket || !state_->pending)
+            throw std::logic_error("stale, foreign or retired upgrade candidate");
+    }
+};
+
+} // namespace oreslang::runtime
