@@ -129,3 +129,10 @@ The Java/Graal frontend draft #1377 parses two distinct lambda modifiers:
 The native bootstrap currently cannot create either typed closure or nonparking continuation. It now fails closed with **distinct diagnostics**, before emitting LLVM IR, for `async task |...|` and `async |...|`, including the latter wrapping `nb { ... }`. `task` is contextual after `async`, not a globally reserved type/identifier.
 
 Do not enable native source execution until task-owned capture/borrowing and cancellation, single-completion publication, lexical return and cleanup unwinding, bounded scheduler admission, cross-domain actor and tenant isolation, and exact-head executable parity evidence are available. Rejection proves only absence of unsafe partial lowering, not implementation.
+
+
+## Suspends lambda native execution gate (2026-10-18)
+
+Java frontend Task draft #1377 differentiates a `suspends |...| -> body` (or contextual `suspend |...|`) caller-executed callable from `async |...|` producing `Future<T>` and `async task |...|` producing `Task<T>`. The `suspends` lambda's return type is **T**, without implicit `Task<T>` creation; the compiler must preserve the suspension effect when using it as a first-class value and require a suspension-capable caller. Ordinary lambdas cannot silently inherit `suspends` from an outer declaration.
+
+The native scalar parser now detects the explicit pipe and typed parameter variants of `suspends` lambda syntax and raises a distinct fail-closed diagnostic before LLVM IR. It does not attempt to represent effectful closures as ordinary C scalar function pointers. The same lexical ownership, actor confinement and cleanup protections that apply to Task continuation frames apply to caller-executed suspension frames; verification requires exact-head real native compiler execution.
