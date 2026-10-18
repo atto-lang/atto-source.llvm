@@ -103,6 +103,82 @@ static void test_rw_fairness_and_wake_cohorts(void) {
     assert(ores_std_release(&gate,d.ticket).code == ORES_STD_SYNC_GRANTED);
 }
 
+static void test_seal_and_physical_quiescence(void) {
+    ores_std_sync_gate gate = ORES_STD_MUTEX_INIT;
+    ores_std_sync_result active = ores_std_request(&gate, ORES_STD_WRITE);
+    ores_std_sync_result queued = ores_std_request(&gate, ORES_STD_WRITE);
+    assert(active.code == ORES_STD_SYNC_GRANTED);
+    assert(queued.code == ORES_STD_SYNC_QUEUED);
+    assert(ores_std_start(&gate, active.ticket) == ORES_STD_SYNC_GRANTED);
+    ores_std_sync_result stop = ores_std_seal(&gate);
+    assert(stop.code == ORES_STD_SYNC_GRANTED);
+    assert(stop.failed_count == 1 && stop.failed[0].sequence == queued.ticket.sequence);
+    assert(ores_std_request(&gate, ORES_STD_WRITE).code == ORES_STD_SYNC_CLOSED);
+    assert(ores_std_start(&gate, queued.ticket) == ORES_STD_SYNC_STALE);
+    assert(ores_std_seal(&gate).code == ORES_STD_SYNC_CLOSED);
+    assert(ores_std_quiescent(&gate) == ORES_STD_SYNC_EXECUTING);
+    assert(ores_std_release(&gate, active.ticket).code == ORES_STD_SYNC_EXECUTING);
+    assert(ores_std_ready_to_suspend(&gate, active.ticket) == ORES_STD_SYNC_EXECUTING);
+    end_retry(&gate, active.ticket);
+    assert(ores_std_ready_to_suspend(&gate, active.ticket) == ORES_STD_SYNC_EXECUTING);
+    assert(ores_std_release(&gate, active.ticket).code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_quiescent(&gate) == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_ready_to_suspend(&gate, active.ticket) == ORES_STD_SYNC_GRANTED);
+
+    ores_std_sync_gate rw = ORES_STD_RW_INIT;
+    ores_std_sync_result r1=ores_std_request(&rw, ORES_STD_READ);
+    ores_std_sync_result r2=ores_std_request(&rw, ORES_STD_READ);
+    ores_std_sync_result w=ores_std_request(&rw, ORES_STD_WRITE);
+    assert(ores_std_start(&rw, r1.ticket) == ORES_STD_SYNC_GRANTED);
+    stop = ores_std_seal(&rw);
+    assert(stop.code == ORES_STD_SYNC_GRANTED);
+    assert(stop.failed_count == 2);
+    assert(ores_std_start(&rw, r2.ticket) == ORES_STD_SYNC_STALE);
+    assert(ores_std_start(&rw, w.ticket) == ORES_STD_SYNC_STALE);
+    end_retry(&rw, r1.ticket);
+    assert(ores_std_release(&rw, r1.ticket).code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_quiescent(&rw) == ORES_STD_SYNC_GRANTED);
+}
+
+typedef struct stop_race {
+    ores_std_sync_gate gate;
+    ores_std_ticket ticket;
+    atomic_bool start;
+    ores_std_sync_code admitted;
+} stop_race;
+static void *start_during_stop(void* payload) {
+    stop_race* race=(stop_race*)payload;
+    while(!atomic_load_explicit(&race->start,memory_order_acquire)) sched_yield();
+    race->admitted=ores_std_start(&race->gate,race->ticket);
+    return NULL;
+}
+static void test_stop_vs_start_race(void) {
+    for(int i=0;i<500;++i) {
+        stop_race race={ORES_STD_MUTEX_INIT,{0},ATOMIC_VAR_INIT(false),ORES_STD_SYNC_INVALID};
+        ores_std_sync_result r=ores_std_request(&race.gate,ORES_STD_WRITE);
+        assert(r.code == ORES_STD_SYNC_GRANTED);
+        race.ticket=r.ticket;
+        pthread_t thread;
+        assert(!pthread_create(&thread,NULL,start_during_stop,&race));
+        atomic_store_explicit(&race.start,true,memory_order_release);
+        ores_std_sync_result stop;
+        do { stop=ores_std_seal(&race.gate); }
+        while(stop.code == ORES_STD_SYNC_RETRY);
+        assert(!pthread_join(thread,NULL));
+        assert(race.admitted == ORES_STD_SYNC_GRANTED ||
+               race.admitted == ORES_STD_SYNC_STALE ||
+               race.admitted == ORES_STD_SYNC_CLOSED ||
+               race.admitted == ORES_STD_SYNC_RETRY);
+        if(race.admitted == ORES_STD_SYNC_GRANTED) {
+            end_retry(&race.gate,race.ticket);
+            assert(release_retry(&race.gate,race.ticket).code == ORES_STD_SYNC_GRANTED);
+        } else {
+            assert(stop.failed_count == 1);
+        }
+        assert(ores_std_quiescent(&race.gate) == ORES_STD_SYNC_GRANTED);
+    }
+}
+
 static ores_std_sync_gate mutex = ORES_STD_MUTEX_INIT;
 static ores_std_sync_gate rw = ORES_STD_RW_INIT;
 static uint64_t mutex_counter, writer_counter;
@@ -148,6 +224,8 @@ static void *rw_writer(void* unused) {
 int main(void) {
     test_mutex_fifo_and_cancellation();
     test_rw_fairness_and_wake_cohorts();
+    test_seal_and_physical_quiescence();
+    test_stop_vs_start_race();
     pthread_t mt[5],rt[4],wt[2];
     for(unsigned i=0;i<5;++i) assert(!pthread_create(&mt[i],NULL,mutex_worker,NULL));
     for(unsigned i=0;i<4;++i) assert(!pthread_create(&rt[i],NULL,rw_reader,NULL));
