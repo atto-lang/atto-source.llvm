@@ -187,7 +187,7 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
  * involved: incoming links must be purged and recycled slots must not revive
  * old non-owning handles.  External ledger is intentionally independent of
  * the implementation's live-node/edge counters. */
-static void model_check_graph_reuse_and_stale_handles() {
+static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
     using Heap = ActorOwnedGraphHeap<8, 16, 3>;
     const ActorHeapIdentity owner{71, 19, 5};
     Heap graph(owner);
@@ -195,7 +195,6 @@ static void model_check_graph_reuse_and_stale_handles() {
     std::array<std::optional<Heap::Handle>, 8> stale{};
     std::array<std::array<bool, 8>, 8> edges{};
     std::array<std::uint8_t, 8> values{};
-    std::uint32_t seed = 0x51ABCAFEu;
     auto random = [&]() noexcept -> std::uint32_t {
         seed ^= seed << 13;
         seed ^= seed >> 17;
@@ -278,6 +277,19 @@ static void model_check_graph_reuse_and_stale_handles() {
                 if (edges[a][b]) ++links;
             }
         }
+        // A stale handle must remain invalid even after thousands of later
+        // allocations and recycling cycles; test across multiple states,
+        // not only at the instant of removal.
+        if (step % 31 == 0) {
+            for (const auto& former : stale) {
+                if (former) {
+                    std::uint8_t discarded = 0;
+                    must_reject([&] {
+                        (void)graph.copy_out(owner, *former, &discarded, 1);
+                    }, "stale actor handle revived after generation recycling");
+                }
+            }
+        }
         check(graph.live_nodes(owner) == nodes, "graph node accounting drift");
         check(graph.live_edges(owner) == links, "graph edge accounting drift");
     }
@@ -288,11 +300,14 @@ static void model_check_graph_reuse_and_stale_handles() {
     check(proof.has_value(), "model stress lacked trusted retirement proof");
     graph.retire(owner, *proof);
     check(graph.retired(), "model stress failed zero-tracing-GC retirement");
-    std::cout << "PASS deterministic model-checked graph ownership and ABA stress\\n";
+    std::cout << "PASS seeded differential graph ownership and ABA stress\\n";
 }
 
 int main() {
-    model_check_graph_reuse_and_stale_handles();
+    for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
+                               0xC0DEC0DEu, 0xDEADBEEFu}) {
+        model_check_graph_reuse_and_stale_handles(seed);
+    }
     cycles_reclaim_without_gc();
     stale_generation_and_foreign_heap_rejected();
     bounded_capacity_and_purge();
