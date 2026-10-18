@@ -82,7 +82,12 @@ private:
         return difference == 0;
     }
     static void validate_header(const Header& h) {
-        require(h.incarnation != 0, "actor checkpoint incarnation must be positive");
+        // Java ByteBuffer.getLong is signed; reject native-only epochs with
+        // the high bit set so both backends admit exactly the same wire space.
+        require(h.incarnation != 0
+                && h.incarnation <= static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max()),
+                "actor checkpoint incarnation must fit positive int64");
     }
 
 public:
