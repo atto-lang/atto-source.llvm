@@ -105,6 +105,28 @@ int main() {
     assert(disconnect_race.invariant());
     rejects([&]{ disconnect_race.accept_verified(
         in_flight, IpcReceiptStage::handler_committed); });
+    // Loss yields exact receipt IDs + stage, so a local supervisor can
+    // complete guest Futures with an indeterminate outcome and NO replay.
+    NativeIpcReceiptTable notices(3);
+    auto m1 = envelope(1), m2 = envelope(2), m3 = envelope(3);
+    m2.session = "sessionB";
+    notices.admit(m1);
+    notices.admit(m2);
+    notices.admit(m3);
+    notices.accept_verified(m3, IpcReceiptStage::remote_accepted);
+    auto retired = notices.retire_transport_lost("session");
+    assert(retired.size() == 2);
+    assert(retired[0].envelope.message_sequence == 1);
+    assert(retired[0].last_observed == IpcReceiptStage::local_admitted);
+    assert(retired[1].envelope.message_sequence == 3);
+    assert(retired[1].last_observed == IpcReceiptStage::remote_accepted);
+    assert(notices.counters() ==
+        (std::pair<std::size_t,std::size_t>{1,1}));
+    assert(notices.retire_transport_lost("session").empty());
+    rejects([&]{ notices.retire_transport_lost("bad session"); });
+    notices.accept_verified(m2,IpcReceiptStage::remote_accepted);
+    notices.accept_verified(m2,IpcReceiptStage::handler_committed);
+    assert(notices.invariant());
     std::mt19937_64 rng(20261018);
     for(int trial=0;trial<2048;++trial) {
         NativeIpcReceiptTable book(3);
