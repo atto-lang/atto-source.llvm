@@ -210,12 +210,12 @@ static void test_cancel_hook_runs_once_on_actor_thread() {
     const auto stats = actor.stats();
     check(state.initials.load() == 1 && state.cleanups.load() == 1,
           "active logical turn cancellation hook was not exactly once");
-    check(state.violations.load() == 0 && stats.cancel_cleanups == 1,
+    check(state.violations.load() == 0 && stats.cancel_callbacks == 1,
           "cancel cleanup lacked actor heap authority or was miscounted");
     check(stats.completed == 0 && stats.abandoned_on_stop == 1,
           "canceled continuation was incorrectly completed");
     actor.join();
-    check(state.cleanups.load() == 1 && actor.stats().cancel_cleanups == 1,
+    check(state.cleanups.load() == 1 && actor.stats().cancel_callbacks == 1,
           "repeated lifecycle join ran cancellation cleanup twice");
 
     State legacy;
