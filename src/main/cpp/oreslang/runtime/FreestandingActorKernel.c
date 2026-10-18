@@ -15,7 +15,8 @@ static void record_fault(OresKernel *kernel) {
 
 static OresKernelActor *locate(OresKernel *kernel, OresKernelRef ref) {
     if (kernel == 0 || kernel->magic != ORES_KERNEL_MAGIC ||
-        ref.slot >= ORES_KERNEL_ACTORS || ref.generation == 0u) return 0;
+        ref.slot >= ORES_KERNEL_ACTORS || ref.generation == 0u ||
+        ref.owner != kernel) return 0;
     OresKernelActor *actor = &kernel->actors[ref.slot];
     if (actor->active != 1u || actor->generation != ref.generation ||
         !metadata_valid(actor)) return 0;
@@ -80,6 +81,7 @@ OresKernelStatus ores_kernel_spawn(OresKernel *kernel, OresKernelHandler handler
         for (uint32_t i=0; i<ORES_KERNEL_MAILBOX; ++i) actor->messages[i] = 0;
         out->slot = slot;
         out->generation = actor->generation;
+        out->owner = kernel;
         kernel->next_slot = (slot + 1) % ORES_KERNEL_ACTORS;
         return ORES_KERNEL_OK;
     }
