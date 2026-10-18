@@ -1,7 +1,9 @@
 #pragma once
-// STAGED HOST-ONLY compiler oracle for a proposed enum-case refined overload
-// ABI. NOT registered in the guest parser, native codegen or dispatch runtime.
-// Its inputs require a trusted nominal-resolution/typechecker pass.
+// Canonical eos2 static enum-case selector and ABI policy. The production
+// general guest frontends still reject executable refined overloads; one
+// opt-in restricted LLVM enum-AOT source compiler now invokes this policy.
+// It is NEVER a runtime tag-dependent overload dispatcher. General imported
+// guest calls require trusted nominal-resolution/typechecker provenance.
 
 #include <algorithm>
 #include <cstddef>
