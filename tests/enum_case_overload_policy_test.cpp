@@ -111,8 +111,11 @@ int main() {
         }
         return bytes;
     }();
-    rejects([&] { checkFamily({f({
-        Parameter::whole("root." + doubledBytes)})}, registry); });
+    rejects([&] { identifier("root." + doubledBytes); });
+    const std::string oneEAcute({char(0xc3), char(0xa9)});
+    std::string exactLimit;
+    for (int i = 0; i < 256; ++i) exactLimit += oneEAcute;
+    identifier(exactLimit);  // 512 UTF-8 bytes exactly are permitted
     checkFamily({f({Parameter::fixed("int")})}, registry);
 
     const std::vector<Parameter> oversize(MaxArity+1,count);
@@ -132,13 +135,13 @@ int main() {
             std::string({char(0xe2), char(0x80), char(0xaf)})}) {
         rejects([&] { identifier("root." + bytes + "Foo"); });
     }
-    rejects([&] { checkFamily({f({Parameter::whole(
-            std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo")})}, registry); });
-    rejects([&] { checkFamily({f({Parameter::selectedCase("root.Foo",
-            std::string("A") + std::string({char(0xe2),char(0x80),char(0x8d)}))})}, registry); });
-    rejects([&] { checkFamily({f({Parameter::whole("root.\xED\xA0\x80")})}, registry); });
-    rejects([&] { checkFamily({f({Parameter::whole("root.\xC0\x80")})}, registry); });
-    rejects([&] { checkFamily({f({Parameter::whole("root.\xF4\x90\x80\x80")})}, registry); });
+    rejects([&] { identifier(
+            std::string("root.") + std::string({char(0xe2),char(0x80),char(0xae)}) + "Foo"); });
+    rejects([&] { identifier(
+            std::string("A") + std::string({char(0xe2),char(0x80),char(0x8d)})); });
+    rejects([&] { identifier(std::string("root.") + std::string({char(0xed),char(0xa0),char(0x80)})); });
+    rejects([&] { identifier(std::string("root.") + std::string({char(0xc0),char(0x80)})); });
+    rejects([&] { identifier(std::string("root.") + std::string({char(0xf4),char(0x90),char(0x80),char(0x80)})); });
     // C-string literals truncate at NUL; force a truly embedded NUL.
     const std::string embeddedNul = std::string("root.") + char(0) + "Foo";
     rejects([&] { identifier(embeddedNul); });
