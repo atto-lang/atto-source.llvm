@@ -14,6 +14,7 @@ message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/frontend/ModuleLoader.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
@@ -481,6 +482,11 @@ if(BUILD_TESTING)
             set_tests_properties(native_http_compiled_actor_${mode} PROPERTIES TIMEOUT 180)
         endforeach()
     endif()
+
+    add_test(NAME native_source_module_graph_execution
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_module_imports.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
 
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}

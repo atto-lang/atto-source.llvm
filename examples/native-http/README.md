@@ -1,6 +1,7 @@
 # Native HTTP actor integration slice
 
-This executable links LLVM-compiled `worker.ores` with the native C actor
+This executable links LLVM-compiled `worker.ores` and its imported `http_status.ores`
+helper with the native C actor
 scheduler, actor-owned scalar heaps and a C++ HTTP/1.1 adapter. It requires no
 Java, JVM, JIT, source parser or compiler at request time. Both scheduler workers
 and the I/O reactor run inside **one OS process**. Actor messages never travel
@@ -61,8 +62,9 @@ not exposed by this slice; there is no blocking-worker fallback.
 ## Deliberate limits
 
 **This is not full Spin compilation or GraalVM feature/performance parity.**
-The native guest actor increments a persistent request count and returns the
-adapter-selected response status. Parsing, fixed routing and response formatting
+The native guest actor increments a persistent request count and passes the
+adapter-selected status through a statically imported public function/private
+helper before returning it. Parsing, fixed routing and response formatting
 are trusted C++ work. Only bodyless HTTP/1.1 requests are admitted; `/health`
 returns `ok\n`; other GET paths produce 404 and other methods produce 405.
 Request bodies, TLS, HTTP/2, general routing, async guest handlers, cancellation,

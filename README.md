@@ -16,6 +16,9 @@ reject them without producing IR. See [the native select parity contract](docs/S
 - Typed `int` parameters, `return` expressions, integer literals with underscores,
   unary `-`, parentheses, `+`, `-`, `*`, parameter references and same-module function calls.
 - Forward declarations enable calls before definitions and recursion (not bounded recursion).
+- Relative module selections are statically linked across files, preserving private
+  helpers, overload slots and whole-program ownership checking. See
+  [native module linking and limits](docs/NATIVE_MODULE_LINKING.md).
 - Reject undeclared names, duplicate function/parameter names, mismatched call arities,
   overflowed positive i64 literals, malformed syntax, and unsupported language features.
 - Lower each function to i64 LLVM IR, verify the entire LLVM module before printing IR.
@@ -65,7 +68,7 @@ The compiler CLI prints LLVM IR; the AOT driver below links it into a host execu
 Direct object output and a versioned ABI remain unimplemented.
 
 Unsupported actors, async/await, channels, traits, general heap-allocated classes,
-imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
+package/std imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
 and compiler-integrated native actor memory domains **fail closed**.
 The narrow stack-only class subset and native RAII runtime primitives above
 are the first tested steps toward an ownership-first backend.
@@ -89,8 +92,8 @@ an executable. It needs the compiler and Clang only at build time; the output
 requires neither Java nor an Ores interpreter. A failed compile/link preserves
 any existing output. No unsupported source falls back to interpretation.
 This is not a static-linking or cross-compilation guarantee, and it does not
-make Spin compile: imports, actors, channels and async HTTP still require guest
-lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
+make Spin compile: public module object/method surfaces, channels and async HTTP
+still require guest lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
 
 ## Native HTTP actor integration
 

@@ -22,7 +22,8 @@ import hashlib, json, pathlib, subprocess, sys
 root, output = map(pathlib.Path, sys.argv[1:3])
 def git(*args): return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
 files = sorted((root/'src/main/cpp/oreslang/runtime').glob('*'))
-files += [root/'examples/native-http/server.cpp', root/'examples/native-http/worker.ores']
+files += sorted((root/'examples/native-http').glob('*.ores'))
+files += [root/'examples/native-http/server.cpp']
 sources = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files if p.is_file()}
 receipt = {'source_commit': git('rev-parse', 'HEAD'), 'source_tree': git('rev-parse', 'HEAD^{tree}'),
            'dirty': bool(git('status', '--porcelain')), 'sources_sha256': sources,

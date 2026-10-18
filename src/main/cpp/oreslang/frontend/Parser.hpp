@@ -176,6 +176,7 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
 };
@@ -197,7 +198,15 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+struct ModuleImport {
+    std::string selected_module;
+    std::string local_name;
+    std::string path;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
@@ -210,5 +219,11 @@ struct Program {
 // Actors remain incompatible with wasm32 and source-level await/suspension.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
+
+// Internal module-linking stages: syntax trees are NOT admitted for codegen.
+// resolve_and_validate_program must run after all module names are resolved.
+Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
+                                 bool experimental_rt_scalar_loop = false);
+void resolve_and_validate_program(const Program& program);
 
 } // namespace oreslang

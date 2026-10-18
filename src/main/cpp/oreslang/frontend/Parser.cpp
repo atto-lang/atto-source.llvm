@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, String, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -108,6 +108,21 @@ public:
                 }
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
+        }
+        if (ch == '"' || ch == '\'') {
+            const char quote = ch;
+            ++at_;
+            const auto content = at_;
+            while (at_ < source_.size() && source_[at_] != quote) {
+                const auto byte = static_cast<unsigned char>(source_[at_]);
+                if (byte < 32 || byte == 127 || source_[at_] == '\\')
+                    throw std::runtime_error("native import path escapes/control characters unsupported at byte " + std::to_string(at_));
+                ++at_;
+            }
+            if (at_ == source_.size()) throw std::runtime_error("unterminated native import path at byte " + std::to_string(start));
+            const auto text = source_.substr(content, at_ - content);
+            ++at_;
+            return {Kind::String, text, start};
         }
         if (digit(ch)) {
             ++at_;
@@ -208,6 +223,23 @@ public:
 
     Program parse() {
         Program program;
+        while (accept("import")) {
+            ModuleImport imported;
+            imported.offset = token_.offset;
+            require("module");
+            imported.selected_module = identifier();
+            imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            if (!module_names_.insert(imported.local_name).second)
+                fail("duplicate imported module binding '" + imported.local_name + "'");
+            require("from");
+            if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
+            imported.path = std::string(token_.text);
+            if (imported.path.empty() || imported.path.size() > 4096)
+                fail("native import path must contain 1..4096 bytes");
+            advance();
+            require(";");
+            program.imports.push_back(std::move(imported));
+        }
         bool wrapped_module = false;
         if (accept("define")) {
             if (accept("serial")) {
@@ -256,9 +288,10 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
-        validate(program);
         return program;
     }
+
+    static void validate_complete(const Program& program) { validate(program); }
 
 private:
     ActorDecl actor_declaration() {
@@ -1264,6 +1297,8 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
+        if (module_names_.count(expr->name) && accept("."))
+            expr->name += "." + identifier();
         if (accept("<")) {
             expr->type_arguments_present = true;
             if (!accept(">")) {
@@ -1836,13 +1871,14 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::unordered_set<std::string> module_names_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
 };
 
 } // namespace
 
-Program parse_program(std::string_view source, bool experimental_owned_int,
+Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
@@ -1851,9 +1887,20 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
              !program.classes.empty() || !program.actors.empty() ||
              !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
-    // LLVM lowering is prohibited unless the native subset has passed both
-    // name/arity checking and flow-sensitive explicit ownership admission.
+    return program;
+}
+
+void resolve_and_validate_program(const Program& program) {
+    if (!program.imports.empty())
+        throw std::runtime_error("native imports require filesystem module resolution");
+    Parser::validate_complete(program);
     validate_i64_ownership(program);
+}
+
+Program parse_program(std::string_view source, bool experimental_owned_int,
+                      bool experimental_rt_scalar_loop) {
+    auto program = parse_unresolved_program(source, experimental_owned_int, experimental_rt_scalar_loop);
+    resolve_and_validate_program(program);
     return program;
 }
 

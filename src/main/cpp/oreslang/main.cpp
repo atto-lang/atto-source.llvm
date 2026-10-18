@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 
@@ -19,44 +20,6 @@
 #include <string>
 #include <array>
 #include <string_view>
-
-// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
-// code points above U+10FFFF) and binary NUL before native parser admission.
-static void require_valid_source_utf8(std::string_view source) {
-    for (std::size_t i = 0; i < source.size();) {
-        const auto lead = static_cast<unsigned char>(source[i]);
-        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
-        if (lead <= 0x7f) { ++i; continue; }
-
-        std::size_t continuation_count = 0;
-        unsigned char min_first = 0x80;
-        unsigned char max_first = 0xbf;
-        if (lead >= 0xc2 && lead <= 0xdf) {
-            continuation_count = 1;
-        } else if (lead >= 0xe0 && lead <= 0xef) {
-            continuation_count = 2;
-            if (lead == 0xe0) min_first = 0xa0;
-            if (lead == 0xed) max_first = 0x9f;
-        } else if (lead >= 0xf0 && lead <= 0xf4) {
-            continuation_count = 3;
-            if (lead == 0xf0) min_first = 0x90;
-            if (lead == 0xf4) max_first = 0x8f;
-        } else {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        if (source.size() - i <= continuation_count) {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        for (std::size_t j = 1; j <= continuation_count; ++j) {
-            const auto byte = static_cast<unsigned char>(source[i + j]);
-            if (byte < (j == 1 ? min_first : 0x80) ||
-                byte > (j == 1 ? max_first : 0xbf)) {
-                throw std::runtime_error("native source is not valid UTF-8");
-            }
-        }
-        i += continuation_count + 1;
-    }
-}
 
 
 
@@ -127,9 +90,10 @@ int main(int argc, char** argv) {
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
+        SourceIdentity source_identity;
         const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
             ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+            : "native source exceeds 8 MiB admission limit", &source_identity);
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -141,8 +105,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
-        auto ast = oreslang::parse_program(text, experimental_owned_int,
-                                           experimental_rt_scalar_loop);
+        auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
+                                                 experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls

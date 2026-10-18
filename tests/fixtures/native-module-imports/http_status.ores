@@ -1,0 +1,10 @@
+define module http_status as
+  fnc normalized(int code): int {
+    if (code eq 200) { return 200; } fi
+    if (code eq 404) { return 404; } fi
+    return 405;
+  }
+  pub fnc response_status(int code): int {
+    return normalized(code);
+  }
+end
