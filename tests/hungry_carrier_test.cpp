@@ -187,13 +187,14 @@ static ActorStep cancel_hook_handler(void* raw, ActorMessage message,
     }
     return {StepKind::cooperate, 0, 0};
 }
-static void cancel_hook_cleanup(void* raw, ActorMessage message) noexcept {
+static bool cancel_hook_cleanup(void* raw, ActorMessage message) noexcept {
     auto& state = *static_cast<CancelHookState*>(raw);
     auto* heap = HungryCarrier::active_heap();
-    if (!heap || message.id != 1 || !state.owned.heap ||
-            !heap->release(state.owned))
-        state.violations.fetch_add(1);
+    const bool ok = heap && message.id == 1 && state.owned.heap &&
+                    heap->release(state.owned);
+    if (!ok) state.violations.fetch_add(1);
     state.cleanups.fetch_add(1);
+    return ok;
 }
 static void test_cancel_hook_runs_once_on_actor_thread() {
     CancelHookState state;
@@ -259,13 +260,14 @@ static ActorStep pending_cancel_handler(void* raw, ActorMessage message,
     state.violations.fetch_add(1); // canceled broker work must never resume user code
     return {};
 }
-static void pending_cancel_cleanup(void* raw, ActorMessage message) noexcept {
+static bool pending_cancel_cleanup(void* raw, ActorMessage message) noexcept {
     auto& state = *static_cast<PendingCancelState*>(raw);
     auto* heap = HungryCarrier::active_heap();
-    if (!heap || message.id != 1 || !state.owned.heap ||
-            !heap->release(state.owned))
-        state.violations.fetch_add(1);
+    const bool ok = heap && message.id == 1 && state.owned.heap &&
+                    heap->release(state.owned);
+    if (!ok) state.violations.fetch_add(1);
     state.callbacks.fetch_add(1);
+    return ok;
 }
 static std::int64_t pending_cancel_io(void* raw, std::int64_t value,
                                       const std::atomic<bool>& cancel) noexcept {
@@ -322,8 +324,9 @@ static ActorStep done_race_handler(void* raw, ActorMessage message,
         std::this_thread::yield();
     return {StepKind::done, 0, 0};
 }
-static void done_race_cancel(void* raw, ActorMessage) noexcept {
+static bool done_race_cancel(void* raw, ActorMessage) noexcept {
     static_cast<DoneRaceState*>(raw)->callbacks.fetch_add(1);
+    return true;
 }
 static void test_stop_racing_done_does_not_cancel_completed_turn() {
     for (int round = 0; round < 128; ++round) {
@@ -374,13 +377,14 @@ static ActorStep invalid_step_after_alloc(void* raw, ActorMessage message,
     // COOPERATE may not smuggle I/O-like value/delay payload.
     return {StepKind::cooperate, 42, 1};
 }
-static void invalid_step_cancel(void* raw, ActorMessage message) noexcept {
+static bool invalid_step_cancel(void* raw, ActorMessage message) noexcept {
     auto& state = *static_cast<InvalidStepState*>(raw);
     auto* heap = HungryCarrier::active_heap();
-    if (!heap || message.id != 1 || !state.owned.heap ||
-            !heap->release(state.owned))
-        state.violations.fetch_add(1);
+    const bool ok = heap && message.id == 1 && state.owned.heap &&
+                    heap->release(state.owned);
+    if (!ok) state.violations.fetch_add(1);
     state.callbacks.fetch_add(1);
+    return ok;
 }
 static void test_protocol_failure_still_cancels_active_owned_frame() {
     for (int round = 0; round < 128; ++round) {
