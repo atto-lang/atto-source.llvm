@@ -72,6 +72,35 @@ inline std::uint8_t checkedNativeExit(const Plan& plan) {
     return static_cast<std::uint8_t>(total);
 }
 
+/**
+ * Source-scanner-matching identity gate shared by parsing and LLVM lowering.
+ * Reject anything this opt-in ASCII lexer would never construct, including
+ * reserved language words and injected nested qualified IDs.
+ */
+inline void validateLexicalName(const std::string& name) {
+    if (name.empty() || name.size() > types::case_overloads::MaxIdBytes)
+        throw std::invalid_argument("native enum AOT: invalid identifier size");
+    const auto start = [](unsigned char ch) {
+        return (ch >= 'A' && ch <= 'Z') ||
+               (ch >= 'a' && ch <= 'z') || ch == '_';
+    };
+    if (!start(static_cast<unsigned char>(name.front())))
+        throw std::invalid_argument("native enum AOT: invalid initial identifier");
+    for (unsigned char ch : name) {
+        if (!start(ch) && !(ch >= '0' && ch <= '9'))
+            throw std::invalid_argument("native enum AOT: nonportable identifier");
+    }
+    static const std::unordered_set<std::string> reserved{
+        "define", "enum", "as", "end", "fnc", "routine", "pub",
+        "private", "return", "int", "bool", "void", "const", "val",
+        "let", "mut", "class", "module", "import", "from", "actor",
+        "async", "suspend", "suspends", "match", "switch", "new",
+        "if", "else", "true", "false", "null", "rt", "self"
+    };
+    if (reserved.count(name))
+        throw std::invalid_argument("native enum AOT: reserved identifier");
+}
+
 class Parser final {
 public:
     explicit Parser(std::string_view source) : source_(source) { advance(); }
@@ -202,21 +231,8 @@ private:
         if (!eat(what)) fail("unexpected token");
     }
     std::string identifier() {
-        if (token_.text.empty()) fail("identifier required");
-        const auto first = static_cast<unsigned char>(token_.text[0]);
-        if (!((first >= 'A' && first <= 'Z') ||
-              (first >= 'a' && first <= 'z') || first == '_')) {
-            fail("identifier required");
-        }
-        std::string text = token_.text;
-        static const std::unordered_set<std::string> reserved{
-            "define", "enum", "as", "end", "fnc", "routine", "pub",
-            "private", "return", "int", "bool", "void", "const", "val",
-            "let", "mut", "class", "module", "import", "from", "actor",
-            "async", "suspend", "suspends", "match", "switch", "new",
-            "if", "else", "true", "false", "null", "rt", "self"
-        };
-        if (reserved.count(text)) fail("reserved keyword cannot name enum/case/callable");
+        const std::string text = token_.text;
+        validateLexicalName(text);
         advance();
         return text;
     }
