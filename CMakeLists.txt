@@ -151,6 +151,12 @@ if(BUILD_TESTING)
             -p test_enum_case_nullary_tag32.py -v)
     set_tests_properties(native_enum_case_nullary_tag32_schema_python
         native_enum_case_nullary_tag32_schema_python_O PROPERTIES TIMEOUT 20)
+    # Mainline callable/nominal source admission must remain intact.
+    add_test(NAME native_callable_nominal_boundary
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_callable_nominal_boundary.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
@@ -846,6 +852,13 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> requires spawn initializer")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
+
+    # Preserve mainline nested Option/Future type-admission negatives.
+    # These do not claim executable flatten/unwrap_all lowering.
+    oreslang_contract_test(source_nested_option_type_admission_fail_closed
+        source-nested-option-flatten-unimplemented.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(source_nested_future_type_admission_fail_closed
+        source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
