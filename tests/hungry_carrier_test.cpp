@@ -232,6 +232,7 @@ struct PendingCancelState {
     std::atomic<int> resumes{0};
     std::atomic<int> callbacks{0};
     std::atomic<int> violations{0};
+    std::atomic<int> io_started{0};
     HungryCarrier::NativeHeap::Handle owned{};
 };
 static ActorStep pending_cancel_handler(void* raw, ActorMessage message,
@@ -252,7 +253,7 @@ static ActorStep pending_cancel_handler(void* raw, ActorMessage message,
             return {};
         }
         state.owned = *handle;
-        return {StepKind::await_io, 77, 500};
+        return {StepKind::await_io, 77, 0};
     }
     state.resumes.fetch_add(1);
     state.violations.fetch_add(1); // canceled broker work must never resume user code
@@ -266,24 +267,26 @@ static void pending_cancel_cleanup(void* raw, ActorMessage message) noexcept {
         state.violations.fetch_add(1);
     state.callbacks.fetch_add(1);
 }
-static std::int64_t pending_cancel_io(void*, std::int64_t value,
+static std::int64_t pending_cancel_io(void* raw, std::int64_t value,
                                       const std::atomic<bool>& cancel) noexcept {
-    // The broker's synthetic delay should be interrupted before this callback
-    // is reached. Still fail closed if a future scheduling change calls it.
-    return cancel.load(std::memory_order_acquire) ? -1 : value;
+    auto& state = *static_cast<PendingCancelState*>(raw);
+    state.io_started.store(1, std::memory_order_release);
+    while (!cancel.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    return value;
 }
 static void test_pending_io_stop_runs_frame_cancel_before_retirement() {
     for (int round = 0; round < 64; ++round) {
         PendingCancelState state;
         HungryCarrier::Options options{};
         options.cancel_handler = pending_cancel_cleanup;
-        HungryCarrier actor(&state, pending_cancel_handler, nullptr,
+        HungryCarrier actor(&state, pending_cancel_handler, &state,
                             pending_cancel_io, options);
         actor.start();
         check(actor.producer_handle().try_send({1, 0}),
               "pending-cancel logical turn was not accepted");
-        check(until([&] { return state.initials.load() == 1; }, 1s),
-              "pending-cancel handler did not enter");
+        check(until([&] { return state.io_started.load(std::memory_order_acquire) == 1; }, 1s),
+              "pending-cancel broker operation did not enter");
         actor.request_stop();
         actor.join();
         const auto stats = actor.stats();
