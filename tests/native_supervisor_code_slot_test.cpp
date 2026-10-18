@@ -3,10 +3,88 @@
 #include <atomic>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 using namespace oreslang::runtime;
 
 static void check(bool yes,const char* why){if(!yes)throw std::runtime_error(why);}
+
+
+/** Failed admission must own/reclaim code images outside the CONTROL lock. */
+static void exercise_rejected_hot_reload_reclamation() {
+    std::atomic<int> rejected_reclaims{0};
+    std::atomic<int> accepted_reclaims{0};
+    NativeSupervisorCodeSlot<std::string> slot(
+            "actor-abi-v1", "actor-policy-v1", [&] { ++accepted_reclaims; }, 2);
+
+    auto rejected_image = [&] {
+        ++rejected_reclaims;
+        // A callback that re-enters the slot exposes teardown-under-lock bugs.
+        (void)slot.live_revisions();
+    };
+    bool denied = false;
+    try {
+        (void)slot.activate(0, "actor-abi-v1", "stale", rejected_image);
+    } catch (const std::logic_error&) { denied = true; }
+    check(denied && rejected_reclaims == 1,
+          "stale candidate must reclaim exactly once outside the slot lock");
+
+    denied = false;
+    try {
+        (void)slot.activate(1, "changed-actor-abi", "incompatible", rejected_image);
+    } catch (const std::invalid_argument&) { denied = true; }
+    check(denied && rejected_reclaims == 2,
+          "ABI mismatch must reclaim candidate without replacing active code");
+    check(slot.current().revision == 1 && slot.pin().code() == "actor-policy-v1",
+          "denied upgrade corrupted active revision");
+
+    auto pinned_v1 = slot.pin();
+    check(slot.activate(1, "actor-abi-v1", "actor-policy-v2",
+                        [&] { ++accepted_reclaims; }).revision == 2,
+          "valid code-only upgrade must publish");
+    denied = false;
+    try {
+        (void)slot.activate(2, "actor-abi-v1", "over-cap", rejected_image);
+    } catch (const std::length_error&) { denied = true; }
+    check(denied && rejected_reclaims == 3,
+          "pinned generation limit must reclaim denied candidate");
+    check(pinned_v1.code() == "actor-policy-v1" && slot.pin().code() == "actor-policy-v2",
+          "pinned invocation observed a different generation");
+    pinned_v1.close();
+
+    // Two simultaneous candidates at the same expected epoch: one winner.
+    std::atomic<int> wins{0}, conflicts{0};
+    std::thread a([&] {
+        try {
+            slot.activate(2, "actor-abi-v1", "competing-a", rejected_image);
+            ++wins;
+        } catch (const std::logic_error&) { ++conflicts; }
+    });
+    std::thread b([&] {
+        try {
+            slot.activate(2, "actor-abi-v1", "competing-b", rejected_image);
+            ++wins;
+        } catch (const std::logic_error&) { ++conflicts; }
+    });
+    a.join();
+    b.join();
+    check(wins == 1 && conflicts == 1 && slot.current().revision == 3,
+          "concurrent candidate publication was not single-winner CAS");
+    check(rejected_reclaims == 4, "losing concurrent candidate leaked");
+    slot.close();
+    denied = false;
+    try {
+        (void)slot.activate(3, "actor-abi-v1", "after-close", rejected_image);
+    } catch (const std::logic_error&) { denied = true; }
+    check(denied && rejected_reclaims == 5,
+          "terminal slot close must reject and reclaim a late candidate");
+    check(accepted_reclaims == 2,
+          "successfully installed old images must each be reclaimed once");
+    // Winning competing candidate also uses rejected_image as its retirement
+    // callback; no active generation may be retained after close.
+    check(rejected_reclaims == 6,
+          "latest revision cleanup did not run when slot closed");
+}
 
 int main(){
     std::atomic<int> reclaimed{0};
@@ -73,4 +151,5 @@ int main(){
     }
     check(reclaimed.load()==3,"new policy leaked after final pinned turn");
     group->close();
+    exercise_rejected_hot_reload_reclamation();
 }
