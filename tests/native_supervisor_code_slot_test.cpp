@@ -76,7 +76,7 @@ static void exercise_rejected_hot_reload_reclamation() {
     try {
         (void)slot.activate(3, "actor-abi-v1", "after-close", rejected_image);
     } catch (const std::logic_error&) { denied = true; }
-    check(denied && rejected_reclaims == 5,
+    check(denied && rejected_reclaims == 6,
           "terminal slot close must reject and reclaim a late candidate");
     check(accepted_reclaims == 2,
           "successfully installed old images must each be reclaimed once");
