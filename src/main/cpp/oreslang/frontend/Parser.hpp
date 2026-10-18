@@ -75,6 +75,8 @@ struct ClassField {
 // subset. Their identity is solely their caller-visible scalar value arity.
 // The optional leading 'self' marker is erased by the parser.
 struct ScalarConstructor {
+    // Parser-owned receiver provenance; never enters value arity or LLVM ABI.
+    bool binds_self = false;
     std::vector<std::string> parameters;
 };
 
