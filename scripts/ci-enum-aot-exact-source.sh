@@ -19,8 +19,29 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 head_sha="$(git rev-parse HEAD)"
+tree_sha="$(git rev-parse HEAD^{tree})"
 test -z "$(git status --porcelain)"
+if [ -n "${EXPECTED_SOURCE_SHA:-}" ] &&
+   [ "$head_sha" != "$EXPECTED_SOURCE_SHA" ]; then
+    echo "ERROR: exact source commit mismatch; refusing uncertified build" >&2
+    exit 3
+fi
+if [ -n "${EXPECTED_SOURCE_TREE:-}" ] &&
+   [ "$tree_sha" != "$EXPECTED_SOURCE_TREE" ]; then
+    echo "ERROR: exact source Git tree mismatch; refusing uncertified build" >&2
+    exit 3
+fi
 echo "Exact source head: $head_sha"
+echo "Exact source tree: $tree_sha"
+echo "Tracked compiler/test blob IDs:"
+git ls-tree -r HEAD -- \
+    src/main/cpp/oreslang/frontend/NativeEnumAotSlice.hpp \
+    src/main/cpp/oreslang/types/EnumCaseOverloadPolicy.hpp \
+    src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+    src/main/cpp/oreslang/main.cpp \
+    tests/native_enum_aot_slice_test.cpp \
+    tests/native_enum_guest_aot.py \
+    tests/fixtures/enum-aot-basic.ores
 echo "Clang: $("$CXX_CLANG" --version | head -1)"
 echo "GCC: $("$CXX_GCC" --version | head -1)"
 
