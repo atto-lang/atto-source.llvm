@@ -90,6 +90,30 @@ int main(void){
     assert(ores_kernel_send(&vm,stale,7)==ORES_KERNEL_INVALID);
     assert(ores_kernel_stop(&vm,a)==ORES_KERNEL_OK);
     assert(ores_kernel_tick(&vm)==ORES_KERNEL_RETIRED);
+    /* A damaged queue pointer must never be used as an unchecked index. */
+    assert(ores_kernel_spawn(&vm,accumulate,&a)==ORES_KERNEL_OK);
+    assert(ores_kernel_send(&vm,a,7)==ORES_KERNEL_OK);
+    vm.actors[a.slot].head = ORES_KERNEL_MAILBOX + 23;
+    assert(ores_kernel_send(&vm,a,3)==ORES_KERNEL_INVALID);
+    assert(ores_kernel_tick(&vm)==ORES_KERNEL_HANDLER_FAILED);
+    assert(vm.fault_count==1);
+    assert(ores_kernel_send(&vm,a,7)==ORES_KERNEL_INVALID);
+    for(unsigned n=0; n<ORES_KERNEL_FIELDS; n++) assert(vm.actors[a.slot].fields[n]==0);
+    for(unsigned n=0; n<ORES_KERNEL_MAILBOX; n++) assert(vm.actors[a.slot].messages[n]==0);
+    assert(ores_kernel_spawn(&vm,accumulate,&b)==ORES_KERNEL_OK);
+    assert(ores_kernel_send(&vm,b,11)==ORES_KERNEL_OK);
+    vm.actors[b.slot].length = ORES_KERNEL_MAILBOX + 1;
+    assert(ores_kernel_tick(&vm)==ORES_KERNEL_HANDLER_FAILED);
+    assert(vm.fault_count==2);
+    /* Existing long-lived actor counters cannot wrap to zero. */
+    assert(ores_kernel_spawn(&vm,accumulate,&c)==ORES_KERNEL_OK);
+    vm.actors[c.slot].processed = UINT64_MAX;
+    assert(ores_kernel_send(&vm,c,3)==ORES_KERNEL_OK);
+    assert(ores_kernel_tick(&vm)==ORES_KERNEL_DELIVERED);
+    assert(ores_kernel_snapshot(&vm,c,&done,&last)==ORES_KERNEL_OK);
+    assert(done==UINT64_MAX && last==3);
+    assert(ores_kernel_stop(&vm,c)==ORES_KERNEL_OK);
+    assert(ores_kernel_tick(&vm)==ORES_KERNEL_RETIRED);
     puts("FREESTANDING_ACTOR_KERNEL_HOST_TEST_PASS");
     return 0;
 }
