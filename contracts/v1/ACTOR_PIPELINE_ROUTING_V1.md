@@ -162,3 +162,43 @@ two eligible round-robin turns; terminated member skipped next turn; no
 out-of-graph delivery; no hidden replay after partial success; group close
 does not stop merely cooperating actors; and a reply from a previously
 admitted branch follows its sealed origin path after membership changes.
+
+## Exact admission linearization and retry classification (v1)
+
+A selected correlation frame does **not** itself prove that its DATA was
+published to the destination mailbox. Implementations MUST distinguish
+reserved-but-unpublished from irrevocably admitted DATA:
+
+1. At successful bounded mailbox enqueue (the `tryWrite` / native
+   equivalent linearization point), record a **monotonic VM-owned published
+   bit on the exact correlation frame**. Set it before any subsequent
+   mutex-publication accounting, dispatch/scheduling work, or callback
+   can fail. Never expose or serialize this bit as a guest field.
+2. Prior to successful enqueue, a failed admission may retire the reserved
+   child and, for authenticated `backward`/`reply`, restore only the
+   **exact one-shot parent frame** consumed in creating that child.
+   Matching flow ID and actor path are not sufficient: sibling branches
+   may legitimately share both. Failed attempt route IDs remain spent.
+   A rollback must never be applied twice or after generation fencing.
+3. After successful enqueue, **no** exception, actor STOP, cancellation,
+   scheduling rejection, or envelope cleanup can turn the admitted DATA
+   into a rejected receipt or justify retrying the previous route.
+   Leave its correlation frame to real mailbox delivery/teardown and
+   preserve original VM-fatal `Error` classification where applicable.
+4. `forward_all` / selective fanout receipts are **per attempted edge**.
+   A postpublication fault cannot be represented as an ordinary negative
+   admission receipt or be used to reissue an earlier accepted branch.
+   It is a terminal/fault outcome requiring supervisor observability,
+   not transactional rollback of already-published branches.
+5. Guest source-level `self.forward_all`/selective fanout requires typed,
+   immutable receipt semantics. None of these rules imply end-to-end
+   exactly-once processing, durable queues, global mailbox atomicity,
+   or network delivery guarantees.
+
+Required regression evidence: same-flow/same-path sibling rollback
+impersonation rejection, repeated rollback rejection, prepublication
+reverse failure followed by safe alternate reply, published return
+cannot be restored before OR after frame retirement, envelope receiving
+the published bit before guest code, and partial fanout preserving
+admission classifications. Exact-tree compiler/runtime executions are
+separate from structural/static source assertions.
