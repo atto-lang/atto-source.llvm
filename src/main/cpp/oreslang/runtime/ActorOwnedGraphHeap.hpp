@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <new>
 #include <optional>
@@ -59,7 +60,7 @@ private:
     inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
-    ActorHeapBorrowGate borrow_gate_;
+    mutable ActorHeapBorrowGate borrow_gate_;
     std::array<Slot, NodeCapacity> slots_{};
     std::size_t active_nodes_ = 0;
     std::size_t active_edges_ = 0;
@@ -82,11 +83,20 @@ private:
     // and destructor callbacks have completed. A read/FFI/continuation
     // lease cannot be raced by a mutation admitted on another carrier.
     ActorHeapBorrowGate::Mutation require_mutation_access(ActorHeapIdentity actor) {
-        require_open_access(actor);
+        // Pin exclusivity before looking at any retirement-owned state.
         auto mutation = borrow_gate_.begin_mutation(actor);
         if (!mutation) throw std::logic_error(
             "actor graph mutation conflicts with live loans, another writer or retirement");
+        require_open_access(actor);
         return std::move(*mutation);
+    }
+
+    ActorHeapBorrowGate::Lease require_read_access(ActorHeapIdentity actor) const {
+        auto loan = borrow_gate_.acquire(actor);
+        if (!loan) throw std::logic_error(
+            "actor graph read conflicts with writer or retirement");
+        require_open_access(actor);
+        return std::move(*loan);
     }
 
     Slot& require_node(Handle id) {
@@ -147,15 +157,17 @@ public:
 
     /** Supervisor/FFI must hold a lease before any reference survives a turn. */
     std::optional<ActorHeapBorrowGate::Lease> borrow(ActorHeapIdentity actor) {
-        require_owner(actor);
-        return borrow_gate_.acquire(actor);
+        // Acquire an external pin before reading concurrently retired state.
+        auto loan = borrow_gate_.acquire(actor);
+        if (loan) require_owner(actor);
+        return loan;
     }
     std::size_t live_nodes(ActorHeapIdentity actor) const {
-        require_open_access(actor);
+        auto loan = require_read_access(actor);
         return active_nodes_;
     }
     std::size_t live_edges(ActorHeapIdentity actor) const {
-        require_open_access(actor);
+        auto loan = require_read_access(actor);
         return active_edges_;
     }
 
@@ -217,7 +229,7 @@ public:
 
     std::size_t copy_out(ActorHeapIdentity actor, Handle id, void* destination,
                          std::size_t capacity) {
-        require_open_access(actor);
+        auto loan = require_read_access(actor);
         Slot& slot = require_node(id);
         if (slot.drop) throw std::logic_error("owned objects are not raw byte payloads");
         if (capacity < slot.length || (slot.length && destination == nullptr))
@@ -251,7 +263,7 @@ public:
     }
 
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
-        require_open_access(actor);
+        auto loan = require_read_access(actor);
         Slot& from = require_node(source);
         if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
         for (std::size_t i = 0; i < from.link_count; ++i) {
