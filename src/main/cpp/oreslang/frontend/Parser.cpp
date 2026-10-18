@@ -221,9 +221,13 @@ public:
             if (accept("@")) {
                 std::pair<int, int> annotation{0, 0};
                 if (accept("ActorThreads")) {
+                    if (token_.text == "<")
+                        fail("actor thread annotations require parentheses, not '<...>'");
                     annotation = token_.text == "("
                             ? actor_thread_arguments("=") : std::pair<int, int>{1, 1};
                 } else if (accept("ActorMaxThreads")) {
+                    if (token_.text == "<")
+                        fail("actor thread annotations require parentheses, not '<...>'");
                     annotation = legacy_actor_max_threads_attribute();
                 } else {
                     fail("unsupported native annotation: only actor thread policies are admitted");
