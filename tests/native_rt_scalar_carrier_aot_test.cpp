@@ -163,7 +163,9 @@ static std::int64_t cancel_frame_no_io(void*, std::int64_t,
 }
 static void stop_runs_compiled_frame_cancellation_exactly_once() {
     CancelFrameState state;
+    const ActorHeapIdentity owner{71, 81, 5};
     HungryCarrier::Options options{};
+    options.heap_owner = owner;
     options.cancel_handler = cancel_compiled_frame;
     HungryCarrier carrier(&state, cancellable_frame_handler, nullptr,
                           cancel_frame_no_io, options);
@@ -181,7 +183,12 @@ static void stop_runs_compiled_frame_cancellation_exactly_once() {
     CHECK(stats.completed == 0);
     CHECK(stats.abandoned_on_stop == 1);
     CHECK(stats.cancel_callbacks == 1);
+    CHECK(stats.cancel_callback_failures == 0);
+    CHECK(stats.unclean_abandonments == 0);
     CHECK(stats.protocol_failures == 0);
+    const auto proof = carrier.retirement_proof();
+    CHECK(proof.has_value());
+    CHECK(proof->owner() == owner);
     // Idempotent lifecycle calls must not invoke cleanup again.
     carrier.join();
     CHECK(state.cleanups.load() == 1);
