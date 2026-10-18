@@ -750,6 +750,201 @@
         2,
         3
       ]
+    },
+    {
+      "id": "two-named-omissions-reordered",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "label": "b",
+          "kind": "underscore"
+        },
+        {
+          "label": "c",
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "label": "a",
+          "kind": "omit"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true",
+        []
+      ],
+      "statuses": [
+        "explicit_omit",
+        "explicit_omit",
+        "provided",
+        "rest_empty"
+      ],
+      "evaluation_order": [
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        1
+      ],
+      "omission_bindings": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "two-positional-omissions-and-rest",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        },
+        {
+          "name": "tags",
+          "type": "string",
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "kind": "underscore"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        },
+        {
+          "expr": "\"x\"",
+          "value_type": "string"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true",
+        [
+          "\"x\""
+        ]
+      ],
+      "statuses": [
+        "explicit_omit",
+        "explicit_omit",
+        "provided",
+        "rest_values"
+      ],
+      "evaluation_order": [
+        "true",
+        "\"x\""
+      ],
+      "call_item_index_by_evaluated_source": [
+        2,
+        3
+      ],
+      "omission_bindings": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "id": "explicit-none-and-syntactic-omit-are-not-identical",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "b",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "c",
+          "type": "bool"
+        }
+      ],
+      "args": [
+        {
+          "expr": "None",
+          "value_type": "Option<string>"
+        },
+        {
+          "kind": "omit"
+        },
+        {
+          "expr": "true",
+          "value_type": "bool"
+        }
+      ],
+      "slots": [
+        "None",
+        "None",
+        "true"
+      ],
+      "statuses": [
+        "explicit_none",
+        "explicit_omit",
+        "provided"
+      ],
+      "evaluation_order": [
+        "None",
+        "true"
+      ],
+      "call_item_index_by_evaluated_source": [
+        0,
+        2
+      ],
+      "omission_bindings": [
+        [
+          1,
+          1
+        ]
+      ]
     }
   ],
   "rejects": [
