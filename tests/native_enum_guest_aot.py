@@ -87,11 +87,11 @@ class NativeEnumGuestAot(unittest.TestCase):
 
     def test_declaration_permutation_and_nominal_tag_metamorphism(self):
         """Actual source compiler must preserve dispatch across declaration order."""
-        head = "define enum Foo as A = %d, B = %d end\\n"
+        head = "define enum Foo as A = %d, B = %d end\n"
         defs = (
-            "fnc classify(Foo.A value): int { return 10; }\\n",
-            "fnc classify(Foo.B value): int { return 20; }\\n",
-            "fnc classify(Foo value): int { return 0; }\\n",
+            "fnc classify(Foo.A value): int { return 10; }\n",
+            "fnc classify(Foo.B value): int { return 20; }\n",
+            "fnc classify(Foo value): int { return 0; }\n",
         )
         body = ("fnc main(): int { const Foo widened = Foo.B; "
                 "return classify(Foo.A) + classify(Foo.B) + classify(widened); }")
@@ -105,7 +105,7 @@ class NativeEnumGuestAot(unittest.TestCase):
                 result = self.compile(text)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 symbols = re.findall(
-                    r'call i64 @("?eos2[^\\s(]+"?)\\(', result.stdout)
+                    r'call i64 @("?eos2[^\s(]+"?)\(', result.stdout)
                 self.assertEqual(len(symbols), 3, result.stdout)
                 self.assertEqual(len(set(symbols)), 3, result.stdout)
                 if baseline is None:
