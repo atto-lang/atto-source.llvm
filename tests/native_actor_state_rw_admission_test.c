@@ -92,6 +92,21 @@ static void test_actor_effects(void) {
     r=ores_state_handle_request(&a,123u,2u,true,ORES_STATE_EFFECT_WRITE,
         ORES_STATE_EFFECT_READ|ORES_STATE_EFFECT_WRITE,ORES_STD_WRITE);
     assert(r.verification==ORES_STATE_EFFECT_DENIED);
+    /* A declared write capability cannot justify a write-effect callback
+     * while holding only a reader loan. Nor can a state-backed callback
+     * suspend or cross an unknown FFI boundary while its loan is live. */
+    r=ores_state_handle_request(&a,123u,2u,true,
+        ORES_STATE_EFFECT_READ|ORES_STATE_EFFECT_WRITE,
+        ORES_STATE_EFFECT_READ|ORES_STATE_EFFECT_WRITE,ORES_STD_READ);
+    assert(r.verification==ORES_STATE_EFFECT_DENIED);
+    r=ores_state_handle_request(&a,123u,2u,true,
+        ORES_STATE_EFFECT_READ|ORES_STATE_EFFECT_SUSPEND,
+        ORES_STATE_EFFECT_READ|ORES_STATE_EFFECT_SUSPEND,ORES_STD_READ);
+    assert(r.verification==ORES_STATE_EFFECT_DENIED);
+    r=ores_state_handle_request(&a,123u,2u,true,
+        ORES_STATE_EFFECT_WRITE|ORES_STATE_EFFECT_FFI,
+        ORES_STATE_EFFECT_WRITE|ORES_STATE_EFFECT_FFI,ORES_STD_WRITE);
+    assert(r.verification==ORES_STATE_EFFECT_DENIED);
     r=ores_state_handle_request(&a,123u,2u,true,ORES_STATE_EFFECT_READ,
         ORES_STATE_EFFECT_READ,ORES_STD_READ);
     assert(r.verification==ORES_STATE_ALLOWED &&
