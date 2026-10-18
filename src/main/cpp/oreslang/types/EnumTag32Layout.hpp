@@ -67,14 +67,16 @@ inline void encodeTag(std::string& out, std::int32_t value) {
 
 class EnumTag32Layout final {
 public:
-    EnumTag32Layout(std::string nominalId, std::vector<CaseTag> cases)
-        : nominalId_(std::move(nominalId)) {
+    EnumTag32Layout(std::string nominalId, std::vector<CaseTag> cases,
+                    bool exported = false)
+        : nominalId_(std::move(nominalId)), exported_(exported) {
         qualified(nominalId_);
         need(!cases.empty() && cases.size() <= MaxCases,
              "enum nullary case budget exceeded");
         schema_.reserve(128 + cases.size() * 24);
-        encodeField(schema_, "ores-nullary-enum-tag32-schema-v1");
+        encodeField(schema_, "ores-nullary-enum-tag32-schema-v2");
         encodeField(schema_, nominalId_);
+        encodeField(schema_, exported_ ? "public" : "private");
         encodeField(schema_, std::to_string(cases.size()));
         std::int32_t previous = 0;
         for (const CaseTag& item : cases) {
@@ -99,9 +101,11 @@ public:
     std::size_t caseCount() const { return tags_.size(); }
     const std::string& canonicalSchemaBytes() const { return schema_; }
     const std::string& nominalId() const { return nominalId_; }
+    bool exported() const noexcept { return exported_; }
 
 private:
     const std::string nominalId_;
+    const bool exported_;
     std::map<std::string, std::int32_t> tags_;
     std::set<std::int32_t> validTags_;
     std::string schema_;
