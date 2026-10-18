@@ -66,6 +66,12 @@ public:
         }
         ~Lease() noexcept { release(); }
         bool commit_dispatch() noexcept {
+            // Policy revocation fences commits that have not reached the host
+            // IO dispatch boundary; committed operations still require broker
+            // cancellation / socket closure on supervisor shutdown.
+            if (state_.load() != 0 || owner_ == nullptr) return false;
+            std::lock_guard<std::mutex> hold(owner_->lock_);
+            if (owner_->closed_) return false;
             std::uint8_t expected = 0;
             return state_.compare_exchange_strong(expected, 1);
         }
