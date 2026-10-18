@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <type_traits>
 #include <vector>
 
 #define REQUIRE(expr) do { if (!(expr)) { \
@@ -81,11 +82,11 @@ int main() {
     AotImage image(registry, family, bodies);
     REQUIRE(image.definitionCount() == family.size());
     const DirectRelocation rA = image.bindDirect({a, n});
-    REQUIRE(rA.targetSymbol == validatedSymbol(registry, aSpecific));
-    REQUIRE(rA.exactBodyDigest == std::string(64, 'a'));
+    REQUIRE(rA.targetSymbol() == validatedSymbol(registry, aSpecific));
+    REQUIRE(rA.exactBodyDigest() == std::string(64, 'a'));
     image.requireImage(rA);
-    REQUIRE(image.bindDirect({bar, n}).targetSymbol == validatedSymbol(registry, other));
-    REQUIRE(image.bindDirect({foo, n}).targetSymbol == validatedSymbol(registry, general));
+    REQUIRE(image.bindDirect({bar, n}).targetSymbol() == validatedSymbol(registry, other));
+    REQUIRE(image.bindDirect({foo, n}).targetSymbol() == validatedSymbol(registry, general));
     rejects([&] { (void)image.bindDirect({{Kind::Variant, "file::Foo", "Z"}, n}); });
     rejects([&] { (void)image.bindDirect({{Kind::Primitive, "string", ""}, n}); });
     auto missingBodies = bodies;
@@ -99,11 +100,13 @@ int main() {
     rejects([&] { AotImage invalid(registry, family, upperDigest); });
     AotImage anotherImage(registry, family, bodies);
     rejects([&] { anotherImage.requireImage(rA); });
-    auto swappedDigest = rA;
-    swappedDigest.exactBodyDigest = std::string(64, 'f');
-    rejects([&] { image.requireImage(swappedDigest); });
+    // Relocation metadata is not a public aggregate and cannot be minted
+    // from an arbitrary symbol/digest or default-initialized by guest code.
+    static_assert(!std::is_aggregate<DirectRelocation>::value, "relocation must be sealed");
+    static_assert(!std::is_default_constructible<DirectRelocation>::value,
+                  "relocation requires a checked image");
     bodies.clear(); // The compilation image owns its immutable exports.
-    REQUIRE(image.bindDirect({a, n}).targetSymbol == rA.targetSymbol);
+    REQUIRE(image.bindDirect({a, n}).targetSymbol() == rA.targetSymbol());
     // Closed-world native compiler policy only; actual guest enum dispatch remains disabled.
     std::puts("PASS native enum variant host policy");
 }
