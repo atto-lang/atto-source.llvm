@@ -38,6 +38,7 @@ static std::int64_t identity(std::int64_t value) { return value; }
 static std::int64_t reject_restore(std::int64_t) {
     throw std::runtime_error("candidate initialization failed");
 }
+static std::int64_t corrupt_restore(std::int64_t value) { return value + 1; }
 static std::atomic<bool> entered{false};
 static std::atomic<bool> release{false};
 static std::int64_t blocked(std::int64_t current, std::int64_t delta) {
@@ -63,6 +64,9 @@ int main() {
         require(rejects([&] { (void) actor.upgrade(image('b'), v2, reject_restore); }));
         require(actor.image().code_sha256 == hash('a'));
         require(actor.value() == 42);
+        require(rejects([&] { (void) actor.upgrade(image('b'), v2, corrupt_restore); }));
+        require(actor.epoch() == 1 && actor.value() == 42);
+        require(actor.image().code_sha256 == hash('a'));
         require(actor.upgrade(image('b'), v2, identity));
         require(actor.epoch() == 2);
         require(actor.value() == 42);
