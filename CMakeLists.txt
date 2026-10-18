@@ -1000,6 +1000,26 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-reentrancy-test)
     set_tests_properties(native_actor_hot_upgrade_reentrant_close_and_race
         PROPERTIES TIMEOUT 20)
+    # Compose the epoch/checkpoint v1 receipt from #597 with #602's ONE
+    # authoritative actor code-generation admission/reclamation gate. Host-only:
+    # this does not lower actual Oreslang actor code or dynamically load PIC/ORC.
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
+    if(OpenSSL_FOUND)
+        add_executable(oreslang-native-actor-checkpoint-code-test
+            tests/native_actor_code_checkpoint_coordinator_test.cpp)
+        target_include_directories(oreslang-native-actor-checkpoint-code-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-actor-checkpoint-code-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        target_link_libraries(oreslang-native-actor-checkpoint-code-test PRIVATE
+            Threads::Threads OpenSSL::Crypto)
+        add_test(NAME native_actor_code_checkpoint_single_gate_transaction
+            COMMAND oreslang-native-actor-checkpoint-code-test)
+        set_tests_properties(native_actor_code_checkpoint_single_gate_transaction
+            PROPERTIES TIMEOUT 30)
+    else()
+        message(STATUS "Native actor checkpoint/code-only integration needs OpenSSL Crypto")
+    endif()
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
