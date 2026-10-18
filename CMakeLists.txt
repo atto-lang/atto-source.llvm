@@ -623,6 +623,10 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_defer_multiguard_cfg_exit_execution native-defer-multiguard-cfg.ores
             --ir "call void @multiply_two" --run 15 --clang "${ORE_CLANG}")
     endif()
+    # Fail closed: the compiler cannot yet emit nominal-case callable symbols.
+    oreslang_contract_test(reject_native_enum_case_overload_source
+        reject-enum-case-overload.ores
+        --diagnostic "native enum case overload declarations require typed enum and static ABI lowering")
     oreslang_contract_test(reject_native_defer_noncall native-defer-noncall-reject.ores
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
