@@ -1,0 +1,4 @@
+define module Entry as
+  import module Assert from "std/assert";
+  pub fnc main(): int { return 0; }
+end
