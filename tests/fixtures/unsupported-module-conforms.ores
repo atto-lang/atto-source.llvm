@@ -1,0 +1,3 @@
+define module Worker conforms Api as
+  pub fnc ping(): int { return 1; }
+end
