@@ -46,7 +46,7 @@ bool reserved(std::string_view name) {
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
-        "cb", "shared", "untrusted", "type", "types", "typeof",
+        "cb", "shared", "untrusted", "ipc", "ffi", "extern", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
@@ -207,6 +207,14 @@ public:
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
+            if (accept("ipc")) {
+                require("actor");
+                fail("native ipc actor requires authenticated artifact/process transport lowering");
+            }
+            if (accept("ffi")) {
+                require("actor");
+                fail("native ffi actor requires compiler-owned ForeignDecl and ABI receipt lowering");
+            }
             if (accept("module")) {
                 program.module = identifier();
                 accept("as");
@@ -226,6 +234,14 @@ public:
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
+                }
+                if (accept("ipc")) {
+                    require("actor");
+                    fail("native ipc actor requires authenticated artifact/process transport lowering");
+                }
+                if (accept("ffi")) {
+                    require("actor");
+                    fail("native ffi actor requires compiler-owned ForeignDecl and ABI receipt lowering");
                 }
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
