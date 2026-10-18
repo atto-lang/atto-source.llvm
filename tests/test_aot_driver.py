@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
         'declare token @llvm.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)',
         'declare ptr @GC_malloc(i64)',
         'declare void @gc_collect()',
+        'define void @"safe;label"() gc "shadow-stack" { ret void }',
+        'declare void @"llvm.g\\\\63root"(ptr, ptr)',
     ]:
         fake.write_text("#!/bin/sh\ncat <<'IR'\n" + invalid_ir + "\nIR\n")
         fake.chmod(0o755)
