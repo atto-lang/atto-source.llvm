@@ -799,6 +799,12 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> requires spawn initializer")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
+    # Explicit nested Option/Future extraction is implemented first in GraalVM.
+    # Do not silently lower either native value to a scalar int.
+    oreslang_contract_test(source_nested_option_extraction_fail_closed
+        source-nested-option-flatten-unimplemented.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(source_nested_future_extraction_fail_closed
+        source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
