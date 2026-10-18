@@ -17,6 +17,7 @@ typedef struct {
     atomic_uint accepted;
     atomic_uint errors;
     atomic_uint completed;
+    atomic_uint executing_handlers;
     /* Preserve exact per-message admission and delivery, not just totals.
      * A dropped message plus a duplicate otherwise cancels in the count. */
     atomic_uint admitted[SENDS + 1];
@@ -31,13 +32,20 @@ typedef struct {
 
 static void handler(void* raw, size_t slot, uint64_t payload) {
     Race* race = (Race*) raw;
+    /* Multiple carriers exist, but a default single-flight actor must
+     * never execute two guest callbacks at the same instant. */
+    if (atomic_fetch_add(&race->executing_handlers, 1) != 0)
+        atomic_fetch_add(&race->errors, 1);
+    sched_yield();
     if (slot != 0 || payload > SENDS) {
         atomic_fetch_add(&race->errors, 1);
+        atomic_fetch_sub(&race->executing_handlers, 1);
         return;
     }
     if (atomic_fetch_add(&race->observed[payload], 1) != 0)
         atomic_fetch_add(&race->errors, 1); /* duplicate despite correct total */
     atomic_fetch_add(&race->completed, 1);
+    atomic_fetch_sub(&race->executing_handlers, 1);
 }
 static void* sender(void* raw) {
     RaceSender* producer = (RaceSender*) raw;
@@ -116,6 +124,7 @@ int main(void) {
         check(ores_native_actor_scheduler_drain(race.scheduler));
         check(ores_native_actor_scheduler_poll_done(race.scheduler, race.actor));
         check(atomic_load(&race.completed) == atomic_load(&race.accepted));
+        check(atomic_load(&race.executing_handlers) == 0);
         check(ores_native_actor_scheduler_completed(race.scheduler) ==
               atomic_load(&race.accepted));
         unsigned distinct_admitted = 0;
