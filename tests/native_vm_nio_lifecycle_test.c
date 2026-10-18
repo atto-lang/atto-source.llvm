@@ -46,6 +46,13 @@ static ThreadIdSet snapshot_thread_ids(void) {
 }
 
 static void check_same_thread_ids(ThreadIdSet before, ThreadIdSet after) {
+    if (before.count != after.count) {
+        fprintf(stderr, "thread census before(%zu):", before.count);
+        for (size_t i = 0; i < before.count; ++i) fprintf(stderr, " %ld", (long)before.ids[i]);
+        fprintf(stderr, "\nafter(%zu):", after.count);
+        for (size_t i = 0; i < after.count; ++i) fprintf(stderr, " %ld", (long)after.ids[i]);
+        fprintf(stderr, "\n");
+    }
     check(before.count == after.count);
     for (size_t i = 0; i < before.count; ++i)
         check(before.ids[i] == after.ids[i]);
