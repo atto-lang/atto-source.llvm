@@ -456,4 +456,34 @@ inline Plan parse(std::string_view text) {
     }
 }
 
+/**
+ * Compiler-owned, immutable source derivation. Unlike the public Plan test
+ * structure, no caller can construct this wrapper from a forged aggregate,
+ * replace its selected declaration symbols, or modify a widened-case value
+ * after parsing. Real LLVM emission accepts this type ONLY.
+ *
+ * A source is still untrusted input: parse() and validatePlan() prove the
+ * deliberately narrow local compile slice, not general imported identity.
+ */
+class VerifiedPlan final {
+public:
+    VerifiedPlan(const VerifiedPlan&) = delete;
+    VerifiedPlan& operator=(const VerifiedPlan&) = delete;
+    VerifiedPlan(VerifiedPlan&&) = delete;
+    VerifiedPlan& operator=(VerifiedPlan&&) = delete;
+
+    const Plan& readOnly() const noexcept { return plan_; }
+
+private:
+    explicit VerifiedPlan(Plan&& source) : plan_(std::move(source)) {}
+    friend VerifiedPlan parseVerified(std::string_view);
+    const Plan plan_;
+};
+
+inline VerifiedPlan parseVerified(std::string_view source) {
+    Plan plan = parse(source);
+    validatePlan(plan);
+    return VerifiedPlan(std::move(plan));
+}
+
 } // namespace oreslang::enum_aot
