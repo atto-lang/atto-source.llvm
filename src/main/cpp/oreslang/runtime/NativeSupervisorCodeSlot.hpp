@@ -25,19 +25,25 @@ namespace oreslang::runtime {
  */
 template <class Policy>
 class NativeSupervisorCodeSlot final {
+    // Runs *after* the Policy object has been destroyed. Running dlclose /
+    // ORC removal first could unload Policy's destructor or captured vtable.
+    struct ReclaimOwner final {
+        std::function<void()> callback;
+        explicit ReclaimOwner(std::function<void()> cb) : callback(std::move(cb)) {}
+        ~ReclaimOwner() noexcept {
+            try { if (callback) callback(); }
+            catch (...) { /* cleanup must not throw from a final code pin */ }
+        }
+    };
     struct Generation {
+        ReclaimOwner owner; // Declared first => destroyed last, after code.
         std::uint64_t number;
         std::string abi;
         Policy code;
-        std::function<void()> reclaim;
         Generation(std::uint64_t revision, std::string signature, Policy image,
                    std::function<void()> cleanup)
-            : number(revision), abi(std::move(signature)),
-              code(std::move(image)), reclaim(std::move(cleanup)) {}
-        ~Generation() noexcept {
-            try { if (reclaim) reclaim(); }
-            catch (...) { /* cannot throw from final shared pin release */ }
-        }
+            : owner(std::move(cleanup)), number(revision),
+              abi(std::move(signature)), code(std::move(image)) {}
     };
 public:
     struct Descriptor {
@@ -70,11 +76,15 @@ public:
     explicit NativeSupervisorCodeSlot(std::string initial_abi, Policy initial,
             std::function<void()> reclaim, std::size_t maximum_live = 8)
         : max_live_(maximum_live) {
-        if (initial_abi.empty() || maximum_live < 2 || !reclaim)
+        // Take ownership even when initial admission or allocation fails.
+        // The initial image may already be a loaded native shared object.
+        ReclaimOwner rejected(std::move(reclaim));
+        if (initial_abi.empty() || maximum_live < 2 || !rejected.callback)
             throw std::invalid_argument("invalid native supervisor code slot admission");
         current_ = std::make_shared<Generation>(
                 1, std::move(initial_abi), std::move(initial),
-                std::move(reclaim));
+                rejected.callback);
+        rejected.callback = nullptr;
         retained_.push_back(current_);
     }
 
@@ -120,14 +130,18 @@ public:
      */
     Descriptor activate(std::uint64_t expected_revision, std::string abi,
             Policy code, std::function<void()> reclaim) {
-        if (abi.empty() || !reclaim)
+        // Callback ownership begins before ABI validation and allocation.
+        // If moving/copying an image or allocating a generation throws, the
+        // guard still schedules image unload exactly once, outside CONTROL.
+        ReclaimOwner rejected(std::move(reclaim));
+        if (abi.empty() || !rejected.callback)
             throw std::invalid_argument("invalid native supervisor code image");
 
-        // Resource ownership starts here, before any CAS/admission rejection.
         // On stale revision, incompatible ABI, close, or live-cap failure the
         // candidate is destroyed AFTER unwinding the scoped activation lock.
         auto candidate = std::make_shared<Generation>(
-                0, std::move(abi), std::move(code), std::move(reclaim));
+                0, std::move(abi), std::move(code), rejected.callback);
+        rejected.callback = nullptr;
         std::shared_ptr<Generation> previous;
         Descriptor activated;
         {
