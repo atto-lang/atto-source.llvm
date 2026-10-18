@@ -218,6 +218,9 @@ public:
     void complete(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
         require_active(frame);
+        if (frame->publication_state_.load(std::memory_order_acquire) == 1)
+            throw std::logic_error(
+                "cannot retire frame while mailbox publication is claimed");
         active_.erase(frame.get());
     }
 
