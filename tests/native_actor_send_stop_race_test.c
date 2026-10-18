@@ -16,11 +16,20 @@ typedef struct {
     atomic_uint accepted;
     atomic_uint errors;
     atomic_uint completed;
+    /* Preserve exact per-message admission and delivery, not just totals.
+     * A dropped message plus a duplicate otherwise cancels in the count. */
+    atomic_uint admitted[SENDS + 1];
+    atomic_uint observed[SENDS + 1];
 } Race;
 
 static void handler(void* raw, size_t slot, uint64_t payload) {
     Race* race = (Race*) raw;
-    if (slot != 0 || payload > SENDS) atomic_fetch_add(&race->errors, 1);
+    if (slot != 0 || payload > SENDS) {
+        atomic_fetch_add(&race->errors, 1);
+        return;
+    }
+    if (atomic_fetch_add(&race->observed[payload], 1) != 0)
+        atomic_fetch_add(&race->errors, 1); /* duplicate despite correct total */
     atomic_fetch_add(&race->completed, 1);
 }
 static void* sender(void* raw) {
@@ -29,8 +38,10 @@ static void* sender(void* raw) {
     for (unsigned i = 1; i <= SENDS; ++i) {
         OresNativeSendStatus outcome =
             ores_native_actor_scheduler_try_send(race->scheduler, race->actor, i);
-        if (outcome == ORES_NATIVE_SEND_ACCEPTED)
+        if (outcome == ORES_NATIVE_SEND_ACCEPTED) {
+            atomic_store(&race->admitted[i], 1);
             atomic_fetch_add(&race->accepted, 1);
+        }
         else if (outcome != ORES_NATIVE_SEND_TERMINATED &&
                  outcome != ORES_NATIVE_SEND_MAILBOX_FULL)
             atomic_fetch_add(&race->errors, 1);
@@ -58,6 +69,7 @@ int main(void) {
         check(ores_native_actor_scheduler_try_send(race.scheduler, race.actor, 0)
               == ORES_NATIVE_SEND_ACCEPTED);
         atomic_store(&race.accepted, 1);
+        atomic_store(&race.admitted[0], 1);
         check(ores_test_barrier_init(&race.start, 2) == 0);
         pthread_t send_thread, stop_thread;
         check(pthread_create(&send_thread, NULL, sender, &race) == 0);
@@ -74,6 +86,15 @@ int main(void) {
         check(atomic_load(&race.completed) == atomic_load(&race.accepted));
         check(ores_native_actor_scheduler_completed(race.scheduler) ==
               atomic_load(&race.accepted));
+        unsigned distinct_admitted = 0;
+        for (unsigned payload = 0; payload <= SENDS; ++payload) {
+            const unsigned admitted = atomic_load(&race.admitted[payload]);
+            const unsigned delivered = atomic_load(&race.observed[payload]);
+            check(admitted <= 1);
+            check(delivered == admitted); /* denies lost, duplicated or phantom message */
+            distinct_admitted += admitted;
+        }
+        check(distinct_admitted == atomic_load(&race.accepted));
         check(ores_native_actor_scheduler_try_destroy(race.scheduler));
     }
     puts("NATIVE_SEND_STOP_RACE_PASS");
