@@ -1,0 +1,1 @@
+define actor Worker with io, suspend as end
