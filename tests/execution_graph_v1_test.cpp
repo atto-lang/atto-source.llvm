@@ -116,6 +116,23 @@ int main() {
         orphan();
         expect_fail([&] { (void) rejectedAfterQueue.get(); }, "rejected after enqueue");
 
+        for (int i = 0; i < 128; ++i) {
+            std::thread early_worker;
+            std::atomic<bool> launched{false};
+            auto rejected = plan.submit_cpu([&](std::function<void()> task) {
+                early_worker = std::thread([&launched, task = std::move(task)]() mutable {
+                    launched.store(true, std::memory_order_release);
+                    task();
+                });
+                while (!launched.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                throw std::runtime_error("executor rejected after start");
+            });
+            early_worker.join();
+            expect_fail([&] { (void) rejected.get(); }, "rejected after start");
+        }
+
         // Cancellation vs actual execution can race. Exactly one terminal state
         // must prevail. No unhandled exception or double promise settlement.
         for (int i = 0; i < 64; ++i) {
