@@ -376,6 +376,12 @@ public:
         require_owner(actor);
         if (proof.owner() != owner_)
             throw std::logic_error("retirement proof belongs to another actor generation");
+        if (retirement_cohort_ == nullptr)
+            throw std::logic_error("actor graph heap has no retirement cohort");
+        if (proof.cohort_id() != retirement_cohort_->cohort_id())
+            throw std::logic_error("retirement proof belongs to another execution cohort");
+        if (!retirement_cohort_->ready_for_retirement())
+            throw std::logic_error("actor retirement cohort is not physically quiescent");
         if (!borrow_gate_.seal_and_quiesced(actor))
             throw std::logic_error("actor heap still has live borrow/FFI leases");
         // One authoritative reclamation turn, even if two supervisors race
