@@ -16,7 +16,10 @@ python3 scripts/verify_ownership_optimization_ir.py /path/to/generated.ll
 ```
 
 The tool rejects unproven optimization **annotations** in a bounded textual IR
-file. A passing result merely reports `UNPROVEN_OPTIMIZATIONS_ABSENT`, not
+file, including TBAA/noalias, invariant memory, LLVM loop/parallel access groups
+and fast-math flags on arithmetic, floating-point comparisons, calls and invokes.
+It is a **denylist preflight**, not a complete LLVM IR proof or verifier: an
+unrecognized unsafe annotation could still evade this check. A passing result merely reports `UNPROVEN_OPTIMIZATIONS_ABSENT`, not
 successful vectorization, scalar replacement, ownership correctness or improved
 runtime. It is currently an opt-in audit, **not compiler emission integrated**.
 LLVM may still auto-vectorize unannotated eligible loops, requiring independent
