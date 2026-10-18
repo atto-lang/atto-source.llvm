@@ -2013,3 +2013,11 @@ if(BUILD_TESTING AND OpenSSL_FOUND)
     set_tests_properties(native_counter_hot_upgrade_transaction_host_only
         PROPERTIES TIMEOUT 20)
 endif()
+
+# Source-independent upgrade state machine regression (host-only).
+if(BUILD_TESTING)
+    add_test(NAME actor_hot_upgrade_model
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_hot_upgrade_transaction_model.py")
+    set_tests_properties(actor_hot_upgrade_model PROPERTIES TIMEOUT 25)
+endif()
