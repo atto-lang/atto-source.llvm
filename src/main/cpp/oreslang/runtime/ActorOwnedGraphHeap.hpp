@@ -256,7 +256,9 @@ public:
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
         require_open_access(actor);
         Slot& from = require_node(source);
-        if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
+        // Querying a stale target is a capability error, not a valid
+        // negative adjacency result: reject stale generations and slots.
+        (void)require_node(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
             if (from.links[i] == target) return true;
         }
