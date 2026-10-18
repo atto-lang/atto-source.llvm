@@ -1,0 +1,450 @@
+{
+  "version": 1,
+  "note": "Reference binder / overload admission only; not actual Oreslang compiler conformance.",
+  "parameters": [
+    {
+      "name": "a",
+      "type": "int"
+    },
+    {
+      "name": "b",
+      "type": "string",
+      "optional": true
+    },
+    {
+      "name": "c",
+      "type": "bool"
+    }
+  ],
+  "accepts": [
+    {
+      "id": "all-positional",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "\"\""
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "omit-interior-named",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "omit-interior-mixed",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "reorder-named",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true"
+        },
+        {
+          "label": "a",
+          "expr": "3"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "named-all-reordered",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true"
+        },
+        {
+          "label": "b",
+          "expr": "\"\""
+        },
+        {
+          "label": "a",
+          "expr": "3"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "mixed-supplied-b",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "\"\""
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"\")",
+        "true"
+      ]
+    },
+    {
+      "id": "explicit-option-none",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "label": "b",
+          "expr": "None"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "explicit-option-some",
+      "target": "fnc",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "label": "b",
+          "expr": "Some(\"x\")"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "3",
+        "Some(\"x\")",
+        "true"
+      ]
+    },
+    {
+      "id": "constructor-omit-interior",
+      "target": "constructor",
+      "args": [
+        {
+          "label": "a",
+          "expr": "7"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "slots": [
+        "7",
+        "None",
+        "true"
+      ]
+    },
+    {
+      "id": "side-effect-order",
+      "target": "fnc",
+      "args": [
+        {
+          "label": "c",
+          "expr": "effect_c()"
+        },
+        {
+          "label": "a",
+          "expr": "effect_a()"
+        }
+      ],
+      "slots": [
+        "effect_a()",
+        "None",
+        "effect_c()"
+      ]
+    }
+  ],
+  "rejects": [
+    {
+      "id": "positional-cannot-skip-middle",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "true"
+        }
+      ],
+      "error": "missing"
+    },
+    {
+      "id": "required-last-missing",
+      "args": [
+        {
+          "expr": "3"
+        }
+      ],
+      "error": "missing"
+    },
+    {
+      "id": "no-args",
+      "args": [],
+      "error": "missing"
+    },
+    {
+      "id": "duplicate-label",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3"
+        },
+        {
+          "label": "a",
+          "expr": "4"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "positional-label-collision",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "label": "a",
+          "expr": "4"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "error": "duplicate"
+    },
+    {
+      "id": "unknown-label",
+      "args": [
+        {
+          "label": "a",
+          "expr": "3"
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        },
+        {
+          "label": "d",
+          "expr": "1"
+        }
+      ],
+      "error": "unknown"
+    },
+    {
+      "id": "positional-after-named",
+      "args": [
+        {
+          "label": "c",
+          "expr": "true"
+        },
+        {
+          "expr": "3"
+        }
+      ],
+      "error": "positional-after-named"
+    },
+    {
+      "id": "excess-positional",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "\"\""
+        },
+        {
+          "expr": "true"
+        },
+        {
+          "expr": "9"
+        }
+      ],
+      "error": "extra"
+    },
+    {
+      "id": "omit-required-both",
+      "args": [
+        {
+          "label": "b",
+          "expr": "\"\""
+        }
+      ],
+      "error": "missing"
+    },
+    {
+      "id": "duplicate-interior",
+      "args": [
+        {
+          "expr": "3"
+        },
+        {
+          "expr": "\"\""
+        },
+        {
+          "label": "b",
+          "expr": "\"extra\""
+        },
+        {
+          "label": "c",
+          "expr": "true"
+        }
+      ],
+      "error": "duplicate"
+    }
+  ],
+  "overloads": [
+    {
+      "id": "ordinary-distinct",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "nonoverlap",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          true,
+          false
+        ]
+      ],
+      "admit": true
+    },
+    {
+      "id": "overlap-simple",
+      "signatures": [
+        [
+          false
+        ],
+        [
+          false,
+          true
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "overlap-interior",
+      "signatures": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          true,
+          false
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "same-arity",
+      "signatures": [
+        [
+          false,
+          false
+        ],
+        [
+          false,
+          false
+        ]
+      ],
+      "admit": false
+    },
+    {
+      "id": "separated-intervals",
+      "signatures": [
+        [
+          false,
+          false,
+          false
+        ],
+        [
+          false
+        ]
+      ],
+      "admit": true
+    }
+  ]
+}
