@@ -10,6 +10,29 @@ typedef struct {
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+
+typedef enum {
+    ORES_NATIVE_TERMINATION_STOPPED = 1,
+    ORES_NATIVE_TERMINATION_RUNTIME_RETIRED = 2
+} OresNativeActorTerminationKind;
+
+/*
+ * Immutable retained per-ActorRef terminal metadata.
+ *
+ * This is host runtime substrate, not a source-level supervision policy.
+ * The current native scheduler drains every accepted DATA/CONTROL envelope
+ * before DONE, so abandoned counts are zero for both terminal kinds below.
+ * A future force/failure path must populate them explicitly rather than
+ * fabricating successful processing.
+ */
+typedef struct {
+    OresNativeActorRef actor;
+    OresNativeActorTerminationKind kind;
+    uint64_t accepted_user_messages;
+    uint64_t processed_user_messages;
+    uint64_t abandoned_user_messages;
+    uint64_t abandoned_control_messages;
+} OresNativeActorTerminalState;
 enum { ORES_NATIVE_CONTROL_PANIC = 1, ORES_NATIVE_CONTROL_CANCELLED = 2,
        ORES_NATIVE_CONTROL_STOPPED = 3 };
 typedef struct {
@@ -57,6 +80,15 @@ int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/*
+ * Nonblocking immutable terminal-state lookup. Returns 1 only after the exact
+ * generation-bound ActorRef is fully retired and its retained record has been
+ * published. Repeated reads return the same value. Stale/foreign refs fail.
+ */
+int ores_native_actor_scheduler_terminal_state(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef actor,
+    OresNativeActorTerminalState* output);
 /* Trusted external supervisor barrier: block only the host caller until
  * the selected stopped actor drains. This is NOT a guest await/Future;
  * never invoke it on a scheduler worker/actor carrier. */
