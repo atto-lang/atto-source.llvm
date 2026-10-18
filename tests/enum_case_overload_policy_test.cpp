@@ -81,6 +81,15 @@ int main() {
     rejects([&] { checkFamily({f({Parameter::selectedCase("root.Unsafe","A")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::whole("forged.Foo")})}, registry); });
     rejects([&] { checkFamily({f({Parameter::fixed("Any")})}, registry); });
+    for (const std::string& id : std::vector<std::string>{
+            "User", "Foo.A", "i8", "String", "f64",
+            "Tuple<int>", "{x:int}", "Unknown", "void"}) {
+        rejects([&] { checkFamily({f({Parameter::fixed(id)})}, registry); });
+    }
+    for (const std::string& id : std::vector<std::string>{
+            "int", "bool", "string", "float"}) {
+        checkFamily({f({Parameter::fixed(id)})}, registry);
+    }
     rejects([&] { checkFamily({f({a}),f({a},Domain::Instance)}, registry); });
     rejects([&] { checkFamily({f({a})}, Registry{{"root.Foo", {"other.Foo", {"A"}, true}}}); });
     rejects([&] { checkFamily({f({a})}, Registry{{"root.Foo", {"root.Foo", {"A","A"}, true}}}); });
