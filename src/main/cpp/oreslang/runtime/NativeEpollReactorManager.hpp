@@ -11,6 +11,8 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 namespace oreslang::runtime {
 
@@ -69,6 +71,15 @@ public:
         // Invalid/blocking descriptors must not cause cold-start thread
         // creation. Validate before provisioning the first throughput reactor.
         if (!NativeEpollReactor::can_watch(fd, events)) return std::nullopt;
+        // dup() aliases of sockets/pipes refer to the same kernel stream
+        // despite different integer descriptors. Resolve identity before any
+        // cold-start thread provisioning; malformed/closed FDs fail closed.
+        struct stat identity{};
+        if (::fstat(fd, &identity) != 0) return std::nullopt;
+        const int flags = ::fcntl(fd, F_GETFL);
+        if (flags < 0) return std::nullopt;
+        const int access_mode = flags & O_ACCMODE;
+        const bool stream_identity = S_ISFIFO(identity.st_mode) || S_ISSOCK(identity.st_mode);
         auto count = started_.load(std::memory_order_relaxed);
         if (count == 0) {
             if (profile_ != Profile::throughput || !reactors_[0]->start())
@@ -76,12 +87,18 @@ public:
             started_.store(1, std::memory_order_release);
             count = 1;
         }
-        // One FD can only have one outstanding readiness owner in this
-        // process-level manager, even if two different epoll instances could
-        // each register that descriptor independently. Otherwise read/write
-        // consumers might race across reactors and violate socket ownership.
+        // A literal FD or dup() alias must have one outstanding owner.
+        // Separate pipe read/write ends share st_dev/st_ino but differ in
+        // access mode, so they remain independently watchable. Linux anon-inode
+        // eventfds can report identical st_dev/st_ino despite being unrelated:
+        // use numeric-FD claims for those and require a stronger upstream
+        // capability boundary if alias-level ownership is necessary.
         for (const auto& claim : claimed_fds_) {
-            if (claim.occupied && claim.fd == fd) return std::nullopt;
+            if (!claim.occupied) continue;
+            if (claim.fd == fd || (stream_identity && claim.stream_identity
+                    && claim.device == identity.st_dev
+                    && claim.inode == identity.st_ino
+                    && claim.access_mode == access_mode)) return std::nullopt;
         }
         maybe_expand_locked();
         count = started_.load(std::memory_order_relaxed);
@@ -96,7 +113,9 @@ public:
                 const Watch result{static_cast<std::uint8_t>(index), *token};
                 for (auto& claim : claimed_fds_) {
                     if (claim.occupied) continue;
-                    claim = FdClaim{true, fd, result};
+                    claim = FdClaim{true, fd, stream_identity,
+                                    identity.st_dev, identity.st_ino,
+                                    access_mode, result};
                     return result;
                 }
                 // With per-reactor capacity and one claim per active slot this
@@ -186,6 +205,10 @@ private:
     struct FdClaim {
         bool occupied = false;
         int fd = -1;
+        bool stream_identity = false;
+        dev_t device = 0;
+        ino_t inode = 0;
+        int access_mode = 0;
         Watch watch{};
     };
     // Fixed-size, process-local ownership table. No allocation on reactor

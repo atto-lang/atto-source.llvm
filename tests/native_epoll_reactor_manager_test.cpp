@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/socket.h>
+#include <sys/eventfd.h>
 using namespace oreslang::runtime;
 static void check(bool good) { if (!good) throw std::runtime_error("reactor manager test failed"); }
 int main() {
@@ -108,6 +110,84 @@ int main() {
         manager.stop();
         ::close(endpoints[0]);
         ::close(endpoints[1]);
+    }
+    {
+        // A duplicated nonblocking pipe-read FD must not bypass the manager's
+        // ownership fence by registering on another epoll reactor.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        int pipefd[2]{-1, -1};
+        check(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+        const int alias = ::dup(pipefd[0]);
+        check(alias >= 0 && alias != pipefd[0]);
+        auto original = manager.try_watch(pipefd[0], EPOLLIN);
+        check(original.has_value());
+        check(!manager.try_watch(alias, EPOLLIN).has_value());
+        // The pipe's separate write end shares inode but not access mode:
+        // a producer must retain an independent EPOLLOUT registration.
+        auto writer = manager.try_watch(pipefd[1], EPOLLOUT);
+        check(writer.has_value());
+        check(::write(pipefd[1], "x", 1) == 1);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool saw_original = false;
+        while (!saw_original && std::chrono::steady_clock::now() < deadline) {
+            auto result = manager.try_pop();
+            if (!result) { std::this_thread::yield(); continue; }
+            if (result->reactor == original->reactor
+                && result->event.ticket.value == original->ticket.value)
+                saw_original = true;
+        }
+        check(saw_original);
+        auto replacement = manager.try_watch(alias, EPOLLIN);
+        check(replacement.has_value());
+        check(!manager.try_watch(pipefd[0], EPOLLIN).has_value());
+        manager.stop();
+        ::close(alias);
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+    }
+    {
+        // Two socket aliases are one readiness owner until terminal pop.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        int sockets[2]{-1, -1};
+        check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                           0, sockets) == 0);
+        const int alias = ::dup(sockets[0]);
+        check(alias >= 0);
+        auto first = manager.try_watch(sockets[0], EPOLLIN);
+        check(first.has_value());
+        check(!manager.try_watch(alias, EPOLLIN).has_value());
+        check(::write(sockets[1], "a", 1) == 1);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool seen = false;
+        while (!seen && std::chrono::steady_clock::now() < deadline) {
+            auto result = manager.try_pop();
+            if (!result) { std::this_thread::yield(); continue; }
+            seen = result->event.ticket.value == first->ticket.value
+                   && result->reactor == first->reactor;
+        }
+        check(seen);
+        check(manager.try_watch(alias, EPOLLIN).has_value());
+        manager.stop();
+        ::close(alias);
+        ::close(sockets[0]);
+        ::close(sockets[1]);
+    }
+    {
+        // Independent anon-inode eventfd objects may share st_dev/st_ino.
+        // Reject aliasing by numeric descriptor, not by false inode equality.
+        NativeEpollReactorManager manager(2,
+            NativeEpollReactorManager::Profile::preallocated_rt, 2);
+        const int one = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        const int two = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        check(one >= 0 && two >= 0);
+        auto a = manager.try_watch(one, EPOLLIN);
+        auto b = manager.try_watch(two, EPOLLIN);
+        check(a.has_value() && b.has_value());
+        manager.stop();
+        ::close(one);
+        ::close(two);
     }
     {
         NativeEpollReactorManager manager(1);
