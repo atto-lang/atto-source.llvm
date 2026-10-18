@@ -10,6 +10,7 @@
 
 extern "C" void oreslang_rt_scalar_frame_init(void*);
 extern "C" int oreslang_rt_scalar_frame_step(void*, std::uint64_t);
+extern "C" void oreslang_rt_scalar_frame_cancel(void*);
 extern "C" std::int64_t oreslang_rt_scalar_frame_result(void*);
 
 using namespace oreslang::runtime;
@@ -112,6 +113,77 @@ static void real_compiled_guest_frame() {
     CHECK(after.protocol_failures == 0);
     CHECK(after.abandoned_on_stop == 0);
 }
+struct CancelFrameState {
+    Frame frame{};
+    std::atomic<int> initials{0};
+    std::atomic<int> resumes{0};
+    std::atomic<int> cleanups{0};
+    std::atomic<int> violations{0};
+};
+static ActorStep cancellable_frame_handler(void* raw, ActorMessage message,
+                                           ResumeCause cause, std::int64_t io) noexcept {
+    auto& state = *static_cast<CancelFrameState*>(raw);
+    if (message.id != 1 || io != 0 || HungryCarrier::active_heap() == nullptr) {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    if (cause == ResumeCause::initial) {
+        if (state.initials.fetch_add(1) != 0 || state.frame.state != 0)
+            state.violations.fetch_add(1);
+        oreslang_rt_scalar_frame_init(&state.frame);
+    } else if (cause == ResumeCause::cpu) {
+        if (state.initials.load() != 1 || state.frame.state != 1)
+            state.violations.fetch_add(1);
+        state.resumes.fetch_add(1);
+    } else {
+        state.violations.fetch_add(1);
+        return {};
+    }
+    const int status = oreslang_rt_scalar_frame_step(&state.frame, 0);
+    if (status != 1 || state.frame.state != 1)
+        state.violations.fetch_add(1);
+    return {StepKind::cooperate, 0, 0};
+}
+static void cancel_compiled_frame(void* raw, ActorMessage message) noexcept {
+    auto& state = *static_cast<CancelFrameState*>(raw);
+    if (message.id != 1 || HungryCarrier::active_heap() == nullptr ||
+            state.frame.state != 1)
+        state.violations.fetch_add(1);
+    oreslang_rt_scalar_frame_cancel(&state.frame);
+    if (state.frame.state != 3) state.violations.fetch_add(1);
+    state.cleanups.fetch_add(1);
+}
+static std::int64_t cancel_frame_no_io(void*, std::int64_t,
+                                      const std::atomic<bool>&) noexcept {
+    return 0;
+}
+static void stop_runs_compiled_frame_cancellation_exactly_once() {
+    CancelFrameState state;
+    HungryCarrier::Options options{};
+    options.cancel_handler = cancel_compiled_frame;
+    HungryCarrier carrier(&state, cancellable_frame_handler, nullptr,
+                          cancel_frame_no_io, options);
+    carrier.start();
+    CHECK(carrier.producer_handle().try_send({1, 0}));
+    CHECK(until([&] { return state.resumes.load() >= 64; }, 2s));
+    carrier.request_stop();
+    carrier.join();
+    const auto stats = carrier.stats();
+    CHECK(state.initials.load() == 1);
+    CHECK(state.cleanups.load() == 1);
+    CHECK(state.violations.load() == 0);
+    CHECK(state.frame.state == 3);
+    CHECK(oreslang_rt_scalar_frame_step(&state.frame, 1) == 2);
+    CHECK(stats.completed == 0);
+    CHECK(stats.abandoned_on_stop == 1);
+    CHECK(stats.cancel_cleanups == 1);
+    CHECK(stats.protocol_failures == 0);
+    // Idempotent lifecycle calls must not invoke cleanup again.
+    carrier.join();
+    CHECK(state.cleanups.load() == 1);
+    CHECK(carrier.stats().cancel_cleanups == 1);
+}
+
 struct BusyState {
     std::atomic<int> initial{0};
     std::atomic<int> cpu{0};
@@ -172,6 +244,7 @@ static void expect_protocol_rejection(Handler handler) {
 }
 int main() {
     real_compiled_guest_frame();
+    stop_runs_compiled_frame_cancellation_exactly_once();
     stop_preserves_unfinished_logical_turn();
     expect_protocol_rejection(invalid_legacy);
     expect_protocol_rejection(invalid_v2);
