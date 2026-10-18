@@ -30,6 +30,19 @@ static void require_index(OresActorPackedState* state, uint64_t index) {
         deny();
 }
 
+/*
+ * Prove carrier-bound turn authority before reading mutable adapter metadata.
+ * A zero-byte read still validates the arena turn and exact opaque record
+ * capability, but cannot expose or modify actor memory.
+ */
+static OresArenaTurn require_field_turn(OresActorPackedState* state,
+                                        uint64_t domain, uint64_t epoch) {
+    if (!state || !state->arena) deny();
+    OresArenaTurn turn = {domain, epoch};
+    ores_actor_arena_read(state->arena, turn, state->record, 0, NULL, 0);
+    return turn;
+}
+
 OresActorPackedState* ores_actor_packed_state_open(uint64_t actor_id,
                                                     uint64_t incarnation,
                                                     uint64_t field_count) {
@@ -78,9 +91,9 @@ void ores_actor_packed_state_leave(OresActorPackedState* state,
 static void initialize(OresActorPackedState* state,
                        uint64_t domain, uint64_t epoch,
                        uint64_t index, int64_t initial, int is_mutable) {
+    OresArenaTurn turn = require_field_turn(state, domain, epoch);
     require_index(state, index);
     if (state->initialized[index]) deny();
-    OresArenaTurn turn = {domain, epoch};
     ores_actor_arena_write(
         state->arena, turn, state->record,
         (size_t) index * sizeof(int64_t), &initial, sizeof(initial));
@@ -103,10 +116,10 @@ void ores_actor_packed_state_field_init_mutable(OresActorPackedState* state,
 int64_t ores_actor_packed_state_field_read(OresActorPackedState* state,
                                            uint64_t domain, uint64_t epoch,
                                            uint64_t index) {
+    OresArenaTurn turn = require_field_turn(state, domain, epoch);
     require_index(state, index);
     if (!state->initialized[index]) deny();
     int64_t value = 0;
-    OresArenaTurn turn = {domain, epoch};
     ores_actor_arena_read(
         state->arena, turn, state->record,
         (size_t) index * sizeof(int64_t), &value, sizeof(value));
@@ -116,9 +129,9 @@ int64_t ores_actor_packed_state_field_read(OresActorPackedState* state,
 void ores_actor_packed_state_field_write(OresActorPackedState* state,
                                          uint64_t domain, uint64_t epoch,
                                          uint64_t index, int64_t value) {
+    OresArenaTurn turn = require_field_turn(state, domain, epoch);
     require_index(state, index);
     if (!state->initialized[index] || !state->mutable_fields[index]) deny();
-    OresArenaTurn turn = {domain, epoch};
     ores_actor_arena_write(
         state->arena, turn, state->record,
         (size_t) index * sizeof(int64_t), &value, sizeof(value));
