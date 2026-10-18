@@ -237,3 +237,26 @@ type checking, ownership/effect checking, invocation lowering, and target
 execution use the same immutable selected-call plan. Existing parsers that
 still represent calls as `List<Expr>` must fail closed, not map `_` to
 `NameExpr("_")` or silently enable source omission.
+
+## Explicit omission origin-to-formal mapping
+
+Because omission syntax occupies a source call item but is **not an evaluated
+expression**, the checked call plan must preserve both the dense expression
+origin list and explicit omission bindings as `[raw_call_item_index,
+formal_parameter_index]` pairs **in lexical call-item order**.
+
+For example, `f(b: _, c: effect(), a: omit)` with formal declaration
+`(string? a, string? b, bool c)` produces
+`call_item_index_by_evaluated_source = [1]` and
+`omission_bindings = [[0, 1], [2, 0]]`. The `c` expression evaluates exactly
+once; neither marker evaluates. The omitted bindings are *not* sorted by
+formal index. The callee receives typed `Option.None` for `a` and `b`;
+this must never conflate either syntactic omission with a supplied
+`None : Option<string>` expression.
+
+For all call items, expression origins and omitted call-item origins must
+partition the raw source argument indices exactly once. Named calls can
+reorder *formal destinations* but cannot reorder *expression evaluations*.
+Reject forged, repeated, missing, negative or out-of-bounds source origins.
+Retain these mappings for diagnostics and backend parity, including
+constructor receiver erasure and final typed rest collection.
