@@ -19,10 +19,13 @@ carrier with `HungryCarrier::active_heap()` authority, so compiler-generated
 frame cancellation/drop glue can release actor-owned resources without exposing
 them to the broker thread. Queued envelopes that never entered user code do not
 receive cancellation callbacks. DONE racing with STOP wins completion and does
-not receive cancellation. Telemetry counts callback invocation, not successful
-cleanup; generated callbacks remain responsible for fail-closed drop semantics.
-An external lifetime owner must still join and quiesce the actor before retiring
-or freeing its frame.
+not receive cancellation. Telemetry separates callback invocation, callback-reported failure and
+active turns abandoned without any callback. The callback returns an explicit
+cleanup acknowledgment. If an abandoned turn has no callback or cleanup returns
+false, the carrier permanently withholds `CarrierRetirementProof`; joined
+threads alone are insufficient authority to reclaim an externally referenced
+actor heap. An external lifetime owner must still join and quiesce the actor
+before retiring or freeing its frame.
 
 This deliberately extends the existing **one-actor-per-HungryCarrier**
 contract. It is not multi-actor run-queue fairness, not a production
