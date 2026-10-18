@@ -534,7 +534,9 @@ inline bool hasUnverifiedEnvironmentDirective(std::string_view source) {
                    (source[cursor] == ' ' || source[cursor] == '\t')) ++cursor;
             if (cursor < source.size() && source[cursor] == ':') return true;
         }
-        start += 2;
+        // Search overlapping // prefixes too: /// ores: and //// ores:
+        // would otherwise hide a directive in an ignored line comment.
+        ++start;
     }
     return false;
 }
