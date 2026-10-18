@@ -60,6 +60,12 @@ static inline ores_actor_state_acquisition ores_state_handle_request(
         out.verification = ORES_STATE_NOT_CRITICAL;
     } else if ((declared_using | inferred_effects) & ~ORES_STATE_EFFECT_MASK ||
                (inferred_effects & ~declared_using) ||
+               /* A read loan must never admit a callback that mutates state,
+                * even if the caller declared both read and write effects. */
+               (mode == ORES_STD_READ && (inferred_effects & ORES_STATE_EFFECT_WRITE)) ||
+               /* This synchronous bridge cannot pin a borrowed state view
+                * across suspend or expose it to arbitrary FFI. */
+               (inferred_effects & (ORES_STATE_EFFECT_SUSPEND | ORES_STATE_EFFECT_FFI)) ||
                !(declared_using & (mode == ORES_STD_READ
                    ? ORES_STATE_EFFECT_READ : ORES_STATE_EFFECT_WRITE)) ||
                !(inferred_effects & (mode == ORES_STD_READ
