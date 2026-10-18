@@ -71,6 +71,19 @@ class NativeEnumGuestAot(unittest.TestCase):
                 self.assertEqual(selected, symbols,
                                  "wire tag changes must not change overload ABI")
             self.assertIn(f"i64 {tag}", result.stdout)
+            # Wire-tag metamorphism must preserve real optimized machine
+            # behavior, not just printed exact eos2 symbol spellings.
+            with tempfile.TemporaryDirectory(prefix="ores-enum-retag-") as temp:
+                ll = pathlib.Path(temp) / "retag.ll"
+                exe = pathlib.Path(temp) / "retag"
+                ll.write_text(result.stdout, encoding="utf-8")
+                built = subprocess.run(
+                    [self.clang, "-x", "ir", "-O2", str(ll), "-o", str(exe)],
+                    capture_output=True, text=True, timeout=30, check=False)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                native = subprocess.run([str(exe)], capture_output=True,
+                                        text=True, timeout=10, check=False)
+                self.assertEqual(native.returncode, 10, native.stderr)
 
     def test_exit_code_and_signed_sum_are_checked_before_codegen(self):
         base = """define enum Foo as A, B end
