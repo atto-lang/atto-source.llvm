@@ -1020,6 +1020,31 @@ if(BUILD_TESTING)
     else()
         message(STATUS "Native actor checkpoint/code-only integration needs OpenSSL Crypto")
     endif()
+    # REAL .ores -> LLVM IR -> PIC shared images -> live actor-owned i64 heap.
+    # Distinct from symbolic code-label/native-static-callback tests. This is
+    # an internal trusted-host AOT fixture only, NOT a signed production
+    # loader, full source actor scheduler, await pin or LLVM ORC execution.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME native_source_actor_aot_pic_hot_reload
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_pic_hot_reload.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_RT_AOT_CLANG}"
+                --cxx "${ORE_RT_AOT_CXX}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_source_actor_aot_pic_hot_reload_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_pic_hot_reload.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_RT_AOT_CLANG}"
+                --cxx "${ORE_RT_AOT_CXX}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(
+            native_source_actor_aot_pic_hot_reload
+            native_source_actor_aot_pic_hot_reload_asan_ubsan
+            PROPERTIES TIMEOUT 180)
+    endif()
     # Bounded independent supervisor CONTROL transport (runtime substrate only).
     add_executable(oreslang-supervisor-hierarchy-test tests/supervisor_hierarchy_test.cpp)
     target_include_directories(oreslang-supervisor-hierarchy-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
