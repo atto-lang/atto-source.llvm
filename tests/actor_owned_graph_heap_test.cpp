@@ -250,8 +250,9 @@ static void standalone_borrow_gate_destruction_fail_closed() {
         if (child == 0) {
             std::set_terminate([] { std::_Exit(86); });
             auto* gate = new oreslang::runtime::ActorHeapBorrowGate(owner);
-            auto lease = hold_mutation ? gate->acquire(owner) :
-                                          std::optional<oreslang::runtime::ActorHeapBorrowGate::Lease>{};
+            auto lease = hold_mutation ?
+                std::optional<oreslang::runtime::ActorHeapBorrowGate::Lease>{} :
+                gate->acquire(owner);
             auto mutation = hold_mutation ? gate->begin_mutation(owner) :
                               std::optional<oreslang::runtime::ActorHeapBorrowGate::Mutation>{};
             if (hold_mutation ? !mutation : !lease) std::_Exit(87);
