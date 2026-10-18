@@ -49,6 +49,29 @@ int main() {
     wrong = h;
     wrong.capability_digest[0] ^= 1;
     check(rejects([&] { (void) Wire::decode(original, wrong, sha); }));
+    wrong = h;
+    wrong.actor_id[0] ^= 1;
+    check(rejects([&] { (void) Wire::decode(original, wrong, sha); }));
+    wrong = h;
+    wrong.code_digest[0] ^= 1;
+    check(rejects([&] { (void) Wire::decode(original, wrong, sha); }));
+    wrong = h;
+    wrong.state_schema_digest[0] ^= 1;
+    check(rejects([&] { (void) Wire::decode(original, wrong, sha); }));
+    wrong = h;
+    wrong.message_abi_digest[0] ^= 1;
+    check(rejects([&] { (void) Wire::decode(original, wrong, sha); }));
+    for (std::size_t bytes = 0; bytes < original.size(); ++bytes) {
+        auto cut = std::vector<std::uint8_t>(original.begin(),
+                                             original.begin() + bytes);
+        check(rejects([&] { (void) Wire::decode(cut, h, sha); }));
+    }
+    auto trailing = original;
+    trailing.push_back(0);
+    check(rejects([&] { (void) Wire::decode(trailing, h, sha); }));
+    auto zero_epoch = h;
+    zero_epoch.incarnation = 0;
+    check(rejects([&] { (void) Wire::encode({zero_epoch, {}}, sha); }));
     auto truncated = original;
     truncated.pop_back();
     check(rejects([&] { (void) Wire::decode(truncated, h, sha); }));
