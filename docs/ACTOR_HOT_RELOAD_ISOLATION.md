@@ -105,3 +105,35 @@ schema migration; actor-owned FFI lease wiring; ORC shared-object loader and
 resource tracking; sandboxed UNTRUSTED image JIT E2E; production canary/revert;
 cross-backend conformance and adversarial/ASan/UBSan native CI. Do not mark
 these complete based on the host-only test.
+
+## Native actor code-only gate (stacked implementation)
+
+The new `NativeActorHotUpgradeGate<CodeImage>` is a **trusted, host-owned
+runtime primitive** built on `NativeSupervisorCodeSlot`. It binds a fixed
+`ActorHeapIdentity {runtime, actor, epoch}`, actor isolation kind, mailbox ABI,
+state schema, shared-cell ABI and capability ABI to the code slot. A turn,
+suspended `await` frame or external FFI callback must hold a move-only
+`Pin` for its whole lifetime. `freeze(expectedRevision)` closes new DATA
+admission, `quiesced(ticket)` rejects promotion until every pin is released,
+and `promote(ticket, exactShape, code, cleanup)` performs the revision CAS.
+Failed candidate images are reclaimed outside the actor gate/CONTROL mutex;
+`abort` leaves the old image active. `close` seals new admission, but existing
+pins keep old code alive until the final lease closes.
+
+`CodeImage` is an immutable description supplied by the host. In the current
+native CTest it is a string. The native source compiler **does not yet
+attach these pins to actual guest call/await/FFI paths**, and the test does
+not perform dynamic machine code loading. All three actor kinds are tested as
+logical shape/identity categories, not verified physical isolation tiers.
+
+The implementation deliberately **rejects any state-schema/layout change**.
+A nontrivial state upgrade still needs separately verified storage snapshots,
+typed migration, rollback, shared-cell reader grace periods and a supervisor
+health gate. This code-only primitive must never be repurposed to permit guest
+raw pointers to cross generations, or to change an untrusted actor's execution
+domain simply by changing `Kind`.
+
+Exact mirrored host regression (GCC -O2 and Clang ASan+UBSan):
+https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39090397220
+The test validates code-only AOT/JIT/AOT generation labels and ownership
+bookkeeping. **It does not execute AOT/JIT generated guest machine code.**
