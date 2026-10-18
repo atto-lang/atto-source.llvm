@@ -23,11 +23,11 @@ static int reenter(uint64_t fields[ORES_KERNEL_FIELDS],int64_t payload,int64_t *
     return accumulate(fields,payload,result);
 }
 int main(void){
-    OresKernel vm;
+    OresKernel vm = {0};
     OresKernelRef a,b,c;
     uint64_t done;
     int64_t last;
-    ores_kernel_init(&vm);
+    assert(ores_kernel_init(&vm)==ORES_KERNEL_OK);
     assert(ores_kernel_spawn(&vm,accumulate,&a)==ORES_KERNEL_OK);
     assert(ores_kernel_spawn(&vm,accumulate,&b)==ORES_KERNEL_OK);
     assert(ores_kernel_send(&vm,a,1)==ORES_KERNEL_OK);
@@ -82,6 +82,14 @@ int main(void){
     assert(ores_kernel_stop(&vm,active_ref)==ORES_KERNEL_OK);
     assert(ores_kernel_tick(&vm)==ORES_KERNEL_RETIRED);
     assert(ores_kernel_tick(&vm)==ORES_KERNEL_IDLE);
+    /* Reset must invalidate even a ref that was previously retired. */
+    const OresKernelRef stale = active_ref;
+    assert(ores_kernel_init(&vm)==ORES_KERNEL_OK);
+    assert(ores_kernel_send(&vm,stale,7)==ORES_KERNEL_INVALID);
+    assert(ores_kernel_spawn(&vm,accumulate,&a)==ORES_KERNEL_OK);
+    assert(ores_kernel_send(&vm,stale,7)==ORES_KERNEL_INVALID);
+    assert(ores_kernel_stop(&vm,a)==ORES_KERNEL_OK);
+    assert(ores_kernel_tick(&vm)==ORES_KERNEL_RETIRED);
     puts("FREESTANDING_ACTOR_KERNEL_HOST_TEST_PASS");
     return 0;
 }
