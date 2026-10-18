@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -77,19 +78,53 @@ public:
         require_registered(supervisor);
         if (policies_.count(supervisor.id()))
             throw std::logic_error("native supervisor policy already installed");
+
+        // Validate while still unbound, then allocate/publish the registry
+        // entry before the irreversible bind. If map allocation fails the
+        // caller's slot remains completely unbound and reusable.
         (void)code->current();
-        code->bind_owner(domain_.get(), supervisor.id());
-        policies_.emplace(supervisor.id(), std::move(code));
+        auto [it, inserted] = policies_.emplace(supervisor.id(), code);
+        if (!inserted)
+            throw std::logic_error("native supervisor policy install raced");
+        try {
+            code->bind_owner(domain_.get(), supervisor.id());
+        } catch (...) {
+            policies_.erase(it);
+            throw;
+        }
     }
 
     NativeSupervisorCodeSlot<std::string>::Descriptor policy_revision(
             const SupervisorRef& supervisor) const {
-        std::lock_guard<std::mutex> guard(mutex_);
-        require_registered(supervisor);
-        auto it = policies_.find(supervisor.id());
-        if (it == policies_.end())
-            throw std::logic_error("supervisor has no installed policy code");
-        return it->second->current();
+        auto code = policy_for(supervisor);
+        return code->current_bound(domain_.get(), supervisor.id());
+    }
+
+    NativeSupervisorCodeSlot<std::string>::Lease pin_policy(
+            const SupervisorRef& supervisor) const {
+        auto code = policy_for(supervisor);
+        return code->pin_bound(domain_.get(), supervisor.id());
+    }
+
+    NativeSupervisorCodeSlot<std::string>::Descriptor activate_policy(
+            const SupervisorRef& supervisor,
+            std::uint64_t expected_revision,
+            std::string abi,
+            std::string code_image,
+            std::function<void()> reclaim) {
+        auto code = policy_for(supervisor);
+        return code->activate_bound(
+                domain_.get(),
+                supervisor.id(),
+                expected_revision,
+                std::move(abi),
+                std::move(code_image),
+                std::move(reclaim));
+    }
+
+    void close_policy(const SupervisorRef& supervisor) {
+        auto code = policy_for(supervisor);
+        code->close_bound(domain_.get(), supervisor.id());
     }
 
     std::uint64_t parent_id(const SupervisorRef& supervisor) const {
@@ -137,6 +172,16 @@ public:
     }
 
 private:
+    std::shared_ptr<NativeSupervisorCodeSlot<std::string>> policy_for(
+            const SupervisorRef& supervisor) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        require_registered(supervisor);
+        auto it = policies_.find(supervisor.id());
+        if (it == policies_.end())
+            throw std::logic_error("supervisor has no installed policy code");
+        return it->second;
+    }
+
     struct Association {
         std::uint64_t supervisor_id;
         std::weak_ptr<NativeActorGroup> group;
