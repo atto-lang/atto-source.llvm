@@ -1905,3 +1905,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# HOST-ONLY token bucket arithmetic and concurrent reservation prototype.
+# Does NOT enforce guest sends or prove native UNTRUSTED isolation.
+if(BUILD_TESTING)
+    add_executable(oreslang-trusted-outbound-token-bucket-host-test
+        tests/trusted_outbound_token_bucket_test.cpp)
+    target_include_directories(oreslang-trusted-outbound-token-bucket-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-trusted-outbound-token-bucket-host-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-trusted-outbound-token-bucket-host-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME trusted_outbound_token_bucket_host_only
+        COMMAND oreslang-trusted-outbound-token-bucket-host-test)
+    set_tests_properties(trusted_outbound_token_bucket_host_only PROPERTIES TIMEOUT 15)
+endif()
