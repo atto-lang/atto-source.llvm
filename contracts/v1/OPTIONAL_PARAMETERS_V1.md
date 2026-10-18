@@ -79,3 +79,64 @@ LLVM: frontend/Parser.cpp accepts named call arguments and rejects duplicates or
 - Add positive/negative fixtures across fnc, routine, static and instance methods, constructors, inheritance, nested expressions, generic inference, borrow/move, exactly-once effects, spreads, and type errors. Include Graal interpreter/native image and LLVM -O0/-O2, plus formatter idempotence.
 - Reject unknown/duplicate labels, missing required slots, extra arguments, positional after named, wrong types, unchecked dynamic calls, inherited label or optionality drift, overlapping overload intervals, and omission in an unsupported backend.
 - The adjacent JSON cases + Python reference checker validate only binder rules and overload admissibility. They DO NOT demonstrate guest-language compiler or runtime conformance.
+
+## Explicit absence vs. no supplied argument (hardening amendment, 2026-10-18)
+
+Canonical proposal: a bare `omit` in a call-argument slot is a **source-level omission item**, never a value expression; it occupies one formal slot and is valid ONLY for an optional parameter. Its final runtime local result is `None`, but the compiler must preserve a separate `supplied` presence bit in the checked call plan.
+
+    foo(3, "", true);           // b = Some("")
+    foo(3, None, true);         // b = None, explicitly supplied
+    foo(3, omit, true);         // b = None, not supplied
+    foo(3, c: true);            // b = None, not supplied
+    foo(3,,true);               // reject: empty argument syntax is never a slot
+    foo(3, void, true);         // reject: void is a return/type marker, not a value
+    foo(3, null, true);         // reject: standalone null is forbidden in Oreslang
+    foo(omit, "x", true);        // reject: required a cannot be omitted
+    foo(a: 3, b: omit, c: true);// optional label may be explicitly omitted
+
+`omit` is reserved in a *call argument item* grammar, including named argument values (e.g. `label: omit`), not available as an ordinary expression or a runtime value, not serializable, not captured, not returned, not spread and not accepted as a record literal field. Do not silently reinterpret an identifier currently bound to a value named `omit`; require an explicit reserved-context token policy before parser rollout. No comma-hole `foo(3,,true)` syntax. No `void` literal. A required `Option<T>` formal can accept explicit `None` but cannot accept `omit` unless explicitly marked optional; optionality and Option-typedness are orthogonal.
+
+The compiler must distinguish:
+- **Provided value**: source expression evaluated once, typechecked; ordinary `T` becomes `Some(T)` at a `T?` boundary.
+- **Provided `None`**: real `Option<T>` value, explicitly supplied; no evaluation of arbitrary default expressions.
+- **Implicitly omitted**: caller leaves an optional slot unbound; no source expression or borrow/move happens.
+- **Explicitly omitted (`omit`)**: positional/named slot is consumed, but no runtime expression or borrow/move happens.
+
+All four have source-span and presence/omission metadata in the checked call plan. The two omitted cases lower to typed `None` in v1. Future explicit defaults (not in v1) apply only to omitted slots, **never** to provided `None`.
+
+An optional call argument is not an `Option` value in an arbitrary expression: no `foo(3, void_returning_function(), true)` rewriting; `void` functions cannot satisfy `Option<T>`.
+
+### Parser/runtime enforcement
+
+Use an `ArgumentItem = Value(label?, expression, span) | Omit(label?, span) | Spread(expression, span)` tagged AST; do not fake omission with `Ast.NameExpr("None")`, `null`, `void` or a zero-sized expression. Track bound slot index, supplied/not-supplied, explicit-vs-implicit omission, and argument source ordinal. Validate kinds BEFORE evaluating source expressions, and avoid constructing option wrappers until all type/ownership checks are satisfied. For a positional `omit`, increment the positional formal index exactly once; never let it remove an argument and shift subsequent positional values left. Reject omissions of mandatory, borrowed-required and variadic-rest slots. Require exact, generic-instantiated `Option<T>` for an explicit `None` or `Some(T)`; never use string matching of expression source such as `startswith("Some(")` for semantic type checking.
+
+## Variadic declaration and call-spread audit
+
+Existing Java `...tuple` call-site spread is supported for statically known tuples (see `ArgumentsTupleSpreadTest`); runtime-length collections cannot currently be spread into a fixed-arity callable. LLVM's current scalar-native parser does not provide a general variadic declaration/rest-packing ABI. Neither backend may claim this proposed variadic declaration syntax already runs.
+
+Canonical future **variadic declaration** spelling follows existing prefix-spread notation:
+
+    pub fnc emit(int id, string? label, bool active, ...string tags): void {
+      // tags: readonly borrowed contiguous Slice<string>, possibly length zero
+      return;
+    }
+
+    emit(3, None, true);                  // explicit empty option; tags=[]
+    emit(3, omit, true);                  // no label; tags=[]
+    emit(3, omit, true, "a", "b");       // tags=["a","b"]
+    emit(3, omit, true, ...tagList);      // variadic tail may expand a checked List<string>
+    emit(id: 3, active: true);            // tags=[]
+    emit(id: 3, active: true, tags: ["a", "b"]); // named rest PACK only
+
+The declared `...T rest` must appear ONCE, at the FINAL parameter position, and cannot also be marked optional with `?`, be a defaulted parameter, or be passed `None`/`omit` directly. Rest has zero-or-more elements, each of exact/assignable `T`; an empty variadic rest is a length-0 collection, **not** `None`. Keep separate `RestParameter` metadata rather than encoding rest as `T?`, Option<Array<T>>, or a generic `Array<T>` field. Rest named argument is one `List<T>`/`Array<T>` pack rather than a single `T` element; mixing it with trailing positional rest elements is a duplicate binding. The two forms `tags: [..]` and `...tagList` must produce the same element sequence but retain different source binding kinds.
+
+V1 constraints for safety:
+- No middle-position rest or multiple rest declarations. No runtime-spread into fixed-arity signatures. Fixed-arity tuple spread retains its existing independent semantics.
+- Static parameter binding proceeds in declaration order for positional arguments. `omit` may only mark an optional fixed slot and consumes that slot; it MUST NOT skip a rest element or act like an empty rest.
+- After a named value/pack/omit argument, no positional argument and no spread argument are allowed (existing named/spread mixing fails closed). `emit(id: 3, active: true, tags: pack)` is allowed when its pack type is proven.
+- A variadic tail may accept a single final runtime collection spread `...items` when its element type and lifetime are proved; arbitrary unbounded iterator/async stream/foreign spread is NOT implicitly admitted. Tuple expansion for fixed-arity calls stays unchanged.
+- Rest is a borrowed read-only `Slice<T>` view in the callee; source-order evaluation, temporary lifetimes and cleanup are compiler-checked. No mandatory heap allocation in freestanding core; if stack/continuation-frame packing is unsupported (including suspend/async/actor pipelines), fail closed. To retain/mutate values, callers explicitly create and transfer an owning collection under normal ownership rules.
+- A named rest pack supplies zero-or-more rest elements as **one** named argument. Empty `tags: []` is provided-empty, not absent and not `None`.
+- Type inference from a **zero-element** rest is impossible unless another explicit argument or generic default constrains `T`.
+- Effective arity is `[required_fixed_count, +infinity)` for any variadic signature, so it conservatively conflicts with any sibling overload in the same existing domain whose admitted call arity intersects. Reject the ambiguous overload family, without selecting by element runtime types, names or omission markers.
+- Keep actor-message transport, constructor field initialization, FFI, overrides, public metadata and binary/serialized interfaces fail closed until they carry explicit rest shapes and feature-negotiated ABI. Constructors may adopt a trailing variadic rest only after those invariants are proven.
