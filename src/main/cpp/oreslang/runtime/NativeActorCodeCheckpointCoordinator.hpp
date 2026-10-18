@@ -83,6 +83,9 @@ private:
         StagedImage(const StagedImage&) = delete;
         StagedImage& operator=(const StagedImage&) = delete;
         ~StagedImage() noexcept {
+            // A future nontrivial code wrapper must die before its DSO unload
+            // callback. The image value here is a POD manifest + pointer.
+            image = {};
             try { if (reclaim) reclaim(); } catch (...) {}
         }
     };
