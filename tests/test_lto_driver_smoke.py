@@ -7,6 +7,7 @@ separate and mandatory (see test_aot_driver.py).
 """
 from pathlib import Path
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -70,5 +71,28 @@ print('define i32 @main() { ret i32 42 }')
         capture_output=True,text=True)
     assert denied.returncode==64,(denied.stdout,denied.stderr)
     assert output.read_bytes()==original_binary
+    # Output publication may not replace the compiler or toolchain itself,
+    # even when distinct pathname spellings share one inode.
+    emitter_bytes=emitter.read_bytes()
+    denied=subprocess.run([driver,str(source),str(emitter)],env=env,
+        capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert emitter.read_bytes()==emitter_bytes
+    compiler_alias=root/'hardlinked compiler output'
+    os.link(emitter,compiler_alias)
+    denied=subprocess.run([driver,str(source),str(compiler_alias)],env=env,
+        capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert emitter.read_bytes()==emitter_bytes
+    # A harmless local shell shim stands in for Clang: never point the test's
+    # output at an actual installed Clang executable.
+    clang_shim=root/'clang wrapper'
+    clang_shim.write_text('#!/bin/sh\\nexec '+shlex.quote(clang)+' "$@"\\n')
+    clang_shim.chmod(0o700)
+    shim_bytes=clang_shim.read_bytes()
+    denied=subprocess.run([driver,str(source),str(clang_shim)],
+        env=dict(env,CLANG=str(clang_shim)),capture_output=True,text=True)
+    assert denied.returncode==64,(denied.stdout,denied.stderr)
+    assert clang_shim.read_bytes()==shim_bytes
     assert not list(root.glob('.ores-aot.*'))
 print('source-free driver/Clang/LLD smoke: PASS; NOT Oreslang language parity')
