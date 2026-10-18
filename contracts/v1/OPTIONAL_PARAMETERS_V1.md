@@ -154,3 +154,61 @@ The **single canonical proposed spelling** is `...T rest` (e.g. `...string messa
 - Phase C: implement **checked** final dynamic collection spread and named rest pack with complete source-order, borrow/effect, continuation and backing-storage proofs. Reference-oracle scenarios for `...tagList` and `tags: list` describe **Phase C semantics**, not currently admitted guest syntax. Existing Java static fixed-tuple spread remains independent.
 - No second or overloaded explicit constructor in v1. In a future separately gated constructor-overloading feature, only caller-visible parameters count toward overload admission; the implicit construction receiver is not an argument. Actor constructors remain disallowed.
 - Experimental pure-binder results are not evidence of executable Java/LLVM guest syntax, Option lowering, variadic runtime packing or CI parity. Fail closed on unsupported paths.
+
+## Contextual underscore omission alias (2026-10-18)
+
+The single-token call item `_` is an **exact contextual alias** for the
+call item `omit`. Both normalize in the parser/AST to
+`ArgumentItem.Omit(label?, sourceSpan)`, not to a value expression,
+`Option<T>.None`, wildcard binding, partial-application placeholder,
+`void`, `null`, nor a default expression. The token is recognized only
+when it occupies a whole top-level call argument item or the whole RHS of
+a named call item. Do NOT globally reserve `_` or change established
+wildcard/destructuring/match semantics. An identifier-like appearance
+inside an ordinary value expression never gains omission semantics.
+
+```oreslang
+pub fnc log(int priority, string? label, ...string messages): void {
+    // label is Option<string>; messages is typed rest collection
+}
+
+log(3, omit, "first", "second");  // valid, label omitted, rest has 2
+log(3, _,    "first", "second");  // identical checked call plan
+log(3, None, "first");           // explicitly supplied typed Option.None
+log(priority: 3, label: _);      // valid, named omission; empty rest
+log(priority: 3, label: omit);   // exact alias of the previous call
+log(priority: 3);               // implicit omission (no call item)
+```
+
+**Presence distinction**: `_` and `omit` each consume one optional
+fixed-parameter slot, perform no expression evaluation, and create no
+move/borrow/effect. They set `explicit_omit` in checked call metadata.
+Unspecified optional slots set `implicit_omit`; explicit
+`None` is an `Option<T>` **value** and sets `explicit_none`.
+The callee gets the exact same typed `Option<T>.None` in all three
+cases, but the compiler retains distinct source provenance for
+diagnostics and future defaults. `_` is not a general runtime sentinel
+and does not have its own `None`-like type.
+
+Parser context and diagnostics:
+
+- In call-argument position, `call(_)` and `call(omit)` normalize to
+  the same Omit node. `call(label: _)` and `call(label: omit)` likewise
+  normalize to a named Omit node.
+- A standalone `_` in a match/destructuring pattern keeps its existing
+  wildcard/discard meaning, independently of call binding.
+- Reject omitting a required parameter, rest element, or rest pack.
+  `call(_, value)` is legal only if that first fixed slot is optional.
+  No positional shifting: a marker consumes one fixed position.
+- Reject `call(,,)`, `call(3,,true)`, `call(3, void, true)` and
+  `call(3, null, true)`. Neither an empty comma item nor
+  `void` represents omission.
+- No partial application or implicit placeholder lambda:
+  `sum(_, 1)` does NOT manufacture a callable.
+- The formatter may **preserve the source spelling** for legibility,
+  but both spellings must produce identical binding/ownership/effect
+  plans and ABI values. Neither changes overload selection.
+
+Guest-language acceptance remains gated on real parser, semantic checker,
+Option lowering and runtime tests. A pure-binder or Python oracle cannot
+establish that this syntax already executes.
