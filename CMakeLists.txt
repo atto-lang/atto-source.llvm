@@ -799,11 +799,12 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> requires spawn initializer")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
-    # Explicit nested Option/Future extraction is implemented first in GraalVM.
-    # Do not silently lower either native value to a scalar int.
-    oreslang_contract_test(source_nested_option_extraction_fail_closed
+    # These tests reject nested type declarations BEFORE member-call lowering.
+    # They prove fail-closed type admission, not flatten/unwrap_all execution.
+    # Operation-level conformance remains blocked on LLVM generic representation.
+    oreslang_contract_test(source_nested_option_type_admission_fail_closed
         source-nested-option-flatten-unimplemented.ores --diagnostic "expected 'int'")
-    oreslang_contract_test(source_nested_future_extraction_fail_closed
+    oreslang_contract_test(source_nested_future_type_admission_fail_closed
         source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
     # Real source-compiled Oreslang actors, not host-only C callback tests.
