@@ -59,7 +59,9 @@ struct OresKernel {
     OresKernelActor actors[ORES_KERNEL_ACTORS];
 };
 
-void ores_kernel_init(OresKernel *kernel);
+/* The caller must provide zero-initialized storage before first init.
+ * Subsequent init invalidates prior generations; no reset during a turn. */
+OresKernelStatus ores_kernel_init(OresKernel *kernel);
 OresKernelStatus ores_kernel_spawn(OresKernel *kernel,
                                    OresKernelHandler handler,
                                    OresKernelRef *out);
