@@ -50,6 +50,7 @@ int main() {
         "00000001430000001f");
     rejected([&] { (void)p.constantTag("Missing"); });
     rejected([&] { (void)EnumTag32Layout("unqualified", cases); });
+    rejected([&] { (void)EnumTag32Layout("unit." + std::string(508, 'A'), cases); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",2},{"B",1}}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {{"A",1},{"A",2}}); });
     rejected([&] { (void)EnumTag32Layout("unit.Foo", {}); });
