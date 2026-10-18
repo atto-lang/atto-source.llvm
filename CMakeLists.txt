@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # STAGED enum-case static signature selector and eos2 ABI oracle.
+    # Host-only; do not claim Oreslang guest enum/virtual method lowering.
+    add_executable(oreslang-native-enum-case-overload-policy-test
+        tests/enum_case_overload_policy_test.cpp)
+    target_include_directories(oreslang-native-enum-case-overload-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-enum-case-overload-policy-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_case_overload_static_policy
+        COMMAND oreslang-native-enum-case-overload-policy-test)
+    set_tests_properties(native_enum_case_overload_static_policy
+        PROPERTIES TIMEOUT 10)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
