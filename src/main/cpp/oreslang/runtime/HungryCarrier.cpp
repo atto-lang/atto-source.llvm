@@ -325,7 +325,7 @@ CarrierStats HungryCarrier::stats() const noexcept {
             thread_tag_.load(std::memory_order_acquire),
             abandoned_on_stop_.load(std::memory_order_acquire),
             cooperations_.load(std::memory_order_acquire),
-            cancel_cleanups_.load(std::memory_order_acquire)};
+            cancel_callbacks_.load(std::memory_order_acquire)};
 }
 
 bool HungryCarrier::pin_cpu() noexcept {
@@ -429,7 +429,7 @@ void HungryCarrier::cancel_active_turn() noexcept {
         tls_actor_heap = &actor_heap_;
         options_.cancel_handler(actor_state_, current_);
         tls_actor_heap = nullptr;
-        cancel_cleanups_.fetch_add(1, std::memory_order_release);
+        cancel_callbacks_.fetch_add(1, std::memory_order_release);
     }
     pending_ = false;
     cooperating_ = false;
