@@ -21,7 +21,7 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         self.fixture = self.root / "fixture.ores"
         self.fixture.write_text("fixture", encoding="utf-8")
 
-    def compiler(self, *, status=0, stdout="", stderr="", leaked_artifact=None):
+    def compiler(self, *, status=0, stdout="", stderr="", leaked_artifact=None, overwrite_input=False):
         path = self.root / "fake-compiler"
         path.write_text(
             "#!" + sys.executable + "\n"
@@ -31,6 +31,8 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
             + f"sys.stderr.write({stderr!r})\n"
             + (f"Path({leaked_artifact!r}).write_text('leaked', encoding='utf-8')\n"
                if leaked_artifact is not None else "")
+            + ("Path(sys.argv[-1]).write_text('overwritten', encoding='utf-8')\n"
+               if overwrite_input else "")
             + f"sys.exit({status})\n",
             encoding="utf-8",
         )
@@ -175,6 +177,15 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
                 p = self.run_contract(compiler, "--diagnostic", "private class field")
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn("filesystem artifacts after rejection", p.stderr)
+
+    def test_rejected_source_mutation_stays_isolated_and_fails(self):
+        original = self.fixture.read_bytes()
+        compiler = self.compiler(
+            status=1, stderr="private class field", overwrite_input=True)
+        p = self.run_contract(compiler, "--diagnostic", "private class field")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("compiler mutated rejected source fixture", p.stderr)
+        self.assertEqual(self.fixture.read_bytes(), original)
 
     def test_rejection_must_not_accept_successful_compilation(self):
         compiler = self.compiler(status=0, stdout="; ModuleID = 'wrong'\n")
