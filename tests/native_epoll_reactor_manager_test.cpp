@@ -176,7 +176,7 @@ int main() {
     }
     {
         // Independent anon-inode eventfd objects may share st_dev/st_ino.
-        // Reject aliasing by numeric descriptor, not by false inode equality.
+        // Anonymous descriptors require authenticated host-issued identities.
         NativeEpollReactorManager manager(2,
             NativeEpollReactorManager::Profile::preallocated_rt, 2);
         const int raw = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -204,16 +204,61 @@ int main() {
             else std::this_thread::yield();
         }
         check(consumed);
-        check(manager.try_watch(*alias, EPOLLIN).has_value());
+        check(manager.drain_owned_eventfd(*alias));
+        check(!manager.drain_owned_eventfd(*one)); // counter already empty
+        auto alias_watch = manager.try_watch(*alias, EPOLLIN);
+        check(alias_watch.has_value());
         check(!manager.try_watch(*one, EPOLLIN).has_value());
+        check(manager.signal_owned_eventfd(*alias));
+        bool alias_completed = false;
+        const auto alias_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::seconds(3);
+        while (!alias_completed && std::chrono::steady_clock::now() < alias_deadline) {
+            auto completion = manager.try_pop();
+            if (completion && completion->reactor == alias_watch->reactor &&
+                completion->event.ticket.value == alias_watch->ticket.value)
+                alias_completed = true;
+            else std::this_thread::yield();
+        }
+        check(alias_completed);
         check(manager.close_owned_eventfd(*one));
-        check(!manager.signal_owned_eventfd(*one)); // stale generation
+        auto replacement = manager.open_owned_eventfd();
+        check(replacement.has_value());
+        check(!manager.signal_owned_eventfd(*one)); // stale reused slot generation
+        check(!manager.try_watch(*one, EPOLLIN).has_value());
+        check(!manager.close_owned_eventfd(*one));
+        check(manager.signal_owned_eventfd(*replacement));
+        check(manager.close_owned_eventfd(*replacement));
         manager.stop();
         while (manager.try_pop().has_value()) { }
         check(manager.close_owned_eventfd(*alias));
         check(!manager.close_owned_eventfd(*alias));
         check(manager.close_owned_eventfd(*two));
         check(!manager.open_owned_eventfd().has_value()); // retired manager
+    }
+    {
+        // A copied capability must not authenticate against another manager,
+        // even if both registries use the same slot and local generation.
+        NativeEpollReactorManager source(1);
+        NativeEpollReactorManager other(1);
+        auto token = source.open_owned_eventfd();
+        auto foreign = other.open_owned_eventfd();
+        check(token.has_value() && foreign.has_value());
+        check(!other.try_watch(*token, EPOLLIN).has_value());
+        check(!other.signal_owned_eventfd(*token));
+        check(!other.close_owned_eventfd(*token));
+        check(source.close_owned_eventfd(*token));
+        check(other.close_owned_eventfd(*foreign));
+        check(!source.try_watch(*token, EPOLLIN).has_value());
+    }
+    {
+        // Cold throughput admission must fail before spawning any pthread.
+        NativeEpollReactorManager manager(1);
+        const int raw = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        check(raw >= 0);
+        check(!manager.try_watch(raw, EPOLLIN).has_value());
+        check(manager.started_threads() == 0);
+        ::close(raw);
     }
     {
         NativeEpollReactorManager manager(1);

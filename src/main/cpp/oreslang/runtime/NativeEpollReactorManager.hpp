@@ -133,6 +133,17 @@ public:
         return ::write(entry->fd, &one, sizeof(one)) ==
                static_cast<ssize_t>(sizeof(one));
     }
+    // Trusted host consumer acknowledgement: eventfd readiness persists until
+    // its counter is read. This never runs guest callbacks or parks a carrier.
+    bool drain_owned_eventfd(OwnedEventFd key) noexcept {
+        std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
+        if (!guard.owns_lock()) return false;
+        const auto* entry = lookup_owned(key);
+        if (!entry) return false;
+        std::uint64_t counter = 0;
+        return ::read(entry->fd, &counter, sizeof(counter)) ==
+               static_cast<ssize_t>(sizeof(counter));
+    }
     // Terminal completion must be consumed before the watched handle closes.
     bool close_owned_eventfd(OwnedEventFd key) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
