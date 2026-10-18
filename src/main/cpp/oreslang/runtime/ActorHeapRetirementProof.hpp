@@ -89,10 +89,11 @@ public:
             && registered_lanes() == expected_lanes_
             && joined_lanes() == expected_lanes_;
     }
-    // Strong enough for destructor-time reclamation after partial startup:
-    // every lane that ever registered has joined and cleanup remained proven.
+    // Bound heap destruction uses the same full-quorum rule as explicit
+    // retirement. Partial startup requires a separate supervisor abort protocol;
+    // silently shrinking the cohort here could race a late lane registration.
     bool safe_for_bound_heap_destruction() const noexcept {
-        return !cleanup_failed() && joined_lanes() == registered_lanes();
+        return ready_for_retirement();
     }
 };
 
