@@ -38,8 +38,34 @@ Reset_Handler:
   movs r0, #9
   movs r1, #4
   bl ores_embedded_probe
-halt:
-  b halt
+  @ 3 * 9 + 4 = 31. Only guest-compiled code can provide this result.
+  cmp r0, #31
+  bne guest_fail
+guest_pass:
+  ldr r1, =pass_message
+  movs r0, #4
+  bkpt #0xab
+  ldr r1, =exit_success
+  movs r0, #0x20
+  bkpt #0xab
+stop_success:
+  b stop_success
+guest_fail:
+  ldr r1, =fail_message
+  movs r0, #4
+  bkpt #0xab
+  ldr r1, =exit_failure
+  movs r0, #0x20
+  bkpt #0xab
+stop_failure:
+  b stop_failure
+.section .rodata,"a",%progbits
+.balign 4
+pass_message: .asciz "ORESLANG_BAREMETAL_GUEST_PASS value=31\\n"
+fail_message: .asciz "ORESLANG_BAREMETAL_GUEST_FAIL\\n"
+.balign 4
+exit_success: .word 0x20026, 0
+exit_failure: .word 0x20023, 1
 """
 
 LINKER = """ENTRY(Reset_Handler)
@@ -71,6 +97,8 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--clang", default=shutil.which("clang"))
     parser.add_argument("--readelf", default=shutil.which("readelf"))
+    parser.add_argument("--qemu", default=None,
+                        help="optional qemu-system-arm executable; required for guest execution")
     args = parser.parse_args()
     verify(bool(args.clang), "Clang with an ARM backend required")
     verify(bool(args.readelf), "readelf required: no skipping ELF symbol audit")
@@ -139,8 +167,30 @@ def main():
             verify(blocked not in symbols,
                    "unexpected hosted/runtime symbol: " + blocked)
 
+        if args.qemu:
+            # On Cortex-M3 this ELF starts from its own vector table and reset
+            # handler. No Zephyr, kernel, libc, crt0 or platform actor runtime.
+            command = [args.qemu, "-M", "lm3s6965evb", "-cpu", "cortex-m3",
+                       "-nographic", "-monitor", "none", "-serial", "none",
+                       "-semihosting-config", "enable=on,target=native",
+                       "-kernel", str(elf)]
+            try:
+                completed = subprocess.run(command, capture_output=True,
+                                           text=True, timeout=20)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("QEMU did not finish: guest may have trapped or spun") from exc
+            output = completed.stdout + completed.stderr
+            verify(completed.returncode == 0,
+                   "QEMU guest failed to exit successfully: " + output)
+            verify("ORESLANG_BAREMETAL_GUEST_PASS value=31" in output,
+                   "QEMU did not observe the source-compiled guest result: " + output)
+            verify("ORESLANG_BAREMETAL_GUEST_FAIL" not in output,
+                   "guest reported a computed result mismatch: " + output)
+            print("Oreslang Cortex-M no-OS QEMU guest computation PASS: value=31")
+
     print("Oreslang Cortex-M standalone no-libc ELF link and symbol gate PASS")
-    print("Scope: compiler + object + standalone link; no emulator execution claimed")
+    if not args.qemu:
+        print("Scope: compiler + object + standalone link; QEMU not requested")
 
 
 if __name__ == "__main__":
