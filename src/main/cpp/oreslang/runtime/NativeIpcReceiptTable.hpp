@@ -67,12 +67,14 @@ public:
             throw std::invalid_argument("route or capability generation rollback");
         if (pending_.size() >= capacity_)
             throw std::overflow_error("bounded IPC correlation capacity exhausted");
-        // Commit the monotonic indices only after the map has accepted the
-        // immutable envelope. A failed allocation cannot burn sequence slots.
+        // Install stream identity first while has_stream_ is still false.
+        // A throwing copy/allocation cannot leave a live correlation entry
+        // without its stream identity or charge a transport credit.
+        if (!has_stream_) stream_ = stream;
+        // Commit the monotonic indices only after successful insertion.
         const bool inserted = pending_.emplace(message.message_sequence,
             Entry{message, IpcReceiptStage::local_admitted}).second;
         if (!inserted) throw std::invalid_argument("duplicate sequence");
-        stream_ = stream;
         has_stream_ = true;
         last_sequence_ = message.message_sequence;
         last_route_epoch_ = message.route_epoch;
