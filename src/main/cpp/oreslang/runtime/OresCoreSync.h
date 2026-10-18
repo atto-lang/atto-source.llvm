@@ -85,7 +85,7 @@ typedef struct ores_core_rw_gate {
 #define ORES_CORE_RW_GATE_INIT { ATOMIC_VAR_INIT(0u), ATOMIC_VAR_INIT(0u), 0u }
 
 typedef struct ores_core_rw_writer_wait {
-    atomic_uint active; /* 0=idle, 2=registering, 1=registered */
+    atomic_uint active; /* 0=idle, 1=queued, 2=transition, 3=claiming, 4=granted */
     ores_core_rw_gate* gate;
 } ores_core_rw_writer_wait;
 
@@ -116,9 +116,14 @@ ores_core_rw_writer_register(ores_core_rw_gate* gate, ores_core_rw_writer_wait* 
 static inline ores_core_sync_result
 ores_core_rw_writer_unregister(ores_core_rw_writer_wait* wait) {
     if (!wait) return ORES_CORE_SYNC_INVALID;
-    unsigned int one = 1u;
-    if (!atomic_compare_exchange_strong_explicit(&wait->active, &one, 2u,
-            memory_order_acq_rel, memory_order_acquire)) return ORES_CORE_SYNC_STALE;
+    /* Cancellation cannot revoke a grant while the writer CAS is in flight.
+     * State 3 claims the wait; state 4 publishes the completed grant. */
+    unsigned int current = atomic_load_explicit(&wait->active, memory_order_acquire);
+    for (;;) {
+        if (current != 1u && current != 4u) return ORES_CORE_SYNC_STALE;
+        if (atomic_compare_exchange_weak_explicit(&wait->active, &current, 2u,
+                memory_order_acq_rel, memory_order_acquire)) break;
+    }
     /* There is exactly one matching pending reservation at this point. */
     atomic_fetch_sub_explicit(&wait->gate->waiting_writers, 1u, memory_order_acq_rel);
     atomic_store_explicit(&wait->active, 0u, memory_order_release);
@@ -163,26 +168,39 @@ ores_core_rw_read_release(ores_core_rw_gate* gate) {
 
 static inline ores_core_sync_result
 ores_core_rw_try_write(ores_core_rw_gate* gate,
-        const ores_core_rw_writer_wait* registered_wait, unsigned int* token) {
+        ores_core_rw_writer_wait* registered_wait, unsigned int* token) {
     if (!gate || !token) return ORES_CORE_SYNC_INVALID;
     if (registered_wait) {
-        if (atomic_load_explicit(&registered_wait->active, memory_order_acquire) != 1u
-                || registered_wait->gate != gate) return ORES_CORE_SYNC_INVALID;
+        unsigned int queued = 1u;
+        if (!atomic_compare_exchange_strong_explicit(&registered_wait->active,
+                &queued, 3u, memory_order_acq_rel, memory_order_acquire))
+            return ORES_CORE_SYNC_BUSY;
+        if (registered_wait->gate != gate) {
+            atomic_store_explicit(&registered_wait->active, 1u, memory_order_release);
+            return ORES_CORE_SYNC_INVALID;
+        }
     } else if (atomic_load_explicit(&gate->waiting_writers, memory_order_acquire)) {
         return ORES_CORE_SYNC_BUSY;
     }
     unsigned int zero = 0u;
     if (!atomic_compare_exchange_strong_explicit(&gate->state, &zero,
-            ORES_CORE_RW_RESERVED, memory_order_acq_rel, memory_order_acquire))
+            ORES_CORE_RW_RESERVED, memory_order_acq_rel, memory_order_acquire)) {
+        if (registered_wait)
+            atomic_store_explicit(&registered_wait->active, 1u, memory_order_release);
         return ORES_CORE_SYNC_BUSY;
+    }
     if (gate->issued_writers == ORES_CORE_RW_MAX_READERS) {
         atomic_store_explicit(&gate->state, 0u, memory_order_release);
+        if (registered_wait)
+            atomic_store_explicit(&registered_wait->active, 1u, memory_order_release);
         return ORES_CORE_SYNC_EXHAUSTED;
     }
     const unsigned int next = ++gate->issued_writers;
     atomic_store_explicit(&gate->state, ORES_CORE_RW_WRITE_BIT | next,
         memory_order_release);
     *token = next;
+    if (registered_wait)
+        atomic_store_explicit(&registered_wait->active, 4u, memory_order_release);
     return ORES_CORE_SYNC_OK;
 }
 
