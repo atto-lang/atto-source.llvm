@@ -1892,6 +1892,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(cortexm_no_libc_elf_link_and_symbol_audit
         PROPERTIES TIMEOUT 120)
+    # Only register execution evidence when the actual QEMU system emulator
+    # is present; the independent link/symbol gate always runs above.
+    find_program(ORES_QEMU_SYSTEM_ARM NAMES qemu-system-arm)
+    if(ORES_QEMU_SYSTEM_ARM)
+        add_test(NAME cortexm_no_libc_source_guest_qemu
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_no_libc_elf.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --qemu "${ORES_QEMU_SYSTEM_ARM}")
+        set_tests_properties(cortexm_no_libc_source_guest_qemu
+            PROPERTIES TIMEOUT 120)
+    endif()
     add_test(NAME cortexm_source_actor_admission
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cortexm_source_actor_admission.py"
