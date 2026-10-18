@@ -13,7 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, LATE_IMMUTABLE_INIT, LATE_MUTABLE_INIT };
 static void invalid_call(enum Misuse which) {
     OresActorSlot foreign_slot = {0, 0, 0};
     if (which == FOREIGN_SLOT) {
@@ -72,6 +72,15 @@ static void invalid_call(enum Misuse which) {
     } else if (which == NESTED_CARRIER_ACTOR) {
         OresActorI64Heap* other = ores_actor_i64_heap_open(30, 8, 1);
         (void) ores_actor_i64_heap_enter(other, 30, 8);
+    } else if (which == LATE_IMMUTABLE_INIT || which == LATE_MUTABLE_INIT) {
+        // The same legitimate carrier may resume the actor, but it may not
+        // initialize a previously blank fixed field on a later mailbox turn.
+        ores_actor_i64_heap_leave(heap, turn);
+        OresActorTurn resumed = ores_actor_i64_heap_enter(heap, 29, 7);
+        if (which == LATE_IMMUTABLE_INIT)
+            ores_actor_i64_heap_field_init(heap, resumed.domain, resumed.epoch, 1, 42);
+        else
+            ores_actor_i64_heap_field_init_mutable(heap, resumed.domain, resumed.epoch, 1, 42);
     }
     /* None of these calls may finish normally. */
 }
@@ -152,6 +161,8 @@ int main(void) {
     CHECK(rejects(CALL_AFTER_RETIRE));
     CHECK(rejects(FOREIGN_CARRIER_TURN));
     CHECK(rejects(NESTED_CARRIER_ACTOR));
+    CHECK(rejects(LATE_IMMUTABLE_INIT));
+    CHECK(rejects(LATE_MUTABLE_INIT));
 #endif
     /* Domain authority must remain unique across repeated actor incarnation
      * creation/destruction. This exercises the saturating CAS issuance path
