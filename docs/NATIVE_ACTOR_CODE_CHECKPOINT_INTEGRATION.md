@@ -189,3 +189,41 @@ dispatch tests to extend; `source-actor-spawn-unavailable-await.ores`
 explicitly documents missing guest await support. The first source
 end-to-end must verify old FIFO drain, stable ActorRef and unchanged actor
 heap, then v2 dispatch, including a forced rollback and concurrent `stop`.
+
+## New source-generated AOT/PIC executable-image integration (2026-10-18)
+
+The same PR now includes `tests/source_actor_pic_hot_reload.py`, two
+independently compiled `.ores` `Counter` generations, and
+`tests/native_source_actor_pic_hot_reload_test.cpp`. Unlike the preexisting
+host function-pointer tests, this test compiles the **actual Oreslang actor**
+twice through `oreslang-llvmc`, materializes two ELF PIC shared objects,
+resolves `oreslang_actor_Counter_init/on_message` from each version, and
+calls both generations against **one actual `OresActorI64Heap`**. The
+`NativeActorHotUpgradeGate` pins old code, freezes DATA admission, rejects
+a deliberately incompatible state ABI, publishes only at quiescence, and
+retains original actor heap/identity as behavior changes from 42 (v1)
+to 86, 128 (v2). Old DSOs remain pinned until release.
+
+Registered Linux CTests:
+- `native_source_actor_aot_pic_hot_reload`
+- `native_source_actor_aot_pic_hot_reload_asan_ubsan`
+
+**Verification status: NOT EXECUTED on the exact source branch.** Source-org
+workflow jobs still fail *before runner steps*, including the exact-head
+LLVM compiler/native execution workflow. This is new code awaiting real
+compilation, not an achieved AOT hot-reload certification. Its compiler
+syntax, linker model, two native image loaders, byte-precise ABI and
+sanitizer behavior must be confirmed by an actual executing runner.
+
+**Trust boundary:** These DSOs are compiled from fixed, trusted test source
+into a private temporary directory. This is intentionally not an
+externally accessible loader: the `dlopen` host fixture does **not**
+independently verify artifact signatures, dependency trust, constructors,
+platform ABI, relocations or a secure load path. Passing the test will
+not authorize loading an attacker-controlled image. The in-test
+synchronous `dlclose` callback is also not an accepted production cleanup
+or durable quarantine mechanism; see LLVM #607 and #610. No LLVM ORC
+execution, guest `await` generation pin, scheduler mailbox freeze, user
+`ActorRef` continuity, multi-threaded DATA execution or state-schema
+migration is claimed here. The runtime-owned scheduler linearization
+described above remains mandatory.
