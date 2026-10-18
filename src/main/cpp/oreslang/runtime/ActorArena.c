@@ -55,10 +55,14 @@ static uint64_t claim_domain(void) {
             return candidate;
     }
 }
+static int try_enter_lock(OresActorArena* a) {
+    if (!a) deny();
+    return !atomic_flag_test_and_set_explicit(&a->lock, memory_order_acquire);
+}
 static void enter_lock(OresActorArena* a) {
     if (!a) deny();
     for (unsigned n = 0; n < 1000000u; ++n)
-        if (!atomic_flag_test_and_set_explicit(&a->lock, memory_order_acquire)) return;
+        if (try_enter_lock(a)) return;
     deny();
 }
 static void leave_lock(OresActorArena* a) {
@@ -288,10 +292,15 @@ void ores_actor_arena_retire(OresActorArena* a) {
     enter_lock(a); a->retiring = 1; leave_lock(a);
 }
 int ores_actor_arena_try_destroy(OresActorArena* a) {
-    enter_lock(a);
+    if (!a) deny();
+    /* CONTROL try-destroy is observational: lock contention means the arena
+     * is not quiescent yet, not a process-fatal scheduler failure. */
+    if (!try_enter_lock(a)) return 0;
     if (!a->retiring) deny();
     if (a->active || a->loans) { leave_lock(a); return 0; }
-    /* Trusted scheduler fences all timers/wakers/FFI holders before destroy. */
+    /* Trusted scheduler fences all timers/wakers/FFI holders before destroy.
+     * Once quiescence is proven, never republish an unlocked object that is
+     * about to be scrubbed/freed; the lock dies with the allocation. */
     secure_zero(a->slab, checked_mul(a->slots, a->slot_bytes));
     secure_zero(a->scratch, a->scratch_bytes);
     secure_zero(a->meta, checked_mul(a->slots, sizeof(Slot)));
@@ -299,7 +308,6 @@ int ores_actor_arena_try_destroy(OresActorArena* a) {
     secure_zero(a->entries, sizeof(a->entries));
     secure_zero(a->scratch_entries, sizeof(a->scratch_entries));
     free(a->slab); free(a->scratch); free(a->meta); free(a->free_slots);
-    leave_lock(a);
     secure_zero(a, sizeof(*a)); free(a);
     return 1;
 }
