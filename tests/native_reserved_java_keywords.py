@@ -100,6 +100,18 @@ CASES = {
         "pub fnc main(): int { return nb { return 7; }; }",
         "native Task block lowering unsupported",
     ),
+    "suspends-task-declaration-still-not-lowered": (
+        "suspends fnc worker(): int { return task { return 7; }; }",
+        "native suspends declaration requires suspension-aware borrow checking",
+    ),
+    "suspends-lambda-inside-task-still-not-lowered": (
+        "pub fnc main(): int { return task { return (suspends |int n| -> n)(5); }; }",
+        "native Task block lowering unsupported",
+    ),
+    "suspends-lambda-caller-local-no-implicit-task": (
+        "pub fnc main(): int { return (suspends |int a| -> a + 1)(5); }",
+        "native suspends lambda effect lowering unsupported",
+    ),
     "suspends-lambda-no-spawn-pipe": (
         "pub fnc main(): int { return (suspends |int a| -> a)(5); }",
         "native suspends lambda effect lowering unsupported",
