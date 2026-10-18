@@ -73,7 +73,7 @@ jobs:
           python3 tests/test_cpu_gpu_nb_admission.py
           printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
           printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
-          printf '%s\n' 'SCOPE=native CPU header and source-free classifier; full LLVM CMake/CTest, frontend compilation and GPU still unverified'
+          printf '%s\n' 'SCOPE=direct native CPU header matrix and source-free classifier; production CMake/CTest + frontend refusal are verified by the separate cmake-ctest-production job; GPU execution remains unverified'
           test "$(grep -c '^PASS ' "$RUNNER_TEMP/dop-graph-evidence/test-results.txt")" = 5
           printf 'PASS cpu_gpu_nb_source_free_classifier\n' >> "$RUNNER_TEMP/dop-graph-evidence/test-results.txt"
           printf 'DOP_GRAPH_TESTS=PASS\n' > "$RUNNER_TEMP/dop-graph-evidence/test-outcome.txt"
@@ -86,5 +86,101 @@ jobs:
             ${{ runner.temp }}/dop-graph-evidence/provenance.txt
             ${{ runner.temp }}/dop-graph-evidence/test-results.txt
             ${{ runner.temp }}/dop-graph-evidence/test-outcome.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  cmake-ctest-production:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact private source head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source and record production inputs
+        id: ctest-provenance
+        shell: bash
+        env:
+          EXPECTED: ${{ github.sha }}
+          EXPECTED_REPO_ID: '1410897874'
+          ACTUAL_REPO_ID: ${{ github.repository_id }}
+          SOURCE_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test "$ACTUAL_REPO_ID" = "$EXPECTED_REPO_ID"
+          test "$SOURCE_PRIVATE" = true
+          test "$GITHUB_REPOSITORY" = 'ores-truffle-oreslang/oreslang-source.llvm'
+          git diff --quiet
+          install -d -m 700 "$RUNNER_TEMP/dop-ctest-evidence"
+          {
+            printf 'SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
+            printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'CMAKE_BLOB=%s\n' "$(git hash-object CMakeLists.txt)"
+            printf 'GRAPH_HEADER_BLOB=%s\n' "$(git hash-object src/main/cpp/oreslang/runtime/ExecutionGraphV1.hpp)"
+            printf 'DOP_BRIDGE_BLOB=%s\n' "$(git hash-object src/main/cpp/oreslang/runtime/DopGraphCpuIntegrationV1.hpp)"
+            printf 'FRONTEND_BLOB=%s\n' "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)"
+            printf '%s\n' 'SCOPE=production CMake registrations, native graph headers, owned CPU bridge, and real oreslang-llvmc fail-closed source admission'
+          } > "$RUNNER_TEMP/dop-ctest-evidence/provenance.txt"
+      - name: Install CMake LLVM and Clang toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-dev clang python3
+          cmake --version
+          clang++ --version
+          llvm-config --version
+      - name: Configure production CMake project
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_DIR="$(llvm-config --cmakedir)"
+          cmake -S . -B build/dop-ctest -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DLLVM_DIR="$LLVM_DIR" \
+            | tee "$RUNNER_TEMP/dop-ctest-evidence/cmake-configure.txt"
+      - name: Build production compiler and registered graph targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/dop-ctest --parallel 2 --target \
+            oreslang-llvmc \
+            execution_graph_v1_test \
+            execution_graph_v1_admission_security_test \
+            oreslang-dop-owned-graph-bridge-test \
+            | tee "$RUNNER_TEMP/dop-ctest-evidence/cmake-build.txt"
+      - name: Execute exact CTest registrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^(execution_graph_v1_test|execution_graph_v1_admission_security_test|dop_owned_f32_cpu_host_i64_graph_bridge|cpu_gpu_nb_source_fail_closed|cpu_gpu_nb_diagnostic_refusal_classifier)$'
+          ctest --test-dir build/dop-ctest -N -R "$regex" \
+            | tee "$RUNNER_TEMP/dop-ctest-evidence/ctest-list.txt"
+          for name in execution_graph_v1_test execution_graph_v1_admission_security_test dop_owned_f32_cpu_host_i64_graph_bridge cpu_gpu_nb_source_fail_closed cpu_gpu_nb_diagnostic_refusal_classifier; do
+            grep -Fq "$name" "$RUNNER_TEMP/dop-ctest-evidence/ctest-list.txt"
+          done
+          ctest --test-dir build/dop-ctest --output-on-failure -R "$regex" \
+            | tee "$RUNNER_TEMP/dop-ctest-evidence/ctest-output.txt"
+          grep -Fq '100% tests passed, 0 tests failed out of 5' \
+            "$RUNNER_TEMP/dop-ctest-evidence/ctest-output.txt"
+          printf 'DOP_LLVM_CMAKE_CTEST=PASS\n' > "$RUNNER_TEMP/dop-ctest-evidence/test-outcome.txt"
+      - name: Retain production CMake CTest evidence
+        if: ${{ always() && steps.ctest-provenance.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, pinned
+        with:
+          name: dop-owned-graph-llvm-cmake-ctest
+          path: |
+            ${{ runner.temp }}/dop-ctest-evidence/provenance.txt
+            ${{ runner.temp }}/dop-ctest-evidence/cmake-configure.txt
+            ${{ runner.temp }}/dop-ctest-evidence/cmake-build.txt
+            ${{ runner.temp }}/dop-ctest-evidence/ctest-list.txt
+            ${{ runner.temp }}/dop-ctest-evidence/ctest-output.txt
+            ${{ runner.temp }}/dop-ctest-evidence/test-outcome.txt
+            build/dop-ctest/Testing/Temporary/LastTest.log
           if-no-files-found: error
           retention-days: 7
