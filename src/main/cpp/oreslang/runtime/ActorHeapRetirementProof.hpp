@@ -131,10 +131,17 @@ ActorHeapRetirementCohort::create(
     const Key key{owner.runtime, owner.actor, owner.epoch};
     std::lock_guard<std::mutex> lock{registry_mutex()};
     auto& values = registry();
+    // The registry is an admission index, not a historical actor table.
+    // Sweep dead weak entries on every cold-path cohort creation so a service
+    // that restarts millions of actor generations cannot grow this map forever.
+    for (auto it = values.begin(); it != values.end(); ) {
+        if (it->second.expired()) it = values.erase(it);
+        else ++it;
+    }
     if (const auto found = values.find(key); found != values.end()) {
         if (found->second.lock())
             throw std::logic_error("actor generation already has a live retirement cohort");
-        values.erase(found);
+        values.erase(found); // defensive: sweep above should have removed it
     }
     auto cohort = std::shared_ptr<ActorHeapRetirementCohort>(
         new ActorHeapRetirementCohort(owner, mint_id(), expected_lanes));
