@@ -75,6 +75,20 @@ int main(void) {
         check(race.scheduler != NULL);
         race.actor = ores_native_actor_scheduler_spawn(race.scheduler, 0);
         check(race.actor.scheduler_domain != 0);
+        /* A reference is a domain + slot + generation capability. Mutations
+         * must fail admission before STOP and must never enter DATA delivery. */
+        OresNativeActorRef forged = race.actor;
+        forged.scheduler_domain ^= UINT64_C(1);
+        check(ores_native_actor_scheduler_try_send(race.scheduler, forged, SENDS)
+              == ORES_NATIVE_SEND_INVALID_REF);
+        forged = race.actor;
+        forged.actor_slot = 1;
+        check(ores_native_actor_scheduler_try_send(race.scheduler, forged, SENDS)
+              == ORES_NATIVE_SEND_INVALID_REF);
+        forged = race.actor;
+        forged.generation ^= UINT64_C(1);
+        check(ores_native_actor_scheduler_try_send(race.scheduler, forged, SENDS)
+              == ORES_NATIVE_SEND_INVALID_REF);
         /* Establish a real delivery obligation before racing STOP: otherwise
          * a STOP-first round could exercise no successful sends at all. */
         for (unsigned payload = 0; payload <= PREFILL; ++payload) {
