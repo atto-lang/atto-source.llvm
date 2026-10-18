@@ -97,9 +97,19 @@ static void stale_generation_and_foreign_heap_rejected() {
     const auto reused = first.allocate(alice, &data, sizeof(data)).value();
     check(reused.slot == old.slot && reused.generation > old.generation,
           "reused slot did not advance generation");
+    must_reject([&]{ (void)first.is_linked(alice, reused, old); },
+                "query admitted stale target generation");
+    must_reject([&]{ (void)first.is_linked(alice, reused,
+                   Heap::Handle{old.heap, static_cast<std::uint32_t>(12345), old.generation}); },
+                "query admitted invalid target slot");
+    must_reject([&]{ (void)first.is_linked(alice, old, reused); },
+                "query admitted stale source generation");
     must_reject([&]{ (void)first.copy_out(bob, reused, &data, sizeof(data)); },
                 "foreign actor entered heap");
     const auto other = second.allocate(bob, &data, sizeof(data)).value();
+    must_reject([&]{ (void)first.is_linked(alice, reused,
+                   Heap::Handle{other.heap, other.slot, other.generation}); },
+                "query admitted foreign target heap domain");
     must_reject([&]{ (void)first.link(alice, reused,
                        Heap::Handle{other.heap, other.slot, other.generation}); },
                 "cross-actor graph edge accepted");
