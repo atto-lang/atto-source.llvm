@@ -40,6 +40,38 @@ struct Plan {
     std::vector<Call> returnCalls;
 };
 
+/**
+ * Bound the first process-entrypoint slice to a reliable POSIX exit status.
+ * Every admitted guest overload body is currently a literal i64 return, so
+ * this performs exact checked addition without interpreting guest code or
+ * changing which overload was statically selected.
+ *
+ * Later general int-valued main functions must return an i64 guest result
+ * through a dedicated entry wrapper instead of silently truncating it.
+ */
+inline std::uint8_t checkedNativeExit(const Plan& plan) {
+    std::unordered_map<std::string, std::int64_t> bodies;
+    for (const auto& fn : plan.functions) {
+        if (!bodies.emplace(fn.signature.symbolId(), fn.returned).second)
+            throw std::invalid_argument("native enum AOT: duplicate compiled slot");
+    }
+    std::int64_t total = 0;
+    for (const auto& call : plan.returnCalls) {
+        auto found = bodies.find(call.exactSymbol);
+        if (found == bodies.end())
+            throw std::invalid_argument("native enum AOT: missing compiled call target");
+        const std::int64_t number = found->second;
+        if ((number > 0 && total > std::numeric_limits<std::int64_t>::max() - number)
+            || (number < 0 && total < std::numeric_limits<std::int64_t>::min() - number)) {
+            throw std::invalid_argument("native enum AOT: signed int sum overflow");
+        }
+        total += number;
+    }
+    if (total < 0 || total > 255)
+        throw std::invalid_argument("native enum AOT: process exit result outside 0..255");
+    return static_cast<std::uint8_t>(total);
+}
+
 class Parser final {
 public:
     explicit Parser(std::string_view source) : source_(source) { advance(); }
@@ -98,6 +130,7 @@ public:
                 family.at(selected).symbolId(), call.tag, valueType.second
             });
         }
+        (void)checkedNativeExit(plan_); // Do not emit partial IR for overflowing input.
         return std::move(plan_);
     }
 
