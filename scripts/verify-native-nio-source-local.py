@@ -7,6 +7,8 @@ attestation. Run it before and after compilation from the repository root.
 from __future__ import annotations
 
 import os
+import hashlib
+import stat
 from pathlib import Path
 import re
 import subprocess
@@ -22,6 +24,62 @@ def git(*args: str) -> bytes:
     return subprocess.check_output(("git", "-c", "core.fileMode=true",
                                     "-c", "core.fsmonitor=false", *args),
                                    stderr=subprocess.PIPE)
+
+
+def verify_raw_tracked_blobs() -> None:
+    """Hash actual compiler-visible bytes, bypassing Git clean/smudge filters.
+
+    `git status` can claim clean for a modified source when an untracked local
+    attributes rule enables a normalizing `filter.*.clean`. In that case the
+    committed/index blob and the actual compiler input are different. Compare
+    each file's raw contents directly against the staged Git SHA-1 object.
+    Index entries are NUL-delimited to handle arbitrary path bytes.
+    """
+    for entry in git("ls-files", "--stage", "-z").split(b"\0"):
+        if not entry:
+            continue
+        metadata, sep, path = entry.partition(b"\t")
+        if not sep or not path:
+            raise ValueError("invalid tracked index entry")
+        fields = metadata.split(b" ")
+        if len(fields) != 3 or fields[2] != b"0":
+            raise ValueError("unmerged or invalid tracked index entry")
+        mode, object_id, _ = fields
+        if mode in (b"100644", b"100755"):
+            # O_NOFOLLOW ensures a source-file symlink substitution cannot
+            # redirect verification outside this checkout.
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                before = os.fstat(fd)
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError("tracked source is not a regular file: " + repr(path[:120]))
+                if bool(before.st_mode & 0o111) != (mode == b"100755"):
+                    raise ValueError("tracked source executable mode mismatch: " + repr(path[:120]))
+                digest = hashlib.sha1()
+                digest.update(b"blob " + str(before.st_size).encode("ascii") + b"\0")
+                while True:
+                    chunk = os.read(fd, 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                after = os.fstat(fd)
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError("tracked source changed during verification: " + repr(path[:120]))
+                if digest.hexdigest().encode("ascii") != object_id:
+                    raise ValueError("raw tracked blob mismatch: " + repr(path[:120]))
+            finally:
+                os.close(fd)
+        elif mode == b"120000":
+            if not stat.S_ISLNK(os.lstat(path).st_mode):
+                raise ValueError("tracked symlink type mismatch: " + repr(path[:120]))
+            raw_target = os.readlink(path)
+            digest = hashlib.sha1(b"blob " + str(len(raw_target)).encode("ascii")
+                                  + b"\0" + raw_target).hexdigest().encode("ascii")
+            if digest != object_id:
+                raise ValueError("raw tracked symlink mismatch: " + repr(path[:120]))
+        else:
+            raise ValueError("unsupported tracked file mode: " + repr(mode))
 
 
 def verify(commit: str, tree: str) -> None:
@@ -54,6 +112,9 @@ def verify(commit: str, tree: str) -> None:
     # Explicitly override a locally disabled core.fileMode and cached fsmonitor.
     if git("status", "--porcelain=v1", "-z", "--untracked-files=all"):
         raise ValueError("dirty, untracked, or file-mode-modified source")
+    # Git's status/diff may run user-configured clean filters and compare the
+    # normalized result instead of actual compiler-visible bytes.
+    verify_raw_tracked_blobs()
 
     # Ignored files can still affect a native build. Permit only root-scoped
     # cache/build directories; never ignored files inside source or tests.

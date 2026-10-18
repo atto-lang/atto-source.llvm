@@ -91,6 +91,24 @@ class NativeNioWorktreeTests(unittest.TestCase):
         (self.repo / 'source.o').write_bytes(b'object')
         self.reject('ignored non-build')
 
+    def test_clean_filter_cannot_hide_raw_source_edit(self):
+        # Local, untracked .git/info/attributes and filter config are outside
+        # worktree status, yet can cause clean-filtered *changed bytes* to be
+        # reported as identical to HEAD. Compiler reads the unfiltered file.
+        attrs = self.repo / '.git' / 'info' / 'attributes'
+        attrs.write_text('source.c filter=mask\n')
+        out = run('git', 'config', 'filter.mask.clean', 'tr A-Z a-z', cwd=self.repo)
+        self.assertEqual(0, out.returncode, out.stderr)
+        before = (self.repo / 'source.c').read_text()
+        self.assertIn('int source', before)
+        (self.repo / 'source.c').write_text(before.replace('int source', 'INT source'))
+        # Prove this is a real Git-status blind spot, not an ordinary dirty edit.
+        status = run('git', '-c', 'core.fileMode=true', '-c',
+                     'core.fsmonitor=false', 'status', '--porcelain=v1',
+                     cwd=self.repo)
+        self.assertEqual('', status.stdout, status.stderr)
+        self.reject('raw tracked blob mismatch')
+
     def test_git_index_override(self):
         env = os.environ.copy()
         env['GIT_INDEX_FILE'] = str(self.repo / '.git' / 'fake-index')
