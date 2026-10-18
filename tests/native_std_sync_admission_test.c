@@ -177,6 +177,20 @@ static void *start_during_stop(void* payload) {
     race->admitted=ores_std_start(&race->gate,race->ticket);
     return NULL;
 }
+static void test_closed_start_does_not_reactivate_dormant_grant(void) {
+    ores_std_sync_gate gate = ORES_STD_MUTEX_INIT_SCOPE(500u);
+    ores_std_sync_result admitted = ores_std_request(&gate, ORES_STD_WRITE);
+    assert(admitted.code == ORES_STD_SYNC_GRANTED);
+    /* Reproduce the linearization of STOP against a ticket that has been
+     * admitted but has not begun a guest callback. */
+    gate.sealed = true;
+    assert(ores_std_start(&gate, admitted.ticket) == ORES_STD_SYNC_CLOSED);
+    assert(ores_std_start(&gate, admitted.ticket) == ORES_STD_SYNC_CLOSED);
+    assert(gate.slots[0].state == ORES_STD_ADMITTED);
+    assert(ores_std_release(&gate, admitted.ticket).code == ORES_STD_SYNC_GRANTED);
+    assert(ores_std_quiescent(&gate) == ORES_STD_SYNC_GRANTED);
+}
+
 static void test_stop_vs_start_race(void) {
     for(int i=0;i<500;++i) {
         stop_race race={ORES_STD_MUTEX_INIT_SCOPE(1u),{0},ATOMIC_VAR_INIT(false),ORES_STD_SYNC_INVALID};
@@ -252,6 +266,7 @@ int main(void) {
     test_rw_fairness_and_wake_cohorts();
     test_seal_and_physical_quiescence();
     test_stop_vs_start_race();
+    test_closed_start_does_not_reactivate_dormant_grant();
     pthread_t mt[5],rt[4],wt[2];
     for(unsigned i=0;i<5;++i) assert(!pthread_create(&mt[i],NULL,mutex_worker,NULL));
     for(unsigned i=0;i<4;++i) assert(!pthread_create(&rt[i],NULL,rw_reader,NULL));
