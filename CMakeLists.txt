@@ -1982,3 +1982,14 @@ if(BUILD_TESTING)
     set_tests_properties(native_enum_case_eos2_closed_aot_link
         PROPERTIES TIMEOUT 15)
 endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-enum-source-aot-plan-test tests/native_enum_aot_slice_test.cpp)
+    target_include_directories(oreslang-enum-source-aot-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-enum-source-aot-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_enum_source_aot_plan_integrity
+        COMMAND oreslang-enum-source-aot-plan-test)
+    set_tests_properties(native_enum_source_aot_plan_integrity PROPERTIES TIMEOUT 20)
+endif()
