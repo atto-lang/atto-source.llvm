@@ -862,6 +862,10 @@ if(BUILD_TESTING)
         --diagnostic "native Scheduler/Region source lowering unsupported")
     oreslang_contract_test(reject_guest_region_create source-region-create-unsupported.ores
         --diagnostic "native Scheduler/Region source lowering unsupported")
+    oreslang_contract_test(reject_guest_anonymous_fnc source-anonymous-fnc-unsupported.ores
+        --diagnostic "native anonymous fnc requires callable capture and closure lowering")
+    oreslang_contract_test(reject_guest_inline_symbol_list source-inline-symbol-list-unsupported.ores
+        --diagnostic "native inline list requires typed aggregate storage and cleanup lowering")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
