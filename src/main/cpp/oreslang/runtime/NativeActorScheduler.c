@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include <pthread.h>
@@ -5,6 +8,10 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <string.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
@@ -43,6 +50,7 @@ struct OresNativeActorScheduler {
     uint64_t accepted, rejected, completed, control_completed;
     uint64_t preferred_carrier_hits, carrier_migrations;
     int retired;
+    int cpu_affinity_opt_in;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
@@ -53,6 +61,7 @@ static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local int carrier_identity;
 static _Thread_local size_t carrier_slot_plus_one;
+static _Thread_local int carrier_cpu_target = -1;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 /* Never wrap a scheduler-domain capability back to 1: a stale ActorRef
@@ -106,6 +115,30 @@ static int find_ready(OresNativeActorScheduler* s, size_t worker,
     }
     return 0;
 }
+/* Opt-in host deployment hint only. Does not establish exclusive cores,
+ * hard realtime, or actor-to-pthread ownership. Empty/non-Linux/large CPU
+ * masks fail back to normal OS scheduling; no affinity is required to run. */
+static int try_bind_allowed_cpu(size_t worker) {
+#ifdef __linux__
+    cpu_set_t allowed;
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) return -1;
+    int count = CPU_COUNT(&allowed);
+    if (count <= 0) return -1;
+    size_t ordinal = worker % (size_t)count;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (!CPU_ISSET(cpu, &allowed)) continue;
+        if (ordinal-- != 0) continue;
+        cpu_set_t target;
+        CPU_ZERO(&target);
+        CPU_SET(cpu, &target);
+        return pthread_setaffinity_np(pthread_self(), sizeof(target), &target) == 0
+            ? cpu : -1;
+    }
+#else
+    (void)worker;
+#endif
+    return -1;
+}
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
     /* pthread_create executes while holding the scheduler mutex. By the
@@ -120,7 +153,9 @@ static void* carrier(void* raw) {
     }
     if (worker == s->started_workers) abort();
     carrier_slot_plus_one = worker + 1;
+    const int bind_cpu = s->cpu_affinity_opt_in;
     unlock(s);
+    carrier_cpu_target = bind_cpu ? try_bind_allowed_cpu(worker) : -1;
     for (;;) {
         lock(s);
         size_t i = 0;
@@ -129,6 +164,7 @@ static void* carrier(void* raw) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 carrier_slot_plus_one = 0;
+                carrier_cpu_target = -1;
                 return NULL;
             }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
@@ -225,6 +261,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->control_callback = control_callback;
     s->panic_callback = panic_callback;
     s->context = ctx;
+    const char* affinity = getenv("ORES_NATIVE_CARRIER_CPU_AFFINITY");
+    s->cpu_affinity_opt_in = affinity && strcmp(affinity, "1") == 0;
     for (size_t i = 0; i < actors; ++i) {
         s->actors[i].messages = s->slots + i * capacity;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
@@ -446,6 +484,9 @@ int ores_native_actor_scheduler_publish_failure(
     return ok;
 }
 /* Scheduler-local diagnostics only; never an authority or affinity promise. */
+int ores_native_actor_scheduler_current_cpu_target(void) {
+    return carrier_slot_plus_one ? carrier_cpu_target : -1;
+}
 int ores_native_actor_scheduler_current_carrier_slot(void) {
     return carrier_slot_plus_one ? (int)(carrier_slot_plus_one - 1) : -1;
 }
