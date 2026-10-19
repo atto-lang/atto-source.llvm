@@ -313,6 +313,39 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_leaf_metadata); },
                      "malformed native ownership AST: non-call expression contains unlowered call metadata");
 
+    // The structural recursion budget is exact: depth 255 is admitted
+    // (root depth is zero), while the next child at depth 256 fails closed.
+    const auto nested_negations = [](unsigned wrappers) {
+        Program p;
+        Function f;
+        f.name = "main";
+        auto value = make_expression(Expression::Kind::Integer, {}, 1);
+        for (unsigned i = 0; i < wrappers; ++i) {
+            auto negate = make_expression(Expression::Kind::Negate);
+            negate->left = std::move(value);
+            value = std::move(negate);
+        }
+        f.result = std::move(value);
+        p.functions.push_back(std::move(f));
+        return p;
+    };
+    auto max_expression_depth = nested_negations(255);
+    const auto max_expression_ir = emit_verified_llvm_ir(max_expression_depth);
+    check(max_expression_ir.find("define") != std::string::npos,
+          "maximum admitted expression nesting was rejected");
+    auto excessive_expression_depth = nested_negations(256);
+    expect_rejection([&] { (void)emit_verified_llvm_ir(excessive_expression_depth); },
+                     "malformed native ownership AST: expression nesting exceeds 256");
+
+    Program unknown_expression_kind;
+    Function unknown_expression_fn;
+    unknown_expression_fn.name = "main";
+    unknown_expression_fn.result = make_expression(
+        static_cast<Expression::Kind>(255));
+    unknown_expression_kind.functions.push_back(std::move(unknown_expression_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_expression_kind); },
+                     "malformed native ownership AST: unknown expression kind");
+
     // Direct-AST actor bootstraps must rebuild the parser's capability and
     // symbol tables before LLVM indexes generated actor maps.
     auto actor_program = actor_bootstrap_program();
@@ -381,6 +414,36 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_locals); },
                      "duplicate owned local 'x'");
 
+    Program unknown_local_class;
+    Function unknown_class_main;
+    unknown_class_main.name = "main";
+    LocalBinding unknown_class_binding;
+    unknown_class_binding.name = "value";
+    unknown_class_binding.new_class = true;
+    unknown_class_binding.class_name = "Ghost";
+    unknown_class_main.locals.push_back(std::move(unknown_class_binding));
+    unknown_class_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    unknown_local_class.functions.push_back(std::move(unknown_class_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_local_class); },
+                     "unknown class 'Ghost'");
+
+    Program unknown_move_source;
+    ClassDecl empty_class;
+    empty_class.name = "Box";
+    unknown_move_source.classes.push_back(std::move(empty_class));
+    Function unknown_move_main;
+    unknown_move_main.name = "main";
+    LocalBinding moved_class;
+    moved_class.name = "dst";
+    moved_class.move_class = true;
+    moved_class.class_name = "Box";
+    moved_class.move_source = "missing";
+    unknown_move_main.locals.push_back(std::move(moved_class));
+    unknown_move_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    unknown_move_source.functions.push_back(std::move(unknown_move_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_move_source); },
+                     "unknown class move source 'missing'");
+
     // Unselected statement payload slots must never be silently ignored by
     // the LLVM lowering path. Ownership traversal alone is not sufficient.
     Program hidden_statement_condition;
@@ -394,7 +457,7 @@ int main() {
     hidden_condition_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     hidden_statement_condition.functions.push_back(std::move(hidden_condition_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_condition); },
-                     "statement contains hidden conditional effects");
+                     "statement contains fields incompatible with its kind");
 
     Program hidden_statement_binding;
     Function hidden_binding_fn;
@@ -408,7 +471,7 @@ int main() {
     hidden_binding_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     hidden_statement_binding.functions.push_back(std::move(hidden_binding_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_binding); },
-                     "statement contains hidden scoped binding");
+                     "statement contains fields incompatible with its kind");
 
     Program hidden_statement_array_commit;
     Function hidden_array_fn;
@@ -421,7 +484,7 @@ int main() {
     hidden_array_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     hidden_statement_array_commit.functions.push_back(std::move(hidden_array_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_array_commit); },
-                     "statement contains hidden array commit");
+                     "statement contains fields incompatible with its kind");
 
     // The actor action vector is the emitter's sole effect schedule. Reject
     // omitted effects, duplicates, invalid indices, and unknown variants.
@@ -435,7 +498,7 @@ int main() {
     orphan_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     orphan_send.functions.push_back(std::move(orphan_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(orphan_send); },
-                     "actor effect omitted from ordered actions");
+                     "actor send is missing from source-order action plan");
 
     Program orphan_stop;
     Function stop_fn;
@@ -444,21 +507,21 @@ int main() {
     stop_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     orphan_stop.functions.push_back(std::move(stop_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(orphan_stop); },
-                     "actor effect omitted from ordered actions");
+                     "actor stop is missing from source-order action plan");
 
     Program duplicate_send_action;
-    Function duplicate_action_fn;
-    duplicate_action_fn.name = "main";
+    Function duplicate_schedule_fn;
+    duplicate_schedule_fn.name = "main";
     ActorSend scheduled;
     scheduled.reference = "worker";
     scheduled.payload = make_expression(Expression::Kind::Integer, {}, 7);
-    duplicate_action_fn.actor_sends.push_back(std::move(scheduled));
-    duplicate_action_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
-    duplicate_action_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
-    duplicate_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
-    duplicate_send_action.functions.push_back(std::move(duplicate_action_fn));
+    duplicate_schedule_fn.actor_sends.push_back(std::move(scheduled));
+    duplicate_schedule_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
+    duplicate_schedule_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
+    duplicate_schedule_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    duplicate_send_action.functions.push_back(std::move(duplicate_schedule_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_send_action); },
-                     "invalid or repeated actor send action");
+                     "actor send action is duplicated");
 
     Program bad_action_index;
     Function indexed_fn;
@@ -467,7 +530,7 @@ int main() {
     indexed_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
     bad_action_index.functions.push_back(std::move(indexed_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(bad_action_index); },
-                     "invalid or repeated actor send action");
+                     "actor send action index is out of range");
 
     Program unknown_action_kind;
     Function unknown_action_fn;
