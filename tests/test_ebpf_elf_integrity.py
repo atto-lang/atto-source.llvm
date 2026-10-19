@@ -91,11 +91,13 @@ def main():
     must_reject(lambda b: struct.pack_into("<Q", b, 448 + 8, 4)) # executable license
     must_reject(lambda b: struct.pack_into("<Q", b, 328, 4))     # hidden executable string section
     must_reject(lambda b: b.__setitem__(0x90, 0))                # false license bytes
+    must_reject(lambda b: struct.pack_into("<Q", b, 384 + 24, 0x60)) # overlap STRTAB
+    must_reject(lambda b: struct.pack_into("<Q", b, 448 + 24, 0x100)) # overlap SHT
     valid_policy = policy_fixture()
     verify_packet_dependent_machine_code(valid_policy, elf_sections(valid_policy))
     must_reject_bad_policy(lambda b: b.__setitem__(0xa0 + 8, 0))  # missing data_end load
     must_reject_bad_policy(lambda b: b.__setitem__(0xa0 + 16, 0)) # missing branch
-    print("PASS: synthetic ELF parser 16 corruptions and policy machine-code 2 negative probes")
+    print("PASS: synthetic ELF parser 18 corruptions and policy machine-code 2 negative probes")
 
 
 if __name__ == "__main__":
