@@ -20,7 +20,7 @@ struct Run {
     Layout layout = Layout::SoA;
     std::size_t rows = 0;
     double nanoseconds = 0.0;
-    ActorShardBudget actor_budget{16U * 1024U * 1024U};
+    std::unique_ptr<ActorShardBudget> actor_budget;
     ActorShardBudget vm_budget{64U * 1024U * 1024U};
     bool failed = false;
 };
@@ -30,7 +30,7 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t iterations) {
     try {
         assert(actor == 0);
         ActorShardColumns shard(
-            run.scheduler, run.owner, run.actor_budget, run.vm_budget,
+            run.scheduler, run.owner, *run.actor_budget, run.vm_budget,
             run.layout, run.rows, 3,
             run.layout == Layout::AoSoA ? 8 : 1);
         for (std::size_t i = 0; i < run.rows; ++i) {
@@ -62,6 +62,7 @@ int main() {
             run.scheduler = ores_native_actor_scheduler_open(1, 2, 1, on_message, &run);
             assert(run.scheduler);
             run.owner = ores_native_actor_scheduler_spawn(run.scheduler, 0);
+            run.actor_budget = std::make_unique<ActorShardBudget>(16U * 1024U * 1024U, run.scheduler, run.owner);
             assert(ores_native_actor_scheduler_send(run.scheduler, run.owner, 200));
             assert(ores_native_actor_scheduler_drain(run.scheduler));
             assert(!run.failed);
@@ -69,7 +70,7 @@ int main() {
                     rows, static_cast<int>(layout), run.nanoseconds / (200.0 * rows));
             ores_native_actor_scheduler_retire(run.scheduler);
             assert(ores_native_actor_scheduler_try_destroy(run.scheduler));
-            assert(run.actor_budget.used_bytes() == 0);
+            assert(run.actor_budget->used_bytes() == 0);
             assert(run.vm_budget.used_bytes() == 0);
         }
     }
