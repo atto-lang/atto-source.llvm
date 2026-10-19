@@ -49,6 +49,7 @@ struct OresNativeActorScheduler {
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     uint64_t preferred_carrier_hits, carrier_migrations;
+    uint64_t ready_control_bits[16], ready_data_bits[16];
     int retired;
     int cpu_affinity_opt_in;
     OresNativeActorTaskFn callback;
@@ -92,34 +93,85 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+/* Actor count is presently admission-bounded to 1024. Allocate the
+ * CONTROL and DATA bitmaps inline with the scheduler, not from actor heaps.
+ * Both are derived indexes: admission, dispatch and physical completion
+ * synchronize under the existing scheduler mutex. No separate authority. */
+enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_WORDS = 16 };
+
+static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
+    if (actor >= s->actor_count) abort();
+    ActorLane* lane = &s->actors[actor];
+    const size_t word = actor / ORES_READY_WORD_BITS;
+    const uint64_t bit = UINT64_C(1) << (actor % ORES_READY_WORD_BITS);
+    if (!lane->active && lane->has_control)
+        s->ready_control_bits[word] |= bit;
+    else
+        s->ready_control_bits[word] &= ~bit;
+    if (!lane->active && lane->queued)
+        s->ready_data_bits[word] |= bit;
+    else
+        s->ready_data_bits[word] &= ~bit;
+}
+
+/* Scan only occupancy-index words and set actor lanes, preserving the old
+ * rotating actor-slot fairness order (including wraparound). A preferred
+ * worker may skip eligible DATA lanes, but the global fallback may not.
+ * Return SIZE_MAX when no matching entry is present. */
+static size_t select_ready_locked(OresNativeActorScheduler* s,
+                                  const uint64_t bits[ORES_READY_MAX_WORDS],
+                                  size_t start, size_t worker,
+                                  int require_preferred) {
+    for (int wrap = 0; wrap < 2; ++wrap) {
+        const size_t begin = wrap ? 0 : start;
+        const size_t end = wrap ? start : s->actor_count;
+        if (begin >= end) continue;
+        const size_t first_word = begin / ORES_READY_WORD_BITS;
+        const size_t final_word = (end - 1) / ORES_READY_WORD_BITS;
+        for (size_t word = first_word; word <= final_word; ++word) {
+            uint64_t eligible = bits[word];
+            if (word == first_word)
+                eligible &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
+            if (word == final_word)
+                eligible &= UINT64_MAX >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
+            while (eligible) {
+                const unsigned bit = (unsigned)__builtin_ctzll(eligible);
+                const size_t actor = word * ORES_READY_WORD_BITS + bit;
+                ActorLane* lane = &s->actors[actor];
+                if (lane->active) abort(); /* stale index is a scheduler bug */
+                if (!require_preferred || lane->last_carrier_plus_one == worker + 1)
+                    return actor;
+                eligible &= eligible - 1;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
 static int find_ready(OresNativeActorScheduler* s, size_t worker,
                       unsigned local_burst, size_t* actor,
                       int* control, int* preferred) {
-    /* CONTROL remains globally first. Then prefer DATA most recently run by
-     * this long-lived pthread, otherwise steal from any runnable actor.
-     * Never wait for a busy preferred worker: starvation avoidance and actual
-     * CONTROL delivery outrank cache hints. */
-    for (int pass = 2; pass >= 0; --pass) {
-        /* After 8 local turns, force a globally fair DATA decision.
-         * Otherwise continuously runnable local actors can starve new
-         * remote/unknown-affinity actor lanes indefinitely. */
-        if (pass == 1 && local_burst >= 8) continue;
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
-            ActorLane* lane = &s->actors[i];
-            if (lane->active) continue;
-            if (pass == 2 && !lane->has_control) continue;
-            if (pass == 1 && (!lane->queued
-                || lane->last_carrier_plus_one != worker + 1)) continue;
-            if (pass == 0 && !lane->queued) continue;
-            *actor = i;
-            *control = pass == 2;
-            *preferred = pass == 1;
-            s->next_actor = (i + 1) % s->actor_count;
-            return 1;
-        }
+    /* A globally prioritized CONTROL pass is never suppressed by DATA.
+     * After eight preferred-carrier DATA turns, skip one affinity pass
+     * to guarantee a globally fair DATA selection. */
+    size_t i = select_ready_locked(s, s->ready_control_bits,
+                                   s->next_actor, worker, 0);
+    int is_control = i != SIZE_MAX;
+    int is_preferred = 0;
+    if (!is_control && local_burst < 8) {
+        i = select_ready_locked(s, s->ready_data_bits,
+                                s->next_actor, worker, 1);
+        is_preferred = i != SIZE_MAX;
     }
-    return 0;
+    if (i == SIZE_MAX)
+        i = select_ready_locked(s, s->ready_data_bits,
+                                s->next_actor, worker, 0);
+    if (i == SIZE_MAX) return 0;
+    *actor = i;
+    *control = is_control;
+    *preferred = is_preferred;
+    s->next_actor = (i + 1) % s->actor_count;
+    return 1;
 }
 /* Opt-in host deployment hint only. Does not establish exclusive cores,
  * hard realtime, or actor-to-pthread ownership. Empty/non-Linux/large CPU
@@ -212,6 +264,7 @@ static void* carrier(void* raw) {
         }
         lane->last_carrier_plus_one = worker + 1;
         lane->active = 1;
+        refresh_ready_locked(s, i);
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -231,6 +284,7 @@ static void* carrier(void* raw) {
          * completion cannot release the actor's next carrier owner. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
         lane->active = 0;
+        refresh_ready_locked(s, i);
         s->outstanding--;
         s->completed++;
         /* A lane contributes at most one runnable turn regardless of how
@@ -371,6 +425,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    refresh_ready_locked(s, i);
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
@@ -460,6 +515,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        refresh_ready_locked(s, (size_t)parent.actor_slot);
         ++s->accepted;
         ++s->outstanding;
         pthread_cond_signal(&s->ready);
@@ -492,6 +548,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        refresh_ready_locked(s, (size_t)parent.actor_slot);
         s->accepted++;
         s->outstanding++;
         pthread_cond_signal(&s->ready);
