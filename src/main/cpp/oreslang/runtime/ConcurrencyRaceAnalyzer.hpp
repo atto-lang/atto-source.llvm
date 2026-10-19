@@ -38,8 +38,9 @@ class ConcurrencyRaceAnalyzer final {
 
   void read(const std::string& participant, const std::string& location) {
     std::lock_guard<std::mutex> hold(mu_);
-    budget();
     const auto id = key(location);
+    clock(participant);
+    budget();
     const auto access = tick(participant);
     auto& state = locations_[id];
     for (const auto& writer : state.writes) {
@@ -66,24 +67,31 @@ class ConcurrencyRaceAnalyzer final {
 
   void send(const std::string& participant, const std::string& message_id) {
     std::lock_guard<std::mutex> hold(mu_);
-    budget();
     const auto id = key(message_id);
-    if (!issued_message_ids_.insert(id).second) {
+    const auto actor = key(participant);
+    if (issued_message_ids_.count(id) != 0) {
       throw std::logic_error("message token cannot be reused, including after receive");
     }
-    messages_.emplace(id, tick(participant).clock);
+    clock(actor);
+    budget();
+    const auto published = tick(actor).clock;
+    issued_message_ids_.insert(id);
+    messages_.emplace(id, published);
   }
 
   void receive(const std::string& participant, const std::string& message_id) {
     std::lock_guard<std::mutex> hold(mu_);
-    budget();
-    auto it = messages_.find(key(message_id));
+    const auto id = key(message_id);
+    const auto actor = key(participant);
+    auto it = messages_.find(id);
     if (it == messages_.end()) {
       throw std::logic_error("message token not published");
     }
-    merge(clock(participant), it->second);
+    auto& destination = clock(actor);
+    budget();
+    merge(destination, it->second);
+    tick(actor);
     messages_.erase(it);
-    tick(participant);
   }
 
   // Reentrant ownership follows logical participant identity, not host threads.
@@ -173,7 +181,7 @@ class ConcurrencyRaceAnalyzer final {
   }
 
   void budget() {
-    if (events_ == 100000) throw std::logic_error("race analyzer event budget exhausted");
+    if (events_ >= 100000) throw std::logic_error("race analyzer event budget exhausted");
     ++events_;
   }
 
