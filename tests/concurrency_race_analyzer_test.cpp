@@ -102,5 +102,31 @@ int main() {
     } catch (const std::logic_error&) { rejected = true; }
     assert(rejected);
   }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.acquire("a", "critical-state");
+    model.acquire("a", "critical-state");
+    model.write("a", "actor-state");
+    model.release("a", "critical-state");
+    bool rejected = false;
+    try {
+      model.acquire("b", "critical-state");
+    } catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    model.release("a", "critical-state");
+    model.acquire("b", "critical-state");
+    model.read("b", "actor-state");
+    assert(model.conflict_count() == 0);
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.acquire("a", "critical-state");
+    model.acquire("a", "critical-state");
+    model.write("a", "actor-state");
+    model.release("a", "critical-state");
+    model.read("b", "actor-state");
+    assert(model.conflict_count() == 1);
+    model.release("a", "critical-state");
+  }
   return 0;
 }
