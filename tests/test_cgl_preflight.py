@@ -88,6 +88,22 @@ class CGLAdmissionTests(unittest.TestCase):
         self.assertEqual(
             self.inspect(elf(load_filesz=1, load_memsz=1))["machine"], 62)
 
+    def test_load_virtual_address_ranges_do_not_wrap_elf64(self):
+        # A malformed loader segment may satisfy file-size/alignment
+        # validation but overflow when computing the exclusive virtual end.
+        last = (1 << 64) - 1
+        for vaddr, memsz in ((last, 1), (last - 1, 2),
+                             (last - 7, 8), (1, last)):
+            with self.subTest(vaddr=vaddr, memsz=memsz):
+                with self.assertRaisesRegex(ValueError, "virtual address range"):
+                    self.inspect(elf(load_vaddr=vaddr, load_memsz=memsz,
+                                     load_align=1))
+        # Exact non-overflowing boundary, and an empty segment at UINT64_MAX.
+        for vaddr, memsz in ((last - 1, 1), (last, 0)):
+            with self.subTest(vaddr=vaddr, memsz=memsz):
+                self.assertEqual(self.inspect(elf(load_vaddr=vaddr,
+                    load_memsz=memsz, load_align=1))["machine"], 62)
+
     def test_reject_shared_object_and_relative_interpreter(self):
         for data in (elf(kind=3), elf(kind=3, interpreter=b"relative/ld.so\0"),
                      elf(kind=3, interpreter=b"/tmp/does-not-exist-CGL\0")):
