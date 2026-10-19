@@ -113,7 +113,16 @@ bool HungryCarrier::DedicatedProducer::try_send(ActorMessage message) const noex
 }
 
 HungryCarrier::DedicatedProducer HungryCarrier::register_spsc_producer() {
+    // Lock in the same lifecycle -> lane-registration order as start().
+    // Otherwise a join-before-start could certify retirement while a
+    // caller still registers a new producer on the logically dead actor.
+    std::lock_guard<std::mutex> lifecycle{lifecycle_mutex_};
     std::lock_guard<std::mutex> lock{lane_registration_mutex_};
+    if (joined_.load(std::memory_order_acquire) ||
+            stop_.load(std::memory_order_acquire) ||
+            (producer_gate_->leases.load(std::memory_order_acquire) &
+                ProducerGate::closing_bit))
+        throw std::logic_error("SPSC producer registration after terminal stop");
     if (started_.load(std::memory_order_acquire))
         throw std::logic_error("SPSC producer registration is only allowed before start");
     if (registered_lanes_ >= max_dedicated_lanes)
