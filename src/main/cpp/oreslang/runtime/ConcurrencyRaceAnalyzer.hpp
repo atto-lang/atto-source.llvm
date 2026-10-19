@@ -104,6 +104,7 @@ class ConcurrencyRaceAnalyzer final {
     if (owner == lock_owners_.end() || owner->second != actor) {
       throw std::logic_error("release requires the current lock owner");
     }
+    clock(actor);
     budget();
     const auto depth = lock_depths_.at(id);
     if (depth > 1) {
@@ -128,6 +129,7 @@ class ConcurrencyRaceAnalyzer final {
         lock_depths_.at(id) == std::numeric_limits<std::uint32_t>::max()) {
       throw std::overflow_error("reentrant lock depth exhausted");
     }
+    clock(actor);
     budget();
     if (owner != lock_owners_.end()) {
       tick(actor);
@@ -139,6 +141,67 @@ class ConcurrencyRaceAnalyzer final {
       lock_owners_[id] = actor;
       lock_depths_[id] = 1;
     }
+  }
+
+  // Child is a fresh logical lifetime: it inherits ONLY pre-fork events.
+  void fork(const std::string& parent, const std::string& child) {
+    std::lock_guard<std::mutex> hold(mu_);
+    const auto ancestor = key(parent);
+    const auto descendant = key(child);
+    if (ancestor == descendant || clocks_.count(descendant) != 0 ||
+        fork_parents_.count(descendant) != 0 ||
+        finished_participants_.count(descendant) != 0) {
+      throw std::logic_error("fork requires a fresh child participant");
+    }
+    clock(ancestor);
+    if (clocks_.size() >= 256) {
+      throw std::logic_error("race analyzer participant budget exhausted");
+    }
+    budget();
+    Clock inherited = tick(ancestor).clock;
+    inherited[descendant] = 1;
+    clocks_.emplace(descendant, std::move(inherited));
+    fork_parents_.emplace(descendant, ancestor);
+  }
+
+  void finish(const std::string& participant) {
+    std::lock_guard<std::mutex> hold(mu_);
+    const auto child = key(participant);
+    if (clocks_.find(child) == clocks_.end() ||
+        finished_participants_.count(child) != 0) {
+      throw std::logic_error("finish requires one live participant");
+    }
+    for (const auto& held : lock_owners_) {
+      if (held.second == child) {
+        throw std::logic_error("cannot finish while owning a lock");
+      }
+    }
+    budget();
+    const auto completed = tick(child).clock;
+    finished_participants_.insert(child);
+    if (fork_parents_.count(child) != 0) {
+      completed_children_.emplace(child, completed);
+    }
+  }
+
+  // Only a finished direct child can synchronize with its parent, once.
+  void join(const std::string& parent, const std::string& child) {
+    std::lock_guard<std::mutex> hold(mu_);
+    const auto ancestor = key(parent);
+    const auto descendant = key(child);
+    const auto origin = fork_parents_.find(descendant);
+    const auto completed = completed_children_.find(descendant);
+    if (origin == fork_parents_.end() || origin->second != ancestor ||
+        completed == completed_children_.end() ||
+        joined_children_.count(descendant) != 0) {
+      throw std::logic_error("join requires a finished direct child, exactly once");
+    }
+    auto& destination = clock(ancestor);
+    budget();
+    merge(destination, completed->second);
+    tick(ancestor);
+    joined_children_.insert(descendant);
+    completed_children_.erase(completed);
   }
 
   std::vector<Finding> findings() const {
@@ -187,6 +250,9 @@ class ConcurrencyRaceAnalyzer final {
 
   Clock& clock(const std::string& participant) {
     const auto id = key(participant);
+    if (finished_participants_.count(id) != 0) {
+      throw std::logic_error("participant lifetime already finished");
+    }
     auto it = clocks_.find(id);
     if (it != clocks_.end()) return it->second;
     if (clocks_.size() >= 256) {
@@ -243,6 +309,10 @@ class ConcurrencyRaceAnalyzer final {
   std::unordered_map<std::string, Clock> locks_;
   std::unordered_map<std::string, std::string> lock_owners_;
   std::unordered_map<std::string, std::uint32_t> lock_depths_;
+  std::unordered_map<std::string, std::string> fork_parents_;
+  std::unordered_map<std::string, Clock> completed_children_;
+  std::unordered_set<std::string> finished_participants_;
+  std::unordered_set<std::string> joined_children_;
   std::vector<Finding> findings_;
 };
 
