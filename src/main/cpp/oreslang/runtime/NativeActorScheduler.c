@@ -339,6 +339,15 @@ int ores_native_actor_scheduler_configure_turn_gate(
     return ok;
 }
 
+void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
+    if (!s) return;
+    lock(s);
+    /* Retirement still drains already admitted mail and must receive the
+     * last permit-release wake rather than parking its final worker. */
+    pthread_cond_broadcast(&s->ready);
+    unlock(s);
+}
+
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
