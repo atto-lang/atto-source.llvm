@@ -398,9 +398,133 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
     }
 }
 
+// A public C++ LLVM emission entrypoint accepts caller-built/transformed
+// Program objects as well as parser-produced ASTs. Ownership and codegen
+// dereference structurally required unique_ptrs; an invalid AST must throw
+// a checked compiler error, never segfault or silently elide side effects.
+// Run this before ANY ownership analysis or LLVM IR construction.
+void preflight_native_ast_shape(const Program& program) {
+    const auto fail = [](const std::string& what, std::size_t offset) {
+        throw std::runtime_error("malformed native ownership AST: " + what +
+                                 " at byte " + std::to_string(offset));
+    };
+    std::function<void(const Expression*, unsigned)> expression;
+    expression = [&](const Expression* expr, unsigned depth) {
+        if (!expr) fail("missing expression", 0);
+        if (depth >= 256) fail("expression nesting exceeds 256", expr->offset);
+        using K = Expression::Kind;
+        switch (expr->kind) {
+            case K::Integer:
+            case K::Variable:
+                // No implicit effects may hide underneath a scalar leaf.
+                if (expr->left || expr->right || !expr->arguments.empty())
+                    fail("scalar leaf contains hidden operands", expr->offset);
+                break;
+            case K::Negate:
+            case K::Copy:
+            case K::Take:
+            case K::Share:
+            case K::Borrow:
+            case K::BorrowMut:
+            case K::Field:
+            case K::ArrayCall:
+                if (!expr->left) fail("missing unary or receiver operand", expr->offset);
+                break;
+            case K::Add:
+            case K::Subtract:
+            case K::Multiply:
+                if (!expr->left || !expr->right)
+                    fail("missing binary operand", expr->offset);
+                break;
+            case K::Call:
+                break;
+            default:
+                fail("unknown expression kind", expr->offset);
+        }
+        if (expr->left) expression(expr->left.get(), depth + 1);
+        if (expr->right) expression(expr->right.get(), depth + 1);
+        for (const auto& arg : expr->arguments)
+            expression(arg.get(), depth + 1);
+    };
+    const auto local = [&](const LocalBinding& binding) {
+        if (!binding.int_array && !binding.new_class &&
+                !binding.move_class && !binding.initializer)
+            fail("local has no initializer", binding.offset);
+        if (binding.initializer) expression(binding.initializer.get(), 0);
+        for (const auto& arg : binding.constructor_arguments)
+            expression(arg.get(), 0);
+    };
+    std::function<void(const Statement&, unsigned)> statement;
+    statement = [&](const Statement& stmt, unsigned depth) {
+        if (depth >= 64) fail("statement nesting exceeds 64", stmt.offset);
+        using S = Statement::Kind;
+        switch (stmt.kind) {
+            case S::Call:
+            case S::FieldWrite:
+            case S::Defer:
+                if (!stmt.expression) fail("statement has no expression", stmt.offset);
+                break;
+            case S::Conditional:
+                if (!stmt.condition_lhs || !stmt.condition_rhs)
+                    fail("conditional missing guard", stmt.offset);
+                break;
+            case S::ScopedLocal:
+                if (!stmt.branch_local)
+                    fail("scoped local has no binding", stmt.offset);
+                break;
+            case S::ArrayCommitFilled:
+                if (!stmt.array_commit_length)
+                    fail("array commit has no length", stmt.offset);
+                break;
+            default:
+                fail("unknown statement kind", stmt.offset);
+        }
+        if (stmt.branch_local) local(*stmt.branch_local);
+        if (stmt.expression) expression(stmt.expression.get(), 0);
+        if (stmt.condition_lhs) expression(stmt.condition_lhs.get(), 0);
+        if (stmt.condition_rhs) expression(stmt.condition_rhs.get(), 0);
+        if (stmt.array_commit_length)
+            expression(stmt.array_commit_length.get(), 0);
+        for (const auto& value : stmt.array_commit_values)
+            expression(value.get(), 0);
+        for (const auto& nested : stmt.then_statements)
+            statement(nested, depth + 1);
+        for (const auto& nested : stmt.else_statements)
+            statement(nested, depth + 1);
+    };
+    const auto function = [&](const Function& fn) {
+        for (const auto& binding : fn.locals) local(binding);
+        for (const auto& stmt : fn.statements) statement(stmt, 0);
+        for (const auto& stmt : fn.caught_throw_defers) statement(stmt, 0);
+        for (const auto& guard : fn.early_returns) {
+            if (!guard.lhs || !guard.rhs || !guard.result)
+                fail("guarded return has missing expression", guard.offset);
+            expression(guard.lhs.get(), 0);
+            expression(guard.rhs.get(), 0);
+            expression(guard.result.get(), 0);
+        }
+        for (const auto& send : fn.actor_sends)
+            expression(send.payload.get(), 0);
+        for (const auto& write : fn.actor_field_writes)
+            expression(write.expression.get(), 0);
+        if (fn.caught_throw_value) expression(fn.caught_throw_value.get(), 0);
+        if (fn.result) expression(fn.result.get(), 0);
+    };
+    for (const auto& cls : program.classes)
+        for (const auto& field : cls.fields)
+            if (field.initializer_expression)
+                expression(field.initializer_expression.get(), 0);
+    for (const auto& actor : program.actors) {
+        for (const auto& field : actor.fields) local(field);
+        function(actor.on_message);
+    }
+    for (const auto& fn : program.functions) function(fn);
+}
+
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
+    preflight_native_ast_shape(program);
     // Both admitted native scalar continuation forms must visit the SAME
     // reusable MIR suspension boundary. One is a cooperative 'suspend fnc'
     // declaration, the other a fuel-bounded --experimental-rt-scalar-loop
