@@ -306,6 +306,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -352,6 +353,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -574,6 +577,8 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
