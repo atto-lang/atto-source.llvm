@@ -115,13 +115,19 @@ std::string emit_experimental_ebpf_xdp_ir(const Program& source) {
     auto* ptr8 = llvm::PointerType::getUnqual(b.getInt8Ty());
     auto* data = b.CreateIntToPtr(b.CreateZExt(data32, i64), ptr8);
     auto* end = b.CreateIntToPtr(b.CreateZExt(end32, i64), ptr8);
-    auto* one_past_first = b.CreateInBoundsGEP(b.getInt8Ty(), data, b.getInt64(1));
+    // Do NOT use inbounds on a potentially zero-length packet. The verifier
+    // validates the resulting pointer against data_end, but an LLVM
+    // inbounds assumption here could introduce poison/UB before the check.
+    auto* one_past_first = b.CreateGEP(b.getInt8Ty(), data, b.getInt64(1));
     auto* nonempty = b.CreateICmpULE(one_past_first, end, "packet.has.byte");
     auto* flag = b.CreateZExt(nonempty, i64);
     auto* decision = b.CreateCall(policy, {flag}, "policy.action.i64");
-    // XDP_ABORTED=0, DROP=1, PASS=2, TX=3, REDIRECT=4. No
-    // verifier-visible negative/out-of-range return values.
-    auto* valid_action = b.CreateICmpULE(decision, b.getInt64(4));
+    // This prototype ONLY supports XDP_DROP (1) and XDP_PASS (2).
+    // TX and REDIRECT require independent device/map/redirect admission.
+    // Recheck at the kernel ABI boundary even after exhaustive AST proof.
+    auto* valid_action = b.CreateOr(
+        b.CreateICmpEQ(decision, b.getInt64(1)),
+        b.CreateICmpEQ(decision, b.getInt64(2)));
     auto* action = b.CreateSelect(valid_action, b.CreateTrunc(decision, i32),
                                   b.getInt32(0), "xdp.checked.action");
     b.CreateRet(action);
