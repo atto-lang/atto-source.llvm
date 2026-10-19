@@ -80,16 +80,20 @@ extern "C" int ores_native_vm_nio_try_pop(
 extern "C" size_t ores_native_vm_nio_try_pop_batch(
     OresNativeVM* vm, OresNativeNioCompletion* output, size_t capacity) {
     if (!output || capacity == 0) return 0;
-    NioBackendLease lease(vm);
-    auto* backend = lease.get();
-    if (!backend) return 0;
-    // Four reactors x 64 preallocated completions. A hostile caller cannot
-    // turn one scheduler poll into an unbounded hot-path spin.
+    // Keep work bounded to four reactors x 64 preallocated results.
     constexpr size_t max_batch = 256;
     const size_t limit = capacity < max_batch ? capacity : max_batch;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
     size_t count = 0;
-    while (count < limit && ores_native_nio_try_pop(backend, &output[count]))
-        ++count;
+    if (backend) {
+        while (count < limit && ores_native_nio_try_pop(backend, &output[count]))
+            ++count;
+    }
+    // Erase stale tickets in every unproduced output slot, including when
+    // a lease is denied. Zeroed records are never counted as completions.
+    for (size_t i = count; i < limit; ++i)
+        output[i] = OresNativeNioCompletion{};
     return count;
 }
 
