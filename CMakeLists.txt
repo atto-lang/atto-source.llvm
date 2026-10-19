@@ -1770,7 +1770,14 @@ if(BUILD_TESTING)
         $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_actor_carrier_last_worker_locality
         COMMAND oreslang-native-carrier-locality-test)
-    set_tests_properties(native_actor_carrier_last_worker_locality PROPERTIES TIMEOUT 30)
+    set_tests_properties(native_actor_carrier_last_worker_locality PROPERTIES
+        TIMEOUT 30 ENVIRONMENT "ORES_NATIVE_CARRIER_CPU_AFFINITY=0")
+    # Host opt-in on a possibly cpuset-restricted Linux runner. The diagnostic
+    # target may be -1 on unsupported/denied hosts: scheduling must still work.
+    add_test(NAME native_actor_carrier_cpuset_opt_in
+        COMMAND oreslang-native-carrier-locality-test)
+    set_tests_properties(native_actor_carrier_cpuset_opt_in PROPERTIES
+        TIMEOUT 30 ENVIRONMENT "ORES_NATIVE_CARRIER_CPU_AFFINITY=1")
 
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
