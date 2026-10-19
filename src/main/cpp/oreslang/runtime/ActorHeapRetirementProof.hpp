@@ -93,9 +93,14 @@ public:
         return registry().size();
     }
     bool ready_for_retirement() const noexcept {
-        return !cleanup_failed()
-            && registered_lanes() == expected_lanes_
-            && joined_lanes() == expected_lanes_;
+        // The joined-lane RMW is the release publication of cleanup outcome.
+        // An acquire that observes the final join must happen BEFORE the
+        // cleanup_failed load. Reading the failure flag first can observe
+        // false, then the final joined count, and incorrectly mint a proof
+        // even though the final lane published cleanup_failed=true.
+        if (registered_lanes() != expected_lanes_) return false;
+        if (joined_lanes() != expected_lanes_) return false;
+        return !cleanup_failed();
     }
     // Bound heap destruction uses the same full-quorum rule as explicit
     // retirement. Partial startup requires a separate supervisor abort protocol;
