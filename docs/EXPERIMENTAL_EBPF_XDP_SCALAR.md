@@ -41,7 +41,7 @@ The ELF section `xdp` contains an `i32` kernel entrypoint that receives an
 opaque XDP context pointer, reads context data/data_end, and computes the
 nonempty predicate with a packet bounds comparison. The guest policy is an
 internal always-inline i64 function, and the wrapper checks its return action
-is within XDP_ABORTED(0)..XDP_REDIRECT(4), otherwise returns XDP_ABORTED.
+is XDP_DROP(1) or XDP_PASS(2), otherwise returns XDP_ABORTED. The AST checker also statically evaluates every reachable result for both possible inputs and rejects other actions before emission.
 The prototype emits **MIT** as testing-only BPF license metadata; the
 compiler does NOT validate that a user owns the source-license rights.
 Production support must require explicit authorized license metadata.
@@ -67,3 +67,12 @@ with checked (data + fixed offset <= data_end) loads -> bounded maps and
 stable schemas -> policy/rule updates via a trusted carrier Linux actor.
 Never promote to certified `--deployment-profile=ebpf-xdp` merely because
 Clang emits a BPF ELF object.
+
+**Hardening audit (2026-10-19):** The LLVM packet comparison must use a
+non-inbounds GEP until bounded by the verifier. The compiler proves allowed
+DROP/PASS results for the entire 0/1 predicate domain using wrapping i64
+bitvector evaluation, and the entrypoint independently clamps illegal output
+to XDP_ABORTED. XDP_TX and XDP_REDIRECT remain forbidden. A 30,000-case
+seeded differential oracle tests the AST proof. CI from the source private
+organization and two test organizations has not shown a successful runner;
+real BPF object and kernel verifier gates remain unverified.
