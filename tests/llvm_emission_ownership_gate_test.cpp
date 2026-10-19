@@ -169,6 +169,80 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(missing_actor_payload); },
                      "malformed native ownership AST: missing expression");
 
+    Program missing_final_result;
+    Function no_result;
+    no_result.name = "main";
+    missing_final_result.functions.push_back(std::move(no_result));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_final_result); },
+                     "malformed native ownership AST: non-void function has no final result");
+
+    Program void_hidden_result;
+    Function void_value;
+    void_value.name = "main";
+    void_value.returns_void = true;
+    void_value.result = make_expression(Expression::Kind::Integer, {}, 7);
+    void_hidden_result.functions.push_back(std::move(void_value));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(void_hidden_result); },
+                     "malformed native ownership AST: void function contains return value");
+
+    Program orphan_catch_metadata;
+    Function orphan_catch;
+    orphan_catch.name = "main";
+    orphan_catch.catch_binding = "error";
+    orphan_catch.result = make_expression(Expression::Kind::Integer, {}, 0);
+    orphan_catch_metadata.functions.push_back(std::move(orphan_catch));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(orphan_catch_metadata); },
+                     "malformed native ownership AST: catch metadata exists without caught throw");
+
+    Program hidden_array_field_initializer;
+    ClassDecl array_class;
+    array_class.name = "Arrays";
+    ClassField array_field;
+    array_field.name = "items";
+    array_field.int_array = true;
+    array_field.mutable_referent = true;
+    array_field.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 99);
+    array_class.fields.push_back(std::move(array_field));
+    hidden_array_field_initializer.classes.push_back(std::move(array_class));
+    Function array_main;
+    array_main.name = "main";
+    array_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_array_field_initializer.functions.push_back(std::move(array_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_array_field_initializer); },
+                     "malformed native ownership AST: Array<int> class field contains hidden scalar initializer");
+
+    Program missing_scalar_field_initializer;
+    ClassDecl scalar_class;
+    scalar_class.name = "Box";
+    ClassField scalar_field;
+    scalar_field.name = "value";
+    scalar_class.fields.push_back(std::move(scalar_field));
+    missing_scalar_field_initializer.classes.push_back(std::move(scalar_class));
+    Function scalar_main;
+    scalar_main.name = "main";
+    scalar_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    missing_scalar_field_initializer.functions.push_back(std::move(scalar_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_scalar_field_initializer); },
+                     "malformed native ownership AST: scalar class field is missing initializer");
+
+    Program inconsistent_scalar_field_literal;
+    ClassDecl literal_class;
+    literal_class.name = "LiteralBox";
+    ClassField literal_field;
+    literal_field.name = "value";
+    literal_field.initial = 8;
+    literal_field.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 7);
+    literal_class.fields.push_back(std::move(literal_field));
+    inconsistent_scalar_field_literal.classes.push_back(std::move(literal_class));
+    Function literal_main;
+    literal_main.name = "main";
+    literal_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    inconsistent_scalar_field_literal.functions.push_back(std::move(literal_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(inconsistent_scalar_field_literal); },
+                     "malformed native ownership AST: scalar class field literal cache disagrees with initializer");
+
     // Source-impossible statement payloads must not be merely traversed:
     // later ownership/codegen switches consume only fields for the active kind.
     Program hidden_statement_field;
