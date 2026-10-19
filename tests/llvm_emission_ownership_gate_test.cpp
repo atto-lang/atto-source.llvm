@@ -704,6 +704,103 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(excessive_statement_depth); },
                      "malformed native ownership AST: statement nesting exceeds 64");
 
+    Program too_many_guarded_returns;
+    Function guarded_limit_fn;
+    guarded_limit_fn.name = "main";
+    for (int i = 0; i < 9; ++i) {
+        GuardedReturn guard;
+        guard.lhs = make_expression(Expression::Kind::Integer, {}, 1);
+        guard.rhs = make_expression(Expression::Kind::Integer, {}, 1);
+        guard.result = make_expression(Expression::Kind::Integer, {}, i);
+        guarded_limit_fn.early_returns.push_back(std::move(guard));
+    }
+    guarded_limit_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    too_many_guarded_returns.functions.push_back(std::move(guarded_limit_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(too_many_guarded_returns); },
+                     "malformed native ownership AST: guarded return count exceeds parser bound");
+
+    Program too_many_conditional_cfgs;
+    Function conditional_limit_fn;
+    conditional_limit_fn.name = "main";
+    for (int i = 0; i < 9; ++i) {
+        Statement conditional;
+        conditional.kind = Statement::Kind::Conditional;
+        conditional.condition_lhs =
+            make_expression(Expression::Kind::Integer, {}, 1);
+        conditional.condition_rhs =
+            make_expression(Expression::Kind::Integer, {}, 1);
+        conditional_limit_fn.statements.push_back(std::move(conditional));
+    }
+    conditional_limit_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    too_many_conditional_cfgs.functions.push_back(
+        std::move(conditional_limit_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(too_many_conditional_cfgs); },
+                     "malformed native ownership AST: conditional CFG count exceeds parser bound");
+
+    Program oversized_conditional_arm;
+    Function arm_limit_fn;
+    arm_limit_fn.name = "main";
+    Statement wide_conditional;
+    wide_conditional.kind = Statement::Kind::Conditional;
+    wide_conditional.condition_lhs =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    wide_conditional.condition_rhs =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    for (int i = 0; i < 17; ++i) {
+        Statement local_stmt;
+        local_stmt.kind = Statement::Kind::ScopedLocal;
+        local_stmt.branch_local = std::make_unique<LocalBinding>(
+            scalar_local("arm_" + std::to_string(i), i));
+        wide_conditional.then_statements.push_back(std::move(local_stmt));
+    }
+    arm_limit_fn.statements.push_back(std::move(wide_conditional));
+    arm_limit_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    oversized_conditional_arm.functions.push_back(std::move(arm_limit_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(oversized_conditional_arm); },
+                     "malformed native ownership AST: conditional arm count exceeds parser bound");
+
+    Program malformed_array_commit_arity;
+    Function array_commit_limit_fn;
+    array_commit_limit_fn.name = "main";
+    Statement array_commit;
+    array_commit.kind = Statement::Kind::ArrayCommitFilled;
+    array_commit.receiver = "owner";
+    array_commit.array_commit_length =
+        make_expression(Expression::Kind::Integer, {}, 3);
+    for (int i = 0; i < 3; ++i)
+        array_commit.array_commit_values.push_back(
+            make_expression(Expression::Kind::Integer, {}, i));
+    array_commit_limit_fn.statements.push_back(std::move(array_commit));
+    array_commit_limit_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    malformed_array_commit_arity.functions.push_back(
+        std::move(array_commit_limit_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(malformed_array_commit_arity); },
+                     "malformed native ownership AST: array commit fill count must equal four");
+
+    Program oversized_caught_finally;
+    Function caught_finally_limit_fn;
+    caught_finally_limit_fn.name = "main";
+    caught_finally_limit_fn.caught_throw_value =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    caught_finally_limit_fn.catch_binding = "error";
+    for (int i = 0; i < 17; ++i) {
+        Statement cleanup;
+        cleanup.kind = Statement::Kind::Defer;
+        cleanup.receiver = "box";
+        cleanup.field = "value";
+        cleanup.expression =
+            make_expression(Expression::Kind::Integer, {}, i);
+        caught_finally_limit_fn.statements.push_back(std::move(cleanup));
+    }
+    caught_finally_limit_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    oversized_caught_finally.functions.push_back(
+        std::move(caught_finally_limit_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(oversized_caught_finally); },
+                     "malformed native ownership AST: caught throw finally statement count exceeds parser bound");
+
     Program unknown_expression_kind;
     Function unknown_expression_fn;
     unknown_expression_fn.name = "main";
