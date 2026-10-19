@@ -18,7 +18,7 @@ public:
     enum Right : unsigned { readiness = 1u, transfer = 2u };
     enum class Phase : std::uint8_t {
         vacant, owned, watching, terminal, transferring,
-        revoking_watch, revoking_terminal, revoked
+        revoking_watch, revoking_terminal, reclaim_pending, revoked
     };
     class Capability final {
         friend class NativeFdAuthority;
@@ -51,6 +51,7 @@ public:
     NativeFdAuthority(const NativeFdAuthority&) = delete;
     NativeFdAuthority& operator=(const NativeFdAuthority&) = delete;
 
+    // A revoked logical slot remains unavailable until confirm_reclaimed().
     // The issuer/broker must have authenticated `owner` and the actual FD
     // identity before minting. A numeric FD supplied by guest code is never
     // sufficient authority to invoke this trusted-host constructor path.
@@ -97,7 +98,8 @@ public:
         auto* e = lookup(cap);
         if (!e || e->owner != caller) return false;
         if (e->phase == Phase::terminal) e->phase = Phase::owned;
-        else if (e->phase == Phase::revoking_terminal) e->phase = Phase::revoked;
+        else if (e->phase == Phase::revoking_terminal)
+            e->phase = Phase::reclaim_pending;
         else return false;
         return true;
     }
@@ -147,13 +149,27 @@ public:
         auto* e = lookup(cap);
         if (!e || e->owner != caller) return false;
         if (e->phase == Phase::owned || e->phase == Phase::transferring)
-            e->phase = Phase::revoked;
+            e->phase = Phase::reclaim_pending;
         else if (e->phase == Phase::watching) e->phase = Phase::revoking_watch;
         else if (e->phase == Phase::terminal)
             e->phase = Phase::revoking_terminal;
         else return false;
         e->destination = 0;
         e->sequence = 0;
+        return true;
+    }
+    // Trusted host CONTROL-plane cleanup receipt, never a guest/actor call.
+    // Revocation removes operating rights immediately but the logical slot
+    // remains unusable until the broker has fenced all transport aliases,
+    // retired terminal delivery and completed descriptor reclamation. An
+    // interrupted handoff or lost destination ACK is NOT cleanup evidence.
+    bool confirm_reclaimed(Capability cap, std::uint64_t trusted_owner) noexcept {
+        std::unique_lock<std::mutex> g(mu_, std::try_to_lock);
+        if (!g.owns_lock()) return false;
+        auto* e = lookup(cap);
+        if (!e || !trusted_owner || e->owner != trusted_owner ||
+                e->phase != Phase::reclaim_pending) return false;
+        e->phase = Phase::revoked;
         return true;
     }
     std::optional<Phase> phase(Capability cap) noexcept {

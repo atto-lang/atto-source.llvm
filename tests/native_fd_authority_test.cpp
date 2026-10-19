@@ -34,8 +34,13 @@ int main() {
     check(!a.begin_watch(*destination, 20));
     check(a.publish_terminal(*destination, 20));
     check(a.consume_terminal(*destination, 20));
-    check(a.phase(*destination) == P::revoked);
+    check(a.phase(*destination) == P::reclaim_pending);
+    check(!a.begin_watch(*destination, 20));
     check(!a.consume_terminal(*destination, 20));
+    check(!a.confirm_reclaimed(*destination, 10));
+    check(a.confirm_reclaimed(*destination, 20));
+    check(a.phase(*destination) == P::revoked);
+    check(!a.confirm_reclaimed(*destination, 20));
     auto replacement = a.mint(30, NativeFdAuthority::readiness);
     check(replacement.has_value());
     check(!a.begin_watch(*destination, 30));
@@ -43,7 +48,25 @@ int main() {
     check(a.publish_terminal(*replacement, 30));
     check(a.consume_terminal(*replacement, 30));
     check(a.revoke(*replacement, 30));
+    check(a.phase(*replacement) == P::reclaim_pending);
+    check(a.confirm_reclaimed(*replacement, 30));
 
+    // A terminal result alone is not a descriptor cleanup receipt, even
+    // when the caller owns the right to revoke before consumption.
+    {
+        NativeFdAuthority extra;
+        auto key = extra.mint(49, NativeFdAuthority::readiness);
+        check(key.has_value());
+        check(!extra.confirm_reclaimed(*key, 49));
+        check(extra.begin_watch(*key, 49));
+        check(extra.revoke(*key, 49));
+        check(!extra.confirm_reclaimed(*key, 49));
+        check(extra.publish_terminal(*key, 49));
+        check(!extra.confirm_reclaimed(*key, 49));
+        check(extra.consume_terminal(*key, 49));
+        check(extra.phase(*key) == P::reclaim_pending);
+        check(extra.confirm_reclaimed(*key, 49));
+    }
     // Exhaustion rejects without evicting any live owner. Reusing a revoked
     // slot rotates its generation, so an old copied handle remains invalid.
     {
@@ -57,6 +80,9 @@ int main() {
         check(!saturated.mint(77, NativeFdAuthority::readiness));
         check(!saturated.begin_transfer(keys[0], 77, 88));
         check(saturated.revoke(keys[0], 77));
+        check(saturated.phase(keys[0]) == P::reclaim_pending);
+        check(!saturated.mint(99, NativeFdAuthority::readiness));
+        check(saturated.confirm_reclaimed(keys[0], 77));
         auto recycled = saturated.mint(99, NativeFdAuthority::readiness);
         check(recycled.has_value());
         check(!saturated.begin_watch(keys[0], 77));
@@ -65,6 +91,8 @@ int main() {
         check(saturated.publish_terminal(*recycled, 99));
         check(saturated.revoke(*recycled, 99));
         check(saturated.consume_terminal(*recycled, 99));
+        check(saturated.phase(*recycled) == P::reclaim_pending);
+        check(saturated.confirm_reclaimed(*recycled, 99));
         check(saturated.phase(*recycled) == P::revoked);
     }
     // Foreign authority instances cannot acknowledge another broker's
@@ -77,7 +105,10 @@ int main() {
         check(pending.has_value());
         check(!foreign.acknowledge(*pending, 22));
         check(origin.revoke(*key, 11));
+        check(origin.phase(*key) == P::reclaim_pending);
         check(!origin.acknowledge(*pending, 22));
+        check(!origin.confirm_reclaimed(*key, 22));
+        check(origin.confirm_reclaimed(*key, 11));
     }
 
     for (int round = 0; round < 1000; ++round) {
@@ -108,6 +139,9 @@ int main() {
         } else {
             check(a.revoke(*key, 1));
         }
+        check(a.phase(*key) == P::reclaim_pending);
+        check(!a.begin_watch(*key, 1));
+        check(a.confirm_reclaimed(*key, 1));
         check(a.phase(*key) == P::revoked);
     }
     return 0;
