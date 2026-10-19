@@ -101,6 +101,7 @@ int main(void) {
     check(ores_native_vm_try_send(vm, main_domain, a, 0)
           == ORES_NATIVE_SEND_ACCEPTED);
     until(&state.entered, 1);
+    until(&state.attempted_own, 0);
     check(ores_native_vm_try_send(vm, main_domain, a, 1)
           == ORES_NATIVE_SEND_ACCEPTED);
     check(ores_native_vm_try_send(vm, main_domain, a, 2)
