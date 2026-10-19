@@ -4,6 +4,7 @@
 #endif
 #include "oreslang/runtime/NativeEpollReactor.hpp"
 #include <array>
+#include <cerrno>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -177,7 +178,13 @@ public:
             if (claim.occupied && claim.fd == entry->fd) return false;
         const int fd = entry->fd;
         entry->live = false; // stale handles may never authorize FD reuse
-        return ::close(fd) == 0;
+        const int result = ::close(fd);
+        if (result == 0) return true;
+        // Linux close(2) releases the descriptor even when interrupted by
+        // EINTR. Retrying would risk closing another thread's reused FD;
+        // keeping this logical slot pending would instead leak authority.
+        // Other errors (notably EBADF) fail closed for trusted-host review.
+        return errno == EINTR;
     }
     // Typed host-only watch. No guest or raw C ABI can forge its owner ID.
     std::optional<Watch> try_watch(OwnedEventFd key, std::uint32_t events) noexcept {
