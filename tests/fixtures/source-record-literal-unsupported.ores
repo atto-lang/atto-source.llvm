@@ -1,0 +1,2 @@
+// Canonical records are structural products; native lowering must not treat them as scalar/object aliases.
+pub fnc main(): int { return record{x: 3, y: 4}; }
