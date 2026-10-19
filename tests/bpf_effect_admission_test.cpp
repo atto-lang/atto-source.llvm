@@ -41,6 +41,22 @@ int main() {
                 }
             }
     check(cases == 8, "incomplete XDP effect admission matrix");
+    // Wire-format contract consumed by oreslang-target-profiles. The two
+    // serialized declarations differ ONLY in compiler-inferred effect.
+    // Neither may include self-authorized grants or backend-specific IR.
+    const std::string constant =
+        R"({"schemaVersion":1,"entry":"ores_xdp","target":"ebpf","backend":"llvm","grants":[],"nodes":[{"id":"ores_xdp","targets":["ebpf"],"requires":[],"imports":[]}]})";
+    const std::string packet =
+        R"({"schemaVersion":1,"entry":"ores_xdp","target":"ebpf","backend":"llvm","grants":[],"nodes":[{"id":"ores_xdp","targets":["ebpf"],"requires":["bpf.packet.read"],"imports":[]}]})";
+    check(oreslang::emit_bpf_xdp_ungranted_closure(false) == constant + "\n",
+          "XDP constant-only closure wire shape changed");
+    check(oreslang::emit_bpf_xdp_ungranted_closure(true) == packet + "\n",
+          "XDP packet-read closure wire shape changed");
+    check(oreslang::emit_bpf_xdp_ungranted_closure(false).find("bpf.packet.read") ==
+              std::string::npos,
+          "constant-only closure incorrectly requires packet read");
+
     std::cout << "XDP host effect acknowledgement: 8/8 cases PASS; "
+                 "closure wire contracts: 3/3 PASS; "
                  "not eBPF verifier or source policy proof\n";
 }
