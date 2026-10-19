@@ -1,5 +1,6 @@
 #include "oreslang/types/EbpfXdpAdmission.hpp"
 #include <iostream>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -83,6 +84,22 @@ int main() {
             parent->right = lit(1);
             p.functions.front().result = std::move(parent);
         }
+        reject(std::move(p));
+    }
+    {
+        // A balanced expression exceeds the TOTAL node budget while staying
+        // well within the separate depth limit. This checks both controls.
+        auto p = clean();
+        std::function<std::unique_ptr<oreslang::Expression>(int)> balanced =
+            [&](int depth) -> std::unique_ptr<oreslang::Expression> {
+                if (depth == 0) return lit(1);
+                auto parent = std::make_unique<oreslang::Expression>();
+                parent->kind = oreslang::Expression::Kind::Add;
+                parent->left = balanced(depth - 1);
+                parent->right = balanced(depth - 1);
+                return parent;
+            };
+        p.functions.front().result = balanced(7); // 255 AST nodes, depth=7
         reject(std::move(p));
     }
     std::cout << "PASS: strict XDP policy AST admission / negative effect and budget matrix\n";
