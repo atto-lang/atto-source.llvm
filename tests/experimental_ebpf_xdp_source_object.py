@@ -18,6 +18,8 @@ def require(condition, message):
 def elf_sections(blob):
     require(blob[:4] == b"\x7fELF" and blob[4:6] == b"\x02\x01",
             "expected little-endian ELF64")
+    require(struct.unpack_from("<H", blob, 16)[0] == 1,
+            "expected relocatable ET_REL, not an arbitrary linked image")
     require(struct.unpack_from("<H", blob, 18)[0] == 247,
             "expected EM_BPF=247, not a host or Wasm object")
     offset = struct.unpack_from("<Q", blob, 40)[0]
@@ -32,16 +34,34 @@ def elf_sections(blob):
         name = struct.unpack_from("<I", blob, base)[0]
         data_offset, size = struct.unpack_from("<QQ", blob, base + 24)
         require(data_offset + size <= len(blob), "section outside ELF")
-        return name, data_offset, size
-    _, strings_offset, strings_size = entry(names_idx)
+        section_type = struct.unpack_from("<I", blob, base + 4)[0]
+        section_flags = struct.unpack_from("<Q", blob, base + 8)[0]
+        return name, data_offset, size, section_type, section_flags
+    _, strings_offset, strings_size, _, _ = entry(names_idx)
     strings = blob[strings_offset:strings_offset + strings_size]
-    found = set()
+    found = {}
     for index in range(count):
-        name_index, _, _ = entry(index)
+        name_index, data_offset, size, section_type, section_flags = entry(index)
         require(name_index < len(strings), "name offset outside string table")
         end = strings.find(b"\0", name_index)
         require(end >= 0, "unterminated section name")
-        found.add(strings[name_index:end].decode("ascii"))
+        name = strings[name_index:end].decode("ascii")
+        require(name not in found, "duplicate ELF section name")
+        found[name] = (data_offset, size, section_type, section_flags)
+    require("xdp" in found and "license" in found, "missing xdp or license ELF section")
+    code_start, code_size, code_type, code_flags = found["xdp"]
+    require(code_type == 1 and (code_flags & 4) == 4 and
+            8 <= code_size <= 32768 and code_size % 8 == 0,
+            "xdp section is not a bounded executable BPF instruction stream")
+    program = blob[code_start:code_start + code_size]
+    opcodes = program[::8]
+    require(opcodes[-1] == 0x95, "xdp section must end in BPF_EXIT")
+    # No runtime subprograms or unapproved privileged helpers are allowed in
+    # this first source-level policy slice. BPF_CALL is opcode 0x85.
+    require(0x85 not in opcodes, "XDP guest contains unapproved BPF_CALL")
+    _, license_size, license_type, license_flags = found["license"]
+    require(license_type == 1 and not (license_flags & 4) and license_size >= 2,
+            "invalid executable or missing license section")
     return found
 
 def main():
@@ -76,9 +96,30 @@ def main():
                      "-c", str(ir), "-o", str(obj)))
         require(built.returncode == 0 and obj.exists(),
                 "Clang BPF object emission failure: " + built.stderr)
-        sections = elf_sections(obj.read_bytes())
+        raw = obj.read_bytes()
+        sections = elf_sections(raw)
         require({"xdp", "license"}.issubset(sections),
                 "BPF object lacks xdp/license section: " + repr(sections))
+        # Prove the ELF parser itself rejects forged host objects and helper
+        # calls; otherwise a broken test could give false-green confidence.
+        for offset, replacement in [(18, b"\x3e\\x00"), (16, b"\x02\\x00")]:
+            corrupted = bytearray(raw)
+            corrupted[offset:offset + 2] = replacement
+            try:
+                elf_sections(corrupted)
+            except RuntimeError:
+                pass
+            else:
+                raise RuntimeError("ELF object mutation was not rejected")
+        code_start, _, _, _ = sections["xdp"]
+        corrupted = bytearray(raw)
+        corrupted[code_start] = 0x85  # BPF_CALL without approval
+        try:
+            elf_sections(corrupted)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("forged helper call was not rejected")
 
         cases = [
             ("fnc xdp_action(int packet_nonempty): int { return 2; }\n", "requires"),
