@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
+typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 struct OresNativePhysicalTurnGate {
     _Atomic size_t admitted;
     _Atomic size_t waiting;
