@@ -171,8 +171,15 @@ int main(int argc, char** argv) {
             initialized.code().init(heap, init_turn.domain, init_turn.epoch);
             ores_actor_i64_heap_leave(heap, init_turn);
         }
-        require(receive(gate, id, heap, 0) == 42,
-                "compiler-generated v1 did not produce 42");
+        HostMailbox host{&gate, heap, id};
+        OresNativeActorScheduler* scheduler =
+            ores_native_actor_scheduler_open(1, 8, 2, source_actor_dispatch, &host);
+        require(scheduler != nullptr, "native actor scheduler could not open");
+        const auto actor = ores_native_actor_scheduler_spawn(scheduler, 0);
+        require(actor.scheduler_domain != 0, "native actor mailbox spawn failed");
+        require(ores_native_actor_scheduler_try_send(scheduler, actor, 0)
+                == ORES_NATIVE_SEND_ACCEPTED, "v1 mailbox admission failed");
+        wait_mail(host, 1, 42);
         require(rejects([&] {
             (void)gate.pin(ActorHeapIdentity{id.runtime, id.actor + 1, id.epoch});
         }), "foreign actor identity was allowed to pin executable code");
