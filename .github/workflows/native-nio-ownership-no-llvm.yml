@@ -7,6 +7,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.*'
       - 'tests/native_epoll_reactor_*.cpp'
       - 'tests/native_epoll_reactor_abi_test.c'
+      - 'tests/native_vm_nio_bridge_denial_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.*'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.h'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - '.github/workflows/native-nio-ownership-no-llvm.yml'
   workflow_dispatch:
 permissions:
@@ -72,7 +76,12 @@ jobs:
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
             /tmp/oreslang-nio-abi-test.o -o /tmp/oreslang-nio-abi-exact-head
-      - name: Execute all four original-source binaries three times
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_vm_nio_bridge_denial_test.cpp \
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp \
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            -o /tmp/oreslang-nio-bridge-denial-exact-head
+      - name: Execute four native tests and isolated bridge-denial contract three times
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
@@ -86,7 +95,8 @@ jobs:
             timeout 45s /tmp/oreslang-nio-abi-exact-head
             timeout 45s /tmp/oreslang-nio-reactor-exact-head
             timeout 45s /tmp/oreslang-nio-bootstrap-exact-head
+            timeout 45s /tmp/oreslang-nio-bridge-denial-exact-head
           done
           python3 -I -B scripts/verify-native-nio-source-local.py \
             "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
-          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=4"
+          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=5 bridge=isolated-test-doubles"
