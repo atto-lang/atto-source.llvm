@@ -24,6 +24,9 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    /* Worker affinity is scheduling metadata, not actor ownership. Zero means
+     * no prior carrier. Updated only under the scheduler mutex. */
+    size_t last_carrier_plus_one;
     uint64_t generation;
     OresNativeExecutionAuthority authority;
 } ActorLane;
@@ -38,6 +41,7 @@ struct OresNativeActorScheduler {
     size_t next_actor, outstanding, runnable_lanes;
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
+    uint64_t preferred_carrier_hits, carrier_migrations;
     int retired;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
@@ -48,6 +52,7 @@ static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local int carrier_identity;
+static _Thread_local size_t carrier_slot_plus_one;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
 /* Never wrap a scheduler-domain capability back to 1: a stale ActorRef
@@ -78,32 +83,52 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
-static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) {
-    /* CONTROL must be admitted ahead of normal mail, across all actors.
-     * The parent still owns its exclusive logical lane. */
-    for (int pass = 1; pass >= 0; --pass) {
+static int find_ready(OresNativeActorScheduler* s, size_t worker,
+                      size_t* actor, int* control) {
+    /* CONTROL remains globally first. Then prefer DATA most recently run by
+     * this long-lived pthread, otherwise steal from any runnable actor.
+     * Never wait for a busy preferred worker: starvation avoidance and actual
+     * CONTROL delivery outrank cache hints. */
+    for (int pass = 2; pass >= 0; --pass) {
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
-            if (!s->actors[i].active
-                && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
-                *actor = i;
-                *control = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
-            }
+            ActorLane* lane = &s->actors[i];
+            if (lane->active) continue;
+            if (pass == 2 && !lane->has_control) continue;
+            if (pass == 1 && (!lane->queued
+                || lane->last_carrier_plus_one != worker + 1)) continue;
+            if (pass == 0 && !lane->queued) continue;
+            *actor = i;
+            *control = pass == 2;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
         }
     }
     return 0;
 }
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
+    /* pthread_create executes while holding the scheduler mutex. By the
+     * time this carrier can take it, its stable entry is published. */
+    lock(s);
+    size_t worker = s->started_workers;
+    for (size_t k = 0; k < s->started_workers; ++k) {
+        if (pthread_equal(pthread_self(), s->threads[k])) {
+            worker = k;
+            break;
+        }
+    }
+    if (worker == s->started_workers) abort();
+    carrier_slot_plus_one = worker + 1;
+    unlock(s);
     for (;;) {
         lock(s);
         size_t i = 0;
         int control = 0;
-        while (!find_ready(s, &i, &control)) {
+        while (!find_ready(s, worker, &i, &control)) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
+                carrier_slot_plus_one = 0;
                 return NULL;
             }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
@@ -128,6 +153,12 @@ static void* carrier(void* raw) {
         if (!ores_execution_enter(&lane->authority, lane->generation,
                 (uint64_t)(uintptr_t)&carrier_identity, 1, &execution_claim))
             abort();
+        if (lane->last_carrier_plus_one == worker + 1) {
+            if (s->preferred_carrier_hits != UINT64_MAX) ++s->preferred_carrier_hits;
+        } else if (lane->last_carrier_plus_one) {
+            if (s->carrier_migrations != UINT64_MAX) ++s->carrier_migrations;
+        }
+        lane->last_carrier_plus_one = worker + 1;
         lane->active = 1;
         unlock(s);
 
@@ -413,6 +444,24 @@ int ores_native_actor_scheduler_publish_failure(
     } else if (s->rejected != UINT64_MAX) s->rejected++;
     unlock(s);
     return ok;
+}
+/* Scheduler-local diagnostics only; never an authority or affinity promise. */
+int ores_native_actor_scheduler_current_carrier_slot(void) {
+    return carrier_slot_plus_one ? (int)(carrier_slot_plus_one - 1) : -1;
+}
+uint64_t ores_native_actor_scheduler_preferred_carrier_hits(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t n = s->preferred_carrier_hits;
+    unlock(s);
+    return n;
+}
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t n = s->carrier_migrations;
+    unlock(s);
+    return n;
 }
 uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler* s) {
     if (!s) return 0;
