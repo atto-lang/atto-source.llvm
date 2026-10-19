@@ -22,5 +22,10 @@ trap 'rm -rf -- "${scratch}"' EXIT
     -Isrc/main/cpp tests/concurrency_race_analyzer_test.cpp \
     -o "${scratch}/oreslang-concurrency-race-test"
 "${scratch}/oreslang-concurrency-race-test"
+if [[ "${RUN_FULL_SUITE:-0}" == "1" ]]; then
+  cmake -S . -B "${scratch}/build" -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+  cmake --build "${scratch}/build" --parallel 2
+  ctest --test-dir "${scratch}/build" --output-on-failure
+fi
 git diff --quiet HEAD -- || { echo "Tracked files modified during test" >&2; exit 2; }
 echo "ORES_CONCURRENCY_CI|backend=llvm|source_tree=${actual}|result=PASS|scope=host-analyzer-asan-ubsan"
