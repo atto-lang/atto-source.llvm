@@ -89,6 +89,10 @@ def main():
             ("pub fnc xdp_action(int packet_nonempty): int { return 2; }\nfnc second(): int { return 2; }\n", "xdp"),
             ("pub fnc xdp_action(int packet_nonempty): int { val x: int = 2; return x; }\n", "xdp"),
             ("pub fnc xdp_action(int packet_nonempty): int { return 3 / 2; }\n", None),
+            ("pub fnc xdp_action(int packet_nonempty): int { return 0; }\n", "outcome"),
+            ("pub fnc xdp_action(int packet_nonempty): int { return 3; }\n", "outcome"),
+            ("pub fnc xdp_action(int packet_nonempty): int { return 4; }\n", "outcome"),
+            ("pub fnc xdp_action(int packet_nonempty): int { return packet_nonempty; }\n", "outcome"),
         ]
         for code, needle in cases:
             source.write_text(code)
