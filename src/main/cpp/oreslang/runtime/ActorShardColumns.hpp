@@ -27,8 +27,8 @@ public:
     /** An unbound budget is permitted only for VM-wide accounting. */
     explicit ActorShardBudget(std::uint64_t maximum_bytes)
         : maximum_(maximum_bytes) {
-        if (maximum_bytes == 0) {
-            throw std::invalid_argument("empty shard budget");
+        if (maximum_bytes == 0 || maximum_bytes > kMaxBytes) {
+            throw std::invalid_argument("shard budget must fit the 63-bit byte counter");
         }
     }
     /** Bind per-actor budgets at spawn, before dispatch and shard creation. */
@@ -59,43 +59,52 @@ public:
     }
     bool vm_wide() const noexcept { return scheduler_ == nullptr; }
     bool retired() const noexcept {
-        return retired_.load(std::memory_order_acquire);
+        return (state_.load(std::memory_order_acquire) & kRetiredBit) != 0;
     }
-    /** Call only after the native scheduler confirms this actor is done.
-     * Existing snapshots remain charged until destruction, but every access
-     * and all new reservations are rejected before scheduler reclamation. */
+    /** Retirement and byte admission share one atomic linearization point.
+     * A reservation CAS can either precede retirement (and remains charged)
+     * or observe its bit and fail. No allocation can be admitted after the
+     * retired bit has been published. */
     void mark_retired_after_done() noexcept {
-        retired_.store(true, std::memory_order_release);
+        state_.fetch_or(kRetiredBit, std::memory_order_acq_rel);
     }
 
     bool try_reserve(std::uint64_t bytes) noexcept {
-        if (retired_.load(std::memory_order_acquire)
-                || bytes == 0 || bytes > maximum_) return false;
-        std::uint64_t used = used_.load(std::memory_order_relaxed);
-        while (used <= maximum_ - bytes) {
-            if (used_.compare_exchange_weak(used, used + bytes,
-                    std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                if (!retired_.load(std::memory_order_acquire)) return true;
-                release(bytes);
-                return false;
+        if (bytes == 0 || bytes > maximum_) return false;
+        std::uint64_t previous = state_.load(std::memory_order_acquire);
+        for (;;) {
+            if ((previous & kRetiredBit) != 0) return false;
+            const std::uint64_t used = previous & kMaxBytes;
+            if (used > maximum_ - bytes) return false;
+            if (state_.compare_exchange_weak(previous, previous + bytes,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return true;
             }
         }
-        return false;
     }
     void release(std::uint64_t bytes) noexcept {
-        const std::uint64_t prior = used_.fetch_sub(bytes, std::memory_order_acq_rel);
-        if (prior < bytes) std::abort(); // never silently hide an accounting bug
+        if (!bytes || bytes > maximum_) std::abort();
+        std::uint64_t previous = state_.load(std::memory_order_acquire);
+        for (;;) {
+            if ((previous & kMaxBytes) < bytes) std::abort();
+            // Preserve the retired bit and atomically refund exactly once.
+            if (state_.compare_exchange_weak(previous, previous - bytes,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) return;
+        }
     }
     std::uint64_t used_bytes() const noexcept {
-        return used_.load(std::memory_order_acquire);
+        return state_.load(std::memory_order_acquire) & kMaxBytes;
     }
     std::uint64_t maximum_bytes() const noexcept { return maximum_; }
 private:
+    static constexpr std::uint64_t kRetiredBit = UINT64_C(1) << 63;
+    static constexpr std::uint64_t kMaxBytes = kRetiredBit - 1;
     std::uint64_t maximum_;
     OresNativeActorScheduler* scheduler_ = nullptr;
     OresNativeActorRef owner_ = {};
-    std::atomic<std::uint64_t> used_{0};
-    std::atomic<bool> retired_{false};
+    // The high bit is a permanent retirement tombstone; the low 63 bits
+    // are bytes currently reserved. Both change in a single atomic word.
+    std::atomic<std::uint64_t> state_{0};
 };
 
 /**
