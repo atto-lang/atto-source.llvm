@@ -85,6 +85,17 @@ for toolchain in gcc clang; do
     UBSAN_OPTIONS=halt_on_error=1 \
       timeout 60s "$dest/fd-broker"
   done
+  # Deterministic real-epoll state-machine scenarios (24 host API
+  # permutations and controlled ledger lock/terminal-consume denials).
+  "$cxx" -std=c++17 "${shared[@]}" \
+    tests/native_fd_authority_broker_state_machine_test.cpp \
+    -o "$dest/fd-broker-state-machine"
+  for attempt in {1..3}; do
+    printf 'NIO_FD_STATE_MATRIX_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 90s "$dest/fd-broker-state-machine"
+  done
   verify_exact_worktree
 done
 

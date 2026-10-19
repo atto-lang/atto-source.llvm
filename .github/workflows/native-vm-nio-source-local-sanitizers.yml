@@ -11,6 +11,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeFdAuthority.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeFdAuthorityBroker.hpp'
       - 'tests/native_fd_authority_broker_test.cpp'
+      - 'tests/native_fd_authority_broker_state_machine_test.cpp'
       - 'tests/native_fd_authority_test.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'

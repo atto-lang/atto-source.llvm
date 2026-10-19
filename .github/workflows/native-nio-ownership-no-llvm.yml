@@ -12,6 +12,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeFdAuthority.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeFdAuthorityBroker.hpp'
       - 'tests/native_fd_authority_broker_test.cpp'
+      - 'tests/native_fd_authority_broker_state_machine_test.cpp'
       - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.*'
       - 'src/main/cpp/oreslang/runtime/NativeOresVM.h'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
@@ -91,6 +92,9 @@ jobs:
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp tests/native_fd_authority_broker_test.cpp \
             -o /tmp/oreslang-nio-fd-broker-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_fd_authority_broker_state_machine_test.cpp \
+            -o /tmp/oreslang-nio-fd-state-machine-exact-head
       - name: Execute native, bridge-denial and host-capability-model tests three times
         shell: bash
         env:
@@ -108,7 +112,8 @@ jobs:
             timeout 45s /tmp/oreslang-nio-bridge-denial-exact-head
             timeout 45s /tmp/oreslang-nio-fd-authority-exact-head
             timeout 45s /tmp/oreslang-nio-fd-broker-exact-head
+            timeout 90s /tmp/oreslang-nio-fd-state-machine-exact-head
           done
           python3 -I -B scripts/verify-native-nio-source-local.py \
             "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
-          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=7 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"
+          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=8 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"
