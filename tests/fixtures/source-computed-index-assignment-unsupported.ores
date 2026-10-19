@@ -1,0 +1,6 @@
+// Computed [] writes need typed projection, mutability and ownership lowering.
+fnc update(int value): int {
+    value[0] = 1;
+    return value;
+}
+pub fnc main(): int { return update(1); }
