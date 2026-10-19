@@ -548,8 +548,17 @@ void validate_i64_ownership(const Program& program) {
             verify_scalar_suspension(function.scalar_while->counter);
 
     Functions functions;
-    for (const auto& function : program.functions)
-        functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
+    for (const auto& function : program.functions) {
+        // Overload identity is caller-visible value arity, not parameter
+        // types, return types, generic arity, or an internal receiver. Direct
+        // Program constructors bypass the parser's declaration-table gate:
+        // ignoring emplace(false) would resolve a call against the first
+        // duplicate while codegen still emits both conflicting declarations.
+        const auto slot = native_function_slot(function.name, function.parameters.size());
+        if (!functions.emplace(slot, &function).second)
+            throw std::runtime_error(
+                "ownership violation: duplicate callable user arity '" + slot + "'");
+    }
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
