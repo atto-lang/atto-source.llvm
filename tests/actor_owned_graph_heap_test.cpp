@@ -1,10 +1,16 @@
 #include "oreslang/runtime/ActorOwnedGraphHeap.hpp"
 #include "oreslang/runtime/HungryCarrier.hpp"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <limits>
+#include <thread>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
+#include <optional>
 
 using oreslang::runtime::ActorHeapIdentity;
 using oreslang::runtime::ActorOwnedGraphHeap;
@@ -91,9 +97,19 @@ static void stale_generation_and_foreign_heap_rejected() {
     const auto reused = first.allocate(alice, &data, sizeof(data)).value();
     check(reused.slot == old.slot && reused.generation > old.generation,
           "reused slot did not advance generation");
+    must_reject([&]{ (void)first.is_linked(alice, reused, old); },
+                "query admitted stale target generation");
+    must_reject([&]{ (void)first.is_linked(alice, reused,
+                   Heap::Handle{old.heap, static_cast<std::uint32_t>(12345), old.generation}); },
+                "query admitted invalid target slot");
+    must_reject([&]{ (void)first.is_linked(alice, old, reused); },
+                "query admitted stale source generation");
     must_reject([&]{ (void)first.copy_out(bob, reused, &data, sizeof(data)); },
                 "foreign actor entered heap");
     const auto other = second.allocate(bob, &data, sizeof(data)).value();
+    must_reject([&]{ (void)first.is_linked(alice, reused,
+                   Heap::Handle{other.heap, other.slot, other.generation}); },
+                "query admitted foreign target heap domain");
     must_reject([&]{ (void)first.link(alice, reused,
                        Heap::Handle{other.heap, other.slot, other.generation}); },
                 "cross-actor graph edge accepted");
@@ -181,7 +197,202 @@ static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     std::cout << "PASS deterministic native destructor glue and cyclic actor retirement\\n";
 }
 
+
+/* Deterministic model-based actor arena stress.  No tracing collector is
+ * involved: incoming links must be purged and recycled slots must not revive
+ * old non-owning handles.  External ledger is intentionally independent of
+ * the implementation's live-node/edge counters. */
+static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
+    using Heap = ActorOwnedGraphHeap<8, 16, 3>;
+    const ActorHeapIdentity owner{71, 19, 5};
+    Heap graph(owner);
+    std::array<std::optional<Heap::Handle>, 8> live{};
+    std::array<std::optional<Heap::Handle>, 8> stale{};
+    std::array<std::array<bool, 8>, 8> edges{};
+    std::array<std::uint8_t, 8> values{};
+    auto random = [&]() noexcept -> std::uint32_t {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    };
+    auto choose_live = [&](std::uint32_t hint) -> int {
+        for (int j = 0; j < 8; ++j) {
+            const int candidate = static_cast<int>((hint + j) % 8);
+            if (live[candidate].has_value()) return candidate;
+        }
+        return -1;
+    };
+    for (int step = 0; step < 2048; ++step) {
+        const auto operation = random() % 8;
+        if (operation < 2) {
+            const std::uint8_t byte = static_cast<std::uint8_t>(step);
+            auto next = graph.allocate(owner, &byte, 1);
+            int free_slots = 0;
+            for (const auto& handle : live) if (!handle) ++free_slots;
+            check(next.has_value() == (free_slots > 0),
+                  "bounded graph allocator/model capacity disagreement");
+            if (next) {
+                const std::size_t slot = next->slot;
+                check(slot < live.size() && !live[slot], "allocator reused live node");
+                if (stale[slot])
+                    check(next->generation > stale[slot]->generation,
+                          "graph slot recycled without generation advance");
+                live[slot] = *next;
+                values[slot] = byte;
+            }
+        } else if (operation == 2) {
+            const int index = choose_live(random());
+            if (index >= 0) {
+                const auto old = *live[index];
+                graph.remove(owner, old);
+                stale[index] = old;
+                live[index].reset();
+                for (int j = 0; j < 8; ++j) {
+                    edges[index][j] = false;
+                    edges[j][index] = false;
+                }
+                std::uint8_t probe = 0;
+                must_reject([&] { (void)graph.copy_out(owner, old, &probe, 1); },
+                            "retired graph handle resurrected after node removal");
+            }
+        } else if (operation < 6) {
+            const int a = choose_live(random());
+            const int b = choose_live(random());
+            if (a >= 0 && b >= 0) {
+                int outgoing = 0;
+                for (int j = 0; j < 8; ++j) if (edges[a][j]) ++outgoing;
+                const bool expected = !edges[a][b] && outgoing < 3;
+                check(graph.link(owner, *live[a], *live[b]) == expected,
+                      "graph link/model disagreement");
+                if (expected) edges[a][b] = true;
+            }
+        } else {
+            const int index = choose_live(random());
+            if (index >= 0) {
+                const std::uint8_t changed = static_cast<std::uint8_t>(random());
+                graph.write(owner, *live[index], &changed, 1);
+                values[index] = changed;
+            }
+        }
+        std::size_t nodes = 0, links = 0;
+        for (int a = 0; a < 8; ++a) {
+            if (!live[a]) continue;
+            ++nodes;
+            std::uint8_t copied = 0;
+            check(graph.copy_out(owner, *live[a], &copied, 1) == 1 &&
+                      copied == values[a], "graph payload changed after reuse");
+            for (int b = 0; b < 8; ++b) {
+                if (!live[b]) {
+                    check(!edges[a][b], "model retained link to dead slot");
+                    continue;
+                }
+                check(graph.is_linked(owner, *live[a], *live[b]) == edges[a][b],
+                      "graph adjacency/model disagreement");
+                if (edges[a][b]) ++links;
+            }
+        }
+        // A stale handle must remain invalid even after thousands of later
+        // allocations and recycling cycles; test across multiple states,
+        // not only at the instant of removal.
+        if (step % 31 == 0) {
+            for (const auto& former : stale) {
+                if (former) {
+                    std::uint8_t discarded = 0;
+                    must_reject([&] {
+                        (void)graph.copy_out(owner, *former, &discarded, 1);
+                    }, "stale actor handle revived after generation recycling");
+                }
+            }
+        }
+        check(graph.live_nodes(owner) == nodes, "graph node accounting drift");
+        check(graph.live_edges(owner) == links, "graph edge accounting drift");
+    }
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    carrier.start();
+    carrier.join();
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "model stress lacked trusted retirement proof");
+    graph.retire(owner, *proof);
+    check(graph.retired(), "model stress failed zero-tracing-GC retirement");
+    std::cout << "PASS seeded differential graph ownership and ABA stress\\n";
+}
+
+
+/* Exercise heap-domain exhaustion without creating billions of arenas.
+ * The injected atomic is equivalent to the allocator's static counter, so
+ * every contending thread must receive either a unique ID or overflow. */
+static void test_heap_domains_never_wrap_or_repeat() {
+    constexpr auto max = std::numeric_limits<std::uint64_t>::max();
+    std::atomic<std::uint64_t> next{max - 4};
+    std::array<std::uint64_t, 12> outcomes{};
+    std::array<std::thread, 12> threads;
+    for (std::size_t i = 0; i < threads.size(); ++i) {
+        threads[i] = std::thread([&, i]() {
+            try {
+                outcomes[i] = oreslang::runtime::detail::reserve_actor_graph_heap_id(next);
+            } catch (const std::overflow_error&) {
+                outcomes[i] = 0;
+            }
+        });
+    }
+    for (auto& worker : threads) worker.join();
+    std::sort(outcomes.begin(), outcomes.end());
+    for (std::size_t i = 0; i < 8; ++i)
+        check(outcomes[i] == 0, "exhausted graph domain was incorrectly reissued");
+    for (std::size_t i = 0; i < 4; ++i)
+        check(outcomes[8 + i] == max - 4 + i, "duplicate or skipped graph heap domain");
+    check(next.load() == max, "heap domain counter wrapped after saturation");
+    bool saturated = false;
+    try {
+        (void)oreslang::runtime::detail::reserve_actor_graph_heap_id(next);
+    } catch (const std::overflow_error&) {
+        saturated = true;
+    }
+    check(saturated && next.load() == max,
+          "exhausted heap domain must permanently reject allocation");
+    std::atomic<std::uint64_t> invalid{0};
+    saturated = false;
+    try {
+        (void)oreslang::runtime::detail::reserve_actor_graph_heap_id(invalid);
+    } catch (const std::overflow_error&) {
+        saturated = true;
+    }
+    check(saturated && invalid.load() == 0,
+          "zero heap domain must never be issued");
+}
+
+/* Regression: capacity/template specializations must not each restart their
+ * own domain counter. A forged cross-shape handle must remain foreign even
+ * when slot and generation happen to be identical. */
+static void test_cross_template_graph_heap_domain_isolation() {
+    const ActorHeapIdentity owner{91, 27, 3};
+    using Left = ActorOwnedGraphHeap<5, 23, 2>;
+    using Right = ActorOwnedGraphHeap<6, 29, 2>;
+    Left left(owner);
+    Right right(owner);
+    check(left.heap_id() != right.heap_id(),
+          "different graph layout specializations reused a heap domain");
+    const std::uint8_t byte = 7;
+    const auto lhs = left.allocate(owner, &byte, 1);
+    const auto rhs = right.allocate(owner, &byte, 1);
+    check(lhs.has_value() && rhs.has_value(), "cross-template setup failed");
+    check(lhs->slot == rhs->slot && lhs->generation == rhs->generation,
+          "cross-template test did not construct colliding slot/generation");
+    const Right::Handle forged{lhs->heap, rhs->slot, rhs->generation};
+    std::uint8_t copied = 0;
+    must_reject([&] {
+        (void)right.copy_out(owner, forged, &copied, 1);
+    }, "cross-template foreign graph handle was accepted");
+}
+
 int main() {
+    test_cross_template_graph_heap_domain_isolation();
+    test_heap_domains_never_wrap_or_repeat();
+    for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
+                               0xC0DEC0DEu, 0xDEADBEEFu}) {
+        model_check_graph_reuse_and_stale_handles(seed);
+    }
     cycles_reclaim_without_gc();
     stale_generation_and_foreign_heap_rejected();
     bounded_capacity_and_purge();

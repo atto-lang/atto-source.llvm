@@ -16,6 +16,27 @@
 
 namespace oreslang::runtime {
 
+// Heap domains are lifetime-unique capability IDs, not a wrapping counter.
+// Reserve UINT64_MAX as terminal exhaustion so no old handle can become
+// valid again if the domain allocator is stressed to its numeric limit.
+namespace detail {
+// Shared by ALL ActorOwnedGraphHeap template specializations in this binary.
+// A class-template static counter would restart at 1 for every capacity/layout
+// and permit foreign graph handles to alias a different heap configuration.
+inline std::atomic<std::uint64_t> next_actor_graph_heap_id{1};
+
+inline std::uint64_t reserve_actor_graph_heap_id(
+        std::atomic<std::uint64_t>& next) {
+    std::uint64_t current = next.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    throw std::overflow_error("actor graph heap ID space exhausted");
+}
+} // namespace detail
+
 // Fixed-capacity, strictly owner-confined native graph heap.
 //
 // Node bytes are owned by the arena; graph edges hold non-owning generational
@@ -56,7 +77,6 @@ private:
         bool live = false;
     };
 
-    inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     ActorHeapBorrowGate borrow_gate_;
@@ -112,7 +132,8 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
+        : owner_(owner), heap_id_(detail::reserve_actor_graph_heap_id(
+              detail::next_actor_graph_heap_id)),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
@@ -235,7 +256,9 @@ public:
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
         require_open_access(actor);
         Slot& from = require_node(source);
-        if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
+        // Querying a stale target is a capability error, not a valid
+        // negative adjacency result: reject stale generations and slots.
+        (void)require_node(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
             if (from.links[i] == target) return true;
         }
