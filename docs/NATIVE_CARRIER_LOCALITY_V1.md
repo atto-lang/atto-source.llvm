@@ -37,3 +37,10 @@ Related: Java #301, Java #303, Java #1025, LLVM #15, Java triple-layout #1480, a
 - Opt-in Linux CPU affinity distributes the first carriers of independent scheduler domains by scheduler-domain ID; otherwise all domains could be pinned to the same first allowed CPU.
 - Default affinity is still off, masks remain OS restricted, and failure falls back to ordinary Linux scheduling. No hard realtime, OS-thread ownership or NUMA-local memory guarantee is claimed.
 - Native compiler, ASan/UBSan, and exact-head CTest remain mandatory merge gates.
+
+## Remaining performance blockers found in audit
+
+- The existing native admission API still rejects actor_count greater than **1024**. The new locality hint does not make million-actor execution possible.
+- `find_ready()` continues to walk actor lanes linearly (globally prioritized CONTROL, preferred DATA and fallback DATA). The fairness fix bounds preferred dispatch bursts, but the scheduler still needs a bounded indexed ready-set/bitmap or sharded dense-ready queue before claiming large-scale O(1) wake-to-turn work.
+- Global scheduler and actor-lane lock traffic, cacheline placement, CPU quota pressure, SMT, NUMA first-touch and OS context-switch rates require measurements. No SoA/AoSoA actor or Task metadata lowering is activated by this draft.
+- Actual CPU topology may change with hotplug or cgroup cpuset updates; optional binding is best effort and not dynamically reprobed.
