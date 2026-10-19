@@ -26,6 +26,14 @@ record-vs-struct type identity, exact struct-shape checking, ownership/drop
 plans, ABI/layout rules, and cross-backend conformance. Dedicated CTest
 fixtures require rejection before LLVM IR publication.
 
+Computed `[]` access is also explicitly rejected in the native scalar frontend.
+Java/Graal now gives that syntax receiver-directed semantics (integer tuple/list
+positions versus string record/struct/class fields), exact-vs-union result typing,
+class visibility rules, mutation authority, and definite-initialization checks.
+Native LLVM must not accept `value[index]` until it can preserve those same
+type/ownership guarantees. The `source-computed-index-unsupported.ores` fixture
+pins this fail-closed boundary before IR publication.
+
 ---
 
 # Scheduler / ActorGroup / Region compute syntax — cross-backend contract (2026-10-19)
