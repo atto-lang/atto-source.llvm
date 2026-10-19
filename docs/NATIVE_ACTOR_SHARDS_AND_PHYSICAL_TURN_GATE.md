@@ -86,3 +86,19 @@ per-core shard placement exists yet. Host-owned `ActorShardColumns`
 uses copy-out snapshots, not inter-actor zero-copy mutable borrowing.
 Exact-head CMake/CTest, sanitizers, and executable source conformance
 are merge gates; CI workflows queued or failing before steps are not evidence.
+
+## Required native actor-stop budget fence (host API)
+
+After sending stop/retire to the actor, invoke
+`retire_actor_shard_budget_after_done(scheduler, exact_ref, actor_budget)`
+from a trusted non-carrier host thread **while the scheduler still exists**.
+The helper waits for the exact generation to finish and marks the actor
+quota retired. New reservations and all actor-owned shard/snapshot data
+access are then rejected before any scheduler call. Outstanding snapshots
+remain charged until their RAII destruction.
+
+Before deleting the scheduler or actor/VM budget objects, destroy all
+shards and snapshots that reference them. This remains an explicit host
+lifetime contract, **not automatically wired into every native VM shutdown
+or guest code path**. A host which ignores it may still create dangling
+lifetime references. See P0 #1531.
