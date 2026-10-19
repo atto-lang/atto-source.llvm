@@ -154,6 +154,9 @@ public:
         else if (e->phase == Phase::terminal)
             e->phase = Phase::revoking_terminal;
         else return false;
+        // Revoke readiness/transfer rights immediately. Keep identity only
+        // for terminal draining and trusted-host reclamation authentication.
+        e->rights = 0;
         e->destination = 0;
         e->sequence = 0;
         return true;
@@ -169,7 +172,12 @@ public:
         auto* e = lookup(cap);
         if (!e || !trusted_owner || e->owner != trusted_owner ||
                 e->phase != Phase::reclaim_pending) return false;
+        // The tombstone retains the generation but no former owner authority.
         e->phase = Phase::revoked;
+        e->owner = 0;
+        e->rights = 0;
+        e->sequence = 0;
+        e->destination = 0;
         return true;
     }
     std::optional<Phase> phase(Capability cap) noexcept {

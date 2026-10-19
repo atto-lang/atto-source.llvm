@@ -66,6 +66,16 @@ for toolchain in gcc clang; do
       timeout 60s "$dest/$fixture"
     printf 'PASS: %s %s (ASan+UBSan)\n' "$toolchain" "$fixture"
   done
+  # Separately exercise host-only descriptor authority races under
+  # both toolchains. This does NOT prove guest FD authorization integration.
+  "$cxx" -std=c++17 "${shared[@]}" \
+    tests/native_fd_authority_test.cpp -o "$dest/fd-authority"
+  for attempt in {1..3}; do
+    printf 'FD_AUTHORITY_HOST_MODEL_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 60s "$dest/fd-authority"
+  done
   verify_exact_worktree
 done
 

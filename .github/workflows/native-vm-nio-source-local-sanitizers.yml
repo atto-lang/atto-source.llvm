@@ -8,6 +8,8 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.*'
       - 'src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h'
       - 'src/main/cpp/oreslang/runtime/NativeEpollReactor*'
+      - 'src/main/cpp/oreslang/runtime/NativeFdAuthority.hpp'
+      - 'tests/native_fd_authority_test.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'tests/native_vm_nio_lifecycle_test.c'

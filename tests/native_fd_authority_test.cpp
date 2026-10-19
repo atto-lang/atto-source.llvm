@@ -144,5 +144,87 @@ int main() {
         check(a.confirm_reclaimed(*key, 1));
         check(a.phase(*key) == P::revoked);
     }
+
+    // Race: handoff completion and original-owner revoke have only one winner.
+    // Both methods can transiently deny on try_lock contention.
+    for (int round = 0; round < 128; ++round) {
+        NativeFdAuthority race;
+        auto key = race.mint(71, NativeFdAuthority::readiness |
+                               NativeFdAuthority::transfer);
+        check(key.has_value());
+        auto pending = race.begin_transfer(*key, 71, 72);
+        check(pending.has_value());
+        std::atomic<int> entered{0};
+        std::atomic<bool> revoked{false};
+        std::optional<NativeFdAuthority::Capability> transferred;
+        std::thread destination([&] {
+            entered.fetch_add(1, std::memory_order_acq_rel);
+            while (entered.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            transferred = race.acknowledge(*pending, 72);
+        });
+        std::thread origin([&] {
+            entered.fetch_add(1, std::memory_order_acq_rel);
+            while (entered.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            revoked.store(race.revoke(*key, 71), std::memory_order_release);
+        });
+        destination.join();
+        origin.join();
+        check(!(transferred.has_value() && revoked.load()));
+        if (transferred) {
+            check(!race.begin_watch(*key, 71));
+            check(!race.confirm_reclaimed(*key, 71));
+            check(race.revoke(*transferred, 72));
+            check(race.phase(*transferred) == P::reclaim_pending);
+            check(race.confirm_reclaimed(*transferred, 72));
+            check(!race.revoke(*transferred, 72));
+        } else {
+            if (!revoked.load()) check(race.revoke(*key, 71));
+            check(race.phase(*key) == P::reclaim_pending);
+            check(!race.acknowledge(*pending, 72));
+            check(!race.confirm_reclaimed(*key, 72));
+            check(race.confirm_reclaimed(*key, 71));
+            check(!race.revoke(*key, 71));
+        }
+    }
+    // Race: a revoked watch cannot reclaim before its unique terminal is
+    // published AND consumed, regardless of producer/owner interleaving.
+    for (int round = 0; round < 128; ++round) {
+        NativeFdAuthority race;
+        auto key = race.mint(81, NativeFdAuthority::readiness);
+        check(key.has_value() && race.begin_watch(*key, 81));
+        std::atomic<int> entered{0};
+        std::atomic<bool> published{false}, revoked{false};
+        std::thread reactor([&] {
+            entered.fetch_add(1, std::memory_order_acq_rel);
+            while (entered.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            published.store(race.publish_terminal(*key, 81),
+                            std::memory_order_release);
+        });
+        std::thread owner([&] {
+            entered.fetch_add(1, std::memory_order_acq_rel);
+            while (entered.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            revoked.store(race.revoke(*key, 81),
+                          std::memory_order_release);
+        });
+        reactor.join();
+        owner.join();
+        if (!revoked.load()) check(race.revoke(*key, 81));
+        if (!published.load()) check(race.publish_terminal(*key, 81));
+        check(race.phase(*key) == P::revoking_terminal);
+        check(!race.confirm_reclaimed(*key, 81));
+        check(!race.publish_terminal(*key, 81));
+        check(!race.begin_watch(*key, 81));
+        check(race.consume_terminal(*key, 81));
+        check(!race.consume_terminal(*key, 81));
+        check(race.phase(*key) == P::reclaim_pending);
+        check(!race.confirm_reclaimed(*key, 82));
+        check(race.confirm_reclaimed(*key, 81));
+        check(race.phase(*key) == P::revoked);
+        check(!race.revoke(*key, 81));
+    }
     return 0;
 }
