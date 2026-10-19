@@ -527,7 +527,8 @@ static void atomic_mutation_vs_loan_races() {
 static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
     using Heap = ActorOwnedGraphHeap<8, 16, 3>;
     const ActorHeapIdentity owner{71, 19, 5};
-    Heap graph(owner);
+    auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 1);
+    Heap graph(cohort);
     std::array<std::optional<Heap::Handle>, 8> live{};
     std::array<std::optional<Heap::Handle>, 8> stale{};
     std::array<std::array<bool, 8>, 8> edges{};
@@ -630,7 +631,8 @@ static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
         check(graph.live_nodes(owner) == nodes, "graph node accounting drift");
         check(graph.live_edges(owner) == links, "graph edge accounting drift");
     }
-    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop,
+                          bound_options(owner, cohort));
     carrier.start();
     carrier.join();
     const auto proof = carrier.retirement_proof();
