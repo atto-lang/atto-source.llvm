@@ -1563,20 +1563,34 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements) {
-            if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
-                    !fn.declared_effects.has(FunctionEffect::Alloc))
-                throw std::runtime_error("filled array commit violates using signature without alloc");
-            if (contains_callable_invocation(stmt.expression.get()))
-                throw std::runtime_error("using effects require transitive call summaries");
+        std::function<void(const Statement&)> validate_statement_effects;
+        validate_statement_effects = [&](const Statement& stmt) {
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                if (!fn.declared_effects.has(FunctionEffect::Alloc))
+                    throw std::runtime_error(
+                        "filled array commit violates using signature without alloc");
                 if (contains_callable_invocation(stmt.array_commit_length.get()))
-                    throw std::runtime_error("filled array commit requires pure scalar length");
+                    throw std::runtime_error(
+                        "filled array commit requires pure scalar length");
                 for (const auto& item : stmt.array_commit_values)
                     if (contains_callable_invocation(item.get()))
-                        throw std::runtime_error("filled array commit requires pure scalar fills");
+                        throw std::runtime_error(
+                            "filled array commit requires pure scalar fills");
             }
-        }
+            if (contains_callable_invocation(stmt.expression.get()) ||
+                    (stmt.branch_local &&
+                     contains_callable_invocation(stmt.branch_local->initializer.get())) ||
+                    contains_callable_invocation(stmt.condition_lhs.get()) ||
+                    contains_callable_invocation(stmt.condition_rhs.get()))
+                throw std::runtime_error(
+                    "using effects require transitive call summaries");
+            for (const auto& nested : stmt.then_statements)
+                validate_statement_effects(nested);
+            for (const auto& nested : stmt.else_statements)
+                validate_statement_effects(nested);
+        };
+        for (const auto& stmt : fn.statements)
+            validate_statement_effects(stmt);
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
