@@ -1,0 +1,47 @@
+name: LLVM ownership gate sanitizers
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/llvm_emission_ownership_gate_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/llvm-ownership-gate-sanitizers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership-gate-asan-ubsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install LLVM toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Configure sanitized ownership gate
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build-sanitized \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_C_FLAGS='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined' \
+            -DCMAKE_CXX_FLAGS='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+      - name: Build direct-AST ownership gate
+        run: cmake --build build-sanitized --target oreslang-llvm-emission-ownership-gate-test --parallel 2
+      - name: Run direct-AST ownership gate under ASan and UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ctest --test-dir build-sanitized \
+            -R '^native_llvm_emission_checks_ownership_and_frame_layout$' \
+            --output-on-failure --timeout 120
