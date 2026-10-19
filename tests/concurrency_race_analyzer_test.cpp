@@ -132,12 +132,13 @@ int main() {
     ConcurrencyRaceAnalyzer model;
     bool rejected = false;
     try {
-      model.write("a", "location\\nORES_TEST|SUMMARY|fake");
+      model.write("a", std::string("location") + static_cast<char>(10) +
+                         "ORES_TEST|SUMMARY|fake");
     } catch (const std::invalid_argument&) { rejected = true; }
     assert(rejected);
     rejected = false;
     try {
-      model.send("a", std::string("token\\0forgery", 13));
+      model.send("a", std::string("token") + static_cast<char>(0) + "forgery");
     } catch (const std::invalid_argument&) { rejected = true; }
     assert(rejected);
   }
