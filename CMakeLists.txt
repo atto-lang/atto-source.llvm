@@ -885,6 +885,8 @@ if(BUILD_TESTING)
         --diagnostic "native record/struct literal lowering unsupported")
     oreslang_contract_test(reject_guest_explicit_struct_literal source-explicit-struct-literal-unsupported.ores
         --diagnostic "native record/struct literal lowering unsupported")
+    oreslang_contract_test(reject_guest_computed_index source-computed-index-unsupported.ores
+        --diagnostic "native computed property/index access unsupported")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
