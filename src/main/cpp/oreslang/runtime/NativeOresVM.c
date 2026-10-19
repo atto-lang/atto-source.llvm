@@ -196,32 +196,41 @@ int ores_native_vm_publish_supervised_failure(
     return accepted;
 }
 
+/* No actor DATA/CONTROL callback from ANY VM domain may act as a trusted
+ * supervisor upgrade coordinator, even when targeting a different pool. */
+static int upgrade_host_origin(OresNativeVM* vm) {
+    if (!vm) return 0;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
+            return 0;
+    return 1;
+}
 int ores_native_vm_upgrade_freeze(
         OresNativeVM* vm, enum OresNativeVMDomain domain,
         OresNativeActorRef ref, uint64_t expected_route_epoch,
         uint64_t* ticket_out) {
-    return vm && valid_domain(domain)
+    return upgrade_host_origin(vm) && valid_domain(domain)
         && ores_native_actor_scheduler_upgrade_freeze(
             vm->schedulers[domain], ref, expected_route_epoch, ticket_out);
 }
 int ores_native_vm_upgrade_quiesced(
         OresNativeVM* vm, enum OresNativeVMDomain domain,
         OresNativeActorRef ref, uint64_t ticket) {
-    return vm && valid_domain(domain)
+    return upgrade_host_origin(vm) && valid_domain(domain)
         && ores_native_actor_scheduler_upgrade_quiesced(
             vm->schedulers[domain], ref, ticket);
 }
 int ores_native_vm_upgrade_finish(
         OresNativeVM* vm, enum OresNativeVMDomain domain,
         OresNativeActorRef ref, uint64_t ticket, int committed) {
-    return vm && valid_domain(domain)
+    return upgrade_host_origin(vm) && valid_domain(domain)
         && ores_native_actor_scheduler_upgrade_finish(
             vm->schedulers[domain], ref, ticket, committed);
 }
 uint64_t ores_native_vm_upgrade_epoch(
         OresNativeVM* vm, enum OresNativeVMDomain domain,
         OresNativeActorRef ref) {
-    return vm && valid_domain(domain)
+    return upgrade_host_origin(vm) && valid_domain(domain)
         ? ores_native_actor_scheduler_upgrade_epoch(vm->schedulers[domain], ref)
         : 0;
 }
