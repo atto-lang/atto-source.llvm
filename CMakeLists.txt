@@ -2037,11 +2037,15 @@ if(BUILD_TESTING)
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME experimental_ebpf_xdp_action_proof_differential
         COMMAND oreslang-ebpf-xdp-action-proof-test)
+    add_test(NAME experimental_ebpf_elf_parser_mutation
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ebpf_elf_integrity.py")
     add_test(NAME experimental_ebpf_xdp_source_object
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/experimental_ebpf_xdp_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(experimental_ebpf_xdp_static_admission
         experimental_ebpf_xdp_action_proof_differential
+        experimental_ebpf_elf_parser_mutation
         experimental_ebpf_xdp_source_object PROPERTIES TIMEOUT 90)
 endif()
