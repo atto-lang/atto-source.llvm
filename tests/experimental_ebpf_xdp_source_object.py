@@ -39,11 +39,30 @@ def elf_sections(blob):
         base = offset + index * entry_size
         name = struct.unpack_from("<I", blob, base)[0]
         data_offset, size = struct.unpack_from("<QQ", blob, base + 24)
-        require(data_offset + size <= len(blob), "section outside ELF")
         section_type = struct.unpack_from("<I", blob, base + 4)[0]
+        # SHT_NOBITS has a logical size but no stored section bytes.
+        if section_type == 8:
+            require(data_offset <= len(blob), "NOBITS offset outside ELF")
+        else:
+            require(data_offset + size <= len(blob), "section outside ELF")
         section_flags = struct.unpack_from("<Q", blob, base + 8)[0]
         return name, data_offset, size, section_type, section_flags
-    _, strings_offset, strings_size, _, _ = entry(names_idx)
+    # No executable or metadata bytes may hide inside ELF headers,
+    # another section's payload or the section-header table itself.
+    # An SHT_NOBITS section reserves memory, not file bytes.
+    occupied = [(0, 64), (offset, offset + entry_size * count)]
+    for index in range(count):
+        _, data_offset, size, kind, _ = entry(index)
+        if kind == 8 or size == 0:
+            continue
+        start, end = data_offset, data_offset + size
+        require(start >= 64, "ELF section overlaps file header")
+        require(all(end <= lo or start >= hi for lo, hi in occupied),
+                "ELF section data overlaps another section or header table")
+        occupied.append((start, end))
+    _, strings_offset, strings_size, names_kind, _ = entry(names_idx)
+    require(names_kind == 3 and strings_size > 1,
+            "ELF section names table must be a nonempty STRTAB")
     strings = blob[strings_offset:strings_offset + strings_size]
     found = {}
     for index in range(count):
