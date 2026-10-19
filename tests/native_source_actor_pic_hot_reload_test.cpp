@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
         std::atomic<int> first_unloaded{0};
         std::atomic<int> second_unloaded{0};
         std::atomic<int> rejected_unloaded{0};
+        std::atomic<int> busy_unloaded{0};
         const auto initial = load_fixture(argv[1]);
         OresActorI64Heap* const heap = ores_actor_i64_heap_open(
             id.actor, id.epoch, 3);
@@ -121,6 +122,9 @@ int main(int argc, char** argv) {
                   });
         require(receive(gate, id, heap, 0) == 42,
                 "compiler-generated v1 did not produce 42");
+        require(rejects([&] {
+            (void)gate.pin(ActorHeapIdentity{id.runtime, id.actor + 1, id.epoch});
+        }), "foreign actor identity was allowed to pin executable code");
 
         // Incompatible ABI must not publish, mutate state, or unload old code.
         {
@@ -146,6 +150,20 @@ int main(int argc, char** argv) {
                     "awaiting old code must block quiescence");
             require(rejects([&] { (void)gate.pin(id); }),
                     "frozen DATA admission permitted a new turn");
+            // A false quiescence observation is not enough: attempt the
+            // forbidden publication and prove both the old image and
+            // replacement-resource ownership survive the refusal.
+            const auto busy = load_fixture(argv[2]);
+            require(rejects([&] {
+                (void)gate.promote(ticket, shape(), busy.image,
+                    [handle = busy.handle, &busy_unloaded] {
+                        unload(handle, busy_unloaded);
+                    });
+            }), "busy old code was replaced while pinned");
+            require(busy_unloaded == 1 && first_unloaded == 0,
+                    "busy upgrade leaked candidate or reclaimed live code");
+            require(suspended.code().receive != nullptr,
+                    "old pinned executable image became invalid");
             suspended.close();
             require(gate.quiesced(ticket), "released code pin remained active");
             const auto result = gate.promote(ticket, shape(), next.image,
@@ -167,6 +185,8 @@ int main(int argc, char** argv) {
         gate.close();
         require(second_unloaded == 1,
                 "new DSO did not retire on terminal code close");
+        require(rejects([&] { (void)gate.pin(id); }),
+                "closed actor accepted a fresh code-generation lease");
         ores_actor_i64_heap_retire(heap);
         require(ores_actor_i64_heap_try_destroy(heap) == 1,
                 "native actor-owned heap did not quiesce/reclaim");
