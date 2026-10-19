@@ -205,6 +205,11 @@ struct Program {
     std::vector<Function> functions;
 };
 
+// The same native lexical-identifier admission used by the parser, exported
+// for trusted compiler stages that revalidate caller-built/transformed ASTs.
+// This is not a validator for arbitrary Unicode or user-visible strings.
+bool valid_native_source_identifier(std::string_view value) noexcept;
+
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
