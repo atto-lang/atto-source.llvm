@@ -352,5 +352,36 @@ int main() {
         require(separateMembers.try_revoke(authority, restarted));
         require(separateMembers.try_retire(authority));
     }
+    // Capacity, concurrent physical completion and duplicate callbacks.
+    // The 65th live pin is rejected; its failure cannot charge another slot.
+    for (int round = 0; round < 16; ++round) {
+        SharedDomainArena bounded;
+        auto control = bounded.take_control();
+        auto member = bounded.grant(control, 8301, 1, true, false);
+        std::vector<SharedDomainArena::LifetimePin> tokens;
+        tokens.reserve(SharedDomainArena::MaxLifetimePins);
+        for (std::size_t i = 0; i < SharedDomainArena::MaxLifetimePins; ++i)
+            tokens.emplace_back(bounded.pin(8301, 1, member));
+        reject([&] { (void)bounded.pin(8301, 1, member); });
+        require(!bounded.try_revoke(control, member));
+        std::atomic<bool> ready{false};
+        std::array<std::thread, 8> finishers;
+        for (std::size_t carrier = 0; carrier < finishers.size(); ++carrier) {
+            finishers[carrier] = std::thread([&, carrier] {
+                while (!ready.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (std::size_t i = carrier; i < tokens.size(); i += finishers.size()) {
+                    tokens[i].release();
+                    tokens[i].release();
+                }
+            });
+        }
+        ready.store(true, std::memory_order_release);
+        for (auto& carrier : finishers) carrier.join();
+        for (const auto& token : tokens) require(!token.live());
+        require(bounded.try_revoke(control, member));
+        require(bounded.try_retire(control));
+        require(bounded.try_retire(control));
+    }
     std::cout << "shared domain arena tests passed\n";
 }
