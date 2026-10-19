@@ -2,14 +2,53 @@
 #include "oreslang/runtime/DopLayout.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <vector>
 
 namespace oreslang::runtime {
+
+/**
+ * Trusted host admission ledger, reused at the VM scope and at each actor
+ * scope. Reserving is atomic: concurrent shard creation cannot exceed either
+ * limit. This intentionally owns no actor pointers and grants no data access.
+ * Both ledgers must outlive every shard charged to them.
+ */
+class ActorShardBudget final {
+public:
+    explicit ActorShardBudget(std::uint64_t maximum_bytes)
+        : maximum_(maximum_bytes) {
+        if (maximum_bytes == 0) {
+            throw std::invalid_argument("empty shard budget");
+        }
+    }
+    bool try_reserve(std::uint64_t bytes) noexcept {
+        if (bytes == 0 || bytes > maximum_) return false;
+        std::uint64_t used = used_.load(std::memory_order_relaxed);
+        while (used <= maximum_ - bytes) {
+            if (used_.compare_exchange_weak(used, used + bytes,
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) return true;
+        }
+        return false;
+    }
+    void release(std::uint64_t bytes) noexcept {
+        const std::uint64_t prior = used_.fetch_sub(bytes, std::memory_order_acq_rel);
+        if (prior < bytes) std::abort(); // never silently hide an accounting bug
+    }
+    std::uint64_t used_bytes() const noexcept {
+        return used_.load(std::memory_order_acquire);
+    }
+    std::uint64_t maximum_bytes() const noexcept { return maximum_; }
+private:
+    std::uint64_t maximum_;
+    std::atomic<std::uint64_t> used_{0};
+};
 
 /**
  * Trusted native host actor-owned scalar ECS shard (no tracing GC).
@@ -25,16 +64,42 @@ public:
     using Layout = oreslang::dop::Layout;
 
     ActorShardColumns(OresNativeActorScheduler* scheduler, OresNativeActorRef owner,
+            ActorShardBudget& actor_budget, ActorShardBudget& vm_budget,
             Layout layout, std::size_t rows, std::uint32_t fields,
             std::uint32_t lanes = 1)
         : scheduler_(scheduler), owner_(owner),
+          actor_budget_(actor_budget), vm_budget_(vm_budget),
           plan_(layout, rows, fields, sizeof(double), alignof(double), lanes) {
         require_owner();
         if (rows == 0 || plan_.byte_length() > 16U * 1024U * 1024U
             || plan_.byte_length() > std::numeric_limits<std::size_t>::max()) {
             throw std::invalid_argument("invalid/oversized actor shard");
         }
-        data_.resize(static_cast<std::size_t>(plan_.byte_length()) / sizeof(double));
+        if (&actor_budget_ == &vm_budget_) {
+            throw std::invalid_argument("actor and VM shard budgets must be distinct");
+        }
+        reserved_bytes_ = plan_.byte_length();
+        if (!vm_budget_.try_reserve(reserved_bytes_)) {
+            throw std::length_error("VM shard memory budget exceeded");
+        }
+        if (!actor_budget_.try_reserve(reserved_bytes_)) {
+            vm_budget_.release(reserved_bytes_);
+            throw std::length_error("actor shard memory budget exceeded");
+        }
+        try {
+            data_.resize(static_cast<std::size_t>(reserved_bytes_) / sizeof(double));
+        } catch (...) {
+            actor_budget_.release(reserved_bytes_);
+            vm_budget_.release(reserved_bytes_);
+            throw;
+        }
+    }
+
+    ~ActorShardColumns() {
+        // Do not retain private shard values after actor termination.
+        std::fill(data_.begin(), data_.end(), 0.0);
+        actor_budget_.release(reserved_bytes_);
+        vm_budget_.release(reserved_bytes_);
     }
 
     ActorShardColumns(const ActorShardColumns&) = delete;
@@ -89,7 +154,10 @@ private:
 
     OresNativeActorScheduler* scheduler_; // host must drain scheduler before shard teardown
     OresNativeActorRef owner_;
+    ActorShardBudget& actor_budget_;
+    ActorShardBudget& vm_budget_;
     oreslang::dop::Plan plan_;
+    std::uint64_t reserved_bytes_ = 0;
     std::vector<double> data_;
 };
 
