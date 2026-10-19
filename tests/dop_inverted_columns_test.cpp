@@ -27,6 +27,13 @@ int main() {
     auto h2 = a.push(3.5f, 300, true);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
     a.reserve(16);
+    // Deterministic oversized reservation must fail without changing any
+    // live row/handle identity or the lengths of individual columns.
+    bool rejected_huge_reservation = false;
+    try { a.reserve(std::numeric_limits<std::size_t>::max()); }
+    catch (const std::length_error&) { rejected_huge_reservation = true; }
+    catch (const std::bad_alloc&) { rejected_huge_reservation = true; }
+    check(rejected_huge_reservation && a.size() == 3);
     check(a.get_row(h0) == std::make_tuple(1.5f, std::int64_t{100}, true));
     a.set_row(h0, 1.5f, 100, true);
     check(a.get_row(h0) == std::make_tuple(1.5f, std::int64_t{100}, true));
