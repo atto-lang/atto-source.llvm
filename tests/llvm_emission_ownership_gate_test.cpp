@@ -678,9 +678,15 @@ int main() {
     duplicate_class.name = "Pair";
     ClassField duplicate_x_first;
     duplicate_x_first.name = "x";
+    duplicate_x_first.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    duplicate_x_first.initial = 1;
     duplicate_class.fields.push_back(std::move(duplicate_x_first));
     ClassField duplicate_x_second;
     duplicate_x_second.name = "x";
+    duplicate_x_second.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 2);
+    duplicate_x_second.initial = 2;
     duplicate_class.fields.push_back(std::move(duplicate_x_second));
     duplicate_class_fields.classes.push_back(std::move(duplicate_class));
     Function class_main;
