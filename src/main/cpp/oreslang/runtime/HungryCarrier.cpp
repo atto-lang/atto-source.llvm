@@ -233,8 +233,18 @@ HungryCarrier::~HungryCarrier() noexcept {
 }
 
 void HungryCarrier::start() {
+    // A terminal join may happen before the first start, or race thread
+    // creation. Serialize the entire setup publication with join(): a
+    // retired actor generation must never spawn threads after a valid
+    // retirement proof has been minted.
+    std::unique_lock<std::mutex> lifecycle{lifecycle_mutex_};
     {
         std::lock_guard<std::mutex> lock{lane_registration_mutex_};
+        if (joined_.load(std::memory_order_acquire) ||
+                stop_.load(std::memory_order_acquire) ||
+                (producer_gate_->leases.load(std::memory_order_acquire) &
+                    ProducerGate::closing_bit))
+            throw std::logic_error("stopped or joined carrier cannot start");
         if (started_.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("carrier can only start once");
     }
@@ -243,15 +253,18 @@ void HungryCarrier::start() {
         actor_thread_ = std::thread([this] { actor_loop(); });
     } catch (...) {
         request_stop();
+        lifecycle.unlock(); // join() serializes on the same lifecycle mutex.
         join();
         throw;
     }
     // Startup is outside strict realtime hot path; verify CPU admission
-    // before allowing any external message.
+    // before allowing any external message. join() cannot certify physical
+    // quiescence before setup has completed and both threads are published.
     while (!setup_done_.load(std::memory_order_acquire))
         std::this_thread::yield();
     if (!setup_ok_.load(std::memory_order_acquire)) {
         request_stop();
+        lifecycle.unlock();
         join();
         throw std::runtime_error("actor CPU affinity admission failed");
     }
@@ -303,7 +316,9 @@ void HungryCarrier::request_stop() noexcept {
 
 void HungryCarrier::join() noexcept {
     // join() is an explicit terminal lifecycle operation, not an indefinite
-    // wait for a spontaneous stop. Only one thread may call join()/destroy.
+    // wait for a spontaneous stop. Concurrent start/join must not permit
+    // startup after a cohort's terminal acknowledgment.
+    std::lock_guard<std::mutex> lifecycle{lifecycle_mutex_};
     if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
         (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
         std::terminate();
