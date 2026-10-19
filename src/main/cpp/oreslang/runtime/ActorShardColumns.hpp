@@ -41,6 +41,12 @@ public:
     }
     ActorShardBudget(const ActorShardBudget&) = delete;
     ActorShardBudget& operator=(const ActorShardBudget&) = delete;
+    ~ActorShardBudget() {
+        // A host that destroys a quota ledger before its actor-owned shards
+        // would otherwise leave dangling quota references. Fail closed at
+        // lifetime teardown instead of silently dropping outstanding bytes.
+        if (used_bytes() != 0) std::abort();
+    }
 
     bool matches_owner(OresNativeActorScheduler* scheduler,
             OresNativeActorRef owner) const noexcept {
