@@ -1369,6 +1369,9 @@ private:
             expr = std::move(field);
             if (expr->kind == Expression::Kind::ArrayCall) break;
         }
+        if (token_.text == "[") {
+            fail("native computed property/index access unsupported: typed tuple slots, record/struct field unions, class visibility and indexed ownership lowering required");
+        }
         return expr;
     }
 
