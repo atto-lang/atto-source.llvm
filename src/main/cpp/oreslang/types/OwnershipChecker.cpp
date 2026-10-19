@@ -637,6 +637,11 @@ void preflight_native_ast_shape(const Program& program) {
             fail("caught throw is missing catch binding", fn.offset);
         if (!actor_handler && !fn.actor_field_writes.empty())
             fail("ordinary function contains actor field writes", fn.offset);
+        if (!fn.has_declared_effects && fn.declared_effects.bits != 0)
+            fail("function contains hidden effect bits", fn.offset);
+        if (fn.has_declared_effects &&
+                (fn.declared_effects.bits == 0 || !fn.declared_effects.valid()))
+            fail("function has invalid declared effect set", fn.offset);
 
         for (const auto& binding : fn.locals) local(binding);
         for (const auto& stmt : fn.statements) statement(stmt, 0);
@@ -970,7 +975,88 @@ void validate_i64_ownership(const Program& program) {
                 "ownership violation: conflicting generated actor symbol");
     }
 
+    const auto contains_callable_invocation = [&](const Expression* root) {
+        std::function<bool(const Expression*)> visit;
+        visit = [&](const Expression* expr) -> bool {
+            if (!expr) return false;
+            if (expr->kind == Expression::Kind::Call ||
+                    expr->kind == Expression::Kind::ArrayCall)
+                return true;
+            if (visit(expr->left.get()) || visit(expr->right.get()))
+                return true;
+            for (const auto& argument : expr->arguments)
+                if (visit(argument.get())) return true;
+            return false;
+        };
+        return visit(root);
+    };
+
     for (const auto& function : program.functions) {
+        if (function.has_declared_effects) {
+            if (!function.actor_spawns.empty() || !function.actor_sends.empty() ||
+                    !function.actor_stops.empty() ||
+                    !function.actor_field_writes.empty())
+                throw std::runtime_error(
+                    "ownership violation: using effects on actor actions requires trusted actor effect summaries");
+            if (function.caught_throw_value)
+                throw std::runtime_error(
+                    "ownership violation: using effects on caught throw requires trusted exceptional summaries");
+
+            for (const auto& binding : function.locals) {
+                const bool allocates_class_array =
+                    binding.new_class && class_arrays.count(binding.class_name) &&
+                    !class_arrays.at(binding.class_name).empty();
+                if ((binding.heap_owned || binding.int_array ||
+                        allocates_class_array) &&
+                        !function.declared_effects.has(FunctionEffect::Alloc))
+                    throw std::runtime_error(
+                        "ownership violation: owned allocation violates using signature without alloc");
+                if (contains_callable_invocation(binding.initializer.get()))
+                    throw std::runtime_error(
+                        "ownership violation: using effects require transitive call summaries");
+            }
+
+            std::function<void(const Statement&)> validate_statement_effects;
+            validate_statement_effects = [&](const Statement& stmt) {
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    if (!function.declared_effects.has(FunctionEffect::Alloc))
+                        throw std::runtime_error(
+                            "ownership violation: filled array commit violates using signature without alloc");
+                    if (contains_callable_invocation(stmt.array_commit_length.get()))
+                        throw std::runtime_error(
+                            "ownership violation: filled array commit requires pure scalar length");
+                    for (const auto& item : stmt.array_commit_values)
+                        if (contains_callable_invocation(item.get()))
+                            throw std::runtime_error(
+                                "ownership violation: filled array commit requires pure scalar fills");
+                }
+                if (contains_callable_invocation(stmt.expression.get()) ||
+                        (stmt.branch_local &&
+                         contains_callable_invocation(
+                             stmt.branch_local->initializer.get())) ||
+                        contains_callable_invocation(stmt.condition_lhs.get()) ||
+                        contains_callable_invocation(stmt.condition_rhs.get()))
+                    throw std::runtime_error(
+                        "ownership violation: using effects require transitive call summaries");
+                for (const auto& nested : stmt.then_statements)
+                    validate_statement_effects(nested);
+                for (const auto& nested : stmt.else_statements)
+                    validate_statement_effects(nested);
+            };
+            for (const auto& stmt : function.statements)
+                validate_statement_effects(stmt);
+
+            for (const auto& guard : function.early_returns)
+                if (contains_callable_invocation(guard.lhs.get()) ||
+                        contains_callable_invocation(guard.rhs.get()) ||
+                        contains_callable_invocation(guard.result.get()))
+                    throw std::runtime_error(
+                        "ownership violation: using effects require transitive call summaries");
+            if (contains_callable_invocation(function.result.get()))
+                throw std::runtime_error(
+                    "ownership violation: using effects require transitive call summaries");
+        }
+
         std::unordered_set<std::string> lexical_names;
         for (const auto& param : function.parameters)
             if (!lexical_names.insert(param.name).second)
