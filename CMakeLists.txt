@@ -1786,6 +1786,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-dynamic-ready-test)
     set_tests_properties(native_actor_dynamic_ready_large_actor_count
         PROPERTIES TIMEOUT 90)
+    # Sparse actor hotset across 65k logical lanes; root/leaf summaries,
+    # rotating fairness, actor-exclusive CONTROL and DATA, no per-turn GC.
+    add_executable(oreslang-native-ready-summary-test
+        tests/native_actor_ready_summary_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ready-summary-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ready-summary-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ready-summary-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ready_summary_sparse_65k
+        COMMAND oreslang-native-ready-summary-test)
+    set_tests_properties(native_actor_ready_summary_sparse_65k
+        PROPERTIES TIMEOUT 90)
     # Real native scheduler: stable pthread slot preference, bounded fallback,
     # zero allocation in dispatch and preserved per-actor exclusive ownership.
     add_executable(oreslang-native-carrier-locality-test
