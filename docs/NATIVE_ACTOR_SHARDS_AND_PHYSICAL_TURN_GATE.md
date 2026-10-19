@@ -19,6 +19,23 @@ issue #1531 is required before exposing it in source lowering.
 Pointers never leave this host API. An actor's logical heap/region
 identity is NOT tied to the pthread selected for its next mailbox turn.
 
+The new trusted host-only `snapshot_column_leased(field)` returns a
+noncopyable RAII `ActorColumnSnapshot`. Its allocation is atomically billed
+to both the exact actor-generation budget and VM budget before allocation.
+Only the creating shard can populate the snapshot, and live-owner turns may
+read it; `close()` is idempotent, scrubs/frees the vector, then refunds
+both reservations. The shard destructor has the same free-before-refund
+order. A standalone `native_actor_shard_snapshot_quota_and_generation`
+CTest exercises 1000 snapshots, generation fences, quota exhaustion and
+refunds.
+
+**Host lifetime requirement:** the actor and VM budget ledgers must outlive
+all snapshots; snapshots must be closed/destroyed before reclaiming the
+native scheduler, since native actor-stop registration/revocation is not
+wired to these host-only handles yet. Therefore this is NOT a complete
+guest-visible snapshot lifecycle; P0 #1531 stays open. The legacy
+`snapshot_column()` vector copy remains unaccounted and host-only.
+
 In addition to the fixed 16 MiB per-shard limit, constructors now require
 distinct trusted host `ActorShardBudget` ledgers for the actor and its VM.
 Both are atomically reserved *before* allocation, rolled back on failure,
