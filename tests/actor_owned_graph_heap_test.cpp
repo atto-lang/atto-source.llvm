@@ -314,6 +314,52 @@ struct DroppableActorObject final {
     }
 };
 
+// A three-carrier actor generation may reclaim a graph only after ALL
+// independent physical joins publish the cohort quorum. Concurrent acks
+// must be monotonic and the graph destructor must never double-drop storage.
+static void concurrent_three_lane_join_reclaims_once() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 3>;
+    for (std::uint64_t iteration = 1; iteration <= 24; ++iteration) {
+        const ActorHeapIdentity owner{291, 51, iteration};
+        auto cohort = oreslang::runtime::ActorHeapRetirementCohort::create(owner, 3);
+        Heap graph(cohort);
+        std::atomic<int> drops{0};
+        check(graph.emplace_owned<DroppableActorObject>(owner, &drops).has_value(),
+              "three-lane graph object allocation failed");
+        HungryCarrier a(nullptr, done_handler, nullptr, io_noop,
+                        bound_options(owner, cohort));
+        HungryCarrier b(nullptr, done_handler, nullptr, io_noop,
+                        bound_options(owner, cohort));
+        HungryCarrier c(nullptr, done_handler, nullptr, io_noop,
+                        bound_options(owner, cohort));
+        a.start(); b.start(); c.start();
+        check(!a.retirement_proof().has_value(),
+              "live three-lane cohort issued a pre-join retirement proof");
+        std::atomic<bool> go{false};
+        auto join_lane = [&](HungryCarrier& lane) {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            lane.join();
+        };
+        std::thread first(join_lane, std::ref(a));
+        std::thread second(join_lane, std::ref(b));
+        std::thread third(join_lane, std::ref(c));
+        go.store(true, std::memory_order_release);
+        first.join(); second.join(); third.join();
+        check(cohort->registered_lanes() == 3 && cohort->joined_lanes() == 3,
+              "concurrent three-lane join missed an expected physical lane");
+        check(cohort->ready_for_retirement(), "joined cohort did not become quiescent");
+        const auto proof = a.retirement_proof();
+        check(proof.has_value() && proof->cohort_id() == graph.retirement_cohort_id(),
+              "joined lanes minted an incorrect cohort retirement proof");
+        graph.retire(owner, *proof);
+        check(graph.retired() && drops.load(std::memory_order_relaxed) == 1,
+              "three-lane reclamation did not execute owned destructor exactly once");
+        must_reject([&] { graph.retire(owner, *proof); },
+                    "duplicate three-lane retirement reentered destructor glue");
+    }
+}
+
 static void test_destructors_are_exactly_once_on_cycles_and_retirement() {
     using Heap = ActorOwnedGraphHeap<4, 64, 3>;
     const ActorHeapIdentity owner{14, 21, 2};
@@ -642,6 +688,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 int main() {
     retirement_cohort_registry_does_not_grow_with_actor_churn();
     multi_lane_cohort_requires_every_carrier_to_join();
+    concurrent_three_lane_join_reclaims_once();
     heap_identity_never_wraps_and_remains_unique_under_races();
     heap_identity_unique_across_graph_specializations();
     concurrent_graph_read_write_links_are_exclusive();
