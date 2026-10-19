@@ -358,6 +358,14 @@ void HungryCarrier::join() noexcept {
     request_stop();
     if (actor_thread_.joinable()) actor_thread_.join();
     if (broker_thread_.joinable()) broker_thread_.join();
+    // Both workers are quiescent now. An outstanding PENDING terminal means
+    // STOP lost the registration race and no cancellation publication won.
+    // Quarantine retirement rather than certify a possibly unacknowledged
+    // broker operation or producer-owned resource.
+    if (terminal_.load(std::memory_order_acquire) == OperationTerminal::pending) {
+        retirement_cleanup_blocked_.store(true, std::memory_order_release);
+        failures_.fetch_add(1, std::memory_order_relaxed);
+    }
     // Once the admission word is closed, only previously leased producer
     // handles can still touch actor-owned queue and notification storage.
     while ((producer_gate_->leases.load(std::memory_order_acquire) &
