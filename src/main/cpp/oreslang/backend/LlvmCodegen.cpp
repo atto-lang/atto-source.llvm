@@ -274,6 +274,37 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // The older `suspend fnc` grammar is also a specialized pinned-frame
+    // emitter. A caller-built Program must obey the parser's exclusivity
+    // contract, not silently emit extra guest functions, owned classes or a
+    // second independent continuation without lifetime/drop admission.
+    // Check structural shape BEFORE walking any potentially untrusted AST.
+    if (!source.cooperative_loops.empty()) {
+        if (source.cooperative_loops.size() != 1 || !source.functions.empty() ||
+                !source.classes.empty() || !source.actors.empty() ||
+                !source.module.empty() || wasm32_target || cortex_m_target)
+            throw std::runtime_error(
+                "native cooperative frame requires one standalone suspend function");
+        const auto& loop = source.cooperative_loops.front();
+        const auto valid_name = [](const std::string& value) {
+            if (value.empty()) return false;
+            const auto start = [](char c) {
+                return (c >= 'a' && c <= 'z') ||
+                       (c >= 'A' && c <= 'Z') || c == '_';
+            };
+            if (!start(value[0])) return false;
+            for (std::size_t i = 1; i < value.size(); ++i) {
+                const char c = value[i];
+                if (!start(c) && !(c >= '0' && c <= '9'))
+                    return false;
+            }
+            return true;
+        };
+        if (!valid_name(loop.name) || !valid_name(loop.variable) ||
+                loop.initial < 0)
+            throw std::runtime_error(
+                "native cooperative frame AST has invalid source identifiers or initializer");
+    }
     // A Program may be constructed, cloned or transformed without going
     // through parse_program(). Never trust caller-controlled "verified" AST
     // state: perform semantic ownership validation before emitting any IR.
