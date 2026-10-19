@@ -83,6 +83,36 @@ This is **focused exact-blob evidence, not full repository tree evidence**.
 It does not yet prove source-tree-wide CTest, multiple kernel versions, maps,
 helpers, BTF/CO-RE, live attachment, or network namespace behavior.
 
+## Compiler-inferred, ungranted target closure
+
+The experimental BPF compiler also accepts `--emit-target-closure`, but
+**only** together with `--target=bpfel --bpf-program=xdp`. This emits a
+version-1 resolved closure *instead of* LLVM IR, after the same parser and
+BPF lowering/IR verifier have admitted the whole function:
+
+```sh
+./build/oreslang-llvmc --target=bpfel --bpf-program=xdp \
+  --emit-target-closure examples/xdp_packet_u8.ores > /tmp/ores-xdp-closure.json
+# Independently review and grant bpf.packet.read for this build before
+# running a pinned version of oreslang-target-profiles' check-closure.
+```
+
+Constant-return XDP emits `requires: []`; checked packet-byte guards emit
+`requires: ["bpf.packet.read"]`. In *both* cases the compiler emits
+`grants: []`, not self-authorized authority. For the packet case an
+independent build policy must explicitly grant that capability and have its
+resolved graph checked. An invalid program emits neither a closure nor IR.
+
+The manifest is **not** an attestation, signed permission, kernel-verifier
+approval, compatible program-type/attach-ABI proof, or a certification that
+the emitted BPF object belongs to the same source; it is only the compiler's
+inferred effect declaration for the present narrow XDP slice. Kernel
+verifier, ELF and attachment evidence remain independent mandatory gates.
+Do not extend this shortcut to socket/TC, maps, helpers, imported functions,
+or broader XDP syntax without typed effect inference and cross-repo
+conformance tests. The closure schema's generic `ebpf` target deliberately
+does not establish XDP attachment permission.
+
 ## Evidence boundary
 
 The focused CTests cover positive XDP actions, packet-bound admission,
