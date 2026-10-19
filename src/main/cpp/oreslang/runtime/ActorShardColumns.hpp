@@ -22,12 +22,35 @@ namespace oreslang::runtime {
  */
 class ActorShardBudget final {
 public:
+    /** An unbound budget is permitted only for VM-wide accounting. */
     explicit ActorShardBudget(std::uint64_t maximum_bytes)
         : maximum_(maximum_bytes) {
         if (maximum_bytes == 0) {
             throw std::invalid_argument("empty shard budget");
         }
     }
+    /** Bind per-actor budgets at spawn, before dispatch and shard creation. */
+    ActorShardBudget(std::uint64_t maximum_bytes,
+            OresNativeActorScheduler* scheduler, OresNativeActorRef owner)
+        : ActorShardBudget(maximum_bytes) {
+        if (!scheduler || !owner.scheduler_domain || !owner.generation) {
+            throw std::invalid_argument("actor shard budget requires live actor identity");
+        }
+        scheduler_ = scheduler;
+        owner_ = owner;
+    }
+    ActorShardBudget(const ActorShardBudget&) = delete;
+    ActorShardBudget& operator=(const ActorShardBudget&) = delete;
+
+    bool matches_owner(OresNativeActorScheduler* scheduler,
+            OresNativeActorRef owner) const noexcept {
+        return scheduler_ != nullptr && scheduler_ == scheduler
+            && owner_.scheduler_domain == owner.scheduler_domain
+            && owner_.actor_slot == owner.actor_slot
+            && owner_.generation == owner.generation;
+    }
+    bool vm_wide() const noexcept { return scheduler_ == nullptr; }
+
     bool try_reserve(std::uint64_t bytes) noexcept {
         if (bytes == 0 || bytes > maximum_) return false;
         std::uint64_t used = used_.load(std::memory_order_relaxed);
@@ -47,6 +70,8 @@ public:
     std::uint64_t maximum_bytes() const noexcept { return maximum_; }
 private:
     std::uint64_t maximum_;
+    OresNativeActorScheduler* scheduler_ = nullptr;
+    OresNativeActorRef owner_ = {};
     std::atomic<std::uint64_t> used_{0};
 };
 
@@ -75,8 +100,9 @@ public:
             || plan_.byte_length() > std::numeric_limits<std::size_t>::max()) {
             throw std::invalid_argument("invalid/oversized actor shard");
         }
-        if (&actor_budget_ == &vm_budget_) {
-            throw std::invalid_argument("actor and VM shard budgets must be distinct");
+        if (&actor_budget_ == &vm_budget_ || !actor_budget_.matches_owner(scheduler_, owner_)
+                || !vm_budget_.vm_wide()) {
+            throw std::invalid_argument("shard budget owner, generation or VM scope mismatch");
         }
         reserved_bytes_ = plan_.byte_length();
         if (!vm_budget_.try_reserve(reserved_bytes_)) {
