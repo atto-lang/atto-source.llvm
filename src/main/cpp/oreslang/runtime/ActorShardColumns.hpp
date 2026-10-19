@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -79,6 +81,90 @@ private:
     OresNativeActorScheduler* scheduler_ = nullptr;
     OresNativeActorRef owner_ = {};
     std::atomic<std::uint64_t> used_{0};
+};
+
+/**
+ * Detached but owner-fenced snapshot with explicit, accounted native storage.
+ * Reads/copy are allowed only in a live physical turn of the original actor,
+ * including if it later migrates pthread carriers. Destruction may happen
+ * outside an actor turn, but both budget ledgers must outlive this object.
+ */
+class ActorColumnSnapshot final {
+public:
+    ActorColumnSnapshot(OresNativeActorScheduler* scheduler, OresNativeActorRef owner,
+            ActorShardBudget& actor_budget, ActorShardBudget& vm_budget, std::size_t length)
+        : scheduler_(scheduler), owner_(owner),
+          actor_budget_(actor_budget), vm_budget_(vm_budget) {
+        if (!scheduler_ || length == 0
+                || length > (16U * 1024U * 1024U) / sizeof(double)
+                || !actor_budget_.matches_owner(scheduler_, owner_)
+                || !vm_budget_.vm_wide()) {
+            throw std::invalid_argument("invalid native snapshot owner, size or budget");
+        }
+        reserved_bytes_ = oreslang::dop::checked_mul(length, sizeof(double));
+        if (!vm_budget_.try_reserve(reserved_bytes_)) {
+            throw std::length_error("VM snapshot quota exhausted");
+        }
+        if (!actor_budget_.try_reserve(reserved_bytes_)) {
+            vm_budget_.release(reserved_bytes_);
+            throw std::length_error("actor snapshot quota exhausted");
+        }
+        try {
+            values_.resize(length);
+        } catch (...) {
+            actor_budget_.release(reserved_bytes_);
+            vm_budget_.release(reserved_bytes_);
+            throw;
+        }
+    }
+
+    ActorColumnSnapshot(const ActorColumnSnapshot&) = delete;
+    ActorColumnSnapshot& operator=(const ActorColumnSnapshot&) = delete;
+    ActorColumnSnapshot(ActorColumnSnapshot&&) = delete;
+    ActorColumnSnapshot& operator=(ActorColumnSnapshot&&) = delete;
+
+    ~ActorColumnSnapshot() { close(); }
+
+    void write_from_owner(std::size_t i, double value) {
+        require_owner();
+        std::lock_guard<std::mutex> hold(lock_);
+        require_open();
+        values_.at(i) = value;
+    }
+    double read(std::size_t i) const {
+        require_owner();
+        std::lock_guard<std::mutex> hold(lock_);
+        require_open();
+        return values_.at(i);
+    }
+    std::size_t length() const noexcept { return values_.size(); }
+    void close() noexcept {
+        std::lock_guard<std::mutex> hold(lock_);
+        if (revoked_) return;
+        revoked_ = true;
+        volatile double* raw = values_.data();
+        for (std::size_t i = 0; i < values_.size(); ++i) raw[i] = 0.0;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        actor_budget_.release(reserved_bytes_);
+        vm_budget_.release(reserved_bytes_);
+    }
+private:
+    void require_owner() const {
+        if (!scheduler_ || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
+            throw std::logic_error("native snapshot requires its owner actor turn");
+        }
+    }
+    void require_open() const {
+        if (revoked_) throw std::logic_error("native snapshot revoked");
+    }
+    OresNativeActorScheduler* scheduler_;
+    OresNativeActorRef owner_;
+    ActorShardBudget& actor_budget_;
+    ActorShardBudget& vm_budget_;
+    std::uint64_t reserved_bytes_ = 0;
+    std::vector<double> values_;
+    mutable std::mutex lock_;
+    bool revoked_ = false;
 };
 
 /**
@@ -179,6 +265,19 @@ public:
         for (std::size_t i = 0; i < rows(); ++i) {
             output[i] = data_[index(i, field)];
         }
+    }
+
+    /** Budget-reserved snapshot; caller owns and eventually destroys lease. */
+    std::unique_ptr<ActorColumnSnapshot> snapshot_column_leased(
+            std::uint32_t field) const {
+        require_owner();
+        if (field >= fields()) throw std::out_of_range("invalid shard field");
+        auto result = std::make_unique<ActorColumnSnapshot>(
+            scheduler_, owner_, actor_budget_, vm_budget_, rows());
+        for (std::size_t i = 0; i < rows(); ++i) {
+            result->write_from_owner(i, data_[index(i, field)]);
+        }
+        return result;
     }
 
     /** Detached result copy: this does not expose a mutable actor heap view. */
