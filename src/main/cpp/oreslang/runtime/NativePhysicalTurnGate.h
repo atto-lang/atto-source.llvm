@@ -6,13 +6,13 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
-typedef struct {
+struct OresNativePhysicalTurnGate {
     _Atomic size_t admitted;
     _Atomic size_t waiting;
     size_t maximum;
     void (*notify_free)(void*);
     void* context;
-} OresNativePhysicalTurnGate;
+};
 
 static inline int ores_native_turn_gate_try_acquire(
         OresNativePhysicalTurnGate* gate) {
