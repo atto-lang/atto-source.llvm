@@ -49,7 +49,8 @@ struct OresNativeActorScheduler {
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     uint64_t preferred_carrier_hits, carrier_migrations;
-    uint64_t ready_control_bits[16], ready_data_bits[16];
+    uint64_t *ready_control_bits, *ready_data_bits;
+    size_t ready_word_count;
     int retired;
     int cpu_affinity_opt_in;
     OresNativeActorTaskFn callback;
@@ -93,16 +94,17 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
-/* Actor count is presently admission-bounded to 1024. Allocate the
- * CONTROL and DATA bitmaps inline with the scheduler, not from actor heaps.
- * Both are derived indexes: admission, dispatch and physical completion
- * synchronize under the existing scheduler mutex. No separate authority. */
-enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_WORDS = 16 };
+/* Bounded, VM-owned ready bitmaps. No per-turn allocations or tracing GC.
+ * Limits are checked before allocating or initializing actor authorities.
+ * They are scheduling hints only; the actor-generation authority wins. */
+enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_ACTORS = 65536 };
+enum { ORES_LARGE_POOL_MAX_MAILBOX_CELLS = 1048576 };
 
 static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
     if (actor >= s->actor_count) abort();
     ActorLane* lane = &s->actors[actor];
     const size_t word = actor / ORES_READY_WORD_BITS;
+    if (word >= s->ready_word_count) abort();
     const uint64_t bit = UINT64_C(1) << (actor % ORES_READY_WORD_BITS);
     if (!lane->active && lane->has_control)
         s->ready_control_bits[word] |= bit;
@@ -119,7 +121,7 @@ static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
  * worker may skip eligible DATA lanes, but the global fallback may not.
  * Return SIZE_MAX when no matching entry is present. */
 static size_t select_ready_locked(OresNativeActorScheduler* s,
-                                  const uint64_t bits[ORES_READY_MAX_WORDS],
+                                  const uint64_t* bits,
                                   size_t start, size_t worker,
                                   int require_preferred) {
     for (int wrap = 0; wrap < 2; ++wrap) {
@@ -312,8 +314,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
     OresNativeActorPanicFn panic_callback, void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
-        || !workers || workers > 128 || actors > SIZE_MAX / capacity)
+    if (!callback || !actors || actors > ORES_READY_MAX_ACTORS
+        || !capacity || capacity > 65536 || !workers || workers > 128
+        || actors > SIZE_MAX / capacity
+        || (actors > 1024 && actors * capacity > ORES_LARGE_POOL_MAX_MAILBOX_CELLS))
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
     if (!s) return NULL;
@@ -321,7 +325,12 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
+    s->ready_word_count = (actors + ORES_READY_WORD_BITS - 1)
+        / ORES_READY_WORD_BITS;
+    s->ready_control_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    s->ready_data_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    if (!s->actors || !s->slots || !s->threads
+        || !s->ready_control_bits || !s->ready_data_bits) goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
@@ -353,6 +362,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->ready_data_bits);
+    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);
@@ -712,6 +723,8 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->ready_data_bits);
+    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);
