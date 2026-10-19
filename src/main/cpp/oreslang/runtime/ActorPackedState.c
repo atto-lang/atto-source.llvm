@@ -13,6 +13,7 @@ struct OresActorPackedState {
     uint64_t owner;
     uint64_t incarnation;
     uint64_t fields;
+    uint64_t mutation_revision;
     unsigned char* initialized;
     unsigned char* mutable_fields;
     int record_ready;
@@ -79,13 +80,14 @@ static void initialize(OresActorPackedState* state,
                        uint64_t domain, uint64_t epoch,
                        uint64_t index, int64_t initial, int is_mutable) {
     require_index(state, index);
-    if (state->initialized[index]) deny();
+    if (state->initialized[index] || state->mutation_revision == UINT64_MAX) deny();
     OresArenaTurn turn = {domain, epoch};
     ores_actor_arena_write(
         state->arena, turn, state->record,
         (size_t) index * sizeof(int64_t), &initial, sizeof(initial));
     state->initialized[index] = 1;
     state->mutable_fields[index] = is_mutable ? 1 : 0;
+    ++state->mutation_revision;
 }
 
 void ores_actor_packed_state_field_init(OresActorPackedState* state,
@@ -117,20 +119,33 @@ void ores_actor_packed_state_field_write(OresActorPackedState* state,
                                          uint64_t domain, uint64_t epoch,
                                          uint64_t index, int64_t value) {
     require_index(state, index);
-    if (!state->initialized[index] || !state->mutable_fields[index]) deny();
+    if (!state->initialized[index] || !state->mutable_fields[index]
+        || state->mutation_revision == UINT64_MAX) deny();
     OresArenaTurn turn = {domain, epoch};
     ores_actor_arena_write(
         state->arena, turn, state->record,
         (size_t) index * sizeof(int64_t), &value, sizeof(value));
+    ++state->mutation_revision;
+}
+
+uint64_t ores_actor_packed_state_mutation_revision(OresActorPackedState* state,
+    uint64_t domain, uint64_t epoch) {
+    if (!state || !state->arena || !state->record_ready) deny();
+    OresArenaTurn turn = {domain, epoch};
+    /* Zero-length read authenticates physical carrier, turn and retirement. */
+    ores_actor_arena_read(state->arena, turn, state->record, 0, NULL, 0);
+    return state->mutation_revision;
 }
 
 int ores_actor_packed_state_compare_publish(OresActorPackedState* state,
     uint64_t domain, uint64_t epoch,
     uint64_t version_index, int64_t expected_version,
+    uint64_t expected_revision,
     const OresActorScalarPatch* patches, uint64_t patch_count) {
     require_index(state, version_index);
     if (!patches || !patch_count || patch_count > state->fields
         || expected_version < 0 || expected_version == INT64_MAX
+        || state->mutation_revision == UINT64_MAX
         || !state->initialized[version_index]
         || !state->mutable_fields[version_index])
         deny();
@@ -141,7 +156,8 @@ int ores_actor_packed_state_compare_publish(OresActorPackedState* state,
     int64_t staging[ORES_PACKED_STATE_MAX_FIELDS];
     ores_actor_arena_read(state->arena, turn, state->record,
                           0, staging, record_bytes);
-    if (staging[version_index] != expected_version)
+    if (staging[version_index] != expected_version
+        || state->mutation_revision != expected_revision)
         return 0;  /* CAS miss is recoverable and has no side effects. */
 
     unsigned char seen[ORES_PACKED_STATE_MAX_FIELDS] = {0};
@@ -164,6 +180,7 @@ int ores_actor_packed_state_compare_publish(OresActorPackedState* state,
      * call; the final write has no intermediate guest-visible state. */
     ores_actor_arena_write(state->arena, turn, state->record,
                            0, staging, record_bytes);
+    ++state->mutation_revision;
     return 1;
 }
 
