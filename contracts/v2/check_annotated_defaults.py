@@ -143,7 +143,7 @@ def run():
 
     check(bind(sig, [Actual('3','int', 'a'),
                      Actual('true','bool','c')])[0] == ['3','None','true'])
-    check(bind(sig, [Actual('3','int'), Actual('','string', omit=True),
+    check(bind(sig, [Actual('3','int'), Actual(omit=True),
                      Actual('true','bool')])[2] == [0,2])
     check(bind(sig, [Actual('3','int'), Actual('None','Option<string>'),
                      Actual('true','bool')])[1][1] == 'supplied')
