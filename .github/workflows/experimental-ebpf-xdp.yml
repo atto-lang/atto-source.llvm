@@ -18,6 +18,10 @@ jobs:
         run: |
           set -euo pipefail
           clang -print-targets | grep -Eq "^ *bpf"
+      - name: Verify exact-header policy with two sanitizer compilers
+        run: |
+          bash scripts/verify-ebpf-admission.sh g++
+          bash scripts/verify-ebpf-admission.sh clang++
       - name: Configure and compile exact source tree
         run: |
           cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
