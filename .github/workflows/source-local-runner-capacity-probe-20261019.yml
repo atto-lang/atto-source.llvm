@@ -1,0 +1,52 @@
+name: Source-local runner capacity probe (zero checkout)
+on:
+  push:
+    branches:
+      - ci/source-local-no-checkout-capacity-probe-20261019
+  workflow_dispatch:
+permissions: {}
+jobs:
+  admission-probe:
+    name: source-local-no-checkout-${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - name: Confirm actual runner allocation without private checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SOURCE_LOCAL_NO_CHECKOUT=true"
+          echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
+          echo "RUNNER_NAME=$RUNNER_NAME"
+          test -n "$RUNNER_NAME"
+      - name: Compile independent synthetic C++ admission fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/fixture.cpp" <<'CPP'
+          #include <atomic>
+          #include <cassert>
+          #include <thread>
+          int main() {
+            std::atomic<int> x{0};
+            std::thread worker([&]{ x.fetch_add(1); });
+            worker.join();
+            assert(x.load() == 1);
+            return 0;
+          }
+          CPP
+          "${{ matrix.compiler }}" -std=c++17 -pthread -O1 -g -Wall -Wextra -Werror \
+            "$RUNNER_TEMP/fixture.cpp" -o "$RUNNER_TEMP/fixture"
+      - name: Actually execute source-free test step
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 15s "$RUNNER_TEMP/fixture"
+          echo "SOURCE_LOCAL_RUNNER_EXECUTED_TEST=true"
+          echo "THIS_IS_NOT_ORESLANG_NATIVE_COMPILER_EVIDENCE=true"
