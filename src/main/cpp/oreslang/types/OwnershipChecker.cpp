@@ -413,6 +413,10 @@ void preflight_native_ast_shape(const Program& program) {
         if (!expr) fail("missing expression", 0);
         if (depth >= 256) fail("expression nesting exceeds 256", expr->offset);
         using K = Expression::Kind;
+        const bool call = expr->kind == K::Call;
+        if (!call && (!expr->argument_names.empty() ||
+                !expr->type_arguments.empty() || expr->type_arguments_present))
+            fail("non-call expression contains unlowered call metadata", expr->offset);
         switch (expr->kind) {
             case K::Integer:
             case K::Variable:
@@ -427,16 +431,26 @@ void preflight_native_ast_shape(const Program& program) {
             case K::Borrow:
             case K::BorrowMut:
             case K::Field:
+                if (!expr->left) fail("missing unary or receiver operand", expr->offset);
+                if (expr->right || !expr->arguments.empty())
+                    fail("unary or field expression contains hidden operands", expr->offset);
+                break;
             case K::ArrayCall:
                 if (!expr->left) fail("missing unary or receiver operand", expr->offset);
+                if (expr->right)
+                    fail("array call contains hidden operand", expr->offset);
                 break;
             case K::Add:
             case K::Subtract:
             case K::Multiply:
                 if (!expr->left || !expr->right)
                     fail("missing binary operand", expr->offset);
+                if (!expr->arguments.empty())
+                    fail("binary expression contains hidden arguments", expr->offset);
                 break;
             case K::Call:
+                if (expr->left || expr->right)
+                    fail("direct call contains hidden receiver or operand", expr->offset);
                 break;
             default:
                 fail("unknown expression kind", expr->offset);
