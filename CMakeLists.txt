@@ -868,6 +868,14 @@ if(BUILD_TESTING)
         --diagnostic "native inline list requires typed aggregate storage and cleanup lowering")
     oreslang_contract_test(reject_guest_compound_field_update source-compound-field-unsupported.ores
         --diagnostic "native compound assignment requires single-evaluation write and borrow lowering")
+    oreslang_contract_test(reject_guest_compound_local_update source-compound-local-unsupported.ores
+        --diagnostic "native compound assignment requires single-evaluation write and borrow lowering")
+    oreslang_contract_test(reject_guest_symbol_missing_name source-symbol-missing-name-unsupported.ores
+        --diagnostic "expected Symbol name after '#'")
+    oreslang_contract_test(reject_guest_symbol_numeric_name source-symbol-numeric-name-unsupported.ores
+        --diagnostic "expected Symbol name after '#'")
+    oreslang_contract_test(reject_guest_symbol_oversize source-symbol-oversize-unsupported.ores
+        --diagnostic "unquoted Symbol literal exceeds 128 ASCII bytes")
     # Java/Graal now distinguishes structural records from concrete closed structs.
     # Until native product ownership/layout lowering carries that distinction,
     # reject all three product literal entry points before LLVM IR emission.
