@@ -48,6 +48,16 @@ git ls-tree -r HEAD -- \
 echo "Clang: $("$CXX_CLANG" --version | head -1)"
 echo "GCC: $("$CXX_GCC" --version | head -1)"
 
+# Parse the actual checked-in native smoke script before a costly build.
+# ast.parse checks syntax without importing it or writing pycache to the tree.
+"$PYTHON" - <<'PY'
+import ast
+from pathlib import Path
+path = Path("tests/native_enum_guest_aot.py")
+ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+print("PASS: exact-source Python native guest smoke parses")
+PY
+
 for compiler in "$CXX_CLANG" "$CXX_GCC"; do
     name="$("$compiler" --version | head -1 | cut -c 1-35 | tr ' /' '__')"
     "$compiler" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
@@ -82,6 +92,7 @@ ctest --test-dir "$build" --show-only=json-v1 > "$tmp/ctest-inventory.json"
 "$PYTHON" - "$tmp/ctest-inventory.json" <<'PY'
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 required = {
@@ -98,11 +109,24 @@ required = {
     "native_enum_source_aot_plan_integrity",
     "native_enum_guest_aot_executable",
 }
-registered = {item["name"] for item in json.loads(Path(sys.argv[1]).read_text())["tests"]}
-missing = sorted(required - registered)
-if missing:
-    sys.exit("ERROR: required exact-source enum AOT CTests absent: " + ", ".join(missing))
-print(f"PASS: all {len(required)} required enum AOT tests registered")
+items = json.loads(Path(sys.argv[1]).read_text())["tests"]
+counts = Counter(item["name"] for item in items)
+missing = sorted(required - counts.keys())
+duplicate = sorted(name for name in required if counts[name] > 1)
+unsafe = sorted(
+    item["name"] for item in items
+    if item["name"] in required and
+    (not item.get("command") or any(
+        entry.get("name") in ("DISABLED", "WILL_FAIL")
+        for entry in item.get("properties", [])
+    ))
+)
+if missing or duplicate or unsafe:
+    sys.exit(
+        "ERROR: incomplete/non-executable enum AOT CTest inventory: "
+        + json.dumps({"missing": missing, "duplicate": duplicate, "disabled_or_no_command": unsafe})
+    )
+print(f"PASS: exactly {len(required)} mandatory enum AOT tests are executable and enabled")
 PY
 
 ctest --test-dir "$build" \
