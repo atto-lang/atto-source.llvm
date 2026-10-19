@@ -14,6 +14,9 @@ static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
+static_assert(!std::is_aggregate_v<Store::Handle>);
+static_assert(!std::is_default_constructible_v<Store::Handle>);
+static_assert(!std::is_constructible_v<Store::Handle, std::uint64_t, std::size_t, std::uint64_t>);
 static void check(bool ok) { if (!ok) throw std::runtime_error("inverted columns assertion"); }
 template<class E, class F> static void expect(F f) {
     bool caught = false;
@@ -62,7 +65,7 @@ int main() {
     check(a.size() == 2 && a.get<0>(h2) == 3.5f && a.get<1>(h2) == 300);
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
     auto reused = a.push(4.5f, 400, false);
-    check(reused.slot == h1.slot && reused.generation != h1.generation);
+    check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
@@ -108,7 +111,7 @@ int main() {
     // Owner IDs are shared across distinct template instantiations.
     oreslang::dop::InvertedColumns<std::int64_t> different_fields;
     const auto foreign = different_fields.push(42);
-    check(foreign.owner != h0.owner);
+    check(foreign.owner() != h0.owner());
     // Saturating exhaustion never wraps the global owner namespace or
     // produces an owner ID already issued to another store.
     auto original_next = oreslang::dop::next_inverted_store_owner.load();
