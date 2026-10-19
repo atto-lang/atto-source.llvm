@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/EbpfXdpCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -67,6 +68,8 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    bool experimental_ebpf_xdp_ir = false;
+    std::string deployment_profile;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
@@ -85,15 +88,19 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--experimental-ebpf-xdp-ir") {
+            if (experimental_ebpf_xdp_ir) {
+                std::cerr << "duplicate experimental eBPF XDP IR option\n"; return 2;
+            }
+            experimental_ebpf_xdp_ir = true;
         } else if (arg.rfind("--deployment-profile=", 0) == 0) {
-            // Deployment profiles are stronger than architecture triples:
-            // generic host IR is never evidence of a qualified XDP, Linux
-            // carrier, FPGA or ASIC artifact. Until a certified emitter and
-            // its independent validators exist, refuse before source I/O.
+            if (!deployment_profile.empty()) {
+                std::cerr << "duplicate deployment profile option\n"; return 2;
+            }
             try {
                 const auto profile = oreslang::DeploymentProfile::parse(
                     arg.substr(std::string_view("--deployment-profile=").size()));
-                profile.require_certified_emitter();
+                deployment_profile = std::string(profile.name());
             } catch (const std::exception& error) {
                 std::cerr << error.what() << '\n';
                 return 2;
@@ -123,6 +130,23 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    // Explicit experimental XDP IR is a *development artifact* only; it
+    // does not certify verifier acceptance or authorize kernel attachment.
+    const bool ebpf_xdp_target = deployment_profile == "ebpf-xdp"
+        && experimental_ebpf_xdp_ir && !target_seen
+        && !experimental_owned_int && !experimental_rt_scalar_loop;
+    if (experimental_ebpf_xdp_ir && !ebpf_xdp_target) {
+        std::cerr << "experimental eBPF XDP IR requires only --deployment-profile=ebpf-xdp (no --target or runtime experiments)\n";
+        return 2;
+    }
+    if (!deployment_profile.empty() && !ebpf_xdp_target) {
+        try {
+            oreslang::DeploymentProfile::parse(deployment_profile).require_certified_emitter();
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            return 2;
+        }
+    }
     oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
     if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
@@ -134,16 +158,18 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--experimental-ebpf-xdp-ir] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
-        const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
-        const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
-            ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+        const std::size_t kMaxSourceBytes = ebpf_xdp_target ? 16u * 1024u :
+            (cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u);
+        const auto text = read_regular_source(path, kMaxSourceBytes,
+            ebpf_xdp_target ? "eBPF XDP source exceeds 16 KiB admission limit" :
+            (cortex_m_target ? "cortex-m source exceeds 128 KiB limit" :
+                               "native source exceeds 8 MiB admission limit"));
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -157,6 +183,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+        if (ebpf_xdp_target) {
+            std::cout << oreslang::emit_experimental_ebpf_xdp_ir(ast);
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
