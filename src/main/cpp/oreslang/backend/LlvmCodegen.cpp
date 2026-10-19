@@ -286,21 +286,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error(
                 "native cooperative frame requires one standalone suspend function");
         const auto& loop = source.cooperative_loops.front();
-        const auto valid_name = [](const std::string& value) {
-            if (value.empty()) return false;
-            const auto start = [](char c) {
-                return (c >= 'a' && c <= 'z') ||
-                       (c >= 'A' && c <= 'Z') || c == '_';
-            };
-            if (!start(value[0])) return false;
-            for (std::size_t i = 1; i < value.size(); ++i) {
-                const char c = value[i];
-                if (!start(c) && !(c >= '0' && c <= '9'))
-                    return false;
-            }
-            return true;
-        };
-        if (!valid_name(loop.name) || !valid_name(loop.variable) ||
+        if (!valid_native_source_identifier(loop.name) ||
+                !valid_native_source_identifier(loop.variable) ||
                 loop.initial < 0)
             throw std::runtime_error(
                 "native cooperative frame AST has invalid source identifiers or initializer");
