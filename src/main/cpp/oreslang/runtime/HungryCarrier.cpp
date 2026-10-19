@@ -324,6 +324,13 @@ void HungryCarrier::request_stop() noexcept {
 }
 
 void HungryCarrier::join() noexcept {
+    // A worker joining itself is fatal. This check MUST precede acquiring
+    // lifecycle_mutex_: an external join may already hold that mutex while
+    // waiting for the worker to exit, otherwise self-join deadlocks instead
+    // of terminating. The second check covers concurrent startup.
+    if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
+        (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
+        std::terminate();
     // join() is an explicit terminal lifecycle operation, not an indefinite
     // wait for a spontaneous stop. Concurrent start/join must not permit
     // startup after a cohort's terminal acknowledgment.
