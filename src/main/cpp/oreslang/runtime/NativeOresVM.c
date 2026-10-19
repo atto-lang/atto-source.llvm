@@ -127,6 +127,7 @@ OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
         }
     }
     return vm;
+}
 
 size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm) {
     return vm && vm->physical_gate.maximum
