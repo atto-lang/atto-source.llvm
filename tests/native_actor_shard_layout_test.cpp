@@ -1,0 +1,82 @@
+#include "oreslang/runtime/ActorShardColumns.hpp"
+#include "oreslang/runtime/NativeActorScheduler.h"
+
+#include <cassert>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <stdexcept>
+#include <vector>
+
+using oreslang::runtime::ActorShardColumns;
+using oreslang::dop::Layout;
+
+struct TestState {
+    OresNativeActorScheduler* scheduler = nullptr;
+    OresNativeActorRef owner = {};
+    Layout layout = Layout::SoA;
+    std::unique_ptr<ActorShardColumns> region;
+    std::vector<double> published;
+    bool failed = false;
+};
+
+static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
+    auto& state = *static_cast<TestState*>(ctx);
+    try {
+        assert(actor == 0);
+        if (step == 1) {
+            auto region = std::make_unique<ActorShardColumns>(
+                state.scheduler, state.owner, state.layout, 65, 3,
+                state.layout == Layout::AoSoA ? 8 : 1);
+            for (std::size_t i = 0; i < 65; ++i) {
+                region->write(i, 0, static_cast<double>(i));
+                region->write(i, 1, static_cast<double>(2 * i));
+                region->write(i, 2, -1);
+            }
+            region->integrate(0, 1, .5);
+            state.region = std::move(region);
+        } else if (step == 2) {
+            state.region->integrate(0, 1, 1);
+            state.published = state.region->snapshot_column(0);
+            auto copy = state.region->snapshot_column(1);
+            copy[0] = 123456;
+            assert(state.region->read(0, 1) == 0);
+        } else {
+            state.failed = true;
+        }
+    } catch (...) {
+        state.failed = true;
+    }
+}
+
+int main() {
+    for (auto layout : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        TestState state;
+        state.layout = layout;
+        state.scheduler = ores_native_actor_scheduler_open(1, 4, 2, on_message, &state);
+        assert(state.scheduler != nullptr);
+        state.owner = ores_native_actor_scheduler_spawn(state.scheduler, 0);
+        assert(state.owner.scheduler_domain != 0);
+        assert(ores_native_actor_scheduler_send(state.scheduler, state.owner, 1));
+        assert(ores_native_actor_scheduler_send(state.scheduler, state.owner, 2));
+        assert(ores_native_actor_scheduler_drain(state.scheduler));
+        assert(!state.failed);
+        assert(state.published.size() == 65);
+        for (std::size_t i = 0; i < 65; ++i) {
+            assert(state.published[i] == static_cast<double>(4 * i));
+        }
+        bool rejected = false;
+        try {
+            (void)state.region->read(0, 0);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        assert(rejected && "host must not read live actor-owned columns");
+        ores_native_actor_scheduler_retire(state.scheduler);
+        assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
+        state.region.reset();
+    }
+    puts("actor-owned AoS/SoA/AoSoA dense native kernel parity: OK");
+    return 0;
+}
