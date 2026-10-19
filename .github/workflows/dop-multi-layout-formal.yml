@@ -55,4 +55,4 @@ jobs:
         run: |
           set -euo pipefail
           /tmp/ores-dop-multi-layout-proof | grep -Fx \
-            'NATIVE_DOP_MULTI_LAYOUT_FORMAL_PASS trials=216 subsets=7 negative=stale-write'
+            'NATIVE_DOP_MULTI_LAYOUT_FORMAL_PASS trials=216 subsets=7 negative=stale-write,forged-epoch,partial-write,bad-tile,absent'
