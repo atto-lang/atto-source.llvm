@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeFdAuthorityBroker.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -37,7 +38,7 @@ int main() {
         check(!broker.confirm_reclaimed(*token, 31));
         check(broker.signal(*token, 31));
         auto done = wait_done(broker);
-        check(done.outcome == Outcome::ready);
+        check(done.owner == 31 && done.outcome == Outcome::ready);
         check(!broker.try_pop());
         check(broker.revoke(*token, 31));
         check(!broker.try_watch(*token, 31));
@@ -80,7 +81,7 @@ int main() {
         check(broker.revoke(*token, 51));
         check(!broker.confirm_reclaimed(*token, 51));
         auto done = wait_done(broker);
-        check(done.outcome == Outcome::stopped);
+        check(done.owner == 51 && done.outcome == Outcome::stopped);
         check(broker.confirm_reclaimed(*token, 51));
     }
     {
@@ -93,6 +94,66 @@ int main() {
         check(broker.revoke(*token, 61));
         (void)wait_done(broker);
         check(broker.confirm_reclaimed(*token, 61));
+    }
+
+    {
+        // A trusted dispatcher receives owner identity with the opaque
+        // completion; records must never be misrouted between principals.
+        NativeFdAuthorityBroker broker(1);
+        auto first = broker.mint_eventfd(81);
+        auto second = broker.mint_eventfd(82);
+        check(first.has_value() && second.has_value());
+        check(broker.try_watch(*first, 81));
+        check(broker.try_watch(*second, 82));
+        check(!broker.signal(*first, 82));
+        check(!broker.signal(*second, 81));
+        check(broker.signal(*first, 81));
+        check(broker.signal(*second, 82));
+        bool seen_first = false, seen_second = false;
+        for (unsigned i = 0; i < 2; ++i) {
+            auto completed = wait_done(broker);
+            check(completed.outcome == Outcome::ready);
+            if (completed.owner == 81) {
+                check(!seen_first);
+                seen_first = true;
+            } else {
+                check(completed.owner == 82 && !seen_second);
+                seen_second = true;
+            }
+        }
+        check(seen_first && seen_second);
+        check(!broker.try_pop());
+        check(broker.revoke(*first, 81));
+        check(broker.revoke(*second, 82));
+        check(broker.confirm_reclaimed(*first, 81));
+        check(broker.confirm_reclaimed(*second, 82));
+    }
+    {
+        // Saturation denies admission without stealing a live capability.
+        // Reclamation rotates the broker token so stale references are dead.
+        NativeFdAuthorityBroker broker(1);
+        std::array<NativeFdAuthorityBroker::Token,
+                   NativeFdAuthorityBroker::capacity> tokens{};
+        for (auto& token : tokens) {
+            auto value = broker.mint_eventfd(91);
+            check(value.has_value());
+            token = *value;
+        }
+        check(!broker.mint_eventfd(91));
+        check(broker.revoke(tokens[0], 91));
+        check(!broker.mint_eventfd(92));
+        check(broker.confirm_reclaimed(tokens[0], 91));
+        auto replacement = broker.mint_eventfd(92);
+        check(replacement.has_value());
+        check(!broker.signal(tokens[0], 91));
+        check(!broker.try_watch(tokens[0], 91));
+        check(!broker.revoke(tokens[0], 92));
+        check(broker.revoke(*replacement, 92));
+        check(broker.confirm_reclaimed(*replacement, 92));
+        for (std::size_t i = 1; i < tokens.size(); ++i) {
+            check(broker.revoke(tokens[i], 91));
+            check(broker.confirm_reclaimed(tokens[i], 91));
+        }
     }
     for (unsigned round = 0; round < 128; ++round) {
         NativeFdAuthorityBroker broker(1);

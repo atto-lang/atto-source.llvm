@@ -22,6 +22,7 @@ namespace oreslang::runtime {
 class NativeFdAuthorityBroker final {
 public:
     static constexpr std::size_t capacity = NativeFdAuthority::capacity;
+    static_assert(capacity <= UINT16_MAX, "broker slot must fit opaque token");
     class Token final {
         friend class NativeFdAuthorityBroker;
         std::uint64_t broker_ = 0, generation_ = 0;
@@ -33,6 +34,9 @@ public:
     };
     struct Completion {
         Token token;
+        // The trusted dispatcher must route this record to the recorded
+        // authenticated owner; a bearer token alone does not identify one.
+        std::uint64_t owner;
         NativeEpollReactor::Outcome outcome;
         std::uint32_t events;
     };
@@ -160,7 +164,8 @@ public:
         }
         if (!authority_.consume_terminal(e.capability, e.owner))
             return std::nullopt; // Retry without publishing twice.
-        const Completion verified{e.token, pending_->event.event.outcome,
+        const Completion verified{e.token, e.owner,
+                                  pending_->event.event.outcome,
                                   pending_->event.event.events};
         e.watch.reset();
         pending_.reset();

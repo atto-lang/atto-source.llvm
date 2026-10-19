@@ -134,3 +134,7 @@ C ABI and does not authenticate supervisor identity itself; callers must
 already be trusted host code. Existing raw socket/pipe watches remain
 legacy host-only operations, with their separate provenance restrictions.
 This must not be described as complete actor capability or Future/await parity.
+
+## Host completion owner routing and reclamation adversarial coverage
+
+The host-only `NativeFdAuthorityBroker::Completion` now carries the authenticated owner metadata from the sealed per-broker entry alongside the opaque token and terminal result. The **trusted supervisor dispatcher** must route by this owner, never by a caller-supplied owner or raw FD. This does not itself authenticate guest principals or expose an actor ABI. The source-local fixture additionally checks two concurrently watched owners, denial of cross-owner signalling, strict capacity exhaustion, logical-slot reclamation, and stale-token rejection after reissue. Execution of these tests remains unverified until a runner executes real build/test steps.
