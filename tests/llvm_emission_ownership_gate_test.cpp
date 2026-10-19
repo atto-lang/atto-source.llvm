@@ -156,6 +156,14 @@ int main() {
     malformed_cooperative_var.cooperative_loops.front().variable = "bad-name";
     expect_rejection([&] { (void)emit_verified_llvm_ir(malformed_cooperative_var); },
                      "invalid source identifiers or initializer");
+    auto reserved_cooperative = cooperative_source_frame();
+    reserved_cooperative.cooperative_loops.front().name = "await";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(reserved_cooperative); },
+                     "invalid source identifiers or initializer");
+    auto reserved_capability_name = cooperative_source_frame();
+    reserved_capability_name.cooperative_loops.front().variable = "ActorGroup";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(reserved_capability_name); },
+                     "invalid source identifiers or initializer");
     auto negative_cooperative = cooperative_source_frame();
     negative_cooperative.cooperative_loops.front().initial = -1;
     expect_rejection([&] { (void)emit_verified_llvm_ir(negative_cooperative); },
