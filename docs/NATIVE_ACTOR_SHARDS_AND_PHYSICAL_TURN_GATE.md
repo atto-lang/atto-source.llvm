@@ -11,6 +11,11 @@ One native actor owns a deterministic scalar allocation using the existing
 The host creates a shard only while that exact generation-checked actor
 callback is running. Every read/write/integration and copied column
 snapshot verifies `ores_native_actor_scheduler_is_current_actor`.
+`copy_column_into(field, output, capacity)` copies into existing trusted-host
+storage without allocating and rejects undersized buffers. The legacy
+`snapshot_column()` still creates an uncharged detached vector, so it is
+not a guest-safe allocation API: P0 snapshot ownership/accounting in Java
+issue #1531 is required before exposing it in source lowering.
 Pointers never leave this host API. An actor's logical heap/region
 identity is NOT tied to the pthread selected for its next mailbox turn.
 
