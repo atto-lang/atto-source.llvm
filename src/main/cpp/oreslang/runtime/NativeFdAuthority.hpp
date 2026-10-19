@@ -5,6 +5,9 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+#include <thread>
+#endif
 
 namespace oreslang::runtime {
 
@@ -51,6 +54,21 @@ public:
     NativeFdAuthority(const NativeFdAuthority&) = delete;
     NativeFdAuthority& operator=(const NativeFdAuthority&) = delete;
 
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+    // Test-only deterministic mutex contention. Never compiled into normal
+    // Oreslang targets and never invoked on a production actor/CONTROL lane.
+    void test_hold_gate_until(std::atomic<bool>& acquired,
+                              const std::atomic<bool>& release) {
+        std::unique_lock<std::mutex> hold(mu_);
+        acquired.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    }
+    void test_deny_next_consume(unsigned count = 1) noexcept {
+        test_consume_denials_.store(count, std::memory_order_release);
+    }
+#endif
+
     // A revoked logical slot remains unavailable until confirm_reclaimed().
     // The issuer/broker must have authenticated `owner` and the actual FD
     // identity before minting. A numeric FD supplied by guest code is never
@@ -93,6 +111,13 @@ public:
         return true;
     }
     bool consume_terminal(Capability cap, std::uint64_t caller) noexcept {
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+        auto remaining = test_consume_denials_.load(std::memory_order_relaxed);
+        while (remaining && !test_consume_denials_.compare_exchange_weak(
+                remaining, remaining - 1, std::memory_order_relaxed))
+            ;
+        if (remaining) return false; // reproducible transient failure
+#endif
         std::unique_lock<std::mutex> g(mu_, std::try_to_lock);
         if (!g.owns_lock()) return false;
         auto* e = lookup(cap);
@@ -224,5 +249,8 @@ private:
     std::array<Entry, capacity> slots_{};
     std::uint64_t next_generation_ = 1;
     std::uint64_t next_sequence_ = 1;
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+    std::atomic<unsigned> test_consume_denials_{0};
+#endif
 };
 } // namespace oreslang::runtime

@@ -54,7 +54,7 @@ public:
     // Ledger rollback is safe on failed open because no FD was ever bound.
     std::optional<Token> mint_eventfd(std::uint64_t trusted_owner) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock() || poisoned_ || !trusted_owner ||
+        if (!guard.owns_lock() || stopped_ || poisoned_ || !trusted_owner ||
                 next_generation_ == UINT64_MAX) return std::nullopt;
         std::size_t slot = capacity;
         for (std::size_t i = 0; i < capacity; ++i)
@@ -82,6 +82,7 @@ public:
                    std::uint32_t events = EPOLLIN) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || poisoned_) return false;
+        if (stopped_) return false; // no new I/O admission after shutdown
         auto* e = lookup(token, trusted_owner);
         if (!e || e->watch ||
                 authority_.phase(e->capability) != NativeFdAuthority::Phase::owned)
@@ -98,7 +99,7 @@ public:
 
     bool signal(Token token, std::uint64_t trusted_owner) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock() || poisoned_) return false;
+        if (!guard.owns_lock() || stopped_ || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
         return e && e->watch &&
                authority_.phase(e->capability) == NativeFdAuthority::Phase::watching &&
@@ -108,7 +109,7 @@ public:
     // Cancellation is not a terminal receipt: try_pop must drain the result.
     bool try_cancel(Token token, std::uint64_t trusted_owner) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock() || poisoned_) return false;
+        if (!guard.owns_lock() || stopped_ || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
         // A revoked owner cannot invoke the ordinary cancellation API:
         // only trusted broker teardown may cancel revoking watches.
@@ -198,11 +199,29 @@ public:
     // Blocking/joining teardown is trusted host-only, never an actor turn.
     void stop() noexcept {
         std::lock_guard<std::mutex> guard(mu_);
+        // Publish the broker admission fence before joining reactor threads.
+        // Revocation, terminal drainage, and host reclamation remain legal.
+        stopped_ = true;
         manager_.stop();
     }
     std::size_t started_threads() const noexcept {
         return manager_.started_threads();
     }
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+    // Isolated native fixture hooks; no guest or normal release ABI.
+    void test_hold_authority_gate_until(std::atomic<bool>& acquired,
+                                         const std::atomic<bool>& release) {
+        authority_.test_hold_gate_until(acquired, release);
+    }
+    void test_deny_next_terminal_consume(unsigned count = 1) noexcept {
+        authority_.test_deny_next_consume(count);
+    }
+    bool test_has_pending_terminal(bool require_published = false) noexcept {
+        std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
+        return guard.owns_lock() && pending_.has_value() &&
+               (!require_published || pending_->published);
+    }
+#endif
 
 private:
     struct Entry {
@@ -242,5 +261,6 @@ private:
     std::optional<Pending> pending_{};
     mutable std::mutex mu_{};
     bool poisoned_ = false;
+    bool stopped_ = false; // host admission fence, protected by mu_
 };
 } // namespace oreslang::runtime
