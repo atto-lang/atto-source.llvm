@@ -532,6 +532,11 @@ void preflight_native_ast_shape(const Program& program) {
             static_cast<unsigned>(binding.move_class);
         if (specialized > 1)
             fail("local selects multiple storage variants", binding.offset);
+        if (binding.heap_owned && specialized != 0)
+            fail("specialized local cannot also be heap-owned", binding.offset);
+        const bool class_storage = binding.new_class || binding.move_class;
+        if (class_storage != !binding.class_name.empty())
+            fail("local class metadata does not match storage variant", binding.offset);
         if (!binding.int_array && !binding.new_class &&
                 !binding.move_class && !binding.initializer)
             fail("local has no initializer", binding.offset);
