@@ -76,3 +76,36 @@ to XDP_ABORTED. XDP_TX and XDP_REDIRECT remain forbidden. A 30,000-case
 seeded differential oracle tests the AST proof. CI from the source private
 organization and two test organizations has not shown a successful runner;
 real BPF object and kernel verifier gates remain unverified.
+
+## Exact-tree CI mirror and evidence (P0/P1)
+
+Do not accept results from an alternate organization until the *complete* Git
+tree SHA (including all blobs, executable modes, symlink targets, and nested
+trees) matches a trusted read of this source branch from the GitHub connector.
+The source is private: do not attempt a cross-org private checkout with the
+runner's `GITHUB_TOKEN`, and never place source into public repositories.
+The connector must transfer Git object contents to an authorized **private**
+test repository and reconstruct the tree there. A source-only selection,
+partial Git tree or test-specific copy is NOT exact-tree CI.
+
+After checkout, before configuring/building:
+
+```sh
+bash scripts/verify-exact-source-tree.sh "$TRUSTED_SOURCE_TREE_SHA"
+bash scripts/verify-ebpf-admission.sh g++
+bash scripts/verify-ebpf-admission.sh clang++
+ctest --test-dir build -R '^(experimental_ebpf_(xdp_|elf_parser_)|deployment_profile_)' --output-on-failure
+```
+
+Use the `CHECKED_OUT_TREE_SHA` line from Actions and compare it independently
+to the trusted source tree. Keep PR draft until exact-tree CTest, real EM_BPF
+ELF, and kernel verifier gates are satisfied. Four alternative private runner
+probes (across multiple organizations) either failed before steps or did not
+demonstrate available runner capacity as of 2026-10-19; no funded runner was
+verified and no full-tree copy was authorized to run without one.
+
+The ELF integrity parser now checks ELF64/ET_REL/EM_BPF architecture and
+header versions, bounded executable XDP instructions, no BPF_CALL, no
+unexpected nonempty executable sections, and exact test-only license bytes.
+The standalone synthetic fixture tests 16 malformed/forged variants. This
+proves a parser safety check, not actual eBPF object emission.
