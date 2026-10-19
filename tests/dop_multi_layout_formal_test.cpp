@@ -158,6 +158,47 @@ void unsafe_mutation_oracle() {
     try { s.verify_current(); }
     catch (const std::runtime_error&) { caught = true; }
     check(caught, "UNSAFE stale two-layout writer went undetected");
+
+    Mirror false_epoch(7);
+    false_epoch.write(Layout::AoS, 0, 0, 700);
+    auto& unrefreshed = false_epoch.copies.at(
+            static_cast<std::size_t>(index(Layout::SoA)));
+    check(unrefreshed.epoch < false_epoch.epoch, "stale cache should exist");
+    unrefreshed.epoch = false_epoch.epoch; // Claim freshness without copying bytes.
+    caught = false;
+    try { false_epoch.verify_current(); }
+    catch (const std::runtime_error&) { caught = true; }
+    check(caught, "UNSAFE forged current epoch went undetected");
+
+    Mirror in_place(7);
+    in_place.raw_put(Layout::AoS, 2, 0, 999); // Physical mutation without commit.
+    caught = false;
+    try { in_place.verify_current(); }
+    catch (const std::runtime_error&) { caught = true; }
+    check(caught, "UNSAFE uncommitted physical write went undetected");
+
+    // Naive AoSoA arithmetic missing the FIELDS tile stride overlaps addresses
+    // at the second tile. This must not coincide with the real checked Plan.
+    std::vector<std::uint64_t> bad_offsets;
+    bool collision = false;
+    for (unsigned row = 0; row < kRows; ++row)
+        for (unsigned field = 0; field < kFields; ++field) {
+            const std::uint64_t bad = static_cast<std::uint64_t>(
+                    (row / kTile + field) * kTile + row % kTile) * 4;
+            if (std::find(bad_offsets.begin(), bad_offsets.end(), bad)
+                    != bad_offsets.end())
+                collision = true;
+            bad_offsets.push_back(bad);
+        }
+    check(collision, "UNSAFE AoSoA tile-stride mutation undetected");
+    check(plan(Layout::AoSoA).byte_offset(2, 0) != bad_offsets.at(4),
+          "native planner must not match mutated tile stride");
+
+    Mirror absent(1);
+    caught = false;
+    try { absent.hydrate(Layout::SoA); }
+    catch (const std::runtime_error&) { caught = true; }
+    check(caught, "absent layout hydration must fail closed");
 }
 }
 
@@ -165,5 +206,5 @@ int main() {
     checked_geometry();
     exhaustive_residency();
     unsafe_mutation_oracle();
-    std::cout << "NATIVE_DOP_MULTI_LAYOUT_FORMAL_PASS trials=216 subsets=7 negative=stale-write\n";
+    std::cout << "NATIVE_DOP_MULTI_LAYOUT_FORMAL_PASS trials=216 subsets=7 negative=stale-write,forged-epoch,partial-write,bad-tile,absent\n";
 }
