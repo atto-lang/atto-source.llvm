@@ -114,8 +114,9 @@ public:
 #if defined(ORESLANG_NIO_TEST_HOOKS)
         auto remaining = test_consume_denials_.load(std::memory_order_relaxed);
         while (remaining && !test_consume_denials_.compare_exchange_weak(
-                remaining, remaining - 1, std::memory_order_relaxed))
-            ;
+                remaining, remaining - 1, std::memory_order_relaxed)) {
+            // Retry only on a concurrent test-side counter update.
+        }
         if (remaining) return false; // reproducible transient failure
 #endif
         std::unique_lock<std::mutex> g(mu_, std::try_to_lock);
