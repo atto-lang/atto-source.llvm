@@ -552,7 +552,7 @@ void preflight_native_ast_shape(const Program& program) {
         for (const auto& nested : stmt.else_statements)
             statement(nested, depth + 1);
     };
-    const auto function = [&](const Function& fn) {
+    const auto function = [&](const Function& fn, bool actor_handler) {
         // Parser-produced functions always have a terminal value exactly when
         // their declared result is non-void. Direct AST callers must not let
         // LLVM receive a null return operand or smuggle an ignored value/effect
@@ -570,6 +570,8 @@ void preflight_native_ast_shape(const Program& program) {
             fail("catch metadata exists without caught throw", fn.offset);
         if (fn.caught_throw_value && fn.catch_binding.empty())
             fail("caught throw is missing catch binding", fn.offset);
+        if (!actor_handler && !fn.actor_field_writes.empty())
+            fail("ordinary function contains actor field writes", fn.offset);
 
         for (const auto& binding : fn.locals) local(binding);
         for (const auto& stmt : fn.statements) statement(stmt, 0);
@@ -645,10 +647,12 @@ void preflight_native_ast_shape(const Program& program) {
             fail("explicit scalar constructor contains owned Array<int> field", 0);
     }
     for (const auto& actor : program.actors) {
+        if (actor.fields.empty() || actor.fields.size() > 16)
+            fail("actor field count is outside parser bounds", actor.offset);
         for (const auto& field : actor.fields) local(field);
-        function(actor.on_message);
+        function(actor.on_message, true);
     }
-    for (const auto& fn : program.functions) function(fn);
+    for (const auto& fn : program.functions) function(fn, false);
 }
 
 } // namespace
@@ -677,9 +681,52 @@ void validate_i64_ownership(const Program& program) {
         if (function.scalar_while)
             verify_scalar_suspension(function.scalar_while->counter);
 
+    const auto require_identifier = [](std::string_view value, const char* role) {
+        if (!valid_native_source_identifier(value))
+            throw std::runtime_error(std::string("ownership violation: invalid native ") +
+                                     role + " identifier '" + std::string(value) + "'");
+    };
+    const auto reserved_runtime_symbol = [&](const std::string& name) {
+        if (name.rfind("oreslang_int_array_", 0) == 0) return true;
+        if (!program.module.empty()) return false;
+        return name == "abort" || name == "__oreslang_guest_main" ||
+            name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+            name.rfind("ores_actor_i64_heap_", 0) == 0 ||
+            name.rfind("oreslang_source_actor_", 0) == 0 ||
+            name.rfind("oreslang_actor_", 0) == 0 ||
+            name.rfind("oreslang_wasm_actor_", 0) == 0;
+    };
+
     Functions functions;
     std::unordered_set<std::string> function_names;
     for (const auto& function : program.functions) {
+        require_identifier(function.name, "function");
+        if (reserved_runtime_symbol(function.name))
+            throw std::runtime_error(
+                "ownership violation: reserved native runtime ABI symbol '" +
+                function.name + "'");
+        if (function.name == "main" && function_names.count("main"))
+            throw std::runtime_error(
+                "ownership violation: native main cannot be overloaded");
+        for (const auto& parameter : function.parameters) {
+            require_identifier(parameter.name, "parameter");
+            switch (parameter.mode) {
+                case Mode::Value:
+                case Mode::Borrow:
+                case Mode::BorrowMut:
+                    break;
+                default:
+                    throw std::runtime_error(
+                        "ownership violation: unknown parameter ownership mode");
+            }
+            if (!parameter.class_name.empty() && !parameter.generic_type.empty())
+                throw std::runtime_error(
+                    "ownership violation: parameter has both class and generic type");
+            if (!parameter.class_name.empty())
+                require_identifier(parameter.class_name, "parameter class");
+            if (!parameter.generic_type.empty())
+                require_identifier(parameter.generic_type, "parameter generic");
+        }
         // Overload identity is caller-visible value arity, not parameter
         // types, return types, generic arity, or an internal receiver. Direct
         // Program constructors bypass the parser's declaration-table gate:
@@ -697,6 +744,11 @@ void validate_i64_ownership(const Program& program) {
     std::unordered_map<std::string, std::unordered_set<std::string>> class_public;
     std::unordered_set<std::string> class_names;
     for (const auto& cls : program.classes) {
+        require_identifier(cls.name, "class");
+        for (const auto& parameter : cls.constructor_parameters)
+            require_identifier(parameter, "constructor parameter");
+        for (const auto& field : cls.fields)
+            require_identifier(field.name, "class field");
         if (!class_names.insert(cls.name).second || function_names.count(cls.name))
             throw std::runtime_error(
                 "ownership violation: duplicate class/function symbol '" + cls.name + "'");
@@ -727,6 +779,12 @@ void validate_i64_ownership(const Program& program) {
     // actorInits.at(), and a failed actor find_if is dereferenced by codegen.
     std::unordered_map<std::string, const ActorDecl*> actor_types;
     for (const auto& actor : program.actors) {
+        require_identifier(actor.name, "actor");
+        if (!actor.on_message.exported)
+            throw std::runtime_error(
+                "ownership violation: native actor handler must be exported");
+        for (const auto& field : actor.fields)
+            require_identifier(field.name, "actor field");
         if (!actor_types.emplace(actor.name, &actor).second ||
                 class_names.count(actor.name) || function_names.count(actor.name))
             throw std::runtime_error(
@@ -811,6 +869,8 @@ void validate_i64_ownership(const Program& program) {
                 "ownership violation: source actor bootstrap requires zero-argument int main without early returns");
 
         for (const auto& spawn : function.actor_spawns) {
+            require_identifier(spawn.name, "actor reference");
+            require_identifier(spawn.actor_type, "actor type");
             if (spawn.declared_type.kind != SourceType::Kind::ActorRef ||
                     spawn.declared_type.argument != spawn.actor_type)
                 throw std::runtime_error(
@@ -825,6 +885,7 @@ void validate_i64_ownership(const Program& program) {
             live_actors.insert(spawn.name);
         }
         for (const auto& binding : function.locals) {
+            require_identifier(binding.name, "local");
             if ((binding.new_class || binding.move_class) &&
                     !class_names.count(binding.class_name))
                 throw std::runtime_error(
