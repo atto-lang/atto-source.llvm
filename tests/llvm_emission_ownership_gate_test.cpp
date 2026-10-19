@@ -823,6 +823,83 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_action_kind); },
                      "unknown actor action kind");
 
+    Program hidden_effect_bits;
+    Function hidden_effect_fn;
+    hidden_effect_fn.name = "main";
+    hidden_effect_fn.declared_effects.bits =
+        static_cast<std::uint32_t>(FunctionEffect::Alloc);
+    hidden_effect_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_effect_bits.functions.push_back(std::move(hidden_effect_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_effect_bits); },
+                     "malformed native ownership AST: function contains hidden effect bits");
+
+    Program invalid_effect_bits;
+    Function invalid_effect_fn;
+    invalid_effect_fn.name = "main";
+    invalid_effect_fn.has_declared_effects = true;
+    invalid_effect_fn.declared_effects.bits = (1u << 31);
+    invalid_effect_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    invalid_effect_bits.functions.push_back(std::move(invalid_effect_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_effect_bits); },
+                     "malformed native ownership AST: function has invalid declared effect set");
+
+    Program allocation_without_effect;
+    Function allocation_effect_fn;
+    allocation_effect_fn.name = "main";
+    allocation_effect_fn.has_declared_effects = true;
+    allocation_effect_fn.declared_effects.bits =
+        static_cast<std::uint32_t>(FunctionEffect::StateRead);
+    auto effect_owned = scalar_local("owned", 1);
+    effect_owned.heap_owned = true;
+    allocation_effect_fn.locals.push_back(std::move(effect_owned));
+    allocation_effect_fn.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    allocation_without_effect.functions.push_back(std::move(allocation_effect_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(allocation_without_effect); },
+                     "owned allocation violates using signature without alloc");
+
+    Program direct_effect_guard_call;
+    Function effect_helper;
+    effect_helper.name = "helper";
+    effect_helper.result =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    direct_effect_guard_call.functions.push_back(std::move(effect_helper));
+    Function effect_main;
+    effect_main.name = "main";
+    effect_main.has_declared_effects = true;
+    effect_main.declared_effects.bits =
+        static_cast<std::uint32_t>(FunctionEffect::Alloc);
+    Statement effect_conditional;
+    effect_conditional.kind = Statement::Kind::Conditional;
+    effect_conditional.condition_lhs =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    effect_conditional.condition_rhs =
+        make_expression(Expression::Kind::Call, "helper");
+    effect_main.statements.push_back(std::move(effect_conditional));
+    effect_main.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    direct_effect_guard_call.functions.push_back(std::move(effect_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(direct_effect_guard_call); },
+                     "using effects require transitive call summaries");
+
+    expect_rejection([&] {
+        (void)parse_program(
+            "pub fnc helper(): int { return 1; } "
+            "pub fnc main(): int using alloc { "
+            "if (1 == helper()) { } else { } fi "
+            "return 0; }");
+    }, "using effects require transitive call summaries");
+
+    expect_rejection([&] {
+        (void)parse_program(
+            "pub fnc helper(): int { return 1; } "
+            "pub fnc main(): int using alloc { "
+            "if (1 == 1) { helper(); } else { } fi "
+            "return 0; }");
+    }, "using effects require transitive call summaries");
+
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
         "pub fnc main(): int { val x: int = 42; return x; }");
