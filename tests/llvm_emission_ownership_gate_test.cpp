@@ -293,6 +293,58 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(unexported_actor); },
                      "ownership violation: native actor handler must be exported");
 
+    Program unresolved_direct_call;
+    Function unresolved_call_main;
+    unresolved_call_main.name = "main";
+    unresolved_call_main.result =
+        make_expression(Expression::Kind::Call, "missing");
+    unresolved_direct_call.functions.push_back(std::move(unresolved_call_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unresolved_direct_call); },
+                     "internal ownership error: unresolved function");
+
+    Program unknown_constructor_reference;
+    ClassDecl ctor_class;
+    ctor_class.name = "Box";
+    ctor_class.explicit_constructor = true;
+    ctor_class.constructor_parameters.push_back("seed");
+    ClassField ctor_field;
+    ctor_field.name = "value";
+    ctor_field.initializer_expression =
+        make_expression(Expression::Kind::Variable, "ghost");
+    ctor_class.fields.push_back(std::move(ctor_field));
+    unknown_constructor_reference.classes.push_back(std::move(ctor_class));
+    Function ctor_main;
+    ctor_main.name = "main";
+    ctor_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    unknown_constructor_reference.functions.push_back(std::move(ctor_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_constructor_reference); },
+                     "ownership violation: unknown class constructor parameter 'ghost'");
+
+    Program impure_constructor_initializer;
+    ClassDecl impure_class;
+    impure_class.name = "Impure";
+    ClassField impure_field;
+    impure_field.name = "value";
+    impure_field.initializer_expression =
+        make_expression(Expression::Kind::Call, "callee");
+    impure_class.fields.push_back(std::move(impure_field));
+    impure_constructor_initializer.classes.push_back(std::move(impure_class));
+    Function impure_main;
+    impure_main.name = "main";
+    impure_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    impure_constructor_initializer.functions.push_back(std::move(impure_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(impure_constructor_initializer); },
+                     "ownership violation: class field initializer requires pure scalar constructor expression");
+
+    Program invalid_module_name;
+    invalid_module_name.module = "bad-module";
+    Function module_main;
+    module_main.name = "main";
+    module_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    invalid_module_name.functions.push_back(std::move(module_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_module_name); },
+                     "ownership violation: invalid native module identifier");
+
     // Source-impossible statement payloads must not be merely traversed:
     // later ownership/codegen switches consume only fields for the active kind.
     Program hidden_statement_field;
