@@ -868,6 +868,15 @@ if(BUILD_TESTING)
         --diagnostic "native inline list requires typed aggregate storage and cleanup lowering")
     oreslang_contract_test(reject_guest_compound_field_update source-compound-field-unsupported.ores
         --diagnostic "native compound assignment requires single-evaluation write and borrow lowering")
+    # Java/Graal now distinguishes structural records from concrete closed structs.
+    # Until native product ownership/layout lowering carries that distinction,
+    # reject all three product literal entry points before LLVM IR emission.
+    oreslang_contract_test(reject_guest_record_literal source-record-literal-unsupported.ores
+        --diagnostic "native record/struct literal lowering unsupported")
+    oreslang_contract_test(reject_guest_infer_struct_literal source-infer-struct-literal-unsupported.ores
+        --diagnostic "native record/struct literal lowering unsupported")
+    oreslang_contract_test(reject_guest_explicit_struct_literal source-explicit-struct-literal-unsupported.ores
+        --diagnostic "native record/struct literal lowering unsupported")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
