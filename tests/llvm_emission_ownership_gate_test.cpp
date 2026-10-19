@@ -191,6 +191,56 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(void_hidden_result); },
                      "malformed native ownership AST: void function contains return value");
 
+    Program void_caught_throw;
+    Function void_throw;
+    void_throw.name = "main";
+    void_throw.returns_void = true;
+    void_throw.caught_throw_value =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    void_throw.catch_binding = "error";
+    void_caught_throw.functions.push_back(std::move(void_throw));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(void_caught_throw); },
+                     "malformed native ownership AST: caught throw requires non-void function");
+
+    Program caught_throw_with_call_statement;
+    Function bad_throw_shape;
+    bad_throw_shape.name = "main";
+    bad_throw_shape.caught_throw_value =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    bad_throw_shape.catch_binding = "error";
+    Statement hidden_call;
+    hidden_call.kind = Statement::Kind::Call;
+    hidden_call.expression =
+        make_expression(Expression::Kind::Call, "helper");
+    bad_throw_shape.statements.push_back(std::move(hidden_call));
+    bad_throw_shape.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    caught_throw_with_call_statement.functions.push_back(
+        std::move(bad_throw_shape));
+    expect_rejection([&] {
+        (void)emit_verified_llvm_ir(caught_throw_with_call_statement);
+    }, "malformed native ownership AST: caught throw finally contains non-field cleanup");
+
+    Program oversized_constructor_signature;
+    ClassDecl wide_ctor;
+    wide_ctor.name = "Wide";
+    wide_ctor.explicit_constructor = true;
+    for (int i = 0; i < 17; ++i)
+        wide_ctor.constructor_parameters.push_back("p" + std::to_string(i));
+    ClassField wide_field;
+    wide_field.name = "value";
+    wide_field.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    wide_ctor.fields.push_back(std::move(wide_field));
+    oversized_constructor_signature.classes.push_back(std::move(wide_ctor));
+    Function wide_main;
+    wide_main.name = "main";
+    wide_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    oversized_constructor_signature.functions.push_back(std::move(wide_main));
+    expect_rejection([&] {
+        (void)emit_verified_llvm_ir(oversized_constructor_signature);
+    }, "malformed native ownership AST: class constructor parameter count exceeds parser bound");
+
     Program orphan_catch_metadata;
     Function orphan_catch;
     orphan_catch.name = "main";
