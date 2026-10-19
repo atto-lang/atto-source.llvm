@@ -298,10 +298,46 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     for (const auto& fn : source.functions)
         if (fn.scalar_while)
             verify_frame_suspension(fn.scalar_while->counter);
-    if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
-            throw std::runtime_error("experimental scalar loop unsupported target/owners");
-        return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
+    // A directly built Program can violate the parser's intentionally
+    // narrow scalar-frame grammar. In particular, lowering one function while
+    // silently ignoring another, or ignoring an owned local, would skip its
+    // drops and break the proof that the 24-byte frame owns only one scalar.
+    const bool has_scalar_frame = std::any_of(source.functions.begin(),
+        source.functions.end(), [](const Function& fn) {
+            return static_cast<bool>(fn.scalar_while);
+        });
+    if (has_scalar_frame) {
+        if (source.functions.size() != 1 || !source.cooperative_loops.empty() ||
+                !source.classes.empty() || !source.actors.empty() ||
+                !source.module.empty() || wasm32_target || cortex_m_target)
+            throw std::runtime_error(
+                "experimental scalar frame requires one standalone native function");
+        const auto& fn = source.functions.front();
+        const auto& loop = *fn.scalar_while;
+        const bool scalar_local = fn.locals.size() == 1 &&
+            fn.locals.front().name == loop.counter &&
+            fn.locals.front().owner_mutable &&
+            !fn.locals.front().heap_owned &&
+            !fn.locals.front().int_array &&
+            fn.locals.front().class_name.empty() &&
+            !fn.locals.front().new_class &&
+            !fn.locals.front().move_class &&
+            fn.locals.front().initializer &&
+            fn.locals.front().initializer->kind == Expression::Kind::Integer &&
+            fn.locals.front().initializer->integer == loop.initial;
+        const bool scalar_return = fn.result &&
+            fn.result->kind == Expression::Kind::Variable &&
+            fn.result->name == loop.counter;
+        if (!scalar_local || !scalar_return || fn.returns_void ||
+                !fn.parameters.empty() || !fn.generic_parameters.empty() ||
+                !fn.statements.empty() || !fn.early_returns.empty() ||
+                !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+                !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
+                !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                !fn.caught_throw_defers.empty() || fn.has_declared_effects)
+            throw std::runtime_error(
+                "experimental scalar frame AST contains unlowered owners or effects");
+        return emit_scalar_while_frame_llvm_ir(loop);
     }
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
