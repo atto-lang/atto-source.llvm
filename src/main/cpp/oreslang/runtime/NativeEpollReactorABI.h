@@ -45,6 +45,8 @@ size_t ores_native_nio_started_reactors(const OresNativeNio* manager);
  * until its terminal completion is consumed; readiness does not itself
  * guarantee subsequent read/write syscalls are nonblocking.
  * Admission is nonparking and bounded by 64 outstanding tickets/reactor.
+ * On failed try_watch with non-null output, both ticket and reactor are reset
+ * to zero: stale caller storage must never masquerade as a new admission.
  */
 int ores_native_nio_try_watch(
     OresNativeNio* manager, int fd, uint32_t events, OresNativeNioWatch* output);

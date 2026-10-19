@@ -26,9 +26,12 @@ int main(void) {
     // epoll readiness cannot make a blocking descriptor safe for guest I/O.
     int blocking[2] = {-1, -1};
     require(pipe(blocking) == 0);
-    OresNativeNioWatch forbidden = {0};
+    OresNativeNioWatch forbidden = {UINT64_MAX, UINT8_MAX};
     require(!ores_native_nio_try_watch(runtime, blocking[0], EPOLLIN, &forbidden));
-    require(forbidden.ticket == 0);
+    require(forbidden.ticket == 0 && forbidden.reactor == 0);
+    forbidden = (OresNativeNioWatch){UINT64_MAX, UINT8_MAX};
+    require(!ores_native_nio_try_watch(NULL, blocking[0], EPOLLIN, &forbidden));
+    require(forbidden.ticket == 0 && forbidden.reactor == 0);
     require(ores_native_nio_started_reactors(runtime) == 0);
     require(ores_native_nio_completion_fd(runtime, 0) == -1);
     close(blocking[0]); close(blocking[1]);
@@ -46,6 +49,11 @@ int main(void) {
     OresNativeNioWatch first = {0};
     require(ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &first));
     require(first.ticket != 0 && first.reactor == 0);
+    /* Reuse of a previously successful output slot must not retain a valid
+     * ticket when a second registration of the same live FD is rejected. */
+    OresNativeNioWatch stale_output = first;
+    require(!ores_native_nio_try_watch(runtime, pipefd[0], EPOLLIN, &stale_output));
+    require(stale_output.ticket == 0 && stale_output.reactor == 0);
     require(ores_native_nio_started_reactors(runtime) == 1);
     require(ores_native_nio_completion_fd(runtime, 0) >= 0);
     /* Foreign runtime handles must not collide, even when both reactors
@@ -55,10 +63,10 @@ int main(void) {
     /* Same pipe open-file-description, separate C ABI runtime: deny alias. */
     int copied_pipe_read = dup(pipefd[0]);
     require(copied_pipe_read >= 0);
-    OresNativeNioWatch alias_forbidden = {0};
+    OresNativeNioWatch alias_forbidden = first;
     require(!ores_native_nio_try_watch(
         foreign_runtime, copied_pipe_read, EPOLLIN, &alias_forbidden));
-    require(alias_forbidden.ticket == 0);
+    require(alias_forbidden.ticket == 0 && alias_forbidden.reactor == 0);
     close(copied_pipe_read);
     int foreign_pipe[2] = {-1, -1};
     require(pipe2(foreign_pipe, O_NONBLOCK | O_CLOEXEC) == 0);

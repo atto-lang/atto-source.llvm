@@ -55,6 +55,9 @@ extern "C" size_t ores_native_vm_nio_started(OresNativeVM* vm) {
 }
 extern "C" int ores_native_vm_nio_try_watch(
     OresNativeVM* vm, int fd, uint32_t events, OresNativeNioWatch* output) {
+    // A retired VM or temporarily contended lease must fail closed without
+    // leaving a previously valid ticket in the caller's output parameter.
+    if (output) *output = OresNativeNioWatch{};
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     return backend ? ores_native_nio_try_watch(backend, fd, events, output) : 0;

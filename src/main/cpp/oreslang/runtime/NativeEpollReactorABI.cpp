@@ -23,6 +23,9 @@ extern "C" size_t ores_native_nio_started_reactors(const OresNativeNio* runtime)
 }
 extern "C" int ores_native_nio_try_watch(
     OresNativeNio* runtime, int fd, uint32_t events, OresNativeNioWatch* output) {
+    // A rejected admission must not leave an earlier live watch token in
+    // caller-owned output storage. Zero it even for a null runtime.
+    if (output) *output = OresNativeNioWatch{};
     if (!runtime || !output) return 0;
     auto watch = runtime->manager.try_watch(fd, events);
     if (!watch) return 0;
