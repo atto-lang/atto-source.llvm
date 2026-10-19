@@ -51,8 +51,9 @@ class ConcurrencyRaceAnalyzer final {
 
   void write(const std::string& participant, const std::string& location) {
     std::lock_guard<std::mutex> hold(mu_);
-    budget();
     const auto id = key(location);
+    clock(participant);
+    budget();
     const auto access = tick(participant);
     auto& state = locations_[id];
     for (const auto& writer : state.writes) {
