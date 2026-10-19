@@ -553,6 +553,24 @@ void preflight_native_ast_shape(const Program& program) {
             statement(nested, depth + 1);
     };
     const auto function = [&](const Function& fn) {
+        // Parser-produced functions always have a terminal value exactly when
+        // their declared result is non-void. Direct AST callers must not let
+        // LLVM receive a null return operand or smuggle an ignored value/effect
+        // through a void declaration.
+        if (fn.returns_void) {
+            if (fn.result)
+                fail("void function contains return value", fn.offset);
+            if (!fn.early_returns.empty())
+                fail("void function contains guarded value return", fn.offset);
+        } else if (!fn.result) {
+            fail("non-void function has no final result", fn.offset);
+        }
+        if (!fn.caught_throw_value &&
+                (!fn.catch_binding.empty() || !fn.caught_throw_defers.empty()))
+            fail("catch metadata exists without caught throw", fn.offset);
+        if (fn.caught_throw_value && fn.catch_binding.empty())
+            fail("caught throw is missing catch binding", fn.offset);
+
         for (const auto& binding : fn.locals) local(binding);
         for (const auto& stmt : fn.statements) statement(stmt, 0);
         for (const auto& stmt : fn.caught_throw_defers) statement(stmt, 0);
@@ -601,10 +619,31 @@ void preflight_native_ast_shape(const Program& program) {
         if (fn.caught_throw_value) expression(fn.caught_throw_value.get(), 0);
         if (fn.result) expression(fn.result.get(), 0);
     };
-    for (const auto& cls : program.classes)
-        for (const auto& field : cls.fields)
-            if (field.initializer_expression)
+    for (const auto& cls : program.classes) {
+        if (cls.fields.empty() || cls.fields.size() > 16)
+            fail("class field count is outside parser bounds", 0);
+        if (!cls.explicit_constructor && !cls.constructor_parameters.empty())
+            fail("implicit class contains constructor parameters", 0);
+        bool owns_array = false;
+        for (const auto& field : cls.fields) {
+            owns_array = owns_array || field.int_array;
+            if (field.int_array) {
+                if (!field.mutable_referent)
+                    fail("Array<int> class field lacks mutable referent capability", 0);
+                if (field.initializer_expression)
+                    fail("Array<int> class field contains hidden scalar initializer", 0);
+            } else {
+                if (!field.initializer_expression)
+                    fail("scalar class field is missing initializer", 0);
                 expression(field.initializer_expression.get(), 0);
+                if (field.initializer_expression->kind == Expression::Kind::Integer &&
+                        field.initial != field.initializer_expression->integer)
+                    fail("scalar class field literal cache disagrees with initializer", 0);
+            }
+        }
+        if (cls.explicit_constructor && owns_array)
+            fail("explicit scalar constructor contains owned Array<int> field", 0);
+    }
     for (const auto& actor : program.actors) {
         for (const auto& field : actor.fields) local(field);
         function(actor.on_message);
