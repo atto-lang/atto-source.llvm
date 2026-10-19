@@ -39,7 +39,7 @@ int main() {
 
     // Even a maximally permissive nominal proof callback must not override
     // unimplemented synchronizing handles and guest-fabricated capability names.
-    for (const std::string& name : {"Arc", "Weak", "Shared", "Mutex",
+    for (const char* name : {"Arc", "Weak", "Shared", "Mutex",
                                     "RwLock", "Channel", "Task", "ActorRef",
                                     "NativeHandle", "FfiHandle", "UnsafeCell"}) {
         const WorkerType handle{Shape::Named, name, {number}};
@@ -67,7 +67,7 @@ int main() {
     assert(!worker_marker(WorkerType{Shape::BorrowShared, "", {owned}},
                           WorkerMarker::Send, ownerOnly));
 
-    for (const std::string& invalid : {"", "void", "null", "Foo",
+    for (const char* invalid : {"", "void", "null", "Foo",
                                        "Thread", "Object"}) {
         assert(!worker_marker(WorkerType{Shape::Primitive, invalid, {}},
                               WorkerMarker::Send, permissive));
