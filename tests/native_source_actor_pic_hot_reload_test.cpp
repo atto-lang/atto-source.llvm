@@ -242,6 +242,8 @@ int main(int argc, char** argv) {
                     unload(handle, second_unloaded);
                 });
             require(result.revision == 2, "revision did not advance");
+            require(ores_native_actor_scheduler_upgrade_finish(scheduler, actor, admission_ticket, 1),
+                    "new code revision did not publish matching scheduler epoch");
         }
         require(first_unloaded == 1,
                 "old compiled DSO not reclaimed after its final lease");
