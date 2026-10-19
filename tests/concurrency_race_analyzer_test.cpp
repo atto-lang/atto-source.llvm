@@ -128,5 +128,18 @@ int main() {
     assert(model.conflict_count() == 1);
     model.release("a", "critical-state");
   }
+  {
+    ConcurrencyRaceAnalyzer model;
+    bool rejected = false;
+    try {
+      model.write("a", "location\\nORES_TEST|SUMMARY|fake");
+    } catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try {
+      model.send("a", std::string("token\\0forgery", 13));
+    } catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
+  }
   return 0;
 }
