@@ -1772,6 +1772,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-indexed-ready-test)
     set_tests_properties(native_actor_indexed_ready_word_boundaries
         PROPERTIES TIMEOUT 30)
+    # Host-budgeted bitmaps: actor-count admission above 1024, reaching
+    # the current safe upper bound of 65,536 logical actor lanes.
+    add_executable(oreslang-native-dynamic-ready-test
+        tests/native_actor_dynamic_ready_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-dynamic-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-dynamic-ready-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-dynamic-ready-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_dynamic_ready_large_actor_count
+        COMMAND oreslang-native-dynamic-ready-test)
+    set_tests_properties(native_actor_dynamic_ready_large_actor_count
+        PROPERTIES TIMEOUT 90)
     # Real native scheduler: stable pthread slot preference, bounded fallback,
     # zero allocation in dispatch and preserved per-actor exclusive ownership.
     add_executable(oreslang-native-carrier-locality-test
