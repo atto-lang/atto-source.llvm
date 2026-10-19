@@ -137,7 +137,24 @@ static void* carrier(void* raw) {
                 unlock(s);
                 return NULL;
             }
+            /* Register before the final permit recheck. A release which saw
+             * zero waiters cannot race us into sleeping with a free token;
+             * a later release will acquire this scheduler mutex only after
+             * cond_wait has atomically released it. */
+            OresNativePhysicalTurnGate* gate = s->physical_turn_gate;
+            const int waiting_on_gate = found && gate != NULL;
+            if (waiting_on_gate) {
+                atomic_fetch_add_explicit(&gate->waiting, 1, memory_order_acq_rel);
+                if (ores_native_turn_gate_try_acquire(gate)) {
+                    atomic_fetch_sub_explicit(&gate->waiting, 1, memory_order_acq_rel);
+                    gate_held = 1;
+                    break;
+                }
+            }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
+            if (waiting_on_gate) {
+                atomic_fetch_sub_explicit(&gate->waiting, 1, memory_order_acq_rel);
+            }
         }
         consecutive = (i == recent_actor && !control)
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
