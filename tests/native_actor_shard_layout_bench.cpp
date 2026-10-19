@@ -1,6 +1,9 @@
 #include "oreslang/runtime/ActorShardColumns.hpp"
 #include "oreslang/runtime/NativeActorScheduler.h"
 
+#if defined(NDEBUG)
+#undef NDEBUG // Keep native proof assertions effective with -O2 -DNDEBUG
+#endif
 #include <cassert>
 #include <chrono>
 #include <cstdint>
