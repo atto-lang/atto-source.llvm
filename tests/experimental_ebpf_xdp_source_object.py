@@ -57,8 +57,8 @@ def main():
         obj = root / "xdp.o"
         cmd = (args.compiler, "--deployment-profile=ebpf-xdp",
                "--experimental-ebpf-xdp-ir", str(source))
-        source.write_text("""pub fnc xdp_action(int packet_bytes): int {
-    if (packet_bytes == 0) { return 1; } fi
+        source.write_text("""pub fnc xdp_action(int packet_nonempty): int {
+    if (packet_nonempty == 0) { return 1; } fi
     return 2;
 }
 """)
@@ -81,14 +81,14 @@ def main():
                 "BPF object lacks xdp/license section: " + repr(sections))
 
         cases = [
-            ("fnc xdp_action(int packet_bytes): int { return 2; }\n", "requires"),
-            ("pub fnc main(int packet_bytes): int { return 2; }\n", "xdp"),
+            ("fnc xdp_action(int packet_nonempty): int { return 2; }\n", "requires"),
+            ("pub fnc main(int packet_nonempty): int { return 2; }\n", "xdp"),
             ("pub fnc xdp_action(): int { return 2; }\n", "xdp"),
-            ("pub fnc xdp_action(int packet_bytes): int { return xdp_action(packet_bytes); }\n", "xdp"),
-            ("pub fnc xdp_action(int packet_bytes): int { return unknown; }\n", None),
-            ("pub fnc xdp_action(int packet_bytes): int { return 2; }\nfnc second(): int { return 2; }\n", "xdp"),
-            ("pub fnc xdp_action(int packet_bytes): int { val x: int = 2; return x; }\n", "xdp"),
-            ("pub fnc xdp_action(int packet_bytes): int { return 3 / 2; }\n", None),
+            ("pub fnc xdp_action(int packet_nonempty): int { return xdp_action(packet_nonempty); }\n", "xdp"),
+            ("pub fnc xdp_action(int packet_nonempty): int { return unknown; }\n", None),
+            ("pub fnc xdp_action(int packet_nonempty): int { return 2; }\nfnc second(): int { return 2; }\n", "xdp"),
+            ("pub fnc xdp_action(int packet_nonempty): int { val x: int = 2; return x; }\n", "xdp"),
+            ("pub fnc xdp_action(int packet_nonempty): int { return 3 / 2; }\n", None),
         ]
         for code, needle in cases:
             source.write_text(code)
@@ -97,7 +97,7 @@ def main():
                     "eBPF rejected case emitted IR: " + code)
             if needle is not None:
                 require(needle in result.stderr.lower(), "unexpected diagnostic: " + result.stderr)
-        source.write_text("pub fnc xdp_action(int packet_bytes): int { return 2; }\n")
+        source.write_text("pub fnc xdp_action(int packet_nonempty): int { return 2; }\n")
         for flags in [
             ("--target=host",), ("--target=wasm32",),
             ("--deployment-profile=ebpf-tc",),
