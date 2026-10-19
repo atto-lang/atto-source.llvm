@@ -13,12 +13,15 @@
 #include <vector>
 
 using oreslang::runtime::ActorShardColumns;
+using oreslang::runtime::ActorShardBudget;
 using oreslang::dop::Layout;
 
 struct TestState {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef owner = {};
     Layout layout = Layout::SoA;
+    ActorShardBudget actor_budget{16U * 1024U * 1024U};
+    ActorShardBudget vm_budget{64U * 1024U * 1024U};
     std::unique_ptr<ActorShardColumns> region;
     std::vector<double> published;
     bool foreign_rejected = false;
@@ -40,7 +43,8 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
         assert(actor == 0);
         if (step == 1) {
             auto region = std::make_unique<ActorShardColumns>(
-                state.scheduler, state.owner, state.layout, 65, 3,
+                state.scheduler, state.owner,
+                state.actor_budget, state.vm_budget, state.layout, 65, 3,
                 state.layout == Layout::AoSoA ? 8 : 1);
             for (std::size_t i = 0; i < 65; ++i) {
                 region->write(i, 0, static_cast<double>(i));
@@ -49,6 +53,18 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             }
             region->integrate(0, 1, .5);
             state.region = std::move(region);
+            ActorShardBudget tiny{64};
+            bool insufficient_budget = false;
+            try {
+                ActorShardColumns excess(state.scheduler, state.owner,
+                    tiny, state.vm_budget, state.layout, 65, 3,
+                    state.layout == Layout::AoSoA ? 8 : 1);
+            } catch (const std::length_error&) {
+                insufficient_budget = true;
+            }
+            assert(insufficient_budget);
+            assert(tiny.used_bytes() == 0);
+            assert(state.actor_budget.used_bytes() > 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
             state.published = state.region->snapshot_column(0);
@@ -96,6 +112,8 @@ int main() {
         ores_native_actor_scheduler_retire(state.scheduler);
         assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
         state.region.reset();
+        assert(state.actor_budget.used_bytes() == 0);
+        assert(state.vm_budget.used_bytes() == 0);
     }
     puts("actor-owned AoS/SoA/AoSoA dense native kernel parity: OK");
     return 0;
