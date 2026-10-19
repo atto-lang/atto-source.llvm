@@ -92,6 +92,47 @@ std::int64_t receive(Gate& gate, ActorHeapIdentity id,
     ores_actor_i64_heap_leave(heap, turn);
     return result;
 }
+struct HostMailbox {
+    Gate* gate;
+    OresActorI64Heap* heap;
+    ActorHeapIdentity id;
+    std::atomic<std::int64_t> last{0};
+    std::atomic<unsigned> completed{0};
+};
+void source_actor_dispatch(void* raw, std::size_t actor, std::uint64_t payload) {
+    auto* host = static_cast<HostMailbox*>(raw);
+    if (!host || actor != 0) std::abort();
+    try {
+        auto value = receive(*host->gate, host->id, host->heap,
+                             static_cast<std::int64_t>(payload));
+        host->last.store(value, std::memory_order_relaxed);
+        host->completed.fetch_add(1, std::memory_order_release);
+    } catch (...) {
+        // A C native scheduler callback cannot unwind into its carrier.
+        std::abort();
+    }
+}
+void wait_mail(HostMailbox& host, unsigned count, std::int64_t expected) {
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(5);
+    while (host.completed.load(std::memory_order_acquire) < count
+           && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    require(host.completed.load(std::memory_order_acquire) == count,
+            "source actor mailbox callback missing or duplicated");
+    require(host.last.load(std::memory_order_relaxed) == expected,
+            "source actor compiled callback result differs");
+}
+void wait_mailbox_quiescence(OresNativeActorScheduler* scheduler,
+                             OresNativeActorRef actor, std::uint64_t ticket) {
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(5);
+    while (!ores_native_actor_scheduler_upgrade_quiesced(scheduler, actor, ticket)
+           && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    require(ores_native_actor_scheduler_upgrade_quiesced(scheduler, actor, ticket),
+            "accepted mailbox work did not reach scheduler quiescence");
+}
 void unload(void* handle, std::atomic<int>& count) {
     // Test-only synchronous close. Production cleanup MUST be queued outside
     // CONTROL and must durably quarantine any failed dlclose/ORC teardown.
