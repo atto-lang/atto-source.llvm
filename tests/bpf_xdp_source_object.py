@@ -205,8 +205,25 @@ def main():
             "}\n"
         )
         src.write_text(packet_source, encoding="utf-8")
-        packet_result = run(cmd)
+        # IR issuance now requires explicit packet-read acknowledgement.
+        # This is not a substitute for an independent policy-approved build.
+        unacknowledged = run(cmd)
+        require(unacknowledged.returncode != 0 and unacknowledged.stdout == "" and
+                "bpf.packet.read" in unacknowledged.stderr,
+                "XDP packet access escaped without explicit effect acknowledgement")
+        packet_cmd = [args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                      "--bpf-grants=bpf.packet.read", str(src)]
+        packet_result = run(packet_cmd)
         require(packet_result.returncode == 0, packet_result.stderr)
+        duplicate_grants = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                                "--bpf-grants=bpf.packet.read", "--bpf-grants=bpf.packet.read", str(src)])
+        require(duplicate_grants.returncode == 2 and duplicate_grants.stdout == "",
+                "duplicate BPF grants option must fail before IR emission")
+        invalid_grants = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                              "--bpf-grants=heap", str(src)])
+        require(invalid_grants.returncode == 2 and invalid_grants.stdout == "",
+                "BPF must not accept arbitrary host authority")
+
         host_packet = run([args.compiler, str(src)])
         require(host_packet.returncode != 0 and not host_packet.stdout and
                 "unknown parameter class" in host_packet.stderr.lower(),
@@ -216,6 +233,12 @@ def main():
                               "--bpf-program=xdp", "--target=bpfel", str(src)])
         require(packet_closure.returncode == 0, packet_closure.stderr)
         packet_graph = json.loads(packet_closure.stdout)
+        forged_closure_grant = run([args.compiler, "--emit-target-closure",
+                                    "--bpf-grants=bpf.packet.read",
+                                    "--target=bpfel", "--bpf-program=xdp", str(src)])
+        require(forged_closure_grant.returncode == 2 and
+                forged_closure_grant.stdout == "",
+                "compiler-produced effect declaration must never self-grant authority")
         require(packet_graph == {
             "schemaVersion": 1, "entry": "ores_xdp", "target": "ebpf",
             "backend": "llvm", "grants": [],
@@ -370,6 +393,11 @@ def main():
         reject("pub fnc ores_xdp(): int { return 2; }\n" + ("// extra\n" * 2000),
                "source exceeds")
         src.write_text("pub fnc ores_xdp(): int { return 2; }\n", encoding="utf-8")
+        unused_grant = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--bpf-grants=bpf.packet.read", str(src)])
+        require(unused_grant.returncode != 0 and unused_grant.stdout == "" and
+                "does not use bpf.packet.read" in unused_grant.stderr,
+                "constant-only XDP admitted unused privileged packet-read grant")
         for good_flags in (["--target=bpfel", "--bpf-program=xdp"],
                            ["--bpf-program=xdp", "--target=bpfel"],
                            ["--no-core-log", "--target=bpfel", "--bpf-program=xdp"],
@@ -388,6 +416,11 @@ def main():
             (["--target=bpfel", "--bpf-program="], 2),
             (["--target=bpfeb", "--bpf-program=xdp"], 2),
             (["--target=bpfel", "--bpf-program=xdp", "--cpu=v3"], 2),
+            (["--bpf-grants=bpf.packet.read"], 2),
+            (["--target=host", "--bpf-grants=bpf.packet.read"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants="], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants=threads"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants=bpf.packet.read,heap"], 2),
             (["--emit-target-closure"], 2),
             (["--target=host", "--emit-target-closure"], 2),
             (["--target=bpfel", "--bpf-program=xdp", "--emit-target-closure",
