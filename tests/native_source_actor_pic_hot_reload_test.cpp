@@ -209,6 +209,13 @@ int main(int argc, char** argv) {
         const auto next = load_fixture(argv[2]);
         {
             auto suspended = gate.pin(id); // Simulates an awaiting old frame.
+            std::uint64_t admission_ticket = 0;
+            require(ores_native_actor_scheduler_upgrade_freeze(scheduler, actor, 1, &admission_ticket),
+                    "native mailbox did not freeze before code publication");
+            wait_mailbox_quiescence(scheduler, actor, admission_ticket);
+            require(ores_native_actor_scheduler_try_send(scheduler, actor, 1)
+                    == ORES_NATIVE_SEND_UPGRADE_FROZEN,
+                    "new DATA accepted under frozen scheduler epoch");
             auto ticket = gate.freeze(id, 1);
             require(!gate.quiesced(ticket),
                     "awaiting old code must block quiescence");
