@@ -1,0 +1,2 @@
+// infer struct creates a concrete closed struct type; native lowering must preserve that distinction.
+pub fnc main(): int { return infer struct{x: 3, y: 4}; }
