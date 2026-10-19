@@ -1842,6 +1842,19 @@ private:
 
 } // namespace
 
+bool valid_native_source_identifier(std::string_view value) noexcept {
+    // Match the ASCII lexical grammar, reserved-word gate, and explicitly
+    // unsupported nominal capability names of Parser::identifier(). Neither
+    // the AST nor the LLVM emitter may admit names that source cannot parse.
+    if (value.empty() || !identifier_start(value.front())) return false;
+    for (std::size_t i = 1; i < value.size(); ++i)
+        if (!identifier_part(value[i])) return false;
+    if (reserved(value) || value == "SelectPlan" || value == "SelectCase" ||
+            value == "ActorGroup" || value == "ActorGroupJoinCapability")
+        return false;
+    return true;
+}
+
 Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
