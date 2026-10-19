@@ -30,7 +30,10 @@ def inspect_elf(path):
     The dynamic dependencies and libc symbol versions still require an actual
     successful launch on the target CGL image, not merely this preflight.
     """
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    # Nonblocking open is required: opening a FIFO for read can otherwise hang
+    # indefinitely BEFORE fstat can reject the non-regular file.
+    flags = (os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0) |
+             getattr(os, "O_NOFOLLOW", 0))
     fd = os.open(path, flags)
     try:
         with os.fdopen(fd, "rb") as f:
