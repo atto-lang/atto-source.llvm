@@ -215,6 +215,26 @@ static void test_physical_close_only_after_authenticated_receipt() {
     require(broker.revoke(*replacement, 73));
     require(broker.confirm_reclaimed(*replacement, 73));
 }
+static void test_real_manager_bootstrap_open_denial_is_retry_safe() {
+    // An accepted RT readiness ticket seals future eventfd creation. The
+    // logical ledger must NOT mint an authority slot on that denied open,
+    // and the previously accepted watch must remain serviceable.
+    NativeFdAuthorityBroker broker(
+        1, oreslang::runtime::NativeEpollReactorManager::Profile::preallocated_rt, 1);
+    auto token = broker.mint_eventfd(75);
+    require(token.has_value());
+    require(broker.try_watch(*token, 75));
+    require(!broker.mint_eventfd(76)); // kernel open denied by RT seal
+    require(!broker.mint_eventfd(76)); // no poisoned broker or ghost slot
+    require(broker.signal(*token, 75));
+    auto completed = next_terminal(broker);
+    require(completed.owner == 75 &&
+            completed.outcome == NativeEpollReactor::Outcome::ready);
+    require(broker.drain_eventfd(*token, 75));
+    require(broker.revoke(*token, 75));
+    require(broker.confirm_reclaimed(*token, 75));
+    require(!broker.mint_eventfd(76)); // RT seal remains enforceable
+}
 static void test_real_gate_contention_during_cleanup() {
     NativeFdAuthorityBroker broker;
     auto token = broker.mint_eventfd(74);
@@ -288,6 +308,7 @@ int main() {
     test_real_mutex_denies_partial_mint();
     test_atomic_host_admission_under_denial();
     test_physical_close_only_after_authenticated_receipt();
+    test_real_manager_bootstrap_open_denial_is_retry_safe();
     test_real_gate_contention_during_cleanup();
     test_all_orderings_of_signal_cancel_revoke_stop();
     return 0;
