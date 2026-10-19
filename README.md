@@ -129,7 +129,11 @@ The race analyzer is host-only and **does not yet instrument LLVM guest loads
 and stores**. Its logical participant IDs must identify distinct concurrent
 task/message lifetimes, not a shared actor reference, and recursive lock
 ownership publishes a happens-before edge only on the final unlock. Invalid
-control-character event identities are rejected. An authorized private runner can validate the exact source tree
+control-character event identities are rejected. Native `fork/finish/join`
+supports fresh logical task lifetimes, rejects unfinished/repeated joins and
+preserves sibling concurrency. It still depends on complete, trustworthy
+compiler/runtime lifecycle instrumentation and does **not** prove guest
+race-freedom. An authorized private runner can validate the exact source tree
 using:
 
 ```sh
@@ -142,3 +146,8 @@ A mirror must contain the exact private source Git tree, with its SHA verified
 before tests; this script neither performs cross-organization checkout nor
 bypasses access controls. Host tests alone cannot certify a complete guest
 memory race checker.
+
+To run the entire repository test suite alongside the targeted exact-tree gate,
+set `RUN_FULL_SUITE=1` when invoking `scripts/ci-verify-concurrency-p0.sh`.
+This requires a working authorized runner; scripts and setup alone do not
+constitute executed test evidence.
