@@ -171,6 +171,65 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
     if (!expr.argument_names.empty() &&
             expr.argument_names.size() != expr.arguments.size())
         reject(expr, "invalid native named call argument layout");
+    if (!expr.type_arguments_present && !expr.type_arguments.empty())
+        reject(expr, "native call contains hidden generic type arguments");
+
+    const auto& generics = found->second->generic_parameters;
+    if (expr.type_arguments_present && generics.empty())
+        reject(expr, "call-site type arguments require generic function");
+    if (!generics.empty()) {
+        if (expr.type_arguments.size() > generics.size())
+            reject(expr, "too many generic type arguments");
+        std::unordered_set<std::string> inferred;
+        std::unordered_set<std::string> assigned;
+        std::unordered_set<std::string> holes;
+        std::size_t positional_type = 0;
+        bool named_type_seen = false;
+        for (const auto& arg : expr.type_arguments) {
+            std::size_t slot = positional_type;
+            if (!arg.name.empty()) {
+                named_type_seen = true;
+                auto it = std::find_if(generics.begin(), generics.end(),
+                    [&](const GenericParameter& candidate) {
+                        return candidate.name == arg.name;
+                    });
+                if (it == generics.end())
+                    reject(expr, "unknown named generic argument '" + arg.name + "'");
+                slot = static_cast<std::size_t>(it - generics.begin());
+            } else {
+                if (named_type_seen)
+                    reject(expr, "positional generic argument after named argument");
+                ++positional_type;
+            }
+            if (slot >= generics.size())
+                reject(expr, "too many generic type arguments");
+            const std::string& name = generics[slot].name;
+            if (!assigned.insert(name).second)
+                reject(expr, "duplicate generic argument '" + name + "'");
+            if (arg.infer) {
+                if (!arg.type.empty())
+                    reject(expr, "generic inference hole contains explicit type");
+                holes.insert(name);
+            } else {
+                if (arg.type != "int")
+                    reject(expr, "unsupported native generic type specialization");
+                inferred.insert(name);
+            }
+        }
+        for (const auto& parameter : parameters)
+            if (!parameter.generic_type.empty())
+                inferred.insert(parameter.generic_type);
+        for (const auto& slot : generics) {
+            if (inferred.count(slot.name)) continue;
+            if (!holes.count(slot.name) && !slot.default_type.empty() &&
+                    (slot.default_type == "int" ||
+                     inferred.count(slot.default_type))) {
+                inferred.insert(slot.name);
+                continue;
+            }
+            reject(expr, "cannot infer generic parameter '" + slot.name + "'");
+        }
+    }
 
     std::vector<Loan> loans;
     std::vector<bool> assigned(parameters.size(), false);
@@ -717,6 +776,23 @@ void validate_i64_ownership(const Program& program) {
         if (function.name == "main" && function_names.count("main"))
             throw std::runtime_error(
                 "ownership violation: native main cannot be overloaded");
+        if (function.name == "main" && !function.generic_parameters.empty())
+            throw std::runtime_error(
+                "ownership violation: native entrypoint main cannot be generic");
+        std::unordered_set<std::string> generic_names;
+        for (const auto& generic : function.generic_parameters) {
+            require_identifier(generic.name, "generic parameter");
+            if (!generic_names.insert(generic.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate generic parameter '" +
+                    generic.name + "'");
+            if (!generic.default_type.empty() &&
+                    generic.default_type != "int" &&
+                    !generic_names.count(generic.default_type))
+                throw std::runtime_error(
+                    "ownership violation: forward or unknown generic default '" +
+                    generic.default_type + "'");
+        }
         for (const auto& parameter : function.parameters) {
             require_identifier(parameter.name, "parameter");
             switch (parameter.mode) {
@@ -733,8 +809,13 @@ void validate_i64_ownership(const Program& program) {
                     "ownership violation: parameter has both class and generic type");
             if (!parameter.class_name.empty())
                 require_identifier(parameter.class_name, "parameter class");
-            if (!parameter.generic_type.empty())
+            if (!parameter.generic_type.empty()) {
                 require_identifier(parameter.generic_type, "parameter generic");
+                if (!generic_names.count(parameter.generic_type))
+                    throw std::runtime_error(
+                        "ownership violation: parameter references unknown generic '" +
+                        parameter.generic_type + "'");
+            }
         }
         // Overload identity is caller-visible value arity, not parameter
         // types, return types, generic arity, or an internal receiver. Direct
