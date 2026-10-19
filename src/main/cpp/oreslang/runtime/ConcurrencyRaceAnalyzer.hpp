@@ -80,6 +80,8 @@ class ConcurrencyRaceAnalyzer final {
     tick(participant);
   }
 
+  // Reentrant ownership follows logical participant identity, not host threads.
+  // Only the outermost unlock publishes synchronization to another owner.
   void release(const std::string& participant, const std::string& lock_id) {
     std::lock_guard<std::mutex> hold(mu_);
     const auto id = key(lock_id);
@@ -89,22 +91,40 @@ class ConcurrencyRaceAnalyzer final {
       throw std::logic_error("release requires the current lock owner");
     }
     budget();
-    locks_[id] = tick(actor).clock;
-    lock_owners_.erase(owner);
+    const auto depth = lock_depths_.at(id);
+    if (depth > 1) {
+      tick(actor);
+      lock_depths_.at(id) = depth - 1;
+    } else {
+      locks_[id] = tick(actor).clock;
+      lock_owners_.erase(owner);
+      lock_depths_.erase(id);
+    }
   }
 
   void acquire(const std::string& participant, const std::string& lock_id) {
     std::lock_guard<std::mutex> hold(mu_);
     const auto id = key(lock_id);
     const auto actor = key(participant);
-    if (lock_owners_.count(id) != 0) {
-      throw std::logic_error("lock is already acquired");
+    const auto owner = lock_owners_.find(id);
+    if (owner != lock_owners_.end() && owner->second != actor) {
+      throw std::logic_error("lock is already acquired by another participant");
+    }
+    if (owner != lock_owners_.end() &&
+        lock_depths_.at(id) == std::numeric_limits<std::uint32_t>::max()) {
+      throw std::overflow_error("reentrant lock depth exhausted");
     }
     budget();
-    const auto it = locks_.find(id);
-    if (it != locks_.end()) merge(clock(actor), it->second);
-    tick(actor);
-    lock_owners_[id] = actor;
+    if (owner != lock_owners_.end()) {
+      tick(actor);
+      ++lock_depths_.at(id);
+    } else {
+      const auto it = locks_.find(id);
+      if (it != locks_.end()) merge(clock(actor), it->second);
+      tick(actor);
+      lock_owners_[id] = actor;
+      lock_depths_[id] = 1;
+    }
   }
 
   std::vector<Finding> findings() const {
@@ -203,6 +223,7 @@ class ConcurrencyRaceAnalyzer final {
   std::unordered_set<std::string> issued_message_ids_;
   std::unordered_map<std::string, Clock> locks_;
   std::unordered_map<std::string, std::string> lock_owners_;
+  std::unordered_map<std::string, std::uint32_t> lock_depths_;
   std::vector<Finding> findings_;
 };
 
