@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/types/OwnershipCfg.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -272,6 +273,25 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // This is an independent emission-time guard, not an assertion that a
+    // caller happened to invoke parse_program()/validate_i64_ownership().
+    // No scalar frame may be emitted if its scheduling boundary was not
+    // admitted by the same place-sensitive ownership CFG used by semantics.
+    const auto verify_frame_suspension = [](const std::string& name) {
+        ownership::Graph graph;
+        graph.entry = {{name, {ownership::kOwned, 0, false}}};
+        graph.blocks = {{{
+            {ownership::Operation::Kind::Read, name},
+            {ownership::Operation::Kind::Suspend, ""},
+            {ownership::Operation::Kind::Read, name}
+        }, {}}};
+        ownership::verify(graph);
+    };
+    for (const auto& loop : source.cooperative_loops)
+        verify_frame_suspension(loop.variable);
+    for (const auto& fn : source.functions)
+        if (fn.scalar_while)
+            verify_frame_suspension(fn.scalar_while->counter);
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
