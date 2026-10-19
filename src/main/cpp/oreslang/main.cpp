@@ -215,13 +215,7 @@ int main(int argc, char** argv) {
                 // After successful verification each guard has a packet read,
                 // and a constant-only program has none. Do NOT auto-grant the
                 // inferred effect; an independent build policy must supply it.
-                std::cout
-                    << "{\"schemaVersion\":1,\"entry\":\"ores_xdp\","
-                    << "\"target\":\"ebpf\",\"backend\":\"llvm\",\"grants\":[],"
-                    << "\"nodes\":[{\"id\":\"ores_xdp\",\"targets\":[\"ebpf\"],"
-                    << "\"requires\":"
-                    << (packet_reads ? "[\"bpf.packet.read\"]" : "[]")
-                    << ",\"imports\":[]}]}\n";
+                std::cout << oreslang::emit_bpf_xdp_ungranted_closure(packet_reads);
             } else {
                 std::cout << verified_ir;
             }
