@@ -78,36 +78,59 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
-static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) {
-    /* CONTROL must be admitted ahead of normal mail, across all actors.
+static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
+        size_t recent_actor, unsigned consecutive) {
+    /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
      * The parent still owns its exclusive logical lane. */
-    for (int pass = 1; pass >= 0; --pass) {
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
-            if (!s->actors[i].active
-                && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
-                *actor = i;
-                *control = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
-            }
+    for (size_t offset = 0; offset < s->actor_count; ++offset) {
+        size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!s->actors[i].active && s->actors[i].has_control) {
+            *actor = i;
+            *control = 1;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
+        }
+    }
+    /* Same-pthread actor reuse improves cache locality with no pthread
+     * binding or borrowed-region transfer. Cap the streak at two DATA turns;
+     * after that the round-robin cursor gets priority. */
+    if (recent_actor < s->actor_count && consecutive < 2
+        && !s->actors[recent_actor].active
+        && s->actors[recent_actor].queued != 0) {
+        *actor = recent_actor;
+        *control = 0;
+        s->next_actor = (recent_actor + 1) % s->actor_count;
+        return 1;
+    }
+    for (size_t offset = 0; offset < s->actor_count; ++offset) {
+        size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!s->actors[i].active && s->actors[i].queued != 0) {
+            *actor = i;
+            *control = 0;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
         }
     }
     return 0;
 }
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
+    size_t recent_actor = SIZE_MAX;
+    unsigned consecutive = 0;
     for (;;) {
         lock(s);
         size_t i = 0;
         int control = 0;
-        while (!find_ready(s, &i, &control)) {
+        while (!find_ready(s, &i, &control, recent_actor, consecutive)) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 return NULL;
             }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
         }
+        consecutive = (i == recent_actor && !control)
+                ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
+        recent_actor = i;
         ActorLane* lane = &s->actors[i];
         uint64_t payload;
         OresNativeActorTerminalFailure failure = {0};
