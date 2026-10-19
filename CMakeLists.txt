@@ -1758,6 +1758,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Real native scheduler: stable pthread slot preference, bounded fallback,
+    # zero allocation in dispatch and preserved per-actor exclusive ownership.
+    add_executable(oreslang-native-carrier-locality-test
+        tests/native_actor_carrier_locality_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-carrier-locality-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-carrier-locality-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-carrier-locality-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_carrier_last_worker_locality
+        COMMAND oreslang-native-carrier-locality-test)
+    set_tests_properties(native_actor_carrier_last_worker_locality PROPERTIES TIMEOUT 30)
+
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
     add_executable(oreslang-native-carrier-create-failure-test
