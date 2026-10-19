@@ -68,6 +68,8 @@ int main(int argc, char** argv) {
     bool cortex_m_target = false;
     bool bpf_target = false;
     bool bpf_program_seen = false;
+    bool bpf_grants_seen = false;
+    bool bpf_packet_read_acknowledged = false;
     bool emit_target_closure = false;
     std::string bpf_program;
     bool target_seen = false;
@@ -92,6 +94,20 @@ int main(int argc, char** argv) {
                 return 2;
             }
             emit_target_closure = true;
+        } else if (arg.rfind("--bpf-grants=", 0) == 0) {
+            if (bpf_grants_seen) {
+                std::cerr << "duplicate BPF grants option\n";
+                return 2;
+            }
+            bpf_grants_seen = true;
+            const auto requested = arg.substr(std::string_view("--bpf-grants=").size());
+            // Only this exact, single capability can be acknowledged in the
+            // experimental XDP slice. No unknown or ambient rights.
+            if (requested != "bpf.packet.read") {
+                std::cerr << "unsupported BPF grants: " << requested << "\n";
+                return 2;
+            }
+            bpf_packet_read_acknowledged = true;
         } else if (arg.rfind("--bpf-program=", 0) == 0) {
             if (bpf_program_seen) { std::cerr << "duplicate BPF program option\n"; return 2; }
             bpf_program_seen = true;
@@ -136,6 +152,10 @@ int main(int argc, char** argv) {
         std::cerr << "--emit-target-closure requires --target=bpfel --bpf-program=xdp\n";
         return 2;
     }
+    if (bpf_grants_seen && (!bpf_target || emit_target_closure)) {
+        std::cerr << "--bpf-grants is valid only for eBPF IR emission\n";
+        return 2;
+    }
     if (bpf_target != bpf_program_seen) {
         std::cerr << (bpf_target
             ? "bpfel target requires --bpf-program=xdp\n"
@@ -153,7 +173,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|bpfel] [--bpf-program=xdp] [--emit-target-closure] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|bpfel] [--bpf-program=xdp] [--emit-target-closure|--bpf-grants=bpf.packet.read] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -186,13 +206,18 @@ int main(int argc, char** argv) {
             // Run the real backend verifier before exporting effects. A parsed
             // AST alone is not a deployable BPF program or an effect witness.
             const auto verified_ir = oreslang::emit_verified_bpf_xdp_ir(ast);
+            const bool packet_reads = !ast.functions.front().early_returns.empty();
+            if (!emit_target_closure &&
+                packet_reads != bpf_packet_read_acknowledged) {
+                throw std::runtime_error(packet_reads
+                    ? "eBPF XDP packet_u8 requires --bpf-grants=bpf.packet.read"
+                    : "eBPF XDP constant action does not use bpf.packet.read");
+            }
             if (emit_target_closure) {
                 // The backend admits zero or more checked packet_u8 guards.
                 // After successful verification each guard has a packet read,
                 // and a constant-only program has none. Do NOT auto-grant the
                 // inferred effect; an independent build policy must supply it.
-                const bool packet_reads =
-                    !ast.functions.front().early_returns.empty();
                 std::cout
                     << "{\"schemaVersion\":1,\"entry\":\"ores_xdp\","
                     << "\"target\":\"ebpf\",\"backend\":\"llvm\",\"grants\":[],"
