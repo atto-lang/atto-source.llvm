@@ -155,6 +155,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Model-level exhaustive safety gate: Python stdlib only.
+    add_test(NAME formal_native_ownership_loan_safety
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/formal_ownership_loan_model.py")
+    set_tests_properties(formal_native_ownership_loan_safety PROPERTIES TIMEOUT 20)
+
     # Executable source admission gate: function values are not nominal classes.
     add_test(NAME native_callable_nominal_boundary
         COMMAND "${Python3_EXECUTABLE}"
