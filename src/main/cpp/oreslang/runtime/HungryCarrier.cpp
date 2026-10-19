@@ -324,7 +324,12 @@ bool HungryCarrier::enqueue_mpsc(ActorMessage message) noexcept {
 }
 
 void HungryCarrier::request_stop() noexcept {
-    stop_.store(true, std::memory_order_release);
+    // The stop store and a new pending-I/O publication participate in one
+    // sequentially consistent handshake. Either this request_stop() sees
+    // the published pending terminal, or the carrier's post-publication
+    // stop load sees this stop. Without the second check, STOP can land
+    // between the handler's initial stop test and terminal_.store(pending).
+    stop_.store(true, std::memory_order_seq_cst);
     auto expected = OperationTerminal::pending;
     if (terminal_.compare_exchange_strong(expected, OperationTerminal::canceled,
                                           std::memory_order_acq_rel,
@@ -482,7 +487,19 @@ void HungryCarrier::run_handler(ActorMessage message, ResumeCause cause, std::in
     // Queue memory is preallocated; no owned actor pointer crosses threads.
     pending_ = true;
     current_ = message;
-    terminal_.store(OperationTerminal::pending, std::memory_order_release);
+    terminal_.store(OperationTerminal::pending, std::memory_order_seq_cst);
+    // CLOSE/REGISTER interlock: request_stop() first publishes stop=true,
+    // then attempts pending->canceled. We publish pending first, then
+    // recheck stop. No execution order permits a pending terminal to be
+    // installed after STOP without one side also canceling it. Do not
+    // enqueue a broker job after this stop has already been observed.
+    if (stop_.load(std::memory_order_seq_cst)) {
+        auto expected = OperationTerminal::pending;
+        if (terminal_.compare_exchange_strong(expected, OperationTerminal::canceled,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            canceled_.fetch_add(1, std::memory_order_relaxed);
+        return; // actor_loop runs exactly-once generated frame cleanup
+    }
     if (!jobs_.try_push(Job{generation_, step.value, step.delay_ms})) {
         pending_ = false;
         failures_.fetch_add(1, std::memory_order_relaxed);
