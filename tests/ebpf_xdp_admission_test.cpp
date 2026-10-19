@@ -49,6 +49,40 @@ int main() {
         p.functions.front().early_returns.push_back(std::move(g));
         oreslang::EbpfXdpAdmission::require(p);
     }
+    {
+        // The entire possible runtime input domain is {0,1}; both outcomes
+        // are admitted by static action proof for this arithmetic expression.
+        auto p = clean();
+        p.functions.front().result->kind = oreslang::Expression::Kind::Add;
+        p.functions.front().result->left =
+            std::make_unique<oreslang::Expression>();
+        p.functions.front().result->left->kind =
+            oreslang::Expression::Kind::Variable;
+        p.functions.front().result->left->name = "packet_nonempty";
+        p.functions.front().result->right = lit(1);
+        oreslang::EbpfXdpAdmission::require(p);
+    }
+    { auto p = clean(); p.functions.front().result = lit(0); reject(std::move(p)); }
+    { auto p = clean(); p.functions.front().result = lit(3); reject(std::move(p)); }
+    { auto p = clean(); p.functions.front().result = lit(4); reject(std::move(p)); }
+    { auto p = clean(); p.functions.front().result = lit(-1); reject(std::move(p)); }
+    {
+        auto p = clean();
+        p.functions.front().result->kind = oreslang::Expression::Kind::Variable;
+        p.functions.front().result->name = "packet_nonempty";
+        reject(std::move(p)); // input=0 would yield XDP_ABORTED
+    }
+    {
+        auto p = clean();
+        oreslang::GuardedReturn g;
+        g.lhs = std::make_unique<oreslang::Expression>();
+        g.lhs->kind = oreslang::Expression::Kind::Variable;
+        g.lhs->name = "packet_nonempty";
+        g.rhs = lit(1);
+        g.result = lit(4);
+        p.functions.front().early_returns.push_back(std::move(g));
+        reject(std::move(p)); // XDP_REDIRECT without helper/map
+    }
     { auto p = clean(); p.classes.emplace_back(); reject(std::move(p)); }
     { auto p = clean(); p.module = "unsafe"; reject(std::move(p)); }
     { auto p = clean(); p.functions.front().name = "main"; reject(std::move(p)); }
