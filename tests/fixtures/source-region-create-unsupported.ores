@@ -1,0 +1,2 @@
+// A Region<Motion> value needs typed owned storage and field-permit lowering.
+pub fnc main(): int { return Region<Motion>.new(layouts: [#aos, #soa, #aosoa]); }
