@@ -26,7 +26,7 @@ def inspect(ir):
     for line_number, raw in enumerate(ir.splitlines(), 1):
         # LLVM ';' comments are never optimization evidence.
         line = raw.split(";", 1)[0]
-        if UNPROVEN.search(line) or re.search(r"\b(?:nonnull|dereferenceable(?:_or_null)?|nocapture|readonly|writeonly|align)\b", line) and re.search(r"\b(?:define|declare|call|invoke)\b", line):
+        if UNPROVEN.search(line) or (re.search(r"\b(?:nonnull|dereferenceable(?:_or_null)?|nocapture|readonly|writeonly|align)\b", line) and re.search(r"\b(?:define|declare|call|invoke)\b", line)):
             findings.append(f"line {line_number}: alias/loop metadata without ownership proof")
         if FAST_MATH.search(line):
             findings.append(f"line {line_number}: floating-point fast-math requires explicit semantics")
