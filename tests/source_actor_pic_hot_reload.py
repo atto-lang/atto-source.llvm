@@ -154,7 +154,7 @@ def main():
         checked([args.cxx, "-std=c++17", "-O1", "-DNDEBUG", *sanitizer,
                  "-Wall", "-Wextra", "-Wpedantic", "-Werror",
                  "-pthread", "-rdynamic", "-I", str(include),
-                 str(cxx_source), str(heap_object), "-ldl",
+                 str(cxx_source), str(heap_object), str(scheduler_object), "-ldl",
                  "-o", str(test)], timeout=60)
         actual = checked([str(test), *(str(path) for path in paths)],
                          timeout=30)
