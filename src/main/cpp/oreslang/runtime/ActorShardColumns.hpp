@@ -123,7 +123,7 @@ public:
     ActorColumnSnapshot(ActorColumnSnapshot&&) = delete;
     ActorColumnSnapshot& operator=(ActorColumnSnapshot&&) = delete;
 
-    ~ActorColumnSnapshot() { close(); }
+    ~ActorColumnSnapshot() { retire_unchecked(); }
 
     double read(std::size_t i) const {
         require_owner();
@@ -137,7 +137,12 @@ public:
         require_open();
         return values_.size();
     }
-    void close() noexcept {
+    void close() {
+        require_owner();
+        retire_unchecked();
+    }
+private:
+    void retire_unchecked() noexcept {
         std::lock_guard<std::mutex> hold(lock_);
         if (revoked_) return;
         revoked_ = true;
@@ -151,7 +156,6 @@ public:
         actor_budget_.release(reserved_bytes_);
         vm_budget_.release(reserved_bytes_);
     }
-private:
     friend class ActorShardColumns; // Only the creating shard can populate a snapshot.
     void write_from_owner(std::size_t i, double value) {
         require_owner();
