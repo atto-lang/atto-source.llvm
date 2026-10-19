@@ -48,7 +48,7 @@ await group.compute(
     layout: #aosoa,
     reads: [Motion.vx, Motion.vy],
     writes: [Motion.x, Motion.y],
-    fnc (chunk) {
+    kernel: fnc (chunk) {
         chunk.x += chunk.vx * dt;
         chunk.y += chunk.vy * dt;
     }
@@ -80,7 +80,10 @@ lowered. LLVM native source is a deliberately restricted compiler subset.
    unknown, missing and positional-after-named arguments; evaluate each
    expression once in lexical order, bind to declared parameter slots
    afterward. Never implement labels as a runtime map or reorder evaluation
-   to match declaration order. Current Java work in
+   to match declaration order. In particular, the user's original bare trailing
+   `fnc (chunk)` after named arguments is invalid; the canonical call uses
+   `kernel: fnc (chunk) { ... }`, not a positional-after-named exception.
+   Current Java work in
    `docs/NAMED_ARGUMENTS_CONTRACT.md` and drafts #1335/#1397/#1408
    does **not** yet make general guest named calls executable.
 4. **Symbols:** `#auto`, `#soft`, `#numa_aware`, `#hierarchical`,
@@ -98,6 +101,10 @@ lowered. LLVM native source is a deliberately restricted compiler subset.
    The compiler must reject unknown fields, duplicates, aliasing conflicts,
    or selectors from a different nominal type. These are never general
    reflection pointers or unrestricted access to another actor's heap.
+   Current Java `parsePostfix` does not yet parse `Region<Motion>.new(...)`:
+   unlike `Region.new<Motion>(...)`, its generic type arguments precede
+   a member access. This requires a dedicated type-member AST and binding
+   path; do not silently attach type specialization to an unrelated method.
 
 ## Execution / concurrency invariants
 
