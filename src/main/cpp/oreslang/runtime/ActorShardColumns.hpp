@@ -122,8 +122,12 @@ public:
     }
 
     ~ActorShardColumns() {
-        // Do not retain private shard values after actor termination.
-        std::fill(data_.begin(), data_.end(), 0.0);
+        // The data is actor-private even on non-tracing heaps. Volatile
+        // stores prevent a compiler from eliminating the scrubbing as dead
+        // writes immediately before vector destruction.
+        volatile double* bytes = data_.data();
+        for (std::size_t i = 0; i < data_.size(); ++i) bytes[i] = 0.0;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
         actor_budget_.release(reserved_bytes_);
         vm_budget_.release(reserved_bytes_);
     }
