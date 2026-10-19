@@ -39,6 +39,15 @@ typedef struct {
 
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in quota/cpuset-aware carrier admission. An explicit nonzero
+ * carrier_workers is preserved for its domain, while zero-valued domains
+ * divide remaining detected CPU capacity (at least one pthread per domain).
+ * This sizes pools, but does NOT pin them, provide isolation, or implement
+ * region/Task ownership. Legacy open() retains its 0 => 5 contract.
+ */
+OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config);
+/* Host-detected snapshot, 1 minimum; not the count of exclusive CPU cores. */
+size_t ores_native_vm_effective_cpu_budget(void);
 size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain domain);
 /* Security admission probe, NOT a capability grant.
  * All four native scheduler domains are in-process host callbacks and have
