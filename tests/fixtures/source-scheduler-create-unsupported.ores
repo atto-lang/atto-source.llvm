@@ -1,0 +1,2 @@
+// A typed Scheduler factory cannot lower as an arbitrary native scalar call.
+pub fnc main(): int { return Scheduler.new(workers: #auto); }
