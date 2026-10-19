@@ -16,6 +16,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+    src/main/cpp/oreslang/backend/EbpfXdpCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
 
@@ -2014,4 +2015,24 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(deployment_profile_static_fail_closed
         deployment_profile_compiler_negative_matrix PROPERTIES TIMEOUT 30)
+endif()
+
+# EXPERIMENTAL eBPF: real .ores -> LLVM BPF -> EM_BPF ELF smoke.
+# No kernel verifier/load/attach evidence; do not enable certified profile.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(oreslang-ebpf-xdp-admission-test
+        tests/ebpf_xdp_admission_test.cpp)
+    target_include_directories(oreslang-ebpf-xdp-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-ebpf-xdp-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME experimental_ebpf_xdp_static_admission
+        COMMAND oreslang-ebpf-xdp-admission-test)
+    add_test(NAME experimental_ebpf_xdp_source_object
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/experimental_ebpf_xdp_source_object.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(experimental_ebpf_xdp_static_admission
+        experimental_ebpf_xdp_source_object PROPERTIES TIMEOUT 90)
 endif()
