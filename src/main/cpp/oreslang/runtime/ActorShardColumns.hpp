@@ -169,6 +169,18 @@ public:
         }
     }
 
+    /** Copy into previously allocated host memory with no new allocation. */
+    void copy_column_into(std::uint32_t field, double* output,
+            std::size_t available) const {
+        require_owner();
+        if (field >= fields() || !output || available < rows()) {
+            throw std::out_of_range("invalid destination column span");
+        }
+        for (std::size_t i = 0; i < rows(); ++i) {
+            output[i] = data_[index(i, field)];
+        }
+    }
+
     /** Detached result copy: this does not expose a mutable actor heap view. */
     std::vector<double> snapshot_column(std::uint32_t field) const {
         require_owner();
