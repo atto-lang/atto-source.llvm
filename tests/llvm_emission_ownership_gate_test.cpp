@@ -98,6 +98,11 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(inconsistent_initializer); },
                      "AST contains unlowered owners or effects");
 
+    auto absent_initializer = bounded_scalar_frame();
+    absent_initializer.functions.front().locals.front().initializer.reset();
+    expect_rejection([&] { (void)emit_verified_llvm_ir(absent_initializer); },
+                     "AST contains unlowered owners or effects");
+
     auto mixed = bounded_scalar_frame();
     Function other;
     other.name = "extra";
