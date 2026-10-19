@@ -854,6 +854,14 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
+    # Frontend recognizes the new surface, but native lowering remains denied
+    # until compiler-owned tagged symbols and typed scheduler/region permits exist.
+    oreslang_contract_test(reject_guest_symbol_tagged_value source-symbol-tagged-value-unsupported.ores
+        --diagnostic "native Symbol literal requires tagged-value")
+    oreslang_contract_test(reject_guest_scheduler_create source-scheduler-create-unsupported.ores
+        --diagnostic "native Scheduler/Region source lowering unsupported")
+    oreslang_contract_test(reject_guest_region_create source-region-create-unsupported.ores
+        --diagnostic "native Scheduler/Region source lowering unsupported")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
