@@ -1692,6 +1692,20 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Opt-in budget-aware sizing; legacy VM defaults remain unchanged.
+    add_executable(oreslang-native-vm-cpu-budget-test
+        tests/native_vm_cpu_budget_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-cpu-budget-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-cpu-budget-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-cpu-budget-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_cgroup_cpu_budgeted_carrier_admission
+        COMMAND oreslang-native-vm-cpu-budget-test)
+    set_tests_properties(native_vm_cgroup_cpu_budgeted_carrier_admission
+        PROPERTIES TIMEOUT 30)
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
