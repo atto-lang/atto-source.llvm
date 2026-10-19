@@ -110,6 +110,24 @@ OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config)
     return vm;
 }
 
+OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
+        const OresNativeVMConfig* config, size_t maximum) {
+    if (!config || maximum == 0) return NULL;
+    OresNativeVM* vm = ores_native_vm_open(config);
+    if (!vm) return NULL;
+    vm->physical_gate.maximum = maximum;
+    vm->physical_gate.context = vm;
+    vm->physical_gate.notify_free = wake_physical_turn_domains;
+    atomic_init(&vm->physical_gate.admitted, 0);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (!ores_native_actor_scheduler_configure_turn_gate(
+                vm->schedulers[i], &vm->physical_gate)) {
+            if (!ores_native_vm_close(vm)) abort();
+            return NULL;
+        }
+    }
+    return vm;
+
 size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm) {
     return vm && vm->physical_gate.maximum
         ? ores_native_turn_gate_active(&vm->physical_gate) : 0;
