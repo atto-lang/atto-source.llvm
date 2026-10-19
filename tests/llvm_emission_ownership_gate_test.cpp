@@ -112,6 +112,58 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(absent_initializer); },
                      "AST contains unlowered owners or effects");
 
+    // Malformed AST leaf nodes can still contain hidden effectful children.
+    // The specialized scalar emitter must reject them instead of ignoring
+    // a move, borrow, call, or extra owner on a fake Integer/Variable leaf.
+    auto initializer_with_hidden_move = bounded_scalar_frame();
+    auto hidden_take = make_expression(Expression::Kind::Take);
+    hidden_take->left = variable("other_owner");
+    initializer_with_hidden_move.functions.front().locals.front()
+        .initializer->arguments.push_back(std::move(hidden_take));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(initializer_with_hidden_move); },
+                     "AST contains unlowered owners or effects");
+
+    auto return_with_hidden_call = bounded_scalar_frame();
+    return_with_hidden_call.functions.front().result->left =
+        make_expression(Expression::Kind::Call, "hidden_effect");
+    expect_rejection([&] { (void)emit_verified_llvm_ir(return_with_hidden_call); },
+                     "AST contains unlowered owners or effects");
+
+    auto initializer_with_generic_args = bounded_scalar_frame();
+    initializer_with_generic_args.functions.front().locals.front()
+        .initializer->type_arguments_present = true;
+    expect_rejection([&] { (void)emit_verified_llvm_ir(initializer_with_generic_args); },
+                     "AST contains unlowered owners or effects");
+
+    auto hidden_constructor = bounded_scalar_frame();
+    hidden_constructor.functions.front().locals.front()
+        .constructor_arguments.push_back(
+            make_expression(Expression::Kind::Call, "hidden_constructor"));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_constructor); },
+                     "AST contains unlowered owners or effects");
+
+    auto hidden_move_source = bounded_scalar_frame();
+    hidden_move_source.functions.front().locals.front().move_source = "other_owner";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_move_source); },
+                     "AST contains unlowered owners or effects");
+
+    auto hidden_catch_binding = bounded_scalar_frame();
+    hidden_catch_binding.functions.front().catch_binding = "exception";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_catch_binding); },
+                     "AST contains unlowered owners or effects");
+
+    auto invalid_function_name = bounded_scalar_frame();
+    invalid_function_name.functions.front().name = "not-source-valid!";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_function_name); },
+                     "AST contains unlowered owners or effects");
+
+    auto invalid_counter_name = bounded_scalar_frame();
+    invalid_counter_name.functions.front().scalar_while->counter = "actor.bad";
+    invalid_counter_name.functions.front().locals.front().name = "actor.bad";
+    invalid_counter_name.functions.front().result->name = "actor.bad";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_counter_name); },
+                     "AST contains unlowered owners or effects");
+
     auto mixed = bounded_scalar_frame();
     Function other;
     other.name = "extra";
