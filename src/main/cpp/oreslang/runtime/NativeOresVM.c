@@ -196,6 +196,35 @@ int ores_native_vm_publish_supervised_failure(
     return accepted;
 }
 
+int ores_native_vm_upgrade_freeze(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef ref, uint64_t expected_route_epoch,
+        uint64_t* ticket_out) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_upgrade_freeze(
+            vm->schedulers[domain], ref, expected_route_epoch, ticket_out);
+}
+int ores_native_vm_upgrade_quiesced(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef ref, uint64_t ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_upgrade_quiesced(
+            vm->schedulers[domain], ref, ticket);
+}
+int ores_native_vm_upgrade_finish(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef ref, uint64_t ticket, int committed) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_upgrade_finish(
+            vm->schedulers[domain], ref, ticket, committed);
+}
+uint64_t ores_native_vm_upgrade_epoch(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_upgrade_epoch(vm->schedulers[domain], ref)
+        : 0;
+}
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef ref, uint64_t payload) {
