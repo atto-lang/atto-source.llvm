@@ -172,6 +172,8 @@ int main(void) {
     check(ores_native_vm_wait_done(vm, main_domain, a));
     check(ores_native_vm_stop(vm, main_domain, other));
     check(ores_native_vm_wait_done(vm, main_domain, other));
+    check(ores_native_vm_stop(vm, ORES_NATIVE_VM_UNTRUSTED, untrusted));
+    check(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_UNTRUSTED, untrusted));
     check(ores_native_vm_close(vm));
     check(atomic_load(&state.new_processed) == 3);
     check(atomic_load(&state.wrong_order) == 0);
