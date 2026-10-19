@@ -113,3 +113,24 @@ Stop and retain draft status if any runner/job lacks executed steps,
 head/tree changes, unexpected workspace/index state appears, a native
 sanitizer fails, or an independent source-transfer security gate is
 unapproved. Never equate absence of runner capacity with runtime parity.
+
+## Incremental real-eventfd authority broker (host only)
+
+The draft integration branch now includes
+`src/main/cpp/oreslang/runtime/NativeFdAuthorityBroker.hpp` and
+`tests/native_fd_authority_broker_test.cpp`. The broker *owns* a real Linux
+`NativeEpollReactorManager`, binds `NativeFdAuthority` capabilities to
+kernel-created eventfds, and prevents numeric-FD exposure from this API.
+Failed admissions do not publish watches. Revocation removes logical
+rights before cancellation; only a consumed actual epoll terminal permits
+host close and logical `confirm_reclaimed`. A stale/foreign token cannot
+authorize a new registration.
+
+The extra fixture is included in both native ownership and VM sanitizer
+workflows, with GCC/Clang and sanitizer builds. Its execution is **not
+established** until a real source-local runner allocates and performs the
+compile/test steps. This narrow broker is not connected to the guest NIO
+C ABI and does not authenticate supervisor identity itself; callers must
+already be trusted host code. Existing raw socket/pipe watches remain
+legacy host-only operations, with their separate provenance restrictions.
+This must not be described as complete actor capability or Future/await parity.

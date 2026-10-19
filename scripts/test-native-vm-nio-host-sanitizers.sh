@@ -76,6 +76,15 @@ for toolchain in gcc clang; do
     UBSAN_OPTIONS=halt_on_error=1 \
       timeout 60s "$dest/fd-authority"
   done
+  # Execute the real epoll/owned-eventfd broker, separately from the guest ABI.
+  "$cxx" -std=c++17 "${shared[@]}" \
+    tests/native_fd_authority_broker_test.cpp -o "$dest/fd-broker"
+  for attempt in {1..3}; do
+    printf "NIO_REAL_EPOLL_FD_BROKER_ATTEMPT=%s toolchain=%s\n" "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 60s "$dest/fd-broker"
+  done
   verify_exact_worktree
 done
 
