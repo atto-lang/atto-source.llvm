@@ -18,6 +18,12 @@ def require(condition, message):
 def elf_sections(blob):
     require(blob[:4] == b"\x7fELF" and blob[4:6] == b"\x02\x01",
             "expected little-endian ELF64")
+    require(len(blob) >= 64 and blob[6] == 1 and
+            struct.unpack_from("<I", blob, 20)[0] == 1,
+            "invalid ELF format version or incomplete header")
+    require(struct.unpack_from("<H", blob, 52)[0] == 64 and
+            struct.unpack_from("<H", blob, 56)[0] == 0,
+            "invalid ELF64 header size or unsupported program headers")
     require(struct.unpack_from("<H", blob, 16)[0] == 1,
             "expected relocatable ET_REL, not an arbitrary linked image")
     require(struct.unpack_from("<H", blob, 18)[0] == 247,
@@ -26,7 +32,7 @@ def elf_sections(blob):
     entry_size = struct.unpack_from("<H", blob, 58)[0]
     count = struct.unpack_from("<H", blob, 60)[0]
     names_idx = struct.unpack_from("<H", blob, 62)[0]
-    require(0 < count < 256 and entry_size >= 64 and names_idx < count,
+    require(0 < count < 256 and entry_size == 64 and names_idx < count,
             "invalid ELF section table geometry")
     require(offset + entry_size * count <= len(blob), "section table beyond ELF")
     def entry(index):
@@ -49,6 +55,11 @@ def elf_sections(blob):
         require(name not in found, "duplicate ELF section name")
         found[name] = (data_offset, size, section_type, section_flags)
     require("xdp" in found and "license" in found, "missing xdp or license ELF section")
+    # Other executable sections must be empty. No hidden kernel programs or
+    # silently linked host/runtime code may ride along in this first slice.
+    for name, (_, length, _, flags) in found.items():
+        if name != "xdp" and (flags & 4) and length:
+            raise RuntimeError("unexpected nonempty executable ELF section: " + name)
     code_start, code_size, code_type, code_flags = found["xdp"]
     require(code_type == 1 and (code_flags & 4) == 4 and
             8 <= code_size <= 32768 and code_size % 8 == 0,
