@@ -49,6 +49,10 @@ def fixture():
                        "--clang", "/usr/bin/clang", "--source-root", "/work/src"]
             if name == "native_shared_guest_v1_real_compiler_asan_ubsan":
                 command.append("--sanitizers")
+        elif name == "native_shared_borrow_v2_real_compiler":
+            command = [sys.executable, "/work/src/tests/native_guest_borrow_v2_source.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang"]
         elif name == "native_ctest_manifest_harness_adversarial":
             command = [sys.executable, "-m", "unittest", "discover",
                        "-s", "/work/src/tests", "-p", "test_ctest_manifest_gate.py", "-v"]
@@ -98,6 +102,22 @@ class ManifestAuditTests(unittest.TestCase):
                         command.remove("--sanitizers")
                 with self.subTest(name=name, corruption=corruption), self.assertRaises(ManifestFailure):
                     check_manifest(document)
+
+    def test_borrow_v2_cannot_use_stub_or_wrong_compiler(self):
+        for key, value in (("script", "/work/src/tests/fake.py"),
+                           ("compiler", "/bin/true"), ("clang", None)):
+            sample = fixture()
+            command = next(item["command"] for item in sample["tests"]
+                           if item["name"] == "native_shared_borrow_v2_real_compiler")
+            if key == "script":
+                command[1] = value
+            elif key == "compiler":
+                command[command.index("--compiler") + 1] = value
+            else:
+                command.remove("--clang")
+                command.remove("/usr/bin/clang")
+            with self.subTest(key=key), self.assertRaises(ManifestFailure):
+                check_manifest(sample)
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
