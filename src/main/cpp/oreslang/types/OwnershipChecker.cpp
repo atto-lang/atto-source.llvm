@@ -1011,6 +1011,9 @@ void validate_i64_ownership(const Program& program) {
     };
 
     for (const auto& function : program.functions) {
+        if (function.caught_throw_value)
+            require_identifier(function.catch_binding, "catch");
+
         if (function.has_declared_effects) {
             if (!function.actor_spawns.empty() || !function.actor_sends.empty() ||
                     !function.actor_stops.empty() ||
