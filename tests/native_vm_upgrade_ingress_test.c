@@ -45,6 +45,16 @@ static void until(atomic_int* observed, int expected) {
     }
     abort();
 }
+static void wait_for_quiescence(OresNativeVM* vm,
+                                enum OresNativeVMDomain domain,
+                                OresNativeActorRef ref, uint64_t ticket) {
+    struct timespec pause = {0, 1000000};
+    for (int attempts = 0; attempts < 3000; ++attempts) {
+        if (ores_native_vm_upgrade_quiesced(vm, domain, ref, ticket)) return;
+        nanosleep(&pause, NULL);
+    }
+    abort();
+}
 int main(void) {
     State state = {0};
     atomic_store(&state.hold, 1);
@@ -97,7 +107,9 @@ int main(void) {
     atomic_store(&state.hold, 0);
     until(&state.processed, 3);
     until(&state.control, 1);
-    check(ores_native_vm_upgrade_quiesced(vm, main_domain, a, ticket));
+    /* The last callback may still hold its execution claim after updating
+     * user-visible counters. Wait for scheduler completion, not just count. */
+    wait_for_quiescence(vm, main_domain, a, ticket);
     check(atomic_load(&state.new_processed) == 0);
     /* This atomic version switch stands in for the separately authorized
      * immutable-image CAS. Never expose this as a source-level upgrade API. */
@@ -110,7 +122,7 @@ int main(void) {
     check(ores_native_vm_try_send(vm, main_domain, a, 4)
           == ORES_NATIVE_SEND_ACCEPTED);
     until(&state.processed, 5);
-    check(atomic_load(&state.new_processed) == 2);
+    until(&state.new_processed, 2);
     check(atomic_load(&state.wrong_order) == 0);
 
     uint64_t second = 0;
