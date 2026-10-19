@@ -1745,6 +1745,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-upgrade-ingress-test)
     set_tests_properties(native_vm_hot_upgrade_mailbox_linearization
         PROPERTIES TIMEOUT 30)
+    # DATA admission and upgrade freeze race under the actual scheduler
+    # mutex. A 128-round exact FIFO/dedup/terminal receipt regression.
+    add_executable(oreslang-native-actor-upgrade-ingress-race-test
+        tests/native_actor_upgrade_ingress_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-upgrade-ingress-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-upgrade-ingress-race-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-upgrade-ingress-race-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_upgrade_admission_contention
+        COMMAND oreslang-native-actor-upgrade-ingress-race-test)
+    set_tests_properties(native_actor_upgrade_admission_contention
+        PROPERTIES TIMEOUT 45)
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
