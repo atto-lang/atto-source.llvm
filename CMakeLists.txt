@@ -29,6 +29,16 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
+    add_executable(oreslang-native-send-sync-contract-test
+        tests/native_send_sync_contract_test.cpp)
+    target_include_directories(oreslang-native-send-sync-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-send-sync-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_send_sync_marker_contract
+        COMMAND oreslang-native-send-sync-contract-test)
+    set_tests_properties(native_send_sync_marker_contract PROPERTIES TIMEOUT 15)
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
