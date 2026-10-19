@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -14,23 +14,25 @@
 
 namespace oreslang::dop {
 
-// Reference CPU storage/borrow admission for independently scheduled ECS/DOP
-// Tasks. This is NOT yet an Oreslang compiler borrow proof or TaskScope ABI.
-// A source compiler must keep returned spans from escaping the owning lease.
+// Host reference for actor-independent DOP/ECS partition admission.  Not an
+// Oreslang source-level borrow checker, TaskScope, or an FFI surface.
+// Safe methods never give callers pointers/references to column storage.
 template<class T>
 class ScopedColumn {
     static_assert((std::is_arithmetic_v<T> || std::is_enum_v<T>) &&
                   !std::is_same_v<T, bool> && std::is_trivially_copyable_v<T> &&
                   (sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8),
-                  "scoped column cells must be fixed-width pointer-free POD (not bool)");
+                  "only fixed-width pointer-free arithmetic/enum cells (not bool)");
     struct Range {
         std::size_t first;
-        std::size_t end;  // exclusive
-        std::uint64_t ticket;
+        std::size_t end;                 // exclusive
+        std::uint64_t ticket;           // monotonically increasing, never reused
         bool write;
+        bool executing = false;         // one bulk callback per lease
+        bool pending_release = false;   // callback may release its own lease
     };
     struct State {
-        std::mutex mutex;
+        std::mutex mutex;               // admission/metadata only; never held in a hot loop
         std::vector<T> cells;
         std::vector<Range> active;
         std::uint64_t next_ticket = 1;
@@ -46,11 +48,7 @@ class ScopedColumn {
                          std::size_t x, std::size_t y) noexcept {
         return a < y && x < b;
     }
-    static void check_index(const State& s, std::size_t i) {
-        if (i >= s.cells.size()) throw std::out_of_range("column index out of range");
-    }
     static void check_range(const State& s, std::size_t first, std::size_t count) {
-        // Subtraction form prevents overflow on first + count.
         if (first > s.cells.size() || count > s.cells.size() - first)
             throw std::out_of_range("column partition out of range");
     }
@@ -58,11 +56,14 @@ class ScopedColumn {
     static bool conflicting(const Range& r, std::size_t first, std::size_t end) {
         return overlaps(r.first, r.end, first, end) && (Write || r.write);
     }
+    static auto find_lease(State& s, std::uint64_t ticket) {
+        return std::find_if(s.active.begin(), s.active.end(),
+                            [ticket](const Range& r) { return r.ticket == ticket; });
+    }
 
 public:
     template<bool Write>
     class Lease {
-        using Element = std::conditional_t<Write, T, const T>;
         std::shared_ptr<State> state_;
         std::size_t first_ = 0;
         std::size_t count_ = 0;
@@ -71,6 +72,35 @@ public:
               std::size_t count, std::uint64_t ticket) noexcept
             : state_(std::move(state)), first_(first), count_(count), ticket_(ticket) {}
         friend class ScopedColumn;
+
+        // Keeps state pinned during a callback and guarantees that a reentrant
+        // release cannot unlock/reallocate the buffer while the callback runs.
+        class Operation {
+            std::shared_ptr<State> state_;
+            std::uint64_t ticket_;
+        public:
+            Operation(const Lease& lease) : state_(lease.state_), ticket_(lease.ticket_) {
+                if (!state_) throw std::logic_error("released partition lease");
+                std::lock_guard lock(state_->mutex);
+                require_open(*state_);
+                auto it = find_lease(*state_, ticket_);
+                if (it == state_->active.end() || it->pending_release)
+                    throw std::logic_error("inactive partition lease");
+                if (it->executing)
+                    throw std::logic_error("partition lease already executing");
+                it->executing = true;
+            }
+            Operation(const Operation&) = delete;
+            Operation& operator=(const Operation&) = delete;
+            ~Operation() {
+                std::lock_guard lock(state_->mutex);
+                auto it = find_lease(*state_, ticket_);
+                if (it == state_->active.end()) return;
+                if (it->pending_release) state_->active.erase(it);
+                else it->executing = false;
+            }
+        };
+
     public:
         Lease(const Lease&) = delete;
         Lease& operator=(const Lease&) = delete;
@@ -79,25 +109,55 @@ public:
               count_(other.count_), ticket_(std::exchange(other.ticket_, 0)) {}
         Lease& operator=(Lease&&) = delete;
         ~Lease() { release(); }
-        std::size_t size() const noexcept { return count_; }
-        std::span<Element> span() const {
+        std::size_t size() const {
             if (!state_) throw std::logic_error("released partition lease");
             std::lock_guard lock(state_->mutex);
             require_open(*state_);
-            const auto found = std::find_if(state_->active.begin(), state_->active.end(),
-                [&](const Range& r) { return r.ticket == ticket_; });
-            if (found == state_->active.end())
+            auto it = find_lease(*state_, ticket_);
+            if (it == state_->active.end() || it->pending_release)
                 throw std::logic_error("inactive partition lease");
-            if (count_ == 0) return {};
-            return {state_->cells.data() + first_, count_};
+            return count_;
         }
+
+        // Callback gets a copy of each cell, never a raw alias to the backing
+        // buffer. Template inlining preserves a contiguous hot-loop substrate.
+        template<class Fn>
+        void for_each(Fn&& fn) const {
+            static_assert(std::is_invocable_v<Fn&, std::size_t, T>,
+                          "read callback accepts (index, cell-value)");
+            Operation pin(*this);
+            const auto& cells = state_->cells;
+            for (std::size_t i = 0; i < count_; ++i)
+                std::invoke(fn, i, static_cast<T>(cells[first_ + i]));
+        }
+
+        // Explicit value-in/value-out write loop: cannot return a reference
+        // into this column. No mutex/atomic operation occurs per cell.
+        template<class Fn>
+        void transform(Fn&& fn) requires (Write) {
+            static_assert(std::is_invocable_r_v<T, Fn&, std::size_t, T>,
+                          "transform callback returns cell-value from (index, cell-value)");
+            Operation pin(*this);
+            auto& cells = state_->cells;
+            for (std::size_t i = 0; i < count_; ++i) {
+                const std::size_t index = first_ + i;
+                const T input = cells[index];
+                const T output = static_cast<T>(std::invoke(fn, i, input));
+                cells[index] = output;
+            }
+        }
+
+        // A release reentered from a running callback is deferred to callback
+        // exit. Thus another owner cannot resize between callback iterations.
         void release() noexcept {
             if (!state_) return;
             auto owner = std::move(state_);
             std::lock_guard lock(owner->mutex);
-            const auto found = std::find_if(owner->active.begin(), owner->active.end(),
-                [&](const Range& r) { return r.ticket == ticket_; });
-            if (found != owner->active.end()) owner->active.erase(found);
+            auto it = find_lease(*owner, ticket_);
+            if (it != owner->active.end()) {
+                if (it->executing) it->pending_release = true;
+                else owner->active.erase(it);
+            }
             ticket_ = 0;
         }
     };
@@ -110,9 +170,8 @@ public:
     ScopedColumn(ScopedColumn&&) = delete;
     ScopedColumn& operator=(ScopedColumn&&) = delete;
     ~ScopedColumn() {
-        // Leases pin the storage, but no new span is issued after retirement.
         std::lock_guard lock(state_->mutex);
-        state_->closed = true;
+        state_->closed = true; // new accesses fail; active callbacks finish pinned
     }
     std::size_t size() const {
         std::lock_guard lock(state_->mutex);
@@ -129,7 +188,7 @@ public:
     T get(std::size_t index) const {
         std::lock_guard lock(state_->mutex);
         require_open(*state_);
-        check_index(*state_, index);
+        check_range(*state_, index, 1);
         for (const auto& r : state_->active)
             if (r.write && overlaps(r.first, r.end, index, index + 1))
                 throw std::logic_error("reading a mutably borrowed cell");
@@ -138,7 +197,7 @@ public:
     void set(std::size_t index, T value) {
         std::lock_guard lock(state_->mutex);
         require_open(*state_);
-        check_index(*state_, index);
+        check_range(*state_, index, 1);
         for (const auto& r : state_->active)
             if (overlaps(r.first, r.end, index, index + 1))
                 throw std::logic_error("writing a borrowed cell");
@@ -152,12 +211,12 @@ public:
         check_range(s, first, count);
         if (s.next_ticket == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("partition ticket exhausted");
-        const auto end = first + count;  // proved in bounds above
+        const auto end = first + count; // proven not to overflow
         for (const auto& r : s.active)
             if (conflicting<Write>(r, first, end))
                 throw std::logic_error("overlapping partition borrow");
-        // Admission is atomic: a failed vector allocation creates no lease.
         const auto ticket = s.next_ticket;
+        // Failed allocation leaves the lease set and ticket unchanged.
         s.active.push_back(Range{first, end, ticket, Write});
         ++s.next_ticket;
         return Lease<Write>(state_, first, count, ticket);
