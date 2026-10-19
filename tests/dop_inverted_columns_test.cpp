@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -70,9 +71,20 @@ int main() {
         owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
-        check(carried->span()[0] == 7.5f);
+        expect<std::logic_error>([&] { (void)carried->span(); });
     }
     carried.reset();
+    // Owner IDs are shared across distinct template instantiations.
+    oreslang::dop::InvertedColumns<std::int64_t> different_fields;
+    const auto foreign = different_fields.push(42);
+    check(foreign.owner != h0.owner);
+    // Saturating exhaustion never wraps the global owner namespace or
+    // produces an owner ID already issued to another store.
+    auto original_next = oreslang::dop::next_inverted_store_owner.load();
+    oreslang::dop::next_inverted_store_owner.store(std::numeric_limits<std::uint64_t>::max());
+    expect<std::overflow_error>([] { Store exhausted; (void)exhausted; });
+    check(oreslang::dop::next_inverted_store_owner.load() == std::numeric_limits<std::uint64_t>::max());
+    oreslang::dop::next_inverted_store_owner.store(original_next);
     // Differential/property-style stress: arbitrary swap-delete order must not
     // change surviving logical rows or revive any stale handle.
     Store fuzz;
