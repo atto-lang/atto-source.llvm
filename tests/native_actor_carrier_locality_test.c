@@ -16,6 +16,8 @@ typedef struct {
 static void on_message(void* opaque, size_t actor, uint64_t message) {
     State* s = (State*)opaque;
     int slot = ores_native_actor_scheduler_current_carrier_slot();
+    int cpuTarget = ores_native_actor_scheduler_current_cpu_target();
+    if (cpuTarget < -1) atomic_fetch_add(&s->errors, 1);
     if (slot < 0 || slot >= 4 || actor >= ACTORS
         || !ores_native_actor_scheduler_is_current_actor(s->scheduler, s->refs[actor]))
         atomic_fetch_add(&s->errors, 1);
