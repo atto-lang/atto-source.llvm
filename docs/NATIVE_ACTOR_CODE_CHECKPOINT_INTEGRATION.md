@@ -324,3 +324,41 @@ matched scheduler/code-gate freeze and drain and rollback of rejected ABI.
 
 No private source has been copied into an alternate GitHub organization.
 Source export remains on hold under platform-conformance #22/#77/#69.
+
+## 2026-10-18 second audit: admission race and torn-publication failure
+
+Added two CTest-native regressions to draft #627:
+- `native_actor_upgrade_admission_contention`: 128 pthread
+  producer-versus-upgrade-freeze races on a real `NativeActorScheduler`.
+  Every admission must report exactly ACCEPTED or UPGRADE_FROZEN;
+  accepted DATA drains once before publish, rejected data is never
+  delivered; the legacy index-based entrypoint must not bypass the seal.
+  A successful route switch advances the epoch once, and a subsequent
+  stop permanently blocks stale ticket resurrection.
+- `native_actor_upgrade_partial_publish_terminal_stop`: host code
+  generation changes to v2 while scheduler ingress remains frozen. A
+  deliberately intervening terminal STOP must cause BOTH route publish
+  and attempted old-route rollback to fail. The gate closes and code
+  images retire without accepting or duplicating additional DATA.
+  This test does not imply recovery from every possible publication
+  failure, nor that stop can be rolled back.
+
+**Architectural audit finding:** code-gate CAS and scheduler route CAS
+are still separate authority objects. A normal success path has two
+publication boundaries. Until a trusted transaction coordinator seals
+both with actual compiler-rooted continuation/FFI pins, a failure
+*after* code CAS may NOT be treated as a regular rollback. Supervisor
+must terminally quarantine/stop or reconcile a versioned transaction
+without reopening the old route. CONTROL may still arrive after a
+quiescence observation, so a code CAS alone cannot certify a stable
+route image. This is a hard blocker, not production implementation.
+
+Evidence: the new tests are committed and registered but remain
+**NOT EXECUTED** on the source branch, because the Actions scheduler
+records zero job steps. A source-owned rerun of the previous test
+run was accepted by GitHub but also recorded zero steps. Local independent
+source-free model: 20/20 PASS in normal Python and with `-O`; this is
+explicitly not native compiler or CTest execution. A separate funded
+organization has real green unrelated workflows, but source export
+requires independently reviewed exact source/destination authorization
+while platform-conformance incidents #22/#77 and bootstrap #69 remain open.
