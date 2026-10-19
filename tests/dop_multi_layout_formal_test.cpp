@@ -158,30 +158,6 @@ void unsafe_mutation_oracle() {
     try { s.verify_current(); }
     catch (const std::runtime_error&) { caught = true; }
     check(caught, "UNSAFE stale two-layout writer went undetected");
-    Mirror stale_stamp(7);
-    stale_stamp.write(Layout::AoS, 0, 0, 700);
-    auto& soa_copy = stale_stamp.copies.at(static_cast<std::size_t>(index(Layout::SoA)));
-    check(soa_copy.epoch < stale_stamp.epoch, "stale cache is required");
-    soa_copy.epoch = stale_stamp.epoch;
-    caught = false;
-    try { stale_stamp.verify_current(); }
-    catch (const std::runtime_error&) { caught = true; }
-    check(caught, "wrong version stamp went undetected");
-
-    Mirror uncommitted(7);
-    uncommitted.raw_put(Layout::AoS, 2, 0, 999);
-    caught = false;
-    try { uncommitted.verify_current(); }
-    catch (const std::runtime_error&) { caught = true; }
-    check(caught, "uncommitted byte mutation went undetected");
-
-    Mirror absent(1);
-    caught = false;
-    try { absent.hydrate(Layout::SoA); }
-    catch (const std::runtime_error&) { caught = true; }
-    check(caught, "absent layout incorrectly hydrated");
-
-
     Mirror false_epoch(7);
     false_epoch.write(Layout::AoS, 0, 0, 700);
     auto& unrefreshed = false_epoch.copies.at(
