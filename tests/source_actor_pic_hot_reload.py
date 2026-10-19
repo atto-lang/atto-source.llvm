@@ -11,6 +11,71 @@ from pathlib import Path
 import subprocess
 import tempfile
 import os
+import re
+
+# Native source-actor v1 is intentionally a deliberately limited ABI:
+# 3 scalar fields in fixed order. A position-preserving field rename still
+# changes source schema and MUST fail rather than relying on C++ hard-coded
+# `shape()` metadata as its own evidence.
+EXPECTED_FIELDS = (
+    ("const", "base", "int"),
+    ("val", "delta", "int"),
+    ("let", "total", "int"),
+)
+
+
+def source_actor_layout(source_text):
+    """Fail closed on any unrecognised actor field header (test-only oracle).
+
+    This is NOT an authenticated compiler-produced ABI manifest and cannot
+    validate arbitrary Oreslang syntax. It refuses grammar drift instead of
+    silently accepting a source layout the test does not understand.
+    """
+    before_handler = source_text.split("pub fnc on_message(", 1)
+    if len(before_handler) != 2:
+        raise ValueError("source actor handler not uniquely identified")
+    if before_handler[1].count("pub fnc on_message("):
+        raise ValueError("multiple actor message handlers")
+    lines = [
+        line.strip() for line in before_handler[0].splitlines()
+        if line.strip() and not line.lstrip().startswith("//")
+    ]
+    if not lines or lines.pop(0) != "define actor Counter as {":
+        raise ValueError("unexpected actor type or declaration")
+    fields = []
+    for line in lines:
+        match = re.fullmatch(
+            r"(const|val|let) ([A-Za-z_][A-Za-z0-9_]*): "
+            r"(int) = [^;]+;", line
+        )
+        if match is None:
+            raise ValueError("unknown or reordered actor field declaration")
+        fields.append(match.groups())
+    if tuple(fields) != EXPECTED_FIELDS:
+        raise ValueError("actor field ABI changed without migration")
+    return tuple(fields)
+
+
+def validate_source_fixture_pair(v1, v2):
+    first = source_actor_layout(v1)
+    second = source_actor_layout(v2)
+    if first != second:
+        raise ValueError("source-generated actor layouts differ")
+    # This is a harness self-check: no passing test may depend solely on
+    # hard-coded metadata while its own fixture inspector silently drifts.
+    for mutated in (
+        v2.replace("let total: int", "let renamed: int", 1),
+        v2.replace("let total: int", "val total: int", 1),
+        v2.replace("let total: int", "let total: string", 1),
+    ):
+        if mutated == v2:
+            raise ValueError("layout mutation selftest fixture missing")
+        try:
+            source_actor_layout(mutated)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("layout mutation falsely accepted")
 
 
 def checked(command, *, timeout=60):
@@ -41,6 +106,14 @@ def main():
 
     sanitizer = (["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
                  if args.sanitizers else [])
+    first_source = (fixtures / "actor-hot-reload-aot-v1.ores").read_text(
+        encoding="utf-8"
+    )
+    second_source = (fixtures / "actor-hot-reload-aot-v2.ores").read_text(
+        encoding="utf-8"
+    )
+    validate_source_fixture_pair(first_source, second_source)
+
     with tempfile.TemporaryDirectory(prefix="ores-actor-pic-") as directory:
         temp = Path(directory)
         paths = []
@@ -84,6 +157,7 @@ def main():
             raise RuntimeError("native actor PIC v1/v2 success marker missing")
         print("PASS compiler-generated .ores AOT PIC: v1=42 -> v2=86 -> 128")
         print("PASS one actor-owned heap, generation-pinned DSO retirement")
+        print("PASS independent fixture field-layout refusal and 3 mutations")
         print("NOT_PROVEN: authenticated production loader, ORC JIT,"
               " await/FFI compiler pins, full source scheduler, process isolation")
 
