@@ -55,6 +55,10 @@ int main() {
             try { (void)copies.back()->read(64); }
             catch (const std::logic_error&) { foreign = true; }
             assert(foreign);
+            bool foreign_close = false;
+            try { copies.back()->close(); }
+            catch (const std::logic_error&) { foreign_close = true; }
+            assert(foreign_close);
             current_actor = owner;
 
             for (int i = 0; i < 500; ++i) {
