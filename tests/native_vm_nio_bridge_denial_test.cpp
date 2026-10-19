@@ -52,7 +52,17 @@ int main() {
         require(!ores_native_vm_nio_try_pop(vm, &done));
         require(done.watch.ticket == 0 && done.watch.reactor == 0 &&
                 done.fd == 0 && done.events == 0 && done.outcome == 0);
-        require(ores_native_vm_nio_try_pop_batch(vm, &done, 1) == 0);
+        OresNativeNioCompletion stale_batch[3]{};
+        for (auto& item : stale_batch) {
+            item.watch = OresNativeNioWatch{UINT64_MAX, UINT8_MAX};
+            item.fd = 12345;
+            item.events = UINT32_MAX;
+            item.outcome = ORES_NATIVE_NIO_READY;
+        }
+        require(ores_native_vm_nio_try_pop_batch(vm, stale_batch, 3) == 0);
+        for (const auto& item : stale_batch)
+            require(item.watch.ticket == 0 && item.watch.reactor == 0 &&
+                    item.fd == 0 && item.events == 0 && item.outcome == 0);
         require(ores_native_vm_nio_completion_fd(vm, 0) == -1);
         ores_native_vm_nio_drain_signal(vm, 0);
     }
