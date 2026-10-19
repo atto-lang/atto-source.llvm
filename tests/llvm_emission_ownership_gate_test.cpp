@@ -54,6 +54,15 @@ static Program main_with_use_after_take() {
     p.functions.push_back(std::move(f));
     return p;
 }
+static Program cooperative_source_frame() {
+    Program p;
+    CooperativeScalarLoop loop;
+    loop.name = "step";
+    loop.variable = "count";
+    loop.initial = 0;
+    p.cooperative_loops.push_back(std::move(loop));
+    return p;
+}
 static Program bounded_scalar_frame() {
     Program p;
     Function f;
@@ -117,5 +126,44 @@ int main() {
                      "one standalone native function");
 
     std::cout << "NATIVE_LLVM_EMISSION_REVALIDATION_OK\n";
+
+    // Direct callers must not sneak unlowered users, extra frames, reserved
+    // source identifiers, or incompatible targets past the parser's contract.
+    auto cooperative = cooperative_source_frame();
+    const auto cooperative_ir = emit_verified_llvm_ir(cooperative);
+    check(cooperative_ir.find("oreslang_rt_step_resume") != std::string::npos,
+          "valid cooperative frame could not emit LLVM IR");
+    auto extra_cooperative = cooperative_source_frame();
+    extra_cooperative.cooperative_loops.push_back(CooperativeScalarLoop{});
+    expect_rejection([&] { (void)emit_verified_llvm_ir(extra_cooperative); },
+                     "one standalone suspend function");
+    auto mixed_cooperative = cooperative_source_frame();
+    Function injected;
+    injected.name = "hidden";
+    injected.result = make_expression(Expression::Kind::Integer, {}, 1);
+    mixed_cooperative.functions.push_back(std::move(injected));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(mixed_cooperative); },
+                     "one standalone suspend function");
+    auto module_cooperative = cooperative_source_frame();
+    module_cooperative.module = "Hidden";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(module_cooperative); },
+                     "one standalone suspend function");
+    auto malformed_cooperative_name = cooperative_source_frame();
+    malformed_cooperative_name.cooperative_loops.front().name = "step.bad";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(malformed_cooperative_name); },
+                     "invalid source identifiers or initializer");
+    auto malformed_cooperative_var = cooperative_source_frame();
+    malformed_cooperative_var.cooperative_loops.front().variable = "bad-name";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(malformed_cooperative_var); },
+                     "invalid source identifiers or initializer");
+    auto negative_cooperative = cooperative_source_frame();
+    negative_cooperative.cooperative_loops.front().initial = -1;
+    expect_rejection([&] { (void)emit_verified_llvm_ir(negative_cooperative); },
+                     "invalid source identifiers or initializer");
+    expect_rejection([&] { (void)emit_verified_llvm_ir(cooperative, true, false); },
+                     "one standalone suspend function");
+    expect_rejection([&] { (void)emit_verified_llvm_ir(cooperative, false, true); },
+                     "one standalone suspend function");
+
     return 0;
 }
