@@ -13,9 +13,10 @@ int main() {
     model.write("b", "counter");
     model.read("c", "counter");
     const auto races = model.findings();
-    assert(races.size() == 2);
+    assert(races.size() == 3);
     assert(races[0].conflict == "write-write");
     assert(races[1].conflict == "write-read");
+    assert(races[2].conflict == "write-read");
     assert(model.event_count() == 3);
   }
   {
