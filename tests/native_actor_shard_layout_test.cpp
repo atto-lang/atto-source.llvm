@@ -20,7 +20,7 @@ struct TestState {
     OresNativeActorScheduler* scheduler = nullptr;
     OresNativeActorRef owner = {};
     Layout layout = Layout::SoA;
-    ActorShardBudget actor_budget{16U * 1024U * 1024U};
+    std::unique_ptr<ActorShardBudget> actor_budget;
     ActorShardBudget vm_budget{64U * 1024U * 1024U};
     std::unique_ptr<ActorShardColumns> region;
     std::vector<double> published;
@@ -44,7 +44,7 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
         if (step == 1) {
             auto region = std::make_unique<ActorShardColumns>(
                 state.scheduler, state.owner,
-                state.actor_budget, state.vm_budget, state.layout, 65, 3,
+                *state.actor_budget, state.vm_budget, state.layout, 65, 3,
                 state.layout == Layout::AoSoA ? 8 : 1);
             for (std::size_t i = 0; i < 65; ++i) {
                 region->write(i, 0, static_cast<double>(i));
@@ -53,7 +53,7 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             }
             region->integrate(0, 1, .5);
             state.region = std::move(region);
-            ActorShardBudget tiny{64};
+            ActorShardBudget tiny{64, state.scheduler, state.owner};
             bool insufficient_budget = false;
             try {
                 ActorShardColumns excess(state.scheduler, state.owner,
@@ -68,19 +68,19 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             bool insufficient_vm_budget = false;
             try {
                 ActorShardColumns excess(state.scheduler, state.owner,
-                    state.actor_budget, tiny_vm, state.layout, 65, 3,
+                    *state.actor_budget, tiny_vm, state.layout, 65, 3,
                     state.layout == Layout::AoSoA ? 8 : 1);
             } catch (const std::length_error&) {
                 insufficient_vm_budget = true;
             }
             assert(insufficient_vm_budget);
             assert(tiny_vm.used_bytes() == 0);
-            assert(state.actor_budget.used_bytes() ==
+            assert(state.actor_budget->used_bytes() ==
                    state.region->rows() * state.region->fields() *
                    sizeof(double) +
                    (state.layout == Layout::AoSoA ? 7 * state.region->fields() *
                    sizeof(double) : 0));
-            assert(state.actor_budget.used_bytes() > 0);
+            assert(state.actor_budget->used_bytes() > 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
             state.published = state.region->snapshot_column(0);
@@ -103,6 +103,7 @@ int main() {
         assert(state.scheduler != nullptr);
         state.owner = ores_native_actor_scheduler_spawn(state.scheduler, 0);
         assert(state.owner.scheduler_domain != 0);
+        state.actor_budget = std::make_unique<ActorShardBudget>(16U * 1024U * 1024U, state.scheduler, state.owner);
         assert(ores_native_actor_scheduler_send(state.scheduler, state.owner, 1));
         assert(ores_native_actor_scheduler_send(state.scheduler, state.owner, 2));
         assert(ores_native_actor_scheduler_drain(state.scheduler));
@@ -128,7 +129,7 @@ int main() {
         ores_native_actor_scheduler_retire(state.scheduler);
         assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
         state.region.reset();
-        assert(state.actor_budget.used_bytes() == 0);
+        assert(state.actor_budget->used_bytes() == 0);
         assert(state.vm_budget.used_bytes() == 0);
     }
     puts("actor-owned AoS/SoA/AoSoA dense native kernel parity: OK");
