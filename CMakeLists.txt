@@ -987,6 +987,9 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-dop-inverted-columns-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-dop-inverted-columns-test PRIVATE Threads::Threads)
     add_test(NAME dop_inverted_columns_safe_handles COMMAND oreslang-dop-inverted-columns-test)
+    add_test(NAME dop_inverted_type_admission
+        COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}"
+                bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/dop_inverted_negative_admission.sh")
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
