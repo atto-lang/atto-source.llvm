@@ -3,6 +3,8 @@ import importlib.util
 import os
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -111,6 +113,30 @@ class CGLAdmissionTests(unittest.TestCase):
             sym.symlink_to(real)
             with self.assertRaises(OSError):
                 probe.inspect_elf(sym)
+
+    def test_fifo_is_rejected_without_waiting_for_a_writer(self):
+        # Open-before-fstat used to block forever on an empty named pipe.
+        # Isolate the regression case so a future removal of O_NONBLOCK
+        # causes a bounded test failure rather than a hung CI job.
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO unavailable on this platform")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "fake-elf.fifo"
+            os.mkfifo(path)
+            code = (
+                "import importlib.util, sys;"
+                "spec=importlib.util.spec_from_file_location('cgl_probe',sys.argv[1]);"
+                "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+                "f=sys.argv[2];"
+                "\\ntry:\\n m.inspect_elf(f)\\nexcept ValueError:\\n sys.exit(0)"
+                "\\nexcept Exception as e:\\n print(type(e).__name__,file=sys.stderr);sys.exit(2)"
+                "\\nsys.exit(3)"
+            ).replace("\\n", "\n")
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(SCRIPT), str(path)],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rt_sysfs_tristate(self):
         with tempfile.TemporaryDirectory() as td:
