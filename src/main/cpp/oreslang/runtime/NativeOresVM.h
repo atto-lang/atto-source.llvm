@@ -46,6 +46,14 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
  * region/Task ownership. Legacy open() retains its 0 => 5 contract.
  */
 OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config);
+/* Separate opt-in strict cross-domain physical callback concurrency limit,
+ * including under 4 CPUs. Leaves configured per-domain carrier counts
+ * unchanged. A denied callback stays on its scheduler's ready queue and no
+ * Oreslang actor code or Task is run while waiting for a permit.
+ * Host-only; independently owned nb Task schedulers are not covered yet. */
+OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
+    const OresNativeVMConfig* config, size_t maximum);
+size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm);
 /* Host-detected snapshot, 1 minimum; not the count of exclusive CPU cores. */
 size_t ores_native_vm_effective_cpu_budget(void);
 size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain domain);
