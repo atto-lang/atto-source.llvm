@@ -187,6 +187,11 @@ int main(int argc, char** argv) {
         // Incompatible ABI must not publish, mutate state, or unload old code.
         {
             const auto incompatible = load_fixture(argv[2]);
+            std::uint64_t admission_ticket = 0;
+            require(ores_native_actor_scheduler_upgrade_freeze(
+                        scheduler, actor, 1, &admission_ticket),
+                    "incompatible upgrade did not freeze native mailbox");
+            wait_mailbox_quiescence(scheduler, actor, admission_ticket);
             auto ticket = gate.freeze(id, 1);
             auto wrong = shape();
             wrong.state_schema = "incompatible-field-layout";
