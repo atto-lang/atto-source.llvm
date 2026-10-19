@@ -11,9 +11,14 @@ primitive on the existing single `ActorArena`-backed persistent record.
 2. It snapshots the entire bounded packed scalar state image into a fixed
    stack buffer: at most 4096 signed 64-bit scalar fields (32 KiB).
 3. It requires a mutable initialized version field, nonnegative and
-   nonoverflowing expected version, distinct mutable initialized update
-   indices, and exactly one `expected+1` version update. Stale versions
-   return 0 with no mutation. Every invalid patch aborts before publication.
+   nonoverflowing expected version, **caller-observed mutation revision**,
+   distinct mutable initialized update indices, and exactly one `expected+1`
+   version update. Every ordinary field initialization/write and successful
+   CAS increments a bounded internal mutation revision. A candidate must
+   carry the revision observed with its input weights in the same admitted
+   turn: staging after an intervening non-version write cannot accidentally
+   authenticate an outdated optimizer candidate. Stale version OR revision
+   returns 0 with no mutation. Invalid patches abort before publication.
 4. It stages all scalar changes outside persistent storage and makes ONE
    whole-record `ores_actor_arena_write` to publish. The underlying arena
    verifies outstanding loans are absent. There is no allocation, callback,
@@ -27,7 +32,8 @@ Extends the real native `actor_packed_state_test.cpp` CTest already wired
 into the CMake suite (`native_source_actor_packed_state_record`):
 
 - Successful version + weight + optimizer-iteration publication.
-- Stale CAS replay returns 0 without modifying the optimizer.
+- Stale CAS replay and TOCTOU publication with an intervening ordinary
+  field write return 0 without modifying the optimizer.
 - Three sequential physical carrier migrations with version progression.
 - Fork-isolated abort cases for duplicate indices, missing version patch,
   skipped version, immutable field write, foreign carrier invocation, and
