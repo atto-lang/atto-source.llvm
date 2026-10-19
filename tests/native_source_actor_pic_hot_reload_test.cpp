@@ -203,6 +203,7 @@ int main(int argc, char** argv) {
             }), "incompatible field ABI published");
             require(first_unloaded == 0 && rejected_unloaded == 1,
                     "ABI refusal leaked/replaced a live image");
+            gate.abort(ticket);
             require(ores_native_actor_scheduler_upgrade_finish(scheduler, actor, admission_ticket, 0), "failed to abort scheduler upgrade");
         }
 
