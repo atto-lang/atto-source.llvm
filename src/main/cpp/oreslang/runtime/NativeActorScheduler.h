@@ -41,10 +41,38 @@ typedef enum {
     ORES_NATIVE_SEND_TERMINATED = 2,
     ORES_NATIVE_SEND_MAILBOX_FULL = 3,
     ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
-    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5,
+    /* Exact live actor is temporarily ingress-sealed for hot replacement.
+     * Caller retains its message: no acceptance receipt was issued. */
+    ORES_NATIVE_SEND_UPGRADE_FROZEN = 6
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Host/supervisor-only DATA freeze at the SAME scheduler mutex used for
+ * try_send and stop. A successful freeze returns a non-repeating per-lane
+ * ticket. Already-acknowledged DATA remains queued and drains on OLD code.
+ * CONTROL and stop remain admissible. This is not guest-accessible authority
+ * and no code image, continuation or schema is validated by these calls.
+ * Commit must be paired with a separate code gate after full quiescence.
+ */
+int ores_native_actor_scheduler_upgrade_freeze(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t expected_route_epoch, uint64_t* ticket_out);
+/* READY only when all queued/active DATA and CONTROL have finished; also
+ * requires the exact outstanding freeze ticket. No waiting on a carrier. */
+int ores_native_actor_scheduler_upgrade_quiesced(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t ticket);
+/* Abort reopens OLD DATA admission; commit advances the route epoch only
+ * after complete scheduler quiescence. Stop/retire wins over both and a
+ * stale/foreign ticket cannot reopen a different incarnation. */
+int ores_native_actor_scheduler_upgrade_finish(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor,
+    uint64_t ticket, int committed);
+/* 0 denotes unknown/stale/terminated actor, not a valid epoch. */
+uint64_t ores_native_actor_scheduler_upgrade_epoch(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
