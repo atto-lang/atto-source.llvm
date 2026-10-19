@@ -61,12 +61,24 @@ def inspect_elf(path):
             has_load = False
             interp = None
             for i in range(phnum):
-                p_type, _, p_offset, _, _, p_filesz, _, _ = struct.unpack_from(
+                p_type, _, p_offset, p_vaddr, _, p_filesz, p_memsz, p_align = struct.unpack_from(
                     "<IIQQQQQQ", phdrs, i * phentsize)
                 if p_type == 1:
                     has_load = True
                     if p_offset > st.st_size or p_filesz > st.st_size - p_offset:
                         raise ValueError("ELF PT_LOAD extends beyond file")
+                    # The loader cannot map more bytes from the file than the
+                    # segment's declared in-memory extent. Prevent permissive
+                    # preflight from accepting malformed program headers.
+                    if p_memsz < p_filesz:
+                        raise ValueError("ELF PT_LOAD file size exceeds memory size")
+                    # ELF p_align must be 0/1 or a power of two. For a mapped
+                    # segment its file offset and virtual address must be
+                    # congruent modulo p_align (no truncation or host ABI guess).
+                    if p_align > 1 and (p_align & (p_align - 1)) != 0:
+                        raise ValueError("ELF PT_LOAD alignment is not a power of two")
+                    if p_align > 1 and (p_vaddr % p_align) != (p_offset % p_align):
+                        raise ValueError("ELF PT_LOAD alignment/offset mismatch")
                 if p_type == 3:
                     if interp is not None:
                         raise ValueError("ELF has multiple PT_INTERP segments")
