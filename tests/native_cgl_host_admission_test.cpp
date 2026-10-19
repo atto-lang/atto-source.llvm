@@ -1,5 +1,5 @@
 #include "oreslang/runtime/CglHostAdmission.hpp"
-#include <cassert>
+#include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -7,52 +7,53 @@
 #include <unistd.h>
 #endif
 
+static void require(bool condition, const char* message) {
+    if (!condition) {
+        std::fprintf(stderr, "CGL native host admission failure: %s\n", message);
+        std::abort();
+    }
+}
 int main() {
     using oreslang::cgl::HostProbe;
     using oreslang::cgl::read_preempt_rt_flag;
-    HostProbe probe = oreslang::cgl::probe_host();
+    const HostProbe probe = oreslang::cgl::probe_host();
 #ifdef __linux__
-    assert(probe.linux);
-    // Host observation may fail under a constrained runner; never manufacture success.
-    if (probe.compatible()) {
-        assert(probe.allowed_cpus > 0);
-        assert(probe.monotonic_clock);
-        assert(probe.scheduler_policy >= 0);
-    }
+    require(probe.linux, "Linux identification");
+    require(probe.compatible(), "effective affinity/monotonic clock/scheduler unavailable");
     char path[] = "/tmp/ores-cgl-flag-XXXXXX";
-    int fd = mkstemp(path);
-    assert(fd >= 0);
-    auto check = [&](const std::string& contents, std::optional<bool> expected) {
-        assert(ftruncate(fd, 0) == 0);
-        assert(lseek(fd, 0, SEEK_SET) == 0);
-        assert(write(fd, contents.data(), contents.size()) ==
-               static_cast<ssize_t>(contents.size()));
-        assert(read_preempt_rt_flag(path) == expected);
+    const int fd = mkstemp(path);
+    require(fd >= 0, "tempfile creation");
+    const auto check = [&](const std::string& contents, std::optional<bool> expected) {
+        require(ftruncate(fd, 0) == 0, "truncate");
+        require(lseek(fd, 0, SEEK_SET) == 0, "seek");
+        require(write(fd, contents.data(), contents.size()) ==
+                    static_cast<ssize_t>(contents.size()), "write");
+        require(read_preempt_rt_flag(path) == expected, "fail-closed realtime flag");
     };
     check("1\n", true);
     check("0\n", false);
     check("1 trailing\n", std::nullopt);
     check("maybe\n", std::nullopt);
-    assert(close(fd) == 0);
-    assert(unlink(path) == 0);
+    check("\n", std::nullopt);
+    require(close(fd) == 0, "close");
+    require(unlink(path) == 0, "unlink");
 #else
-    assert(!probe.compatible());
+    require(!probe.compatible(), "non-Linux host must fail closed");
 #endif
     HostProbe synthetic{true, 2, true, 0, true};
-    assert(synthetic.compatible());
-    assert(synthetic.compatible(true));
+    require(synthetic.compatible(), "normal admission");
+    require(synthetic.compatible(true), "verified RT admission");
     synthetic.preempt_rt = std::nullopt;
-    assert(synthetic.compatible());
-    assert(!synthetic.compatible(true));
+    require(synthetic.compatible() && !synthetic.compatible(true), "unknown RT");
     synthetic.preempt_rt = false;
-    assert(!synthetic.compatible(true));
+    require(!synthetic.compatible(true), "disabled RT");
     synthetic.allowed_cpus = 0;
-    assert(!synthetic.compatible());
+    require(!synthetic.compatible(), "zero CPUs");
     synthetic.allowed_cpus = 2;
     synthetic.monotonic_clock = false;
-    assert(!synthetic.compatible());
+    require(!synthetic.compatible(), "nonmonotonic clock");
     synthetic.monotonic_clock = true;
     synthetic.scheduler_policy = -1;
-    assert(!synthetic.compatible());
+    require(!synthetic.compatible(), "unverified scheduler policy");
     return 0;
 }
