@@ -1721,6 +1721,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-cpu-budget-test)
     set_tests_properties(native_vm_cgroup_cpu_budgeted_carrier_admission
         PROPERTIES TIMEOUT 30)
+    # One physical turn permit for all native scheduler domains; idle
+    # carriers do not execute guest callbacks while another owns the permit.
+    add_executable(oreslang-native-vm-turn-gate-test
+        tests/native_vm_physical_turn_gate_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-turn-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-turn-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-turn-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_cross_domain_physical_turn_limit
+        COMMAND oreslang-native-vm-turn-gate-test)
+    set_tests_properties(native_vm_cross_domain_physical_turn_limit
+        PROPERTIES TIMEOUT 30)
+
     # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
     # The actor scheduler certifies owner identity; no source-level lowering.
     add_executable(oreslang-native-actor-shard-layout-test
