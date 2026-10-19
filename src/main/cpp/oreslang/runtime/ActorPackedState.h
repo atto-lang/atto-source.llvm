@@ -51,9 +51,15 @@ typedef struct {
  * This is NOT durable publication and NOT an authenticated gradient
  * contribution API. It is a compiler/runtime integration primitive.
  */
+/* Caller must snapshot the revision while reading the input weight fields
+ * within the same authenticated actor turn. Any subsequent ordinary write,
+ * initialization or successful CAS invalidates that snapshot. */
+uint64_t ores_actor_packed_state_mutation_revision(OresActorPackedState*,
+    uint64_t domain, uint64_t epoch);
 int ores_actor_packed_state_compare_publish(OresActorPackedState*,
     uint64_t domain, uint64_t epoch,
     uint64_t version_index, int64_t expected_version,
+    uint64_t expected_revision,
     const OresActorScalarPatch* patches, uint64_t patch_count);
 
 void ores_actor_packed_state_retire(OresActorPackedState*);
