@@ -51,6 +51,7 @@ int main() {
   }
   {
     ConcurrencyRaceAnalyzer model;
+    model.acquire("a", "lock");
     model.write("a", "counter");
     model.release("a", "lock");
     model.acquire("b", "lock");
@@ -69,6 +70,37 @@ int main() {
     const auto races = model.findings();
     assert(races[1].prior_participant == "a");
     assert(races[1].current_participant == "c");
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    bool rejected = false;
+    try {
+      model.release("a", "lock");
+    } catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    model.acquire("a", "lock");
+    rejected = false;
+    try {
+      model.acquire("b", "lock");
+    } catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try {
+      model.release("b", "lock");
+    } catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    model.release("a", "lock");
+    model.acquire("b", "lock");
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.send("a", "once");
+    model.receive("b", "once");
+    bool rejected = false;
+    try {
+      model.send("b", "once");
+    } catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
   }
   return 0;
 }
