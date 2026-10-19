@@ -51,6 +51,9 @@ struct OresNativeActorScheduler {
     uint64_t preferred_carrier_hits, carrier_migrations;
     uint64_t *ready_control_bits, *ready_data_bits;
     size_t ready_word_count;
+    /* Up to 1024 data words => 16 static summary words per priority.
+     * Derived strictly under the same lock; not guest-owned authority. */
+    uint64_t ready_control_summary[16], ready_data_summary[16];
     int retired;
     int cpu_affinity_opt_in;
     OresNativeActorTaskFn callback;
@@ -100,6 +103,15 @@ static void unlock(OresNativeActorScheduler* s) {
 enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_ACTORS = 65536 };
 enum { ORES_LARGE_POOL_MAX_MAILBOX_CELLS = 1048576 };
 
+static void update_ready_summary(uint64_t summary[16], size_t word,
+                                 uint64_t occupied) {
+    const size_t summary_word = word / ORES_READY_WORD_BITS;
+    if (summary_word >= 16) abort();
+    const uint64_t flag = UINT64_C(1) << (word % ORES_READY_WORD_BITS);
+    if (occupied) summary[summary_word] |= flag;
+    else summary[summary_word] &= ~flag;
+}
+
 static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
     if (actor >= s->actor_count) abort();
     ActorLane* lane = &s->actors[actor];
@@ -114,14 +126,23 @@ static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
         s->ready_data_bits[word] |= bit;
     else
         s->ready_data_bits[word] &= ~bit;
+    update_ready_summary(s->ready_control_summary, word,
+                         s->ready_control_bits[word]);
+    update_ready_summary(s->ready_data_summary, word,
+                         s->ready_data_bits[word]);
 }
 
 /* Scan only occupancy-index words and set actor lanes, preserving the old
  * rotating actor-slot fairness order (including wraparound). A preferred
  * worker may skip eligible DATA lanes, but the global fallback may not.
  * Return SIZE_MAX when no matching entry is present. */
+/* Second-level 64-way nonempty-word summary. This avoids probing up to
+ * 1024 empty DATA words on every dispatch in a 65,536-lane scheduler.
+ * CONTROL still precedes DATA; all state remains mutex-owned.
+ * The two-pass range preserves slot round-robin wrap semantics. */
 static size_t select_ready_locked(OresNativeActorScheduler* s,
                                   const uint64_t* bits,
+                                  const uint64_t summary[16],
                                   size_t start, size_t worker,
                                   int require_preferred) {
     for (int wrap = 0; wrap < 2; ++wrap) {
@@ -130,26 +151,45 @@ static size_t select_ready_locked(OresNativeActorScheduler* s,
         if (begin >= end) continue;
         const size_t first_word = begin / ORES_READY_WORD_BITS;
         const size_t final_word = (end - 1) / ORES_READY_WORD_BITS;
-        for (size_t word = first_word; word <= final_word; ++word) {
-            uint64_t eligible = bits[word];
-            if (word == first_word)
-                eligible &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
-            if (word == final_word)
-                eligible &= UINT64_MAX >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
-            while (eligible) {
-                const unsigned bit = (unsigned)__builtin_ctzll(eligible);
-                const size_t actor = word * ORES_READY_WORD_BITS + bit;
-                ActorLane* lane = &s->actors[actor];
-                if (lane->active) abort(); /* stale index is a scheduler bug */
-                if (!require_preferred || lane->last_carrier_plus_one == worker + 1)
-                    return actor;
-                eligible &= eligible - 1;
+        const size_t first_summary = first_word / ORES_READY_WORD_BITS;
+        const size_t final_summary = final_word / ORES_READY_WORD_BITS;
+        if (final_summary >= 16) abort();
+        for (size_t summary_word = first_summary;
+             summary_word <= final_summary; ++summary_word) {
+            uint64_t candidate_words = summary[summary_word];
+            if (summary_word == first_summary)
+                candidate_words &= UINT64_MAX
+                                   << (first_word % ORES_READY_WORD_BITS);
+            if (summary_word == final_summary)
+                candidate_words &= UINT64_MAX >>
+                     (63 - (final_word % ORES_READY_WORD_BITS));
+            while (candidate_words) {
+                const size_t word = summary_word * ORES_READY_WORD_BITS
+                    + (unsigned)__builtin_ctzll(candidate_words);
+                if (word >= s->ready_word_count || !bits[word]) abort();
+                uint64_t eligible = bits[word];
+                if (word == first_word)
+                    eligible &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
+                if (word == final_word)
+                    eligible &= UINT64_MAX >>
+                        (63 - ((end - 1) % ORES_READY_WORD_BITS));
+                while (eligible) {
+                    const unsigned bit = (unsigned)__builtin_ctzll(eligible);
+                    const size_t actor = word * ORES_READY_WORD_BITS + bit;
+                    if (actor >= s->actor_count) abort();
+                    ActorLane* lane = &s->actors[actor];
+                    if (lane->active) abort();
+                    if (!require_preferred
+                        || lane->last_carrier_plus_one == worker + 1)
+                        return actor;
+                    eligible &= eligible - 1;
+                }
+                candidate_words &= candidate_words - 1;
             }
         }
     }
     return SIZE_MAX;
 }
-
 static int find_ready(OresNativeActorScheduler* s, size_t worker,
                       unsigned local_burst, size_t* actor,
                       int* control, int* preferred) {
@@ -157,16 +197,19 @@ static int find_ready(OresNativeActorScheduler* s, size_t worker,
      * After eight preferred-carrier DATA turns, skip one affinity pass
      * to guarantee a globally fair DATA selection. */
     size_t i = select_ready_locked(s, s->ready_control_bits,
+                                   s->ready_control_summary,
                                    s->next_actor, worker, 0);
     int is_control = i != SIZE_MAX;
     int is_preferred = 0;
     if (!is_control && local_burst < 8) {
         i = select_ready_locked(s, s->ready_data_bits,
+                                s->ready_data_summary,
                                 s->next_actor, worker, 1);
         is_preferred = i != SIZE_MAX;
     }
     if (i == SIZE_MAX)
         i = select_ready_locked(s, s->ready_data_bits,
+                                s->ready_data_summary,
                                 s->next_actor, worker, 0);
     if (i == SIZE_MAX) return 0;
     *actor = i;
