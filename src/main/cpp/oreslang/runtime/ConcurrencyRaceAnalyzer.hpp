@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <unordered_set>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -61,8 +62,8 @@ class ConcurrencyRaceAnalyzer final {
     std::lock_guard<std::mutex> hold(mu_);
     budget();
     const auto id = key(message_id);
-    if (messages_.count(id) != 0) {
-      throw std::logic_error("message token already published");
+    if (!issued_message_ids_.insert(id).second) {
+      throw std::logic_error("message token cannot be reused, including after receive");
     }
     messages_.emplace(id, tick(participant).clock);
   }
@@ -81,16 +82,29 @@ class ConcurrencyRaceAnalyzer final {
 
   void release(const std::string& participant, const std::string& lock_id) {
     std::lock_guard<std::mutex> hold(mu_);
+    const auto id = key(lock_id);
+    const auto actor = key(participant);
+    const auto owner = lock_owners_.find(id);
+    if (owner == lock_owners_.end() || owner->second != actor) {
+      throw std::logic_error("release requires the current lock owner");
+    }
     budget();
-    locks_[key(lock_id)] = tick(participant).clock;
+    locks_[id] = tick(actor).clock;
+    lock_owners_.erase(owner);
   }
 
   void acquire(const std::string& participant, const std::string& lock_id) {
     std::lock_guard<std::mutex> hold(mu_);
+    const auto id = key(lock_id);
+    const auto actor = key(participant);
+    if (lock_owners_.count(id) != 0) {
+      throw std::logic_error("lock is already acquired");
+    }
     budget();
-    const auto it = locks_.find(key(lock_id));
-    if (it != locks_.end()) merge(clock(participant), it->second);
-    tick(participant);
+    const auto it = locks_.find(id);
+    if (it != locks_.end()) merge(clock(actor), it->second);
+    tick(actor);
+    lock_owners_[id] = actor;
   }
 
   std::vector<Finding> findings() const {
@@ -186,7 +200,9 @@ class ConcurrencyRaceAnalyzer final {
   std::unordered_map<std::string, Clock> clocks_;
   std::unordered_map<std::string, Location> locations_;
   std::unordered_map<std::string, Clock> messages_;
+  std::unordered_set<std::string> issued_message_ids_;
   std::unordered_map<std::string, Clock> locks_;
+  std::unordered_map<std::string, std::string> lock_owners_;
   std::vector<Finding> findings_;
 };
 
