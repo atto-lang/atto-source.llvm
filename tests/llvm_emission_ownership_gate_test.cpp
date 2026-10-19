@@ -669,6 +669,41 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(excessive_expression_depth); },
                      "malformed native ownership AST: expression nesting exceeds 256");
 
+    // Statement recursion has its own lower bound. Preflight must admit
+    // the deepest representable tree below the cap and reject the next
+    // statement before ownership analysis can recursively consume it.
+    const auto nested_conditionals = [](unsigned wrappers) {
+        Program p;
+        Function f;
+        f.name = "main";
+        Statement current;
+        current.kind = Statement::Kind::Conditional;
+        current.condition_lhs =
+            make_expression(Expression::Kind::Integer, {}, 1);
+        current.condition_rhs =
+            make_expression(Expression::Kind::Integer, {}, 1);
+        for (unsigned i = 1; i < wrappers; ++i) {
+            Statement outer;
+            outer.kind = Statement::Kind::Conditional;
+            outer.condition_lhs =
+                make_expression(Expression::Kind::Integer, {}, 1);
+            outer.condition_rhs =
+                make_expression(Expression::Kind::Integer, {}, 1);
+            outer.then_statements.push_back(std::move(current));
+            current = std::move(outer);
+        }
+        f.statements.push_back(std::move(current));
+        f.result = make_expression(Expression::Kind::Integer, {}, 0);
+        p.functions.push_back(std::move(f));
+        return p;
+    };
+    auto max_statement_depth = nested_conditionals(64);
+    expect_rejection([&] { (void)emit_verified_llvm_ir(max_statement_depth); },
+                     "ownership violation: unsupported conditional arm effect");
+    auto excessive_statement_depth = nested_conditionals(65);
+    expect_rejection([&] { (void)emit_verified_llvm_ir(excessive_statement_depth); },
+                     "malformed native ownership AST: statement nesting exceeds 64");
+
     Program unknown_expression_kind;
     Function unknown_expression_fn;
     unknown_expression_fn.name = "main";
