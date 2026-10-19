@@ -75,32 +75,34 @@ static void misuse(enum Misuse kind) {
         ores_actor_packed_state_field_init_mutable(
                 ml, t.domain, t.epoch, 1, 5);
         ores_actor_packed_state_field_init(ml, t.domain, t.epoch, 2, 99);
+        const uint64_t revision =
+            ores_actor_packed_state_mutation_revision(ml, t.domain, t.epoch);
         OresActorScalarPatch full[] = {{0, 2}, {1, 4}};
         if (kind == CAS_DUPLICATE_PATCH) {
             const OresActorScalarPatch duplicate[] = {{0, 2}, {0, 2}};
             (void) ores_actor_packed_state_compare_publish(
-                ml, t.domain, t.epoch, 0, 1, duplicate, 2);
+                ml, t.domain, t.epoch, 0, 1, revision, duplicate, 2);
         } else if (kind == CAS_MISSING_VERSION) {
             const OresActorScalarPatch missing[] = {{1, 4}};
             (void) ores_actor_packed_state_compare_publish(
-                ml, t.domain, t.epoch, 0, 1, missing, 1);
+                ml, t.domain, t.epoch, 0, 1, revision, missing, 1);
         } else if (kind == CAS_VERSION_SKIP) {
             const OresActorScalarPatch skipped[] = {{0, 3}};
             (void) ores_actor_packed_state_compare_publish(
-                ml, t.domain, t.epoch, 0, 1, skipped, 1);
+                ml, t.domain, t.epoch, 0, 1, revision, skipped, 1);
         } else if (kind == CAS_IMMUTABLE_FIELD) {
             const OresActorScalarPatch immutable[] = {{0, 2}, {2, 7}};
             (void) ores_actor_packed_state_compare_publish(
-                ml, t.domain, t.epoch, 0, 1, immutable, 2);
+                ml, t.domain, t.epoch, 0, 1, revision, immutable, 2);
         } else if (kind == CAS_FORGED_CARRIER) {
             std::thread intruder([&] {
                 (void) ores_actor_packed_state_compare_publish(
-                    ml, t.domain, t.epoch, 0, 1, full, 2);
+                    ml, t.domain, t.epoch, 0, 1, revision, full, 2);
             });
             intruder.join();
         } else if (kind == CAS_VERSION_OVERFLOW) {
             (void) ores_actor_packed_state_compare_publish(
-                ml, t.domain, t.epoch, 0, INT64_MAX, full, 2);
+                ml, t.domain, t.epoch, 0, INT64_MAX, revision, full, 2);
         }
     }
 }
@@ -173,9 +175,12 @@ int main(void) {
         ml, step.domain, step.epoch, 1, 5); // scalar weight
     ores_actor_packed_state_field_init_mutable(
         ml, step.domain, step.epoch, 2, 0); // optimizer iteration
+    const uint64_t initialRevision =
+        ores_actor_packed_state_mutation_revision(ml, step.domain, step.epoch);
+    CHECK(initialRevision == 3);
     const OresActorScalarPatch firstUpdate[] = {{0, 2}, {1, 4}, {2, 1}};
     CHECK(ores_actor_packed_state_compare_publish(
-        ml, step.domain, step.epoch, 0, 1, firstUpdate, 3) == 1);
+        ml, step.domain, step.epoch, 0, 1, initialRevision, firstUpdate, 3) == 1);
     CHECK(ores_actor_packed_state_field_read(
         ml, step.domain, step.epoch, 0) == 2);
     CHECK(ores_actor_packed_state_field_read(
@@ -184,7 +189,7 @@ int main(void) {
         ml, step.domain, step.epoch, 2) == 1);
     // Exact duplicate CAS is a miss with ZERO mutations.
     CHECK(ores_actor_packed_state_compare_publish(
-        ml, step.domain, step.epoch, 0, 1, firstUpdate, 3) == 0);
+        ml, step.domain, step.epoch, 0, 1, initialRevision, firstUpdate, 3) == 0);
     CHECK(ores_actor_packed_state_field_read(
         ml, step.domain, step.epoch, 2) == 1);
     ores_actor_packed_state_leave(ml, step);
@@ -196,11 +201,14 @@ int main(void) {
         std::thread carrierTurn([&, round] {
             auto t = ores_actor_packed_state_enter(ml, 90, 7);
             const int64_t expected = 2 + round;
+            const uint64_t revision =
+                ores_actor_packed_state_mutation_revision(
+                    ml, t.domain, t.epoch);
             const OresActorScalarPatch updates[] = {
                 {0, expected + 1}, {1, 4 - round}, {2, expected}
             };
             if (ores_actor_packed_state_compare_publish(
-                    ml, t.domain, t.epoch, 0, expected, updates, 3) != 1
+                    ml, t.domain, t.epoch, 0, expected, revision, updates, 3) != 1
                 || ores_actor_packed_state_field_read(
                     ml, t.domain, t.epoch, 0) != expected + 1
                 || ores_actor_packed_state_field_read(
@@ -216,6 +224,23 @@ int main(void) {
         ml, step.domain, step.epoch, 0) == 5);
     CHECK(ores_actor_packed_state_field_read(
         ml, step.domain, step.epoch, 2) == 4);
+    // Staging AFTER an intervening ordinary field write must not authorize
+    // an optimizer candidate derived from a previous snapshot revision.
+    const uint64_t staleSnapshotRevision =
+        ores_actor_packed_state_mutation_revision(
+            ml, step.domain, step.epoch);
+    ores_actor_packed_state_field_write(
+        ml, step.domain, step.epoch, 1, 99);
+    const OresActorScalarPatch staleCandidate[] = {
+        {0, 6}, {1, 1}, {2, 5}
+    };
+    CHECK(ores_actor_packed_state_compare_publish(
+        ml, step.domain, step.epoch, 0, 5, staleSnapshotRevision,
+        staleCandidate, 3) == 0);
+    CHECK(ores_actor_packed_state_field_read(
+        ml, step.domain, step.epoch, 1) == 99);
+    CHECK(ores_actor_packed_state_field_read(
+        ml, step.domain, step.epoch, 0) == 5);
     ores_actor_packed_state_retire(ml);
     CHECK(ores_actor_packed_state_try_destroy(ml) == 0);
     ores_actor_packed_state_leave(ml, step);
