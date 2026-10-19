@@ -148,6 +148,20 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_leaf); },
                      "malformed native ownership AST: scalar leaf contains hidden operands");
 
+    // A direct AST cannot define two same-name/same-user-arity overloads:
+    // the semantic symbol table must not silently keep the first binding.
+    Program duplicate_slots;
+    Function first_overload;
+    first_overload.name = "compute";
+    first_overload.result = make_expression(Expression::Kind::Integer, {}, 1);
+    duplicate_slots.functions.push_back(std::move(first_overload));
+    Function second_overload;
+    second_overload.name = "compute";
+    second_overload.result = make_expression(Expression::Kind::Integer, {}, 2);
+    duplicate_slots.functions.push_back(std::move(second_overload));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_slots); },
+                     "duplicate callable user arity");
+
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
         "pub fnc main(): int { val x: int = 42; return x; }");
