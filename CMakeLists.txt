@@ -538,6 +538,24 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # Exercise the *actual LLVM emitter API* with Program ASTs constructed
+    # without parse_program(), to detect bypasses after parser verification.
+    add_executable(oreslang-llvm-emission-ownership-gate-test
+        tests/llvm_emission_ownership_gate_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-llvm-emission-ownership-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-llvm-emission-ownership-gate-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-llvm-emission-ownership-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_llvm_emission_checks_ownership_and_frame_layout
+        COMMAND oreslang-llvm-emission-ownership-gate-test)
+    set_tests_properties(native_llvm_emission_checks_ownership_and_frame_layout
+        PROPERTIES TIMEOUT 30)
     # Field-wise native destruction verifier and concrete owner flags.
     # Separate from unsupported source-level nontrivial class drop glue.
     add_executable(oreslang-ownership-drop-plan-test
