@@ -107,30 +107,51 @@ required where the backing domain is incompatible.
 a guest `InvertedArray<T>` integration.
 
 - `read(first,count)` and `write(first,count)` create move-only,
-  runtime-checked leased spans backed by the **same** vector. Two readers
+  runtime-checked region leases backed by the **same** vector. Two readers
   may overlap; a writer excludes overlapping readers/writers but not
   disjoint readers/writers.
 - Borrow admission holds one metadata mutex and performs bounds/overflow,
   conflict, ticket-generation and strong-lifetime checks. Element loops
-  directly use contiguous spans, without locking per element or cloning
-  the column. Zero-length partitions are conservative leases: they block
+  directly traverse contiguous underlying columns, without a lock per
+  element or cloning the column. Safe APIs are `for_each((index,value))`
+  for reads and `transform((index,value)->value)` for writes; inputs
+  and outputs are scalars passed by value, not buffer pointers. Zero-length partitions are conservative leases: they block
   structure changes but cannot overlap nonempty ranges.
 - `get`/`set` reject conflicting outstanding range access; `resize`
   refuses **all** live loans, including empty ones. A holder dropping early
   releases only its own monotonic ticket.
-- Destroying the owner retires new span issuance while outstanding leases
-  keep the backing memory allocated. This is NOT permission to use a raw span
-  already extracted from a destroyed/returned loan.
-- `std::span` is an unchecked C++ borrowing view and **can escape** the
-  lease at host level. Source compiler nonescape/lifetime checks, actor domain
-  authority, allocator quotas, TaskScope cancellation and physical completion
-  still require implementation.
+- The previously public `span()` getter was **removed** after an audit found
+  that callers could retain a raw span after releasing a lease and resizing
+  the vector. Neither safe bulk API exposes a pointer/reference to storage.
+  Runtime lease size checks also reject stale/released authority.
+- A bulk callback owns an internal operation pin for its entire lifetime;
+  no metadata mutex is held while transforming elements. A nested call
+  on the same lease is rejected. If a callback calls its own `release()`,
+  release is deferred until callback exit, including throwing callbacks:
+  no other writer or structural resize is admitted halfway through.
+- A callback exception leaves any **already updated scalar cells** updated;
+  this is a nontransactional computational operation, not an ECS structural
+  transaction. The caller must use explicit staging/rollback if atomic
+  multi-cell computation is required.
+- Destroying an owner rejects **new** operations, while active operations
+  pin the backing allocation until callback exit. A retiring owner must not
+  race another thread still invoking methods **on the owner object itself**.
+- One `Lease` object must not be concurrently moved, destroyed, or manually
+  released by one host thread while another host thread invokes its methods;
+  operation admission detects concurrent *bulk* entry, but the C++ reference
+  is not a generalized thread-safe lease-object wrapper. Oreslang's compiler
+  and TaskScope must enforce exclusive handle ownership and physical joins.
+- Actor domain authority, allocator quotas, scoped source borrow escape,
+  TaskScope cancellation, and physical completion still require integration.
 
 `tests/dop_scoped_partitions_test.cpp` exercises two simultaneous same-column
 writers, disjoint read/write, overlapping rejection, index bounds, empty loans,
-resize/structural exclusion, multiple readers, single-ticket release, post-owner
-retirement, 8-worker parallel 8,192-element writes and a deterministic
-4,000-trial interval admission differential oracle. It contains no actor.
+resize/structural exclusion, multiple readers, stale-lease operations, callback
+reentrancy, nested bulk admission, release-in-callback, release-on-throw,
+post-owner retirement, 8-worker parallel 8,192-element writes and a deterministic
+4,000-trial interval admission differential oracle. No actor is involved.
+A compile-time negative check also ensures neither read nor write leases expose
+`.span()`.
 
 ## Security/ownership and performance gates before enabling source
 
@@ -147,10 +168,12 @@ retirement, 8-worker parallel 8,192-element writes and a deterministic
   barriers; row handles remain generation-checked after swap delete.
 - Actor-local arena retirement, tenant/trust-domain isolation and sharing
   permissions independently constrain otherwise `Send/Sync` types.
-- Exact native source files run with GCC/Clang and ASan/UBSan locally; full
-  native source repo CMake/CTest, Java JDK25/GraalVM, LLVM guest source
-  compile/execution, TSan, cross-backend parity and performance still
-  require independent confirmation. Do not claim the above host tests
+- Exact native source files run locally with GCC 14/Clang 17 C++20 strict
+  warnings, AddressSanitizer+UndefinedBehaviorSanitizer (both compilers),
+  and GCC ThreadSanitizer (passed in the available environment). Full native
+  source-repository CMake/CTest, Java JDK25/GraalVM, LLVM guest source
+  compile/execution, cross-backend parity and performance still require
+  independent confirmation. Do not claim the above host tests
   prove source `nb`, ECS or `Arc` working.
 - Benchmarks must compare dense AoS, SoA, AoSoA on both partial-column
   and complete-row workloads. Measure bytes copied, pointer identity,
