@@ -722,6 +722,12 @@ int main() {
     Program unknown_move_source;
     ClassDecl empty_class;
     empty_class.name = "Box";
+    ClassField box_value;
+    box_value.name = "value";
+    box_value.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    box_value.initial = 0;
+    empty_class.fields.push_back(std::move(box_value));
     unknown_move_source.classes.push_back(std::move(empty_class));
     Function unknown_move_main;
     unknown_move_main.name = "main";
