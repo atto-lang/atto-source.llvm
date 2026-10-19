@@ -1,0 +1,2 @@
+// Syntax is reserved for Java/LLVM parity; LLVM cannot yet lower closures.
+pub fnc main(): int { return fnc (chunk) { return chunk; }; }
