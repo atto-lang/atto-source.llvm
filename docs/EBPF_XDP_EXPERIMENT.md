@@ -135,6 +135,26 @@ or broader XDP syntax without typed effect inference and cross-repo
 conformance tests. The closure schema's generic `ebpf` target deliberately
 does not establish XDP attachment permission.
 
+## Additional local effect-closure hardening (2026-10-19)
+
+The XDP compiler now serializes both inferred target-closure variants through
+the LLVM-independent `BpfEffectAdmission.hpp` helper. The emitted graph is
+still version 1 and **never** includes a build grant. The full wire shape is
+pinned by the registered C++ CTest; compiler-side tests also cover reordered
+packet-byte comparisons, edge offsets (0, 14, 255, 4095), eight guarded reads,
+and the forbidden ninth guard. The new compiler-side edge-case tests have
+**not** yet been run under the full LLVM toolchain.
+
+Local source-integrity-checked C++ tests passed with GCC and Clang at both
+`-O0` and `-O2`, and with Clang AddressSanitizer + UndefinedBehaviorSanitizer
+(8 effect-gate cases + 3 wire-contract assertions per run). A separate
+C++-emitted-manifest → Node JSON interoperability check passed for both
+constant and packet-read declarations. This is **not** a full repository build,
+LLVM IR verifier execution, kernel verifier acceptance, or policy authorization
+for that exact source head. Do not promote the staged XDP implementation until
+those tests execute on an authorized runner and source/object provenance is
+independently pinned.
+
 ## Evidence boundary
 
 The focused CTests cover positive XDP actions, packet-bound admission,
