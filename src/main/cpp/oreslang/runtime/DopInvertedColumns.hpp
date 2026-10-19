@@ -16,6 +16,10 @@
 
 namespace oreslang::dop {
 
+// Shared across all field type packs. Never wrap and reuse a live or stale
+// handle's owner identity, even after a store is destroyed.
+inline std::atomic<std::uint64_t> next_inverted_store_owner{1};
+
 // Native reference storage for the proposed Oreslang `inverted class` ABI.
 // One typed contiguous vector per field, stable generation-checked handles,
 // and field-granular loans. This is not yet source-language lowering.
@@ -52,7 +56,6 @@ class InvertedColumns {
         explicit State(std::uint64_t id) : owner(id) {}
     };
     std::shared_ptr<State> state_;
-    inline static std::atomic<std::uint64_t> next_owner_{1};
 
     static void ensure_open(const State& s) {
         if (s.closed) throw std::logic_error("closed inverted column store");
@@ -112,7 +115,11 @@ public:
         ~Loan() { release(); }
         std::span<SpanValue> span() const {
             if (!state_) throw std::logic_error("released inverted column loan");
-            // Structural mutations are excluded throughout the loan lifetime.
+            // A loan retains backing memory but cannot issue a *new* span after
+            // its owning store has been destroyed. Already-issued raw C++ spans
+            // cannot be revoked: the source borrow checker must prevent escape.
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            ensure_open(*state_);
             auto& column = std::get<I>(state_->columns);
             return {column.data(), column.size()};
         }
@@ -126,9 +133,13 @@ public:
     };
 
     InvertedColumns() {
-        const auto id = next_owner_.fetch_add(1, std::memory_order_relaxed);
-        if (id == 0 || id == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("inverted store identity exhausted");
+        std::uint64_t id = next_inverted_store_owner.load(std::memory_order_relaxed);
+        while (true) {
+            if (id == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("inverted store identity exhausted");
+            if (next_inverted_store_owner.compare_exchange_weak(
+                    id, id + 1, std::memory_order_relaxed)) break;
+        }
         state_ = std::make_shared<State>(id);
     }
     InvertedColumns(const InvertedColumns&) = delete;
@@ -218,6 +229,8 @@ public:
         std::lock_guard<std::mutex> lock(state_->mutex);
         ensure_open(*state_);
         if (state_->writers[I]) throw std::logic_error("column already mutably borrowed");
+        if (state_->readers[I] == std::numeric_limits<std::size_t>::max())
+            throw std::overflow_error("inverted column reader count exhausted");
         ++state_->readers[I];
         return Loan<I, false>(state_);
     }
