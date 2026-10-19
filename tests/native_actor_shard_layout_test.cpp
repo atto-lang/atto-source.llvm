@@ -81,6 +81,20 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
                    (state.layout == Layout::AoSoA ? 7 * state.region->fields() *
                    sizeof(double) : 0));
             assert(state.actor_budget->used_bytes() > 0);
+            ActorShardBudget incorrect(
+                65536, state.scheduler,
+                OresNativeActorRef{state.owner.scheduler_domain,
+                    state.owner.actor_slot + 1, state.owner.generation});
+            bool mismatched_budget_rejected = false;
+            try {
+                ActorShardColumns wrong(state.scheduler, state.owner,
+                    incorrect, state.vm_budget, state.layout, 65, 3,
+                    state.layout == Layout::AoSoA ? 8 : 1);
+            } catch (const std::invalid_argument&) {
+                mismatched_budget_rejected = true;
+            }
+            assert(mismatched_budget_rejected);
+            assert(incorrect.used_bytes() == 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
             state.published = state.region->snapshot_column(0);
