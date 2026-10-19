@@ -75,6 +75,11 @@ def inspect_elf(path):
                     # preflight from accepting malformed program headers.
                     if p_memsz < p_filesz:
                         raise ValueError("ELF PT_LOAD file size exceeds memory size")
+                    # A 64-bit loader must never interpret a virtual address
+                    # range wrapping UINT64_MAX. Python integers do not
+                    # overflow, so test the exclusive end explicitly.
+                    if p_memsz and p_vaddr > (1 << 64) - p_memsz - 1:
+                        raise ValueError("ELF PT_LOAD virtual address range overflows ELF64")
                     # ELF p_align must be 0/1 or a power of two. For a mapped
                     # segment its file offset and virtual address must be
                     # congruent modulo p_align (no truncation or host ABI guess).
