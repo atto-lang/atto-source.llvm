@@ -6,7 +6,7 @@ import unittest
 
 from ctest_manifest_gate import (
     CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
-    SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
+    SHARED_GUEST_TESTS, SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
 )
 
 
@@ -43,6 +43,12 @@ def fixture():
                        "--clang", "/usr/bin/clang", "--root", "/work/src"]
             if name == "source_actor_compiled_native_asan_ubsan":
                 command.append("--sanitize")
+        elif name in SHARED_GUEST_TESTS:
+            command = [sys.executable, "/work/src/tests/native_guest_parity_v1_source.py",
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang", "--source-root", "/work/src"]
+            if name == "native_shared_guest_v1_real_compiler_asan_ubsan":
+                command.append("--sanitizers")
         elif name == "native_ctest_manifest_harness_adversarial":
             command = [sys.executable, "-m", "unittest", "discover",
                        "-s", "/work/src/tests", "-p", "test_ctest_manifest_gate.py", "-v"]
@@ -74,6 +80,24 @@ class ManifestAuditTests(unittest.TestCase):
     def fail_on(self, expected):
         with self.assertRaisesRegex(ManifestFailure, expected):
             check_manifest(self.manifest)
+
+    def test_shared_guest_cannot_be_stubbed_or_omit_sanitizers(self):
+        for name in SHARED_GUEST_TESTS:
+            for corruption in ("wrong-script", "no-compiler", "no-sanitizer"):
+                document = fixture()
+                command = next(item["command"] for item in document["tests"]
+                               if item["name"] == name)
+                if corruption == "wrong-script":
+                    command[1] = "/work/src/tests/fake_success.py"
+                elif corruption == "no-compiler":
+                    command[command.index("--compiler") + 1] = "/bin/true"
+                else:
+                    if name != "native_shared_guest_v1_real_compiler_asan_ubsan":
+                        command.append("--sanitizers")
+                    else:
+                        command.remove("--sanitizers")
+                with self.subTest(name=name, corruption=corruption), self.assertRaises(ManifestFailure):
+                    check_manifest(document)
 
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
