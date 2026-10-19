@@ -148,5 +148,87 @@ int main() {
     model.write("actor-one/task-2", "actor-one/state");
     assert(model.conflict_count() == 1);
   }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.write("parent", "shared");
+    model.fork("parent", "child");
+    model.read("child", "shared");
+    model.write("child", "result");
+    model.finish("child");
+    model.join("parent", "child");
+    model.read("parent", "result");
+    assert(model.conflict_count() == 0);
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.fork("parent", "child-1");
+    model.fork("parent", "child-2");
+    model.write("child-1", "shared");
+    model.write("child-2", "shared");
+    model.write("child-1", "separate");
+    model.read("parent", "separate");
+    assert(model.conflict_count() == 2);
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.fork("parent", "child");
+    const auto before = model.event_count();
+    bool rejected = false;
+    try { model.join("parent", "child"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try { model.join("stranger", "child"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    assert(model.event_count() == before);
+    model.write("child", "shared");
+    model.finish("child");
+    rejected = false;
+    try { model.write("child", "shared"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    model.join("parent", "child");
+    rejected = false;
+    try { model.join("parent", "child"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.acquire("owner", "mutex");
+    const auto before = model.event_count();
+    bool rejected = false;
+    try { model.finish("owner"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    assert(model.event_count() == before);
+    model.release("owner", "mutex");
+    model.finish("owner");
+    rejected = false;
+    try { model.acquire("owner", "mutex"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+  }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.send("a", "once");
+    const auto before = model.event_count();
+    bool rejected = false;
+    try { model.receive(std::string("bad") + static_cast<char>(10), "once"); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try { model.receive("b", "not-issued"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    rejected = false;
+    try { model.send("a", "once"); }
+    catch (const std::logic_error&) { rejected = true; }
+    assert(rejected);
+    assert(model.event_count() == before);
+    model.receive("b", "once");
+    assert(model.event_count() == before + 1);
+  }
   return 0;
 }
