@@ -124,6 +124,49 @@ void ores_actor_packed_state_field_write(OresActorPackedState* state,
         (size_t) index * sizeof(int64_t), &value, sizeof(value));
 }
 
+int ores_actor_packed_state_compare_publish(OresActorPackedState* state,
+    uint64_t domain, uint64_t epoch,
+    uint64_t version_index, int64_t expected_version,
+    const OresActorScalarPatch* patches, uint64_t patch_count) {
+    require_index(state, version_index);
+    if (!patches || !patch_count || patch_count > state->fields
+        || expected_version < 0 || expected_version == INT64_MAX
+        || !state->initialized[version_index]
+        || !state->mutable_fields[version_index])
+        deny();
+    const size_t record_bytes = (size_t)state->fields * sizeof(int64_t);
+    OresArenaTurn turn = {domain, epoch};
+    /* ActorArena authenticates the admitted physical carrier and turn.
+     * The single-record read validates bounds/loan lifetime before staging. */
+    int64_t staging[ORES_PACKED_STATE_MAX_FIELDS];
+    ores_actor_arena_read(state->arena, turn, state->record,
+                          0, staging, record_bytes);
+    if (staging[version_index] != expected_version)
+        return 0;  /* CAS miss is recoverable and has no side effects. */
+
+    unsigned char seen[ORES_PACKED_STATE_MAX_FIELDS] = {0};
+    for (uint64_t i = 0; i < patch_count; ++i) {
+        const uint64_t index = patches[i].index;
+        if (index >= state->fields || seen[index]
+            || !state->initialized[index] || !state->mutable_fields[index])
+            deny();
+        seen[index] = 1;
+        staging[index] = patches[i].value;
+    }
+    /* Version must advance once. No plain write or incomplete optimizer
+     * image may reuse the old version under this API. */
+    if (!seen[version_index]
+        || staging[version_index] != expected_version + INT64_C(1))
+        deny();
+
+    /* Entire state image is copied under one ActorArena write lock.
+     * All allocations, graph work and tensor kernels are OUTSIDE this
+     * call; the final write has no intermediate guest-visible state. */
+    ores_actor_arena_write(state->arena, turn, state->record,
+                           0, staging, record_bytes);
+    return 1;
+}
+
 void ores_actor_packed_state_retire(OresActorPackedState* state) {
     if (!state || !state->arena) deny();
     ores_actor_arena_retire(state->arena);
