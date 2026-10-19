@@ -23,7 +23,7 @@ namespace {
 
 llvm::Value* lower_scalar(const Expression& expr,
                           llvm::IRBuilder<>& ir,
-                          llvm::Value* packet_bytes) {
+                          llvm::Value* packet_nonempty) {
     using Kind = Expression::Kind;
     auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
     switch (expr.kind) {
@@ -32,20 +32,20 @@ llvm::Value* lower_scalar(const Expression& expr,
         case Kind::Variable:
             // EbpfXdpAdmission already proved the exact name and no pointer
             // ownership escape. Recheck on the emission boundary.
-            if (expr.name != "packet_bytes")
+            if (expr.name != "packet_nonempty")
                 throw std::runtime_error("eBPF XDP unadmitted variable in emitter");
-            return packet_bytes;
+            return packet_nonempty;
         case Kind::Negate:
-            return ir.CreateNeg(lower_scalar(*expr.left, ir, packet_bytes), "xdp.neg");
+            return ir.CreateNeg(lower_scalar(*expr.left, ir, packet_nonempty), "xdp.neg");
         case Kind::Add:
-            return ir.CreateAdd(lower_scalar(*expr.left, ir, packet_bytes),
-                                lower_scalar(*expr.right, ir, packet_bytes), "xdp.add");
+            return ir.CreateAdd(lower_scalar(*expr.left, ir, packet_nonempty),
+                                lower_scalar(*expr.right, ir, packet_nonempty), "xdp.add");
         case Kind::Subtract:
-            return ir.CreateSub(lower_scalar(*expr.left, ir, packet_bytes),
-                                lower_scalar(*expr.right, ir, packet_bytes), "xdp.sub");
+            return ir.CreateSub(lower_scalar(*expr.left, ir, packet_nonempty),
+                                lower_scalar(*expr.right, ir, packet_nonempty), "xdp.sub");
         case Kind::Multiply:
-            return ir.CreateMul(lower_scalar(*expr.left, ir, packet_bytes),
-                                lower_scalar(*expr.right, ir, packet_bytes), "xdp.mul");
+            return ir.CreateMul(lower_scalar(*expr.left, ir, packet_nonempty),
+                                lower_scalar(*expr.right, ir, packet_nonempty), "xdp.mul");
         default:
             throw std::runtime_error("eBPF XDP unadmitted expression in emitter");
     }
@@ -80,7 +80,7 @@ std::string emit_experimental_ebpf_xdp_ir(const Program& source) {
         llvm::GlobalValue::InternalLinkage, "oreslang_xdp_policy", module);
     policy->addFnAttr(llvm::Attribute::AlwaysInline);
     auto* length = policy->getArg(0);
-    length->setName("packet_bytes");
+    length->setName("packet_nonempty");
     auto* next = llvm::BasicBlock::Create(context, "entry", policy);
     llvm::IRBuilder<> ir(next);
 
@@ -96,9 +96,10 @@ std::string emit_experimental_ebpf_xdp_ir(const Program& source) {
     }
     ir.CreateRet(lower_scalar(*src.result, ir, length));
 
-    // This is a restricted XDP context ABI: data at +0 and data_end at +4
-    // are u32 offsets. Only length metadata is read: packet memory is never
-    // dereferenced and its pointers cannot escape this wrapper.
+    // XDP context exposes data at +0 and data_end at +4. Load only
+    // these metadata pointers; derive a verifier-friendly bounds predicate
+    // (data + 1 <= data_end). Never subtract packet-end pointers or
+    // dereference packet contents. This first guest policy sees only 0/1.
     llvm::Type* ctx_ptr = llvm::PointerType::getUnqual(i32);
     auto* xdp = llvm::Function::Create(
         llvm::FunctionType::get(i32, {ctx_ptr}, false),
@@ -106,20 +107,18 @@ std::string emit_experimental_ebpf_xdp_ir(const Program& source) {
     xdp->setSection("xdp");
     xdp->getArg(0)->setName("ctx");
     auto* entry = llvm::BasicBlock::Create(context, "entry", xdp);
-    auto* good = llvm::BasicBlock::Create(context, "ctx.valid", xdp);
-    auto* bad = llvm::BasicBlock::Create(context, "ctx.invalid", xdp);
     llvm::IRBuilder<> b(entry);
     auto* data_ptr = b.CreateInBoundsGEP(i32, xdp->getArg(0), b.getInt64(0));
     auto* end_ptr = b.CreateInBoundsGEP(i32, xdp->getArg(0), b.getInt64(1));
-    auto* data = b.CreateLoad(i32, data_ptr, "ctx.data");
-    auto* end = b.CreateLoad(i32, end_ptr, "ctx.data_end");
-    // No unchecked underflow: malformed or untrusted contexts abort.
-    b.CreateCondBr(b.CreateICmpUGE(end, data), good, bad);
-    b.SetInsertPoint(bad);
-    b.CreateRet(b.getInt32(0)); // XDP_ABORTED
-    b.SetInsertPoint(good);
-    auto* bytes = b.CreateZExt(b.CreateSub(end, data, "packet.bytes.u32"), i64);
-    auto* decision = b.CreateCall(policy, {bytes}, "policy.action.i64");
+    auto* data32 = b.CreateLoad(i32, data_ptr, "ctx.data");
+    auto* end32 = b.CreateLoad(i32, end_ptr, "ctx.data_end");
+    auto* ptr8 = llvm::PointerType::getUnqual(b.getInt8Ty());
+    auto* data = b.CreateIntToPtr(b.CreateZExt(data32, i64), ptr8);
+    auto* end = b.CreateIntToPtr(b.CreateZExt(end32, i64), ptr8);
+    auto* one_past_first = b.CreateInBoundsGEP(b.getInt8Ty(), data, b.getInt64(1));
+    auto* nonempty = b.CreateICmpULE(one_past_first, end, "packet.has.byte");
+    auto* flag = b.CreateZExt(nonempty, i64);
+    auto* decision = b.CreateCall(policy, {flag}, "policy.action.i64");
     // XDP_ABORTED=0, DROP=1, PASS=2, TX=3, REDIRECT=4. No
     // verifier-visible negative/out-of-range return values.
     auto* valid_action = b.CreateICmpULE(decision, b.getInt64(4));
