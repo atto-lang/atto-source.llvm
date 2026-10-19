@@ -155,8 +155,11 @@ void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
- * close from a carrier callback. Returns 0 if a carrier calls close (VM remains
- * retired, and an external host must retry); 1 after complete destruction.
+ * close from a carrier callback. Close also returns 0 when the calling host
+ * thread still owns an NIO bootstrap reservation: that caller must cancel
+ * its reservation (or finish it before initiating close), then retry close.
+ * Both early rejections leave the VM retired but schedulers allocated for
+ * a safe subsequent external close. Returns 1 after complete destruction.
  * No forceful termination of an uncooperative guest callback is attempted.
  */
 void ores_native_vm_retire(OresNativeVM* vm);

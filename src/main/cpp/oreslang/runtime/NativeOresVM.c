@@ -471,6 +471,19 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
             return 0;
+    /*
+     * A host thread that still OWNS its NIO bootstrap reservation cannot
+     * synchronously close this VM: final close waits for that reservation
+     * to be canceled or attached by its owner, which is this very thread.
+     * Reject BEFORE draining/destroying any scheduler, so the owner can
+     * cancel its reservation and a later external close can safely retry.
+     * A foreign closer still waits as before for the owner to finish.
+     */
+    control_lock(vm);
+    const int owns_bootstrap = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self());
+    control_unlock(vm);
+    if (owns_bootstrap) return 0;
     /* No callback can synchronously join or destroy its own scheduler. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;

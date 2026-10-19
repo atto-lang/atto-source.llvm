@@ -228,3 +228,32 @@ unless the run allocates a real runner and performs compile/test steps.
 Local file-level exact-blob testing is narrower than full-tree, compiler,
 guest actor, and Future-to-await conformance. Neither a private-source
 export nor an independently approved cross-organization mirror occurred.
+
+## Native VM bootstrap self-close deadlock prevention (2026-10-19)
+
+Audit finding: `ores_native_vm_close` retired and destroyed scheduler
+domains before waiting on `nio_idle` for an unfinished NIO bootstrap.
+If the **same** trusted host thread that issued
+`ores_native_vm_nio_begin_bootstrap` synchronously called close, the
+condition could never become true: only the reservation owner can finish
+or cancel it, and that owner is blocked inside close. The API could
+deadlock permanently.
+
+The host close path now checks the bootstrap reservation's `pthread_t`
+under `control_lock`, **before any scheduler drain/destruction**, and
+returns 0 when the closer owns an outstanding reservation. This preserves
+the retired-but-allocated VM so the owner can call
+`ores_native_vm_nio_cancel_bootstrap` and subsequently retry
+`ores_native_vm_close`. A separate external closer still waits for an
+in-progress bootstrap; existing cross-thread close/borrow tests are
+unchanged. The native VM lifecycle fixture adds 32 deterministic
+self-close/cancel/retry iterations. This is a host lifecycle guard,
+not guest runtime conformance or a guarantee that unauthorized
+close-from-actor calls succeed.
+
+An independent source-free faithful pthread control-lock/condition
+model passed 10,000 reentrant close/owner-cancel/retry iterations under
+GCC and Clang ASan+UBSan. It is **not** execution of the private C VM
+and cannot stand in for exact-head CI or the combined C VM plus actor
+scheduler. The production regression is committed to source-local
+native VM lifecycle CI and requires a runner to execute.

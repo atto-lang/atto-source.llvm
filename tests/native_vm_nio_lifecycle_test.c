@@ -329,5 +329,19 @@ int main(void) {
         check(pthread_join(closer, NULL) == 0);
         check(atomic_load(&race.finished));
     }
+    // Calling close while OWN bootstrap is reserved must never self-wait
+    // on nio_idle; reject before destroying scheduler resources, then allow
+    // owner cancellation and a safe second host close.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        OresNativeVM* self_bootstrap = ores_native_vm_open(&cfg);
+        check(self_bootstrap != NULL);
+        check(ores_native_vm_nio_begin_bootstrap(self_bootstrap));
+        check(!ores_native_vm_close(self_bootstrap));
+        check(!ores_native_vm_nio_begin_bootstrap(self_bootstrap));
+        // Close retired the VM, but it must still own live scheduler objects
+        // and the bootstrap reservation until the issuing host cancels it.
+        ores_native_vm_nio_cancel_bootstrap(self_bootstrap);
+        check(ores_native_vm_close(self_bootstrap));
+    }
     return 0;
 }
