@@ -65,6 +65,16 @@ int main() {
     REQUIRE(ordered[0][0].name() == "a" && ordered[1][0].name() == "b"
            && ordered[2][0].name() == "c");
 
+    // A missing access footprint is not an effect/purity proof. Serialize
+    // it until the compiler has independently checked all possible effects.
+    const SystemFootprint unknown_effects("unknown_effects", {});
+    const SystemFootprint another_unknown("another_unknown", {});
+    REQUIRE(access_conflicts(unknown_effects, render));
+    REQUIRE(access_conflicts(render, unknown_effects));
+    REQUIRE(access_conflicts(unknown_effects, another_unknown));
+    const auto barriers = plan_access_batches({render, unknown_effects, render2});
+    REQUIRE(barriers.size() == 3);
+
     // Immutable validated descriptors: every exposed view is const.
     static_assert(std::is_same_v<
             decltype(std::declval<const SystemFootprint&>().spans()),
