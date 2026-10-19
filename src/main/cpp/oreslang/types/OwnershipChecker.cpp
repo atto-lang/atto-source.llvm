@@ -635,6 +635,23 @@ void preflight_native_ast_shape(const Program& program) {
             fail("catch metadata exists without caught throw", fn.offset);
         if (fn.caught_throw_value && fn.catch_binding.empty())
             fail("caught throw is missing catch binding", fn.offset);
+        if (fn.caught_throw_value) {
+            if (fn.returns_void)
+                fail("caught throw requires non-void function", fn.offset);
+            if (!fn.early_returns.empty() || !fn.actor_actions.empty() ||
+                    !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
+                    !fn.actor_stops.empty())
+                fail("caught throw contains incompatible control effects", fn.offset);
+            if (fn.caught_throw_defers.size() > 8)
+                fail("caught throw defer count exceeds parser bound", fn.offset);
+            for (const auto& cleanup : fn.caught_throw_defers)
+                if (cleanup.kind != Statement::Kind::FieldWrite)
+                    fail("caught throw scoped defer is not a field write", cleanup.offset);
+            for (const auto& cleanup : fn.statements)
+                if (cleanup.kind != Statement::Kind::Defer ||
+                        cleanup.receiver.empty() || cleanup.field.empty())
+                    fail("caught throw finally contains non-field cleanup", cleanup.offset);
+        }
         if (!actor_handler && !fn.actor_field_writes.empty())
             fail("ordinary function contains actor field writes", fn.offset);
         if (!fn.has_declared_effects && fn.declared_effects.bits != 0)
