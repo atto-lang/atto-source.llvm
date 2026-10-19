@@ -345,6 +345,107 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_module_name); },
                      "ownership violation: invalid native module identifier");
 
+    Program hidden_generic_arguments;
+    Function generic_identity;
+    generic_identity.name = "identity";
+    GenericParameter type_slot;
+    type_slot.name = "T";
+    generic_identity.generic_parameters.push_back(std::move(type_slot));
+    Parameter generic_value;
+    generic_value.name = "value";
+    generic_value.generic_type = "T";
+    generic_identity.parameters.push_back(std::move(generic_value));
+    generic_identity.result = variable("value");
+    hidden_generic_arguments.functions.push_back(std::move(generic_identity));
+    Function hidden_generic_main;
+    hidden_generic_main.name = "main";
+    auto hidden_generic_call =
+        make_expression(Expression::Kind::Call, "identity");
+    hidden_generic_call->arguments.push_back(
+        make_expression(Expression::Kind::Integer, {}, 1));
+    GenericTypeArgument hidden_type;
+    hidden_type.type = "int";
+    hidden_generic_call->type_arguments.push_back(std::move(hidden_type));
+    hidden_generic_main.result = std::move(hidden_generic_call);
+    hidden_generic_arguments.functions.push_back(std::move(hidden_generic_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_generic_arguments); },
+                     "native call contains hidden generic type arguments");
+
+    Program nongeneric_specialization;
+    Function plain_identity;
+    plain_identity.name = "plain";
+    Parameter plain_value;
+    plain_value.name = "value";
+    plain_identity.parameters.push_back(std::move(plain_value));
+    plain_identity.result = variable("value");
+    nongeneric_specialization.functions.push_back(std::move(plain_identity));
+    Function nongeneric_main;
+    nongeneric_main.name = "main";
+    auto specialized_plain =
+        make_expression(Expression::Kind::Call, "plain");
+    specialized_plain->arguments.push_back(
+        make_expression(Expression::Kind::Integer, {}, 1));
+    specialized_plain->type_arguments_present = true;
+    nongeneric_main.result = std::move(specialized_plain);
+    nongeneric_specialization.functions.push_back(std::move(nongeneric_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(nongeneric_specialization); },
+                     "call-site type arguments require generic function");
+
+    Program self_referential_generic_default;
+    Function bad_default;
+    bad_default.name = "bad_default";
+    GenericParameter self_default;
+    self_default.name = "T";
+    self_default.default_type = "T";
+    bad_default.generic_parameters.push_back(std::move(self_default));
+    bad_default.result = make_expression(Expression::Kind::Integer, {}, 0);
+    self_referential_generic_default.functions.push_back(std::move(bad_default));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(self_referential_generic_default); },
+                     "ownership violation: forward or unknown generic default 'T'");
+
+    Program unknown_formal_generic;
+    Function bad_formal;
+    bad_formal.name = "bad_formal";
+    GenericParameter declared_generic;
+    declared_generic.name = "T";
+    bad_formal.generic_parameters.push_back(std::move(declared_generic));
+    Parameter unknown_generic_parameter;
+    unknown_generic_parameter.name = "value";
+    unknown_generic_parameter.generic_type = "U";
+    bad_formal.parameters.push_back(std::move(unknown_generic_parameter));
+    bad_formal.result = variable("value");
+    unknown_formal_generic.functions.push_back(std::move(bad_formal));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_formal_generic); },
+                     "ownership violation: parameter references unknown generic 'U'");
+
+    Program malformed_inference_hole;
+    Function hole_identity;
+    hole_identity.name = "hole_identity";
+    GenericParameter hole_slot;
+    hole_slot.name = "T";
+    hole_identity.generic_parameters.push_back(std::move(hole_slot));
+    Parameter hole_value;
+    hole_value.name = "value";
+    hole_value.generic_type = "T";
+    hole_identity.parameters.push_back(std::move(hole_value));
+    hole_identity.result = variable("value");
+    malformed_inference_hole.functions.push_back(std::move(hole_identity));
+    Function hole_main;
+    hole_main.name = "main";
+    auto bad_hole_call =
+        make_expression(Expression::Kind::Call, "hole_identity");
+    bad_hole_call->arguments.push_back(
+        make_expression(Expression::Kind::Integer, {}, 1));
+    bad_hole_call->type_arguments_present = true;
+    GenericTypeArgument bad_hole;
+    bad_hole.infer = true;
+    bad_hole.type = "int";
+    bad_hole_call->type_arguments.push_back(std::move(bad_hole));
+    hole_main.result = std::move(bad_hole_call);
+    malformed_inference_hole.functions.push_back(std::move(hole_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(malformed_inference_hole); },
+                     "generic inference hole contains explicit type");
+
     // Source-impossible statement payloads must not be merely traversed:
     // later ownership/codegen switches consume only fields for the active kind.
     Program hidden_statement_field;
