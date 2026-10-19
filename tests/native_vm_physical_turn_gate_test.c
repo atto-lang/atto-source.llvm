@@ -1,5 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeOresVM.h"
+#if defined(NDEBUG)
+#undef NDEBUG // Tests must not silently disappear in optimized CMake builds
+#endif
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
