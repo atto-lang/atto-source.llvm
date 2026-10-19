@@ -1,0 +1,2 @@
+// Explicit anonymous structs require concrete layout/ownership/drop lowering.
+pub fnc main(): int { return struct{x: int, y: int}{x: 3, y: 4}; }
