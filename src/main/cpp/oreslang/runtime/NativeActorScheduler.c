@@ -43,6 +43,7 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
     void* context;
+    OresNativePhysicalTurnGate* physical_turn_gate;
 };
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
@@ -121,7 +122,17 @@ static void* carrier(void* raw) {
         lock(s);
         size_t i = 0;
         int control = 0;
-        while (!find_ready(s, &i, &control, recent_actor, consecutive)) {
+        int gate_held = 0;
+        for (;;) {
+            int found = find_ready(s, &i, &control, recent_actor, consecutive);
+            if (found && (!s->physical_turn_gate
+                    || ores_native_turn_gate_try_acquire(s->physical_turn_gate))) {
+                gate_held = s->physical_turn_gate != NULL;
+                break;
+            }
+            /* No actor turn begins when the process-wide permit is full.
+             * Remain idle on the scheduler condition, not in a guest await
+             * or blocking lock. The releasing domain broadcasts wakeups. */
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 return NULL;
@@ -192,6 +203,9 @@ static void* carrier(void* raw) {
             if (s->retired) pthread_cond_broadcast(&s->ready);
         }
         unlock(s);
+        /* Notify other scheduler domains only after dropping the local pool
+         * mutex: cross-pool wakeups must never form a lock-order cycle. */
+        if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
     }
 }
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
@@ -314,6 +328,17 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
+int ores_native_actor_scheduler_configure_turn_gate(
+        OresNativeActorScheduler* s, OresNativePhysicalTurnGate* gate) {
+    if (!s || (gate && gate->maximum == 0)) return 0;
+    lock(s);
+    const int ok = !s->retired && s->started_workers == 0
+        && s->outstanding == 0 && s->accepted == 0;
+    if (ok) s->physical_turn_gate = gate;
+    unlock(s);
+    return ok;
+}
+
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
