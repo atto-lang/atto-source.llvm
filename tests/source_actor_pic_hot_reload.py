@@ -145,6 +145,11 @@ def main():
                  "-I", str(include), "-c",
                  str(runtime / "ActorOwnedI64Heap.c"),
                  "-o", str(heap_object)], timeout=60)
+        scheduler_object = temp / "scheduler.o"
+        checked([args.clang, "-std=c11", "-O1", "-fPIC", *sanitizer,
+                 "-pthread", "-I", str(include), "-c",
+                 str(runtime / "NativeActorScheduler.c"),
+                 "-o", str(scheduler_object)], timeout=60)
         test = temp / "hot-source-actor"
         checked([args.cxx, "-std=c++17", "-O1", "-DNDEBUG", *sanitizer,
                  "-Wall", "-Wextra", "-Wpedantic", "-Werror",
