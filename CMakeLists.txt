@@ -122,18 +122,18 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
     # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
-    # Four portable cases have lossless exit status; DO NOT claim seven.
+    # A dedicated C ABI driver prints the complete guest i64 (not OS exit status).
     find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     if(NOT ORE_SOURCE_I64_CLANG)
         message(WARNING "Portable native i64 execution gate will fail: Clang not found")
         set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
     endif()
-    add_test(NAME native_source_i64_os_exit_subset
+    add_test(NAME native_source_i64_fullwidth_execution
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
-    set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    set_tests_properties(native_source_i64_fullwidth_execution PROPERTIES TIMEOUT 120)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
