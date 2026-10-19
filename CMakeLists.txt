@@ -1737,6 +1737,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_vm_cross_domain_physical_turn_limit
         PROPERTIES TIMEOUT 30)
 
+    # Deterministic, isolated C11 physical permit contention test;
+    # no guest compiler lowering or NUMA policy implied.
+    add_executable(oreslang-native-physical-turn-gate-stress-test
+        tests/native_physical_turn_gate_stress_test.c)
+    target_include_directories(oreslang-native-physical-turn-gate-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-physical-turn-gate-stress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-physical-turn-gate-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_actor_turn_gate_pthread_contention
+        COMMAND oreslang-native-physical-turn-gate-stress-test)
+    set_tests_properties(native_shared_actor_turn_gate_pthread_contention
+        PROPERTIES TIMEOUT 30)
+
     # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
     # The actor scheduler certifies owner identity; no source-level lowering.
     add_executable(oreslang-native-actor-shard-layout-test
