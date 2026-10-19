@@ -14,6 +14,7 @@
 
 using oreslang::runtime::ActorShardColumns;
 using oreslang::runtime::ActorShardBudget;
+using oreslang::runtime::ActorColumnSnapshot;
 using oreslang::dop::Layout;
 
 struct TestState {
@@ -23,6 +24,7 @@ struct TestState {
     std::unique_ptr<ActorShardBudget> actor_budget;
     ActorShardBudget vm_budget{64U * 1024U * 1024U};
     std::unique_ptr<ActorShardColumns> region;
+    std::vector<std::unique_ptr<ActorColumnSnapshot>> snapshots;
     std::vector<double> published;
     bool foreign_rejected = false;
     bool failed = false;
@@ -38,6 +40,13 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             } catch (const std::logic_error&) {
                 state.foreign_rejected = true;
             }
+            bool snapshot_rejected = false;
+            try {
+                (void)state.snapshots.back()->read(0);
+            } catch (const std::logic_error&) {
+                snapshot_rejected = true;
+            }
+            assert(snapshot_rejected);
             return;
         }
         assert(actor == 0);
@@ -113,6 +122,24 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             assert(wrong_generation.used_bytes() == 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
+            const std::uint64_t prior = state.actor_budget->used_bytes();
+            for (int k = 0; k < 1000; ++k) {
+                state.snapshots.emplace_back(state.region->snapshot_column_leased(0));
+            }
+            assert(state.snapshots.back()->read(64) == 256.0);
+            assert(state.actor_budget->used_bytes() == prior + 1000U * 65U * sizeof(double));
+            for (int k = 0; k < 500; ++k) {
+                state.snapshots[k]->close();
+                state.snapshots[k]->close();
+                bool revoked = false;
+                try {
+                    (void)state.snapshots[k]->read(0);
+                } catch (const std::logic_error&) {
+                    revoked = true;
+                }
+                assert(revoked);
+            }
+            assert(state.actor_budget->used_bytes() == prior + 500U * 65U * sizeof(double));
             std::vector<double> into(67, -1.0);
             state.region->copy_column_into(0, into.data() + 1, 65);
             assert(into[0] == -1.0 && into[66] == -1.0);
@@ -172,6 +199,8 @@ int main() {
         ores_native_actor_scheduler_retire(state.scheduler);
         assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
         state.region.reset();
+        assert(state.actor_budget->used_bytes() == 500U * 65U * sizeof(double));
+        state.snapshots.clear(); // RAII refund after scheduler stopped
         assert(state.actor_budget->used_bytes() == 0);
         assert(state.vm_budget.used_bytes() == 0);
     }
