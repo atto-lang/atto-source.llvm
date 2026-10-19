@@ -40,6 +40,20 @@ static std::int64_t io_noop(void*, std::int64_t value,
                             const std::atomic<bool>&) noexcept {
     return value;
 }
+
+struct FailedCleanupState {
+    std::atomic<bool> entered{false};
+};
+static ActorStep cooperative_until_stopped(
+        void* raw, ActorMessage, oreslang::runtime::ResumeCause,
+        std::int64_t) noexcept {
+    static_cast<FailedCleanupState*>(raw)->entered.store(
+        true, std::memory_order_release);
+    return {oreslang::runtime::StepKind::cooperate, 0, 0};
+}
+static bool reject_frame_cleanup(void*, ActorMessage) noexcept {
+    return false;
+}
 static HungryCarrier::Options bound_options(
         ActorHeapIdentity owner,
         std::shared_ptr<oreslang::runtime::ActorHeapRetirementCohort> cohort = {}) {
@@ -127,6 +141,59 @@ static void multi_lane_cohort_requires_every_carrier_to_join() {
           "fully quiesced cohort proof not visible from already-joined lanes");
     graph.retire(owner, *proof);
     check(graph.retired(), "three-lane actor graph did not retire after quorum");
+}
+
+static void failed_final_lane_cleanup_never_publishes_retirement_proof() {
+    for (std::uint64_t iteration = 1; iteration <= 128; ++iteration) {
+        const ActorHeapIdentity owner{611, 73, iteration};
+        auto cohort =
+            oreslang::runtime::ActorHeapRetirementCohort::create(owner, 2);
+
+        HungryCarrier clean(nullptr, done_handler, nullptr, io_noop,
+                           bound_options(owner, cohort));
+
+        FailedCleanupState state;
+        auto failing_options = bound_options(owner, cohort);
+        failing_options.cancel_handler = reject_frame_cleanup;
+        HungryCarrier failing(&state, cooperative_until_stopped, nullptr,
+                              io_noop, std::move(failing_options));
+        auto producer = failing.producer_handle();
+
+        clean.start();
+        failing.start();
+        check(producer.try_send(ActorMessage{iteration, 1}),
+              "failed-cleanup race could not admit actor turn");
+        while (!state.entered.load(std::memory_order_acquire))
+            std::this_thread::yield();
+
+        clean.join();
+        check(!clean.retirement_proof().has_value(),
+              "partial cohort published retirement before final lane");
+
+        std::atomic<bool> polling{true};
+        std::atomic<bool> saw_proof{false};
+        std::thread observer([&] {
+            while (polling.load(std::memory_order_acquire)) {
+                if (clean.retirement_proof().has_value()) {
+                    saw_proof.store(true, std::memory_order_release);
+                    break;
+                }
+            }
+        });
+
+        failing.join();
+        polling.store(false, std::memory_order_release);
+        observer.join();
+
+        check(!saw_proof.load(std::memory_order_acquire),
+              "failed final cleanup transiently published retirement proof");
+        check(cohort->joined_lanes() == 2 && cohort->cleanup_failed() &&
+                  !cohort->ready_for_retirement(),
+              "failed final cleanup did not permanently quarantine cohort");
+        check(!clean.retirement_proof().has_value() &&
+                  !failing.retirement_proof().has_value(),
+              "failed cleanup minted a post-join retirement proof");
+    }
 }
 
 static void cycles_reclaim_without_gc() {
@@ -810,6 +877,7 @@ static void concurrent_graph_read_write_links_are_exclusive() {
 int main() {
     retirement_cohort_registry_does_not_grow_with_actor_churn();
     multi_lane_cohort_requires_every_carrier_to_join();
+    failed_final_lane_cleanup_never_publishes_retirement_proof();
     concurrent_three_lane_join_reclaims_once();
     heap_identity_never_wraps_and_remains_unique_under_races();
     heap_identity_unique_across_graph_specializations();
