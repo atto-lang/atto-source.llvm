@@ -107,6 +107,27 @@ for toolchain in gcc clang; do
     UBSAN_OPTIONS=halt_on_error=1 \
       timeout 90s "$dest/fd-close-eintr"
   done
+  # Extended SHA-bound real reactor/manager ownership conformance and
+  # public C ABI denial tests, not guest Future/await semantics.
+  "$cxx" -std=c++17 "${shared[@]}" \
+    tests/native_epoll_manager_adversarial_test.cpp -o "$dest/manager-adversarial"
+  "$cc" -std=c11 "${shared[@]}" \
+    -c tests/native_abi_parity_adversarial_test.c -o "$dest/abi-adversarial.o"
+  "$cxx" "${shared[@]}" "$dest/NativeEpollReactorABI.o" \
+    "$dest/abi-adversarial.o" -o "$dest/abi-adversarial"
+  "$cxx" -std=c++17 "${shared[@]}" \
+    tests/native_vm_nio_bridge_denial_test.cpp \
+    "$runtime/NativeOresVMNio.cpp" "$runtime/NativeEpollReactorABI.cpp" \
+    -o "$dest/vm-bridge-denial"
+  for attempt in {1..3}; do
+    printf 'NIO_BOUNDARY_REGRESSION_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/manager-adversarial"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/abi-adversarial"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/vm-bridge-denial"
+  done
   verify_exact_worktree
 done
 

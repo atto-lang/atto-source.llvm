@@ -13,6 +13,8 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeFdAuthorityBroker.hpp'
       - 'tests/native_fd_authority_broker_test.cpp'
       - 'tests/native_fd_authority_broker_state_machine_test.cpp'
+      - 'tests/native_abi_parity_adversarial_test.c'
+      - 'tests/native_epoll_manager_adversarial_test.cpp'
       - 'tests/native_fd_close_eintr_regression.cpp'
       - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.*'
       - 'src/main/cpp/oreslang/runtime/NativeOresVM.h'
@@ -71,6 +73,9 @@ jobs:
             -I src/main/cpp tests/native_epoll_reactor_manager_test.cpp \
             -o /tmp/oreslang-nio-manager-exact-head
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_manager_adversarial_test.cpp \
+            -o /tmp/oreslang-nio-manager-adversarial-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp tests/native_epoll_reactor_test.cpp \
             -o /tmp/oreslang-nio-reactor-exact-head
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
@@ -82,6 +87,12 @@ jobs:
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
             /tmp/oreslang-nio-abi-test.o -o /tmp/oreslang-nio-abi-exact-head
+          "$CC" -std=c11 -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp -c tests/native_abi_parity_adversarial_test.c \
+            -o /tmp/oreslang-nio-abi-adversarial.o
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            /tmp/oreslang-nio-abi-adversarial.o -o /tmp/oreslang-nio-abi-adversarial-exact-head
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp tests/native_vm_nio_bridge_denial_test.cpp \
             src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp \
@@ -110,7 +121,9 @@ jobs:
           for n in 1 2 3; do
             echo "NATIVE_NIO_ATTEMPT=$n"
             timeout 45s /tmp/oreslang-nio-manager-exact-head
+            timeout 45s /tmp/oreslang-nio-manager-adversarial-exact-head
             timeout 45s /tmp/oreslang-nio-abi-exact-head
+            timeout 45s /tmp/oreslang-nio-abi-adversarial-exact-head
             timeout 45s /tmp/oreslang-nio-reactor-exact-head
             timeout 45s /tmp/oreslang-nio-bootstrap-exact-head
             timeout 45s /tmp/oreslang-nio-bridge-denial-exact-head
@@ -121,4 +134,4 @@ jobs:
           done
           python3 -I -B scripts/verify-native-nio-source-local.py \
             "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
-          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=9 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"
+          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=11 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"

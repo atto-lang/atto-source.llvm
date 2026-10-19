@@ -184,3 +184,47 @@ No private-source mirror, cross-organization checkout, or CI policy
 authorization was introduced. This remains a trusted-host Linux
 eventfd-specific integration, not guest actor ownership or
 Future-to-await conformance.
+
+## Native manager, C ABI, and VM bridge fail-closed validation (2026-10-19)
+
+Two expanded adversarial fixtures are checked in:
+`tests/native_epoll_manager_adversarial_test.cpp` and
+`tests/native_abi_parity_adversarial_test.c`. The former exercises the
+actual Linux epoll-backed manager: a saturated 64-watch reactor, admission
+denial while terminal receipts are pending, strict ticket uniqueness after
+retirement, cross-manager raw pipe/dup-alias exclusion, a manager-owned
+kernel eventfd through READY, explicit physical counter drain, shutdown
+STOPPED terminal, and no duplicate or orphan outcomes. The C fixture uses
+the actual compiled native C ABI: rejected raw eventfd and invalid requests,
+zero-thread lazy bootstrap, cross-manager public ticket forgery, global raw
+stream exclusion, release after consumed terminal, exactly-once cancellation,
+and preallocated RT startup.
+
+**Source-level fail-closed defect reproduced**: both
+`ores_native_nio_try_pop` and `ores_native_vm_nio_try_pop` previously
+returned 0 without clearing an existing `OresNativeNioCompletion`. In
+particular, a stale ticket and FD remained in caller-owned output on empty
+queue or denied VM lease. The native ABI and VM adapter now reset all
+non-null output fields on unsuccessful calls (including null runtime/VM),
+as `try_watch` already does. The official VM denial fixture now tests
+this behavior 1,000 times, using intentionally unavailable C-VM lifecycle
+test doubles.
+
+**Local native validation**: original production broker/reactor/manager
+and ABI/VM adapter source blobs were fetched from the private PR and Git
+SHA checked in the isolated local workspace. The new C and manager test
+source blobs also match their Git object SHAs. GCC 14.2 and Clang 17 each
+passed the new real C ABI and manager tests 3/3 with ASan+UBSan. GCC TSan
+passed 3/3, and the bridge adapter compiled and passed its original denial
+fixture and an additional local real-backend shim fixture 3/3 under those
+three sanitizer configurations. The bridge shim is **not** the full C VM
+or scheduler. Separately, 20 serial optimized smoke cycles per boundary
+fixture passed.
+
+The native ownership workflow now includes 11 native fixtures, and the
+VM lifecycle sanitizer script also compiles and runs the new C, manager,
+and bridge denial cases. **GitHub-hosted exact-head CI is still NOT_EXECUTED**
+unless the run allocates a real runner and performs compile/test steps.
+Local file-level exact-blob testing is narrower than full-tree, compiler,
+guest actor, and Future-to-await conformance. Neither a private-source
+export nor an independently approved cross-organization mirror occurred.
