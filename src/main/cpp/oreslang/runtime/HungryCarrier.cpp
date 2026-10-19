@@ -347,6 +347,9 @@ void HungryCarrier::join() noexcept {
         options_.retirement_cohort->acknowledge_lane(cleanup_ok);
         retirement_lane_acknowledged_ = true;
     }
+    // join-before-start also represents a physically stopped actor. The
+    // worker's stopped_ publication cannot run when no thread was created.
+    stopped_.store(true, std::memory_order_release);
     joined_.store(true, std::memory_order_release);
 }
 
