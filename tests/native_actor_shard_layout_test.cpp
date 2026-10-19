@@ -201,6 +201,12 @@ int main() {
         assert(!state.failed && state.foreign_rejected &&
                "a different actor in the same scheduler cannot borrow the shard");
         ores_native_actor_scheduler_retire(state.scheduler);
+        assert(oreslang::runtime::retire_actor_shard_budget_after_done(
+                state.scheduler, state.owner, *state.actor_budget));
+        assert(state.actor_budget->retired());
+        assert(!state.actor_budget->try_reserve(1));
+        // The actor and its snapshots may still be held by the trusted host,
+        // but none may enter a new logical turn after their retirement fence.
         assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
         state.region.reset();
         assert(state.actor_budget->used_bytes() == 500U * 65U * sizeof(double));
