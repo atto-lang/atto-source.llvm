@@ -1,7 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-#include "oreslang/runtime/NativePhysicalTurnGate.h"
+typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
 #endif
