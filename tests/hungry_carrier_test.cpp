@@ -556,6 +556,82 @@ static void test_join_initiates_stop() {
     check(actor.stats().abandoned_on_stop == 0,
           "idle actor spuriously recorded abandoned requests");
 }
+// Once a cohort has joined, startup must NEVER resurrect carrier threads,
+// including when stop was requested before the very first start().
+static void test_terminal_lifecycle_rejects_restart() {
+    const ActorHeapIdentity owner{88, 33, 1};
+    State state;
+    HungryCarrier::Options options{};
+    options.heap_owner = owner;
+    HungryCarrier actor(&state, handle, nullptr, io_double, options);
+    const auto handle = actor.producer_handle();
+    actor.join(); // Valid terminal shutdown without ever starting.
+    const auto proof = actor.retirement_proof();
+    check(proof.has_value() && proof->owner() == owner,
+          "pre-start terminal join did not discharge its empty actor cohort");
+    bool rejected = false;
+    try { actor.start(); }
+    catch (const std::logic_error&) { rejected = true; }
+    check(rejected, "start() resurrected actor threads after physical retirement proof");
+    check(!handle.try_send({1, 1}), "closed producer admitted post-retirement work");
+    actor.join(); // Repeated terminal join must remain idempotent.
+    check(actor.retirement_proof().has_value(),
+          "repeat join revoked an already safe terminal proof");
+
+    State other;
+    HungryCarrier stopped(&other, handle, nullptr, io_double, {});
+    stopped.request_stop();
+    rejected = false;
+    try { stopped.start(); }
+    catch (const std::logic_error&) { rejected = true; }
+    check(rejected, "start() admitted an actor stopped before initial startup");
+    stopped.join();
+}
+
+// Startup must not race ahead of a terminal join and publish a new worker
+// after the supervisor has acknowledged that the cohort is physically done.
+static void test_start_join_race_never_resurrects_workers() {
+    for (std::uint64_t i = 0; i < 48; ++i) {
+        const ActorHeapIdentity owner{88, 34, i + 1};
+        State state;
+        HungryCarrier::Options options{};
+        options.heap_owner = owner;
+        HungryCarrier actor(&state, handle, nullptr, io_double, options);
+        std::atomic<bool> begin{false};
+        std::atomic<int> started{0}, rejected{0}, unexpected{0};
+        std::thread starter([&] {
+            while (!begin.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try { actor.start(); started.fetch_add(1); }
+            catch (const std::logic_error&) { rejected.fetch_add(1); }
+            catch (...) { unexpected.fetch_add(1); }
+        });
+        std::thread closer([&] {
+            while (!begin.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            actor.join();
+        });
+        begin.store(true, std::memory_order_release);
+        starter.join();
+        closer.join();
+        check(unexpected.load() == 0 &&
+                  started.load() + rejected.load() == 1,
+              "concurrent start/join did not have a single terminal result");
+        check(!actor.producer_handle().try_send({1, 1}),
+              "concurrent join left an actor queue externally writable");
+        check(actor.retirement_proof().has_value(),
+              "concurrent start/join minted no safe empty-cohort proof");
+        bool late_start_rejected = false;
+        try { actor.start(); }
+        catch (const std::logic_error&) { late_start_rejected = true; }
+        check(late_start_rejected,
+              "join issued retirement proof before late actor thread startup");
+        actor.join();
+        check(actor.retirement_proof().has_value(),
+              "idempotent join of racing startup lost terminal cohort authority");
+    }
+}
+
 static void test_stop_while_producers_are_publishing() {
     // All producers start before stop, then we race them against join.
     // The caller retains actor lifetime until producer threads are joined;
@@ -866,6 +942,8 @@ int main() {
         test_strict_realtime_profiles_fail_closed();
         test_stop_completion_races();
         test_join_initiates_stop();
+        test_terminal_lifecycle_rejects_restart();
+        test_start_join_race_never_resurrects_workers();
         test_stop_while_producers_are_publishing();
         test_producer_handle_survives_destroy();
         test_producer_handles_concurrent_destructor();
