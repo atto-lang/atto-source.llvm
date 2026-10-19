@@ -126,7 +126,10 @@ aggregate, call, string, conditional and async feature limits.
 ## Exact-tree host concurrency analyzer test gate
 
 The race analyzer is host-only and **does not yet instrument LLVM guest loads
-and stores**. An authorized private runner can validate the exact source tree
+and stores**. Its logical participant IDs must identify distinct concurrent
+task/message lifetimes, not a shared actor reference, and recursive lock
+ownership publishes a happens-before edge only on the final unlock. Invalid
+control-character event identities are rejected. An authorized private runner can validate the exact source tree
 using:
 
 ```sh
