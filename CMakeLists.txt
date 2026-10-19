@@ -1735,6 +1735,15 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-shard-layout-test)
     set_tests_properties(native_actor_owned_aos_soa_aosoa_dense_kernel
         PROPERTIES TIMEOUT 30)
+    # Manual performance benchmark; do not gate correctness on wall times.
+    add_executable(oreslang-native-actor-shard-bench
+        tests/native_actor_shard_layout_bench.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shard-bench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-bench PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-bench PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
 
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
