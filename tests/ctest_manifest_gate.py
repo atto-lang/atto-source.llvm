@@ -45,6 +45,7 @@ CRITICAL_TESTS = (
     "source_actor_compiled_native_asan_ubsan",
     "native_shared_guest_v1_real_compiler",
     "native_shared_guest_v1_real_compiler_asan_ubsan",
+    "native_shared_borrow_v2_real_compiler",
     "native_supervisor_hierarchy_control",
     "native_supervisor_priority_control",
     "native_typed_exception_unwind",
@@ -184,6 +185,12 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
             raise ManifestFailure(f"shared guest parity must invoke real native compiler and Clang: {name}")
         if ("--sanitizers" in command) != (name == "native_shared_guest_v1_real_compiler_asan_ubsan"):
             raise ManifestFailure(f"shared guest sanitizer flag mismatch: {name}")
+    elif name == "native_shared_borrow_v2_real_compiler":
+        if (not python_program(command[0]) or len(command) != 6
+                or not command[1].endswith("/tests/native_guest_borrow_v2_source.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--clang", name)):
+            raise ManifestFailure("borrow v2 CTest must invoke genuine LLVM compiler and Clang")
     elif name.startswith("native_contract_harness_"):
         optimization = {
             "native_contract_harness_optimize_failclosed": [],
