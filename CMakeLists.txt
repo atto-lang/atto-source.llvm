@@ -2022,3 +2022,16 @@ if(BUILD_TESTING)
     set_tests_properties(native_shared_guest_v1_real_compiler
         native_shared_guest_v1_real_compiler_asan_ubsan PROPERTIES TIMEOUT 180)
 endif()
+
+
+# Reuse the same real Oreslang compiler + Clang toolchain for canonical v2
+# checked class borrowing. Native array-bearing class borrows and Result
+# lowering remain independently fail-closed; this gate does not certify them.
+if(BUILD_TESTING)
+    add_test(NAME native_shared_borrow_v2_real_compiler
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_borrow_v2_source.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NATIVE_GUEST_V1_CLANG}")
+    set_tests_properties(native_shared_borrow_v2_real_compiler PROPERTIES TIMEOUT 120)
+endif()
