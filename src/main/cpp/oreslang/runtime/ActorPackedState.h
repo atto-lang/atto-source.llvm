@@ -35,6 +35,27 @@ void ores_actor_packed_state_field_write(OresActorPackedState*,
                                          uint64_t domain, uint64_t epoch,
                                          uint64_t index, int64_t value);
 
+/* Trusted runtime-only scalar publication patch, no guest-visible pointer. */
+typedef struct {
+    uint64_t index;
+    int64_t value;
+} OresActorScalarPatch;
+
+/*
+ * Version-checked ALL-OR-NOTHING scalar record publication under the
+ * existing carrier-bound exclusive actor turn. On stale expected version
+ * returns 0 without mutation; on success returns 1. Forged turn, malformed
+ * patch, overflow, immutable/uninitialized field and duplicate indices
+ * fail-stop. No allocation, guest callback or throw after staging.
+ *
+ * This is NOT durable publication and NOT an authenticated gradient
+ * contribution API. It is a compiler/runtime integration primitive.
+ */
+int ores_actor_packed_state_compare_publish(OresActorPackedState*,
+    uint64_t domain, uint64_t epoch,
+    uint64_t version_index, int64_t expected_version,
+    const OresActorScalarPatch* patches, uint64_t patch_count);
+
 void ores_actor_packed_state_retire(OresActorPackedState*);
 /* Returns 0 while a turn is active; on success zeroizes/frees the arena and
  * the adapter metadata. The supervisor must fence stale callbacks first. */
