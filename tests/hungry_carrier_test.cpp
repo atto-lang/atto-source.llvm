@@ -1,6 +1,7 @@
 #include "oreslang/runtime/HungryCarrier.hpp"
 #include "oreslang/runtime/FixedArena.hpp"
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <cerrno>
 #include <algorithm>
 #include <unistd.h>
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -542,6 +544,46 @@ static void test_pending_socket_cancel_does_not_block_join() {
 }
 
 
+struct SelfJoinState {
+    HungryCarrier* carrier = nullptr;
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+static ActorStep self_join_handler(void* raw, ActorMessage,
+                                   bool, std::int64_t) noexcept {
+    auto& state = *static_cast<SelfJoinState*>(raw);
+    state.entered.store(true, std::memory_order_release);
+    while (!state.release.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    state.carrier->join(); // MUST terminate, not deadlock on external join.
+    return {};
+}
+static void test_self_join_rejected_during_external_join() {
+    // Process isolation prevents expected std::terminate from killing CTest.
+    // alarm() makes a newly introduced self-join deadlock observable as a
+    // failed regression instead of hanging the entire suite.
+    const pid_t child = fork();
+    check(child >= 0, "fork failed for carrier self-join test");
+    if (child == 0) {
+        std::set_terminate([] { std::_Exit(86); });
+        alarm(5);
+        SelfJoinState state;
+        HungryCarrier actor(&state, self_join_handler, nullptr, io_double, {});
+        state.carrier = &actor;
+        actor.start();
+        if (!actor.producer_handle().try_send({1, 0})) std::_Exit(87);
+        while (!state.entered.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        state.release.store(true, std::memory_order_release);
+        actor.join(); // Intentionally overlaps the worker's self-join.
+        std::_Exit(88);
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "self-join child wait failed");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 86,
+          "carrier self-join did not terminate before lifecycle lock deadlock");
+}
+
 static void test_join_initiates_stop() {
     State state;
     HungryCarrier actor(&state, handle, nullptr, io_double, {});
@@ -951,6 +993,7 @@ int main() {
         test_cpu_affinity_fails_closed();
         test_strict_realtime_profiles_fail_closed();
         test_stop_completion_races();
+        test_self_join_rejected_during_external_join();
         test_join_initiates_stop();
         test_terminal_lifecycle_rejects_restart();
         test_start_join_race_never_resurrects_workers();
