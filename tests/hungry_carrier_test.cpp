@@ -566,6 +566,7 @@ static void test_terminal_lifecycle_rejects_restart() {
     HungryCarrier actor(&state, handle, nullptr, io_double, options);
     const auto producer = actor.producer_handle();
     actor.join(); // Valid terminal shutdown without ever starting.
+    check(actor.stopped(), "join-before-start did not publish stopped state");
     const auto proof = actor.retirement_proof();
     check(proof.has_value() && proof->owner() == owner,
           "pre-start terminal join did not discharge its empty actor cohort");
@@ -586,6 +587,7 @@ static void test_terminal_lifecycle_rejects_restart() {
     catch (const std::logic_error&) { rejected = true; }
     check(rejected, "start() admitted an actor stopped before initial startup");
     stopped.join();
+    check(stopped.stopped(), "pre-stopped actor remained logically running after join");
 }
 
 // Startup must not race ahead of a terminal join and publish a new worker
