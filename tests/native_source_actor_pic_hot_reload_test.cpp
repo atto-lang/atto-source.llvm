@@ -247,10 +247,14 @@ int main(int argc, char** argv) {
         }
         require(first_unloaded == 1,
                 "old compiled DSO not reclaimed after its final lease");
-        require(receive(gate, id, heap, 1) == 86,
-                "v2 code did not run on preserved actor heap");
-        require(receive(gate, id, heap, 0) == 128,
-                "v2 subsequent turn lost persistent actor state");
+        require(ores_native_actor_scheduler_try_send(scheduler, actor, 1)
+                == ORES_NATIVE_SEND_ACCEPTED, "v2 scheduler admission failed");
+        wait_mail(host, 2, 86);
+        require(ores_native_actor_scheduler_try_send(scheduler, actor, 0)
+                == ORES_NATIVE_SEND_ACCEPTED, "v2 follow-up DATA rejected");
+        wait_mail(host, 3, 128);
+        require(ores_native_actor_scheduler_upgrade_epoch(scheduler, actor) == 2,
+                "code revision not reflected in scheduler epoch");
         require(rejects([&] { (void)gate.freeze(id, 1); }),
                 "stale supervisor revision admitted");
 
