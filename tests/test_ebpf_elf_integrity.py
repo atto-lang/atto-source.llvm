@@ -53,7 +53,7 @@ def policy_fixture():
     code[16] = 0x55
     code[24] = 0x95
     obj[0xa0:0xc0] = code
-    obj[0xd0:0xd4] = b"MIT\\0"
+    obj[0xd0:0xd4] = b"MIT\0"
     struct.pack_into("<Q", obj, 384 + 24, 0xa0)
     struct.pack_into("<Q", obj, 384 + 32, len(code))
     struct.pack_into("<Q", obj, 448 + 24, 0xd0)
