@@ -381,6 +381,104 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_locals); },
                      "duplicate owned local 'x'");
 
+    // Unselected statement payload slots must never be silently ignored by
+    // the LLVM lowering path. Ownership traversal alone is not sufficient.
+    Program hidden_statement_condition;
+    Function hidden_condition_fn;
+    hidden_condition_fn.name = "main";
+    Statement hidden_condition;
+    hidden_condition.kind = Statement::Kind::Call;
+    hidden_condition.expression = make_expression(Expression::Kind::Call, "callee");
+    hidden_condition.condition_lhs = make_expression(Expression::Kind::Take);
+    hidden_condition_fn.statements.push_back(std::move(hidden_condition));
+    hidden_condition_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_statement_condition.functions.push_back(std::move(hidden_condition_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_condition); },
+                     "statement contains hidden conditional effects");
+
+    Program hidden_statement_binding;
+    Function hidden_binding_fn;
+    hidden_binding_fn.name = "main";
+    Statement hidden_binding;
+    hidden_binding.kind = Statement::Kind::Call;
+    hidden_binding.expression = make_expression(Expression::Kind::Call, "callee");
+    hidden_binding.branch_local = std::make_unique<LocalBinding>(
+        scalar_local("secret", 1));
+    hidden_binding_fn.statements.push_back(std::move(hidden_binding));
+    hidden_binding_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_statement_binding.functions.push_back(std::move(hidden_binding_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_binding); },
+                     "statement contains hidden scoped binding");
+
+    Program hidden_statement_array_commit;
+    Function hidden_array_fn;
+    hidden_array_fn.name = "main";
+    Statement hidden_array;
+    hidden_array.kind = Statement::Kind::Call;
+    hidden_array.expression = make_expression(Expression::Kind::Call, "callee");
+    hidden_array.array_commit_length = make_expression(Expression::Kind::Integer, {}, 5);
+    hidden_array_fn.statements.push_back(std::move(hidden_array));
+    hidden_array_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_statement_array_commit.functions.push_back(std::move(hidden_array_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_array_commit); },
+                     "statement contains hidden array commit");
+
+    // The actor action vector is the emitter's sole effect schedule. Reject
+    // omitted effects, duplicates, invalid indices, and unknown variants.
+    Program orphan_send;
+    Function orphan_fn;
+    orphan_fn.name = "main";
+    ActorSend orphan;
+    orphan.reference = "worker";
+    orphan.payload = make_expression(Expression::Kind::Integer, {}, 7);
+    orphan_fn.actor_sends.push_back(std::move(orphan));
+    orphan_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    orphan_send.functions.push_back(std::move(orphan_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(orphan_send); },
+                     "actor effect omitted from ordered actions");
+
+    Program orphan_stop;
+    Function stop_fn;
+    stop_fn.name = "main";
+    stop_fn.actor_stops.push_back("worker");
+    stop_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    orphan_stop.functions.push_back(std::move(stop_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(orphan_stop); },
+                     "actor effect omitted from ordered actions");
+
+    Program duplicate_send_action;
+    Function duplicate_action_fn;
+    duplicate_action_fn.name = "main";
+    ActorSend scheduled;
+    scheduled.reference = "worker";
+    scheduled.payload = make_expression(Expression::Kind::Integer, {}, 7);
+    duplicate_action_fn.actor_sends.push_back(std::move(scheduled));
+    duplicate_action_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
+    duplicate_action_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
+    duplicate_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    duplicate_send_action.functions.push_back(std::move(duplicate_action_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_send_action); },
+                     "invalid or repeated actor send action");
+
+    Program bad_action_index;
+    Function indexed_fn;
+    indexed_fn.name = "main";
+    indexed_fn.actor_actions.push_back({ActorAction::Kind::Send, 0});
+    indexed_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    bad_action_index.functions.push_back(std::move(indexed_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(bad_action_index); },
+                     "invalid or repeated actor send action");
+
+    Program unknown_action_kind;
+    Function unknown_action_fn;
+    unknown_action_fn.name = "main";
+    unknown_action_fn.actor_actions.push_back({
+        static_cast<ActorAction::Kind>(255), 0});
+    unknown_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    unknown_action_kind.functions.push_back(std::move(unknown_action_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_action_kind); },
+                     "unknown actor action kind");
+
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
         "pub fnc main(): int { val x: int = 42; return x; }");
