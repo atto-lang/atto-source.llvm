@@ -55,7 +55,7 @@ A column view is zero-copy and tied to its owning store; compiler-enforced, none
 
 A region/task privilege planner should eventually express `reads`, `writes`, `discards` and `reduces(op)`; unsound unknown aliases must serialize or be rejected. `critical` waiting must park the Oreslang task instead of blocking an actor/main/CONTROL scheduler carrier thread.
 
-Each mutable collection belongs to one actor/arena or an explicitly authorized share domain. `rt share` never creates mutable cross-actor pointers. Hot reload and teardown must revoke row handles and loans before reclaiming owning arenas; generations are also scoped to the store identity.
+Each mutable collection has exactly one **owner domain**, which may be an ordinary stack/heap allocation, a structured Task scope, an actor-local arena, or an explicitly authorized shared domain. **Neither `InvertedArray<T>` nor columnar DOP requires an actor.** Disjoint borrowed columns or proven row partitions can be processed by ordinary `nb` Tasks while the owning world/collection remains live. Immutable `Arc<T>`-style shared buffers support zero-payload-copy clones; `rt share` never creates mutable cross-actor pointers. Hot reload and teardown must revoke row handles and loans before reclaiming owning arenas; generations are also scoped to the store identity.
 
 ## DOP extensions / ordered roll-out
 
@@ -64,6 +64,9 @@ Each mutable collection belongs to one actor/arena or an explicitly authorized s
 **P1, optimizer-facing:** explicit `Region<T>` layouts (`soa`, `aosoa<N>`, `aos`, `auto`; defaults may not silently violate an inverted-class contract); zero-copy projections, disjoint partition proof, `for ... simd`, field-aware reductions, map/filter fusion, and explicit AoS snapshots. Per-column alignment, heterogeneous widths, AoSoA padding and overflow require checked descriptors before native/Java ABI parity.
 
 **P2, heterogeneous compute:** `compute fnc` effect restrictions, placement, GPU-resident columns, tiling, sparse/gather/scatter, ECS-like joins, AoSoA, device transfer fences, NUMA scheduling and benchmarks; no implicit CPU fallback for unsupported GPU execution.
+
+
+Actor-independent shared ownership, ECS and structured-task composition are specified in [SHARED_STORAGE_ECS_TASKS_V1.md](SHARED_STORAGE_ECS_TASKS_V1.md). That contract distinguishes zero-copy immutable sharing from exclusive parallel writes and actor-boundary admission.
 
 ## Required acceptance gates
 
