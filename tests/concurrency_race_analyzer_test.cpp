@@ -142,5 +142,11 @@ int main() {
     } catch (const std::invalid_argument&) { rejected = true; }
     assert(rejected);
   }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.write("actor-one/task-1", "actor-one/state");
+    model.write("actor-one/task-2", "actor-one/state");
+    assert(model.conflict_count() == 1);
+  }
   return 0;
 }
