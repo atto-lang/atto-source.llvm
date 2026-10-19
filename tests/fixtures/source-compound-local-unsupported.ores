@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  let mut int total = 1;
+  total += 2;
+  return total;
+}
