@@ -16,6 +16,20 @@ namespace oreslang::runtime {
 
 namespace {
 thread_local HungryCarrier::NativeHeap* tls_actor_heap = nullptr;
+// A self-join check based on std::thread::joinable()/get_id() can race a
+// supervisor calling std::thread::join(). This TLS identity is set BEFORE
+// carrier/broker callbacks and can be checked without touching thread objects
+// or waiting behind the joiner's lifecycle mutex.
+thread_local const HungryCarrier* tls_executing_carrier = nullptr;
+struct CarrierExecutionScope final {
+    explicit CarrierExecutionScope(const HungryCarrier* carrier) noexcept {
+        if (tls_executing_carrier != nullptr) std::terminate();
+        tls_executing_carrier = carrier;
+    }
+    CarrierExecutionScope(const CarrierExecutionScope&) = delete;
+    CarrierExecutionScope& operator=(const CarrierExecutionScope&) = delete;
+    ~CarrierExecutionScope() noexcept { tls_executing_carrier = nullptr; }
+};
 }
 
 HungryCarrier::NativeHeap* HungryCarrier::active_heap() noexcept {
@@ -232,11 +246,9 @@ HungryCarrier::HungryCarrier(void* actor_state, ActorHandlerV2 handler,
 }
 
 HungryCarrier::~HungryCarrier() noexcept {
-    // A self-destructing worker would close eventfds and free queues while
-    // the thread is still accessing them. Fail closed rather than UAF.
-    if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
-        (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
-        std::terminate();
+    // A worker may never destroy its own carrier. TLS avoids racing an
+    // external std::thread::join() while inspecting the std::thread object.
+    if (tls_executing_carrier == this) std::terminate();
     request_stop();
     join();
 }
@@ -324,13 +336,10 @@ void HungryCarrier::request_stop() noexcept {
 }
 
 void HungryCarrier::join() noexcept {
-    // A worker joining itself is fatal. This check MUST precede acquiring
-    // lifecycle_mutex_: an external join may already hold that mutex while
-    // waiting for the worker to exit, otherwise self-join deadlocks instead
-    // of terminating. The second check covers concurrent startup.
-    if ((actor_thread_.joinable() && actor_thread_.get_id() == std::this_thread::get_id()) ||
-        (broker_thread_.joinable() && broker_thread_.get_id() == std::this_thread::get_id()))
-        std::terminate();
+    // Detect actor/broker self-join BEFORE taking the lifecycle mutex.
+    // Reading std::thread::joinable() here would itself race an external join;
+    // TLS gives an independent, carrier-local execution identity.
+    if (tls_executing_carrier == this) std::terminate();
     // join() is an explicit terminal lifecycle operation, not an indefinite
     // wait for a spontaneous stop. Concurrent start/join must not permit
     // startup after a cohort's terminal acknowledgment.
@@ -540,6 +549,7 @@ void HungryCarrier::wait_actor() noexcept {
 }
 
 void HungryCarrier::actor_loop() noexcept {
+    const CarrierExecutionScope active{this};
     const auto tag = std::hash<std::thread::id>{}(std::this_thread::get_id());
     thread_tag_.store(static_cast<std::uint64_t>(tag), std::memory_order_release);
     const bool admitted = pin_cpu() && actor_heap_.bind_carrier();
@@ -605,6 +615,7 @@ void HungryCarrier::actor_loop() noexcept {
 }
 
 void HungryCarrier::broker_loop() noexcept {
+    const CarrierExecutionScope active{this};
     while (!stop_.load(std::memory_order_acquire)) {
         Job job;
         if (jobs_.try_pop(job)) {
