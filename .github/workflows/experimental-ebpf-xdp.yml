@@ -28,7 +28,7 @@ jobs:
           cmake --build build --parallel 2
       - name: Validate source admission, profile fallback and BPF ELF
         run: |
-          ctest --test-dir build -R "^(experimental_ebpf_xdp_|deployment_profile_)" --output-on-failure
+          ctest --test-dir build -R "^(experimental_ebpf_(xdp_|elf_parser_)|deployment_profile_)" --output-on-failure
       - name: Scope warning
         run: |
           echo "EXPERIMENTAL ONLY: EM_BPF ELF output is not evidence of kernel verifier acceptance."
