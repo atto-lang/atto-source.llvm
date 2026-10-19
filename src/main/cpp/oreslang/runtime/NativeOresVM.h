@@ -80,6 +80,25 @@ int ores_native_vm_confirm_supervised_finalized(
 int ores_native_vm_publish_supervised_failure(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorTerminalFailure failure);
+/* Trusted source actor upgrade coordinator entry points, forwarded to the
+ * exact scheduler admission lock. Source actors may NOT call these APIs;
+ * routing and code-image authority remain the supervisor's responsibility.
+ * A committed scheduler route revision is only valid after separately
+ * authenticating the code generation and all native continuation leases.
+ */
+int ores_native_vm_upgrade_freeze(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t expected_route_epoch,
+    uint64_t* ticket_out);
+int ores_native_vm_upgrade_quiesced(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t ticket);
+int ores_native_vm_upgrade_finish(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t ticket, int committed);
+uint64_t ores_native_vm_upgrade_epoch(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref);
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
