@@ -36,3 +36,7 @@ On a target CGL host, also record the exact Git tree/commit, distribution image,
 - CGL vendor specifics and production licensing/support remain deployment concerns.
 
 Blocking implementation references: LLVM issues #15 (privileged OS admission), #20 (producer progress), draft LLVM PR #444 (typed advisory realtime metadata), and Java issue #1061 (soft-RT parity).
+
+## Native C++ host admission gate
+
+A native, read-only C++ host probe is now exposed at src/main/cpp/oreslang/runtime/CglHostAdmission.hpp. It inspects the caller's effective CPU mask, monotonic-clock availability, scheduler policy and PREEMPT_RT sysfs state. The CTest native_cgl_linux_host_admission exercises both live probing and negative policy/flag parsing cases. It **does not** request scheduler privileges, change CPU pinning, or get called by compiled Oreslang actors yet.

@@ -24,8 +24,9 @@ jobs:
       - name: Build native compiler
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build build --target oreslang-llvmc --parallel 2
+          cmake --build build --target oreslang-llvmc oreslang-native-cgl-host-admission-test --parallel 2
       - name: End to end source to ELF64 process on generic Linux
         run: bash scripts/cgl-native-smoke.sh
       - name: Existing native scalar source regression
-        run: ctest --test-dir build --output-on-failure -R '^native_source_i64_os_exit_subset$'
+        run: ctest --test-dir build --output-on-failure -R '^(native_cgl_linux_host_admission|native_source_i64_os_exit_subset)
+
