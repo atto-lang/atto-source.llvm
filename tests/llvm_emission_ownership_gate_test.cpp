@@ -162,6 +162,53 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_slots); },
                      "duplicate callable user arity");
 
+    // Even a non-null AST can hide a moved/borrowed expression underneath a
+    // source-impossible child slot. Those children must fail admission instead
+    // of being ignored by subsequent ownership analysis or LLVM codegen.
+    Program hidden_unary_operand;
+    Function unary_fn;
+    unary_fn.name = "main";
+    auto unary = make_expression(Expression::Kind::Negate);
+    unary->left = make_expression(Expression::Kind::Integer, {}, 1);
+    unary->right = make_expression(Expression::Kind::Take);
+    unary_fn.result = std::move(unary);
+    hidden_unary_operand.functions.push_back(std::move(unary_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_unary_operand); },
+                     "malformed native ownership AST: unary or field expression contains hidden operands");
+
+    Program hidden_call_receiver;
+    Function call_fn;
+    call_fn.name = "main";
+    auto direct = make_expression(Expression::Kind::Call, "callee");
+    direct->left = variable("unadmitted");
+    call_fn.result = std::move(direct);
+    hidden_call_receiver.functions.push_back(std::move(call_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_call_receiver); },
+                     "malformed native ownership AST: direct call contains hidden receiver or operand");
+
+    Program hidden_binary_arguments;
+    Function binary_fn;
+    binary_fn.name = "main";
+    auto binary = make_expression(Expression::Kind::Add);
+    binary->left = make_expression(Expression::Kind::Integer, {}, 1);
+    binary->right = make_expression(Expression::Kind::Integer, {}, 2);
+    binary->arguments.push_back(make_expression(Expression::Kind::Take));
+    binary_fn.result = std::move(binary);
+    hidden_binary_arguments.functions.push_back(std::move(binary_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_binary_arguments); },
+                     "malformed native ownership AST: binary expression contains hidden arguments");
+
+    Program hidden_leaf_metadata;
+    Function metadata_fn;
+    metadata_fn.name = "main";
+    auto leaf = make_expression(Expression::Kind::Variable, "x");
+    leaf->type_arguments_present = true;
+    metadata_fn.locals.push_back(scalar_local("x", 42));
+    metadata_fn.result = std::move(leaf);
+    hidden_leaf_metadata.functions.push_back(std::move(metadata_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_leaf_metadata); },
+                     "malformed native ownership AST: non-call expression contains unlowered call metadata");
+
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
         "pub fnc main(): int { val x: int = 42; return x; }");
