@@ -1758,6 +1758,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Indexed CONTROL/DATA ready bitsets: all 16 64-bit words (1024 actors)
+    # plus exclusive actor execution, FIFO and word-boundary CONTROL lanes.
+    add_executable(oreslang-native-indexed-ready-test
+        tests/native_actor_indexed_ready_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-indexed-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-indexed-ready-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-indexed-ready-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_indexed_ready_word_boundaries
+        COMMAND oreslang-native-indexed-ready-test)
+    set_tests_properties(native_actor_indexed_ready_word_boundaries
+        PROPERTIES TIMEOUT 30)
     # Real native scheduler: stable pthread slot preference, bounded fallback,
     # zero allocation in dispatch and preserved per-actor exclusive ownership.
     add_executable(oreslang-native-carrier-locality-test
