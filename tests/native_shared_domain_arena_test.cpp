@@ -296,6 +296,10 @@ int main() {
         auto pinnedGrant = pinned.grant(pinnedControl, 301, 7, true, false);
         auto pin = pinned.pin(301, 7, pinnedGrant);
         require(pin.live());
+        require(!pinned.try_revoke(pinnedControl, pinnedGrant));
+        // A fresh incarnation must not replace a member while an old
+        // continuation still pins that membership.
+        reject([&] { (void)pinned.grant(pinnedControl, 301, 8, true, false); });
         require(!pinned.try_retire(pinnedControl));
         reject([&] { (void)pinned.read(301, 7, pinnedGrant); });
         std::thread completion([p = std::move(pin)]() mutable {
@@ -305,6 +309,8 @@ int main() {
             p.release();
         });
         completion.join();
+        // STOP has sealed the domain; an old pin has drained so physical
+        // retirement proceeds, but member grants cannot reopen afterwards.
         require(pinned.try_retire(pinnedControl));
         require(pinned.try_retire(pinnedControl));
         reject([&] { (void)pinned.pin(301, 7, pinnedGrant); });
@@ -329,5 +335,22 @@ int main() {
         require(duplicateCallbacks.try_retire(ownership));
     }
 
+    // Per-member pin counts allow independent CONTROL revocation without
+    // prematurely recycling a still-pinned actor's membership identity.
+    {
+        SharedDomainArena separateMembers;
+        auto authority = separateMembers.take_control();
+        auto old = separateMembers.grant(authority, 1201, 1, true, false);
+        auto other = separateMembers.grant(authority, 1202, 1, true, false);
+        auto outstanding = separateMembers.pin(1201, 1, old);
+        require(!separateMembers.try_revoke(authority, old));
+        require(separateMembers.try_revoke(authority, other));
+        reject([&] { (void)separateMembers.grant(authority, 1201, 2, true, false); });
+        outstanding.release();
+        require(separateMembers.try_revoke(authority, old));
+        auto restarted = separateMembers.grant(authority, 1201, 2, true, false);
+        require(separateMembers.try_revoke(authority, restarted));
+        require(separateMembers.try_retire(authority));
+    }
     std::cout << "shared domain arena tests passed\n";
 }
