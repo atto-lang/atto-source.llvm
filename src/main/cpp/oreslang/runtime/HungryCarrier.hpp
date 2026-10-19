@@ -211,6 +211,10 @@ private:
                max_dedicated_lanes> lanes_{};
     // Synchronizes only registration/start; never taken by the carrier hot path.
     std::mutex lane_registration_mutex_;
+    // Serializes start() publication/thread creation with terminal join().
+    // Without this guard, join-before-start can certify retirement and a
+    // later start() can resurrect actor/broker worker threads.
+    std::mutex lifecycle_mutex_;
     std::size_t registered_lanes_ = 0; // immutable after start
     std::size_t next_input_ = 0;       // actor-carrier thread only
 
