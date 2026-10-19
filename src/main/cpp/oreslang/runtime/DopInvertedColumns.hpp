@@ -52,6 +52,9 @@ class InvertedColumns {
         std::array<bool, field_count> writers{};
         std::mutex mutex;
         std::uint64_t owner;
+        // Capability stays alive while any issued handle holds it; cannot be
+        // reconstructed from predictable owner/slot/generation integers.
+        std::shared_ptr<const unsigned char> issuer = std::make_shared<const unsigned char>(0);
         bool closed = false;
         explicit State(std::uint64_t id) : owner(id) {}
     };
@@ -67,10 +70,11 @@ class InvertedColumns {
     }
     static std::size_t resolve(const State& s, const auto& h) {
         ensure_open(s);
-        if (h.owner != s.owner || h.slot >= s.slots.size())
+        if (h.issuer_.get() != s.issuer.get() || h.owner_ != s.owner
+                || h.slot_ >= s.slots.size())
             throw std::out_of_range("foreign or invalid inverted row handle");
-        const auto& slot = s.slots[h.slot];
-        if (!slot.live || slot.generation != h.generation)
+        const auto& slot = s.slots[h.slot_];
+        if (!slot.live || slot.generation != h.generation_)
             throw std::out_of_range("stale inverted row handle");
         return slot.row;
     }
@@ -99,14 +103,29 @@ class InvertedColumns {
     static void erase_columns(State& s, std::size_t row, std::size_t last,
                               std::index_sequence<I...>) {
         ((std::get<I>(s.columns)[row] = std::get<I>(s.columns)[last],
+          // Scrub the vacated physical tail before releasing the logical row.
+          std::get<I>(s.columns)[last] = Cell<std::tuple_element_t<I, std::tuple<Fields...>>>{},
           std::get<I>(s.columns).pop_back()), ...);
     }
 
 public:
-    struct Handle {
-        std::uint64_t owner;
-        std::size_t slot;
-        std::uint64_t generation;
+    class Handle {
+        // Native host callers cannot mint row capabilities from public
+        // numeric coordinates or mutate them to alias another live row.
+        std::shared_ptr<const unsigned char> issuer_;
+        std::uint64_t owner_;
+        std::size_t slot_;
+        std::uint64_t generation_;
+
+        Handle(std::shared_ptr<const unsigned char> issuer, std::uint64_t owner,
+               std::size_t slot, std::uint64_t generation)
+            : issuer_(std::move(issuer)), owner_(owner), slot_(slot),
+              generation_(generation) {}
+        friend class InvertedColumns;
+    public:
+        std::uint64_t owner() const noexcept { return owner_; }
+        std::size_t slot() const noexcept { return slot_; }
+        std::uint64_t generation() const noexcept { return generation_; }
     };
 
     template<std::size_t I, bool Write>
@@ -203,7 +222,7 @@ public:
             s.slots.push_back(Slot{row, 1, true});
         }
         s.row_slots.push_back(slot);
-        return Handle{s.owner, slot, s.slots[slot].generation};
+        return Handle{s.issuer, s.owner, slot, s.slots[slot].generation};
     }
     void erase_swap(Handle h) {
         std::lock_guard<std::mutex> lock(state_->mutex);
@@ -211,7 +230,7 @@ public:
         const auto row = resolve(s, h);
         if (any_loans(s)) throw std::logic_error("cannot erase borrowed inverted columns");
         const auto last = s.row_slots.size() - 1;
-        const bool recycle = s.slots[h.slot].generation != std::numeric_limits<std::uint64_t>::max();
+        const bool recycle = s.slots[h.slot_].generation != std::numeric_limits<std::uint64_t>::max();
         if (recycle) s.free_slots.reserve(s.free_slots.size() + 1);
         erase_columns(s, row, last, std::index_sequence_for<Fields...>{});
         if (row != last) {
@@ -220,11 +239,11 @@ public:
             s.slots[displaced].row = row;
         }
         s.row_slots.pop_back();
-        auto& slot = s.slots[h.slot];
+        auto& slot = s.slots[h.slot_];
         slot.live = false;
         if (recycle) {
             ++slot.generation;
-            s.free_slots.push_back(h.slot);
+            s.free_slots.push_back(h.slot_);
         }
     }
     // A complete row snapshot observes a single checked storage state.
