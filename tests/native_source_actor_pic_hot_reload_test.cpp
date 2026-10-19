@@ -5,15 +5,19 @@
 // builds both shared objects in a private directory before invocation.
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/NativeActorHotUpgradeGate.hpp"
+#include "oreslang/runtime/NativeActorScheduler.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
