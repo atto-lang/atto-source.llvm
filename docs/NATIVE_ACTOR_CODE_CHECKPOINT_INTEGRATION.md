@@ -263,3 +263,64 @@ require independent exact-destination/source export approval; no such
 approval has been verified here. Use a vetted source-org runner or
 approved in-boundary source-local ephemeral machine. Source-free tests
 may run separately on a funded org without any private source transfer.
+
+## Native scheduler upgrade admission integration — October 18, 2026
+
+The source branch now adds a **host-only** per-actor DATA admission freeze to
+`NativeActorScheduler.c` and a typed `NativeOresVM` supervisor adapter:
+
+- `ores_native_vm_upgrade_freeze(vm, domain, actor, expected_epoch, &ticket)`
+  seals admission under exactly the scheduler lock used by `try_send`.
+  The historical generation-checked `ActorRef` is not renumbered.
+- Newly attempted DATA returns `ORES_NATIVE_SEND_UPGRADE_FROZEN` rather
+  than a false ACCEPTED receipt. The legacy index-based `submit` also
+  checks the scheduler's frozen flag and cannot bypass the freeze.
+- Already acknowledged queued DATA **drains in FIFO order on the old
+  handler**, regardless of the freeze; priority CONTROL/terminal STOP still
+  progress. A second actor on a different carrier can continue.
+- `upgrade_quiesced` requires no active, queued or pending CONTROL work
+  and the exact live freeze ticket. `upgrade_finish(..., committed=0)`
+  reopens the original route. Only a quiesced `committed=1` advances its
+  monotonic route epoch and reopens DATA. Terminal stop/retire permanently
+  defeats stale abort/publish tickets.
+- Calls from any active native VM actor carrier are rejected, including
+  callbacks in *another* scheduler domain. This is carrier-origin hardening,
+  **not** an unforgeable supervisor capability or hostile native sandbox.
+
+The new `native_vm_hot_upgrade_mailbox_linearization` CTest exercises
+old FIFO drain, rejection after freeze, dedicated CONTROL delivery, second
+lane progress, mismatched actor/tickets, code-only simulated version switch,
+rollback, stale epoch, stop precedence and actor-origin negative cases.
+The existing `tests/source_actor_pic_hot_reload.py` now additionally
+compiles/links `NativeActorScheduler.c` so the **actual compiler-emitted
+Oreslang actor v1/v2 handlers** are invoked by the real scheduler worker
+through `NativeActorHotUpgradeGate`. The v1=42, v2=86 then 128 check
+uses the same persistent `OresActorI64Heap` and route epoch, with
+matched scheduler/code-gate freeze and drain and rollback of rejected ABI.
+
+**Release blockers remain:**
+
+1. This patch is **not yet executed** on source-owned GitHub Actions.
+   A CI workflow with no runner steps is neither a pass nor a compiler
+   regression. Run real CTest, compiler-generated PIC, and ASan/UBSan
+   before making a source-level capability claim.
+2. Supervisor authority is host convention in this current C API;
+   a real security boundary must seal CONTROL ownership against
+   arbitrary foreign code and prevent untrusted native FFI access.
+3. Scheduler physical idleness alone cannot prove guest `await`,
+   suspended continuation, external FFI borrow, timer, DMA or shared
+   arena quiescence. Compiler lowering must attach **generation pins**
+   before such work is allowed to hot-reload (LLVM #606).
+4. The scheduler's quiesced observation and the independent code-gate
+   publication must become **one linearizable supervisor transaction**.
+   CONTROL callbacks can be admitted after an observation; do not
+   assume an earlier `quiesced` means future CONTROL has stopped.
+5. The test `dlopen` loads only private, trusted, source-generated
+   fixtures and is **not** an authenticated production AOT/ORC loader.
+   Artifact authentication before constructors and durable unload
+   quarantine remain tracked by LLVM #607/#610.
+6. Cross-backend Java actor hot swapping and full PRIVATE/UNTRUSTED
+   physically protected worker migration remain separate gates.
+
+No private source has been copied into an alternate GitHub organization.
+Source export remains on hold under platform-conformance #22/#77/#69.
