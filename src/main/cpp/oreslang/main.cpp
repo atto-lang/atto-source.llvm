@@ -3,6 +3,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/BpfEffectAdmission.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 
 #include <algorithm>
@@ -207,12 +208,8 @@ int main(int argc, char** argv) {
             // AST alone is not a deployable BPF program or an effect witness.
             const auto verified_ir = oreslang::emit_verified_bpf_xdp_ir(ast);
             const bool packet_reads = !ast.functions.front().early_returns.empty();
-            if (!emit_target_closure &&
-                packet_reads != bpf_packet_read_acknowledged) {
-                throw std::runtime_error(packet_reads
-                    ? "eBPF XDP packet_u8 requires --bpf-grants=bpf.packet.read"
-                    : "eBPF XDP constant action does not use bpf.packet.read");
-            }
+            oreslang::enforce_bpf_xdp_effect_admission(
+                packet_reads, bpf_packet_read_acknowledged, emit_target_closure);
             if (emit_target_closure) {
                 // The backend admits zero or more checked packet_u8 guards.
                 // After successful verification each guard has a packet read,
