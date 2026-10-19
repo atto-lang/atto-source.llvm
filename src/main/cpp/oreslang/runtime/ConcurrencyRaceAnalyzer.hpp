@@ -154,9 +154,14 @@ class ConcurrencyRaceAnalyzer final {
   };
 
   static std::string key(const std::string& value) {
-    if (value.empty() || value.size() > 128 ||
-        value.find_first_not_of(" \t\r\n") == std::string::npos) {
-      throw std::invalid_argument("event identity must contain 1..128 characters");
+    const bool control = std::any_of(value.begin(), value.end(), [](char byte) {
+      const auto c = static_cast<unsigned char>(byte);
+      return c < 0x20 || c == 0x7f;
+    });
+    if (value.empty() || value.size() > 128 || control ||
+        value.find_first_not_of(" ") == std::string::npos) {
+      throw std::invalid_argument(
+          "event identity must contain 1..128 non-control characters");
     }
     return value;
   }
