@@ -363,5 +363,18 @@ int main() {
         invalid.blocks = {{{}, {2}}};
         verify(invalid);
     }));
+    // Prevent a forged or generated CFG from consuming unbounded memory/time
+    // before ownership analysis, even when most blocks are unreachable.
+    Graph over_budget;
+    over_budget.entry = {{"x", cell(kOwned)}};
+    over_budget.blocks.resize(16385);
+    assert(rejected([&] { verify(over_budget); }));
+    over_budget.blocks.resize(1);
+    over_budget.blocks[0].operations.resize(65537, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(over_budget); }));
+    over_budget.blocks[0].operations.clear();
+    over_budget.blocks[0].successors.resize(65537, 0);
+    assert(rejected([&] { verify(over_budget); }));
+
     return 0;
 }
