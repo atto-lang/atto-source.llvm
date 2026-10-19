@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
+#include "oreslang/runtime/DeploymentProfile.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 
 #include <algorithm>
@@ -84,6 +85,19 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--deployment-profile=", 0) == 0) {
+            // Deployment profiles are stronger than architecture triples:
+            // generic host IR is never evidence of a qualified XDP, Linux
+            // carrier, FPGA or ASIC artifact. Until a certified emitter and
+            // its independent validators exist, refuse before source I/O.
+            try {
+                const auto profile = oreslang::DeploymentProfile::parse(
+                    arg.substr(std::string_view("--deployment-profile=").size()));
+                profile.require_certified_emitter();
+            } catch (const std::exception& error) {
+                std::cerr << error.what() << '\n';
+                return 2;
+            }
         } else if (arg.rfind("--target=", 0) == 0) {
             if (target_seen) { std::cerr << "duplicate target option\n"; return 2; }
             target_seen = true;
@@ -120,7 +134,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
