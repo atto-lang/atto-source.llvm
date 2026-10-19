@@ -25,6 +25,9 @@ class IRGuardTests(unittest.TestCase):
   self.reject("define void @f(ptr noalias %p) { ret void }\n")
   self.reject("define void @f(ptr nonnull %p) { ret void }\n")
   self.reject("declare void @f(ptr dereferenceable(8) %p)\n")
+  self.reject("attributes #0 = { readonly }\n")
+  self.reject("attributes #1 = { nocapture }\n")
+  self.reject("define void @f(ptr %p) #0 { ret void }\nattributes #0 = { nonnull }\n")
   self.reject("load i64, ptr %p, !invariant.load !0\n")
   self.reject("store i64 1, ptr %p, !invariant.group !0\n")
   self.reject("load i64, ptr %p, !llvm.access.group !0\n")
@@ -38,6 +41,9 @@ class IRGuardTests(unittest.TestCase):
   self.reject("%r = call fast float @llvm.sqrt.f32(float %a)\n")
   self.reject("%r = invoke nnan float @sqrt(float %a) to label %ok unwind label %bad\n")
   self.reject("%r = select fast i1 %pred, float %a, float %b\n")
+
+ def test_invalid_unicode_is_rejected(self):
+  self.reject("define void @f() { ret void }\ud800")
 
  def test_bounded_admission(self):
   self.reject("a"*(1024*1024+1))
