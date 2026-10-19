@@ -217,6 +217,8 @@ int main(int argc, char** argv) {
             require(ores_native_actor_scheduler_try_send(scheduler, actor, 1)
                     == ORES_NATIVE_SEND_UPGRADE_FROZEN,
                     "new DATA accepted under frozen scheduler epoch");
+            require(!ores_native_actor_scheduler_submit(scheduler, 0, 1),
+                    "legacy index-based scheduler submit bypassed upgrade freeze");
             auto ticket = gate.freeze(id, 1);
             require(!gate.quiesced(ticket),
                     "awaiting old code must block quiescence");
