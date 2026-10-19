@@ -70,9 +70,11 @@ def elf_sections(blob):
     # No runtime subprograms or unapproved privileged helpers are allowed in
     # this first source-level policy slice. BPF_CALL is opcode 0x85.
     require(0x85 not in opcodes, "XDP guest contains unapproved BPF_CALL")
-    _, license_size, license_type, license_flags = found["license"]
-    require(license_type == 1 and not (license_flags & 4) and license_size >= 2,
+    license_offset, license_size, license_type, license_flags = found["license"]
+    require(license_type == 1 and not (license_flags & 4) and license_size == 4,
             "invalid executable or missing license section")
+    require(blob[license_offset:license_offset + license_size] == b"MIT\0",
+            "test-only BPF license bytes differ from reviewed prototype metadata")
     return found
 
 def main():
