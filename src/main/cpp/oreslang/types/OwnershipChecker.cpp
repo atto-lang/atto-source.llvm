@@ -782,16 +782,19 @@ void validate_i64_ownership(const Program& program) {
         std::unordered_set<std::string> generic_names;
         for (const auto& generic : function.generic_parameters) {
             require_identifier(generic.name, "generic parameter");
-            if (!generic_names.insert(generic.name).second)
+            if (generic.name == "_" || generic_names.count(generic.name))
                 throw std::runtime_error(
-                    "ownership violation: duplicate generic parameter '" +
+                    "ownership violation: duplicate or reserved generic parameter '" +
                     generic.name + "'");
+            // A named default may reference only an already-declared slot,
+            // never itself or a forward declaration.
             if (!generic.default_type.empty() &&
                     generic.default_type != "int" &&
                     !generic_names.count(generic.default_type))
                 throw std::runtime_error(
                     "ownership violation: forward or unknown generic default '" +
                     generic.default_type + "'");
+            generic_names.insert(generic.name);
         }
         for (const auto& parameter : function.parameters) {
             require_identifier(parameter.name, "parameter");
