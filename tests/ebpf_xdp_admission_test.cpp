@@ -20,7 +20,7 @@ static oreslang::Program clean() {
     fn.name = "xdp_action";
     fn.exported = true;
     oreslang::Parameter p;
-    p.name = "packet_bytes";
+    p.name = "packet_nonempty";
     fn.parameters.push_back(p);
     fn.result = lit(2);
     program.functions.push_back(std::move(fn));
@@ -42,7 +42,7 @@ int main() {
         oreslang::GuardedReturn g;
         g.lhs = std::make_unique<oreslang::Expression>();
         g.lhs->kind = oreslang::Expression::Kind::Variable;
-        g.lhs->name = "packet_bytes";
+        g.lhs->name = "packet_nonempty";
         g.rhs = lit(0);
         g.result = lit(1);
         p.functions.front().early_returns.push_back(std::move(g));
