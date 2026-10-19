@@ -1,10 +1,10 @@
-// A field compound write must never be emitted as read+write without a
-// single-evaluation lvalue and field-sensitive exclusive loan proof.
+// Native compiler must not rewrite a mutable field += into multiple
+// evaluations or admit a write without checked exclusive field access.
 define class Motion as
-  let int x = 0;
+  pub let int x = 0;
 end
 pub fnc main(): int {
-  let Motion chunk = new Motion();
+  let mut Motion chunk = new Motion();
   chunk.x += 1;
-  return 0;
+  return chunk.x;
 }
