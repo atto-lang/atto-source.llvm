@@ -111,15 +111,21 @@ int main(int argc, char** argv) {
         const auto initial = load_fixture(argv[1]);
         OresActorI64Heap* const heap = ores_actor_i64_heap_open(
             id.actor, id.epoch, 3);
-        const auto init_turn = ores_actor_i64_heap_enter(
-            heap, id.actor, id.epoch);
-        initial.image.init(heap, init_turn.domain, init_turn.epoch);
-        ores_actor_i64_heap_leave(heap, init_turn);
-
         Gate gate(id, shape(), initial.image,
                   [handle = initial.handle, &first_unloaded] {
                       unload(handle, first_unloaded);
                   });
+        // Even first-generation initialization is guest executable code.
+        // Register a generation lease BEFORE invoking the compiler-emitted
+        // init function so future loader integration cannot call into
+        // unpinned executable pages while a concurrent retire is possible.
+        {
+            auto initialized = gate.pin(id);
+            const auto init_turn = ores_actor_i64_heap_enter(
+                heap, id.actor, id.epoch);
+            initialized.code().init(heap, init_turn.domain, init_turn.epoch);
+            ores_actor_i64_heap_leave(heap, init_turn);
+        }
         require(receive(gate, id, heap, 0) == 42,
                 "compiler-generated v1 did not produce 42");
         require(rejects([&] {
