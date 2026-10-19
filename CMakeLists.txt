@@ -866,6 +866,8 @@ if(BUILD_TESTING)
         --diagnostic "native anonymous fnc requires callable capture and closure lowering")
     oreslang_contract_test(reject_guest_inline_symbol_list source-inline-symbol-list-unsupported.ores
         --diagnostic "native inline list requires typed aggregate storage and cleanup lowering")
+    oreslang_contract_test(reject_guest_compound_field_update source-compound-field-unsupported.ores
+        --diagnostic "native compound assignment requires single-evaluation write and borrow lowering")
 
     # ActorRef<T> is a source-checked non-Copy capability; Future<T> remains
     # explicitly blocked until compiler-generated suspension is lowered.
