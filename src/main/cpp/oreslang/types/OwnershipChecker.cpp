@@ -524,6 +524,37 @@ void preflight_native_ast_shape(const Program& program) {
             default:
                 fail("unknown statement kind", stmt.offset);
         }
+        // A transformed AST must not smuggle unlowered effects into fields
+        // that belong to some other statement variant. Walking the ignored
+        // children is insufficient: subsequent code generation drops them.
+        const bool is_effect = stmt.kind == S::Call ||
+            stmt.kind == S::FieldWrite || stmt.kind == S::Defer;
+        const bool is_conditional = stmt.kind == S::Conditional;
+        const bool is_scoped = stmt.kind == S::ScopedLocal;
+        const bool is_array_commit = stmt.kind == S::ArrayCommitFilled;
+        if (!is_effect && stmt.expression)
+            fail("statement contains hidden expression", stmt.offset);
+        if (!is_conditional && (stmt.condition_lhs || stmt.condition_rhs ||
+                !stmt.then_statements.empty() || !stmt.else_statements.empty()))
+            fail("statement contains hidden conditional effects", stmt.offset);
+        if (!is_scoped && stmt.branch_local)
+            fail("statement contains hidden scoped binding", stmt.offset);
+        if (!is_array_commit && (stmt.array_commit_length ||
+                !stmt.array_commit_values.empty()))
+            fail("statement contains hidden array commit", stmt.offset);
+        if (stmt.kind != S::FieldWrite && stmt.kind != S::Defer &&
+                !stmt.field.empty())
+            fail("statement contains hidden field target", stmt.offset);
+        if (stmt.kind != S::FieldWrite && stmt.kind != S::Defer &&
+                stmt.kind != S::ArrayCommitFilled && !stmt.receiver.empty())
+            fail("statement contains hidden receiver", stmt.offset);
+        if (stmt.kind == S::Defer &&
+                (stmt.receiver.empty() != stmt.field.empty()))
+            fail("deferred field target is incomplete", stmt.offset);
+        if (stmt.kind == S::Call && stmt.expression &&
+                stmt.expression->kind != Expression::Kind::Call &&
+                stmt.expression->kind != Expression::Kind::ArrayCall)
+            fail("call statement has non-call expression", stmt.offset);
         if (stmt.branch_local) local(*stmt.branch_local);
         if (stmt.expression) expression(stmt.expression.get(), 0);
         if (stmt.condition_lhs) expression(stmt.condition_lhs.get(), 0);
@@ -548,6 +579,34 @@ void preflight_native_ast_shape(const Program& program) {
             expression(guard.rhs.get(), 0);
             expression(guard.result.get(), 0);
         }
+        // The lowering stage uses actor_actions as the sole source of
+        // send/stop order. Orphaned entries would silently disappear; repeated
+        // entries would double-send or double-stop a runtime actor.
+        std::vector<bool> seen_sends(fn.actor_sends.size(), false);
+        std::vector<bool> seen_stops(fn.actor_stops.size(), false);
+        for (const auto& action : fn.actor_actions) {
+            switch (action.kind) {
+                case ActorAction::Kind::Send:
+                    if (action.index >= seen_sends.size() ||
+                            seen_sends[action.index])
+                        fail("invalid or repeated actor send action", fn.offset);
+                    seen_sends[action.index] = true;
+                    break;
+                case ActorAction::Kind::Stop:
+                    if (action.index >= seen_stops.size() ||
+                            seen_stops[action.index])
+                        fail("invalid or repeated actor stop action", fn.offset);
+                    seen_stops[action.index] = true;
+                    break;
+                default:
+                    fail("unknown actor action kind", fn.offset);
+            }
+        }
+        if (std::find(seen_sends.begin(), seen_sends.end(), false) !=
+                seen_sends.end() ||
+                std::find(seen_stops.begin(), seen_stops.end(), false) !=
+                seen_stops.end())
+            fail("actor effect omitted from ordered actions", fn.offset);
         for (const auto& send : fn.actor_sends)
             expression(send.payload.get(), 0);
         for (const auto& write : fn.actor_field_writes)
