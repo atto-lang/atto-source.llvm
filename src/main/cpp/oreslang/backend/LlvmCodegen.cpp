@@ -333,7 +333,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 "experimental scalar frame requires one standalone native function");
         const auto& fn = source.functions.front();
         const auto& loop = *fn.scalar_while;
+        // A C++-constructed AST is not necessarily parser-canonical. Checking
+        // just the Kind of Integer/Variable is insufficient: hidden call,
+        // move or borrow children can be attached to an otherwise harmless
+        // leaf, then silently discarded by specialized scalar lowering.
+        const auto is_leaf = [](const Expression& expr) {
+            return !expr.left && !expr.right && expr.arguments.empty() &&
+                expr.argument_names.empty() && expr.type_arguments.empty() &&
+                !expr.type_arguments_present;
+        };
         const bool scalar_local = fn.locals.size() == 1 &&
+            valid_native_source_identifier(fn.name) &&
+            valid_native_source_identifier(loop.counter) &&
             fn.locals.front().name == loop.counter &&
             fn.locals.front().owner_mutable &&
             !fn.locals.front().heap_owned &&
@@ -341,11 +352,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             fn.locals.front().class_name.empty() &&
             !fn.locals.front().new_class &&
             !fn.locals.front().move_class &&
+            !fn.locals.front().field_mutable &&
+            fn.locals.front().move_source.empty() &&
+            fn.locals.front().constructor_arguments.empty() &&
             fn.locals.front().initializer &&
             fn.locals.front().initializer->kind == Expression::Kind::Integer &&
+            is_leaf(*fn.locals.front().initializer) &&
             fn.locals.front().initializer->integer == loop.initial;
         const bool scalar_return = fn.result &&
             fn.result->kind == Expression::Kind::Variable &&
+            is_leaf(*fn.result) &&
             fn.result->name == loop.counter;
         if (!scalar_local || !scalar_return || fn.returns_void ||
                 !fn.parameters.empty() || !fn.generic_parameters.empty() ||
@@ -353,6 +369,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 !fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
                 !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+                !fn.catch_binding.empty() ||
                 !fn.caught_throw_defers.empty() || fn.has_declared_effects)
             throw std::runtime_error(
                 "experimental scalar frame AST contains unlowered owners or effects");
