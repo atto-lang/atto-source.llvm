@@ -694,6 +694,8 @@ void preflight_native_ast_shape(const Program& program) {
     for (const auto& cls : program.classes) {
         if (cls.fields.empty() || cls.fields.size() > 16)
             fail("class field count is outside parser bounds", 0);
+        if (cls.constructor_parameters.size() > 16)
+            fail("class constructor parameter count exceeds parser bound", 0);
         if (!cls.explicit_constructor && !cls.constructor_parameters.empty())
             fail("implicit class contains constructor parameters", 0);
         bool owns_array = false;
