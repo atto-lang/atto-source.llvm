@@ -558,6 +558,79 @@ static ActorStep self_join_handler(void* raw, ActorMessage,
     state.carrier->join(); // MUST terminate, not deadlock on external join.
     return {};
 }
+// A final lane's cancellation outcome is published BEFORE its joined count.
+// A racing supervisor must acquire the full joined count before sampling the
+// failure bit, otherwise it may briefly certify a doomed actor cohort.
+struct QuorumFailureState {
+    std::atomic<int> resumed{0};
+    std::atomic<int> cleanups{0};
+};
+static ActorStep busy_quorum_handler(void* raw, ActorMessage,
+                                    ResumeCause cause, std::int64_t) noexcept {
+    auto& state = *static_cast<QuorumFailureState*>(raw);
+    if (cause == ResumeCause::initial || cause == ResumeCause::cpu)
+        state.resumed.fetch_add(1, std::memory_order_release);
+    return {StepKind::cooperate, 0, 0};
+}
+static bool quorum_cleanup_success(void* raw, ActorMessage) noexcept {
+    static_cast<QuorumFailureState*>(raw)->cleanups.fetch_add(1, std::memory_order_release);
+    return true;
+}
+static bool quorum_cleanup_failure(void* raw, ActorMessage) noexcept {
+    static_cast<QuorumFailureState*>(raw)->cleanups.fetch_add(1, std::memory_order_release);
+    return false;
+}
+static void test_failed_final_lane_never_publishes_retirement_quorum() {
+    for (std::uint64_t iteration = 1; iteration <= 96; ++iteration) {
+        const ActorHeapIdentity owner{611, 707, iteration};
+        auto cohort = ActorHeapRetirementCohort::create(owner, 2);
+        QuorumFailureState firstState, lastState;
+        HungryCarrier::Options firstOptions{};
+        firstOptions.retirement_cohort = cohort;
+        firstOptions.cancel_handler = quorum_cleanup_success;
+        HungryCarrier::Options lastOptions{};
+        lastOptions.retirement_cohort = cohort;
+        lastOptions.cancel_handler = quorum_cleanup_failure;
+        HungryCarrier first(&firstState, busy_quorum_handler,
+                            nullptr, io_double, firstOptions);
+        HungryCarrier last(&lastState, busy_quorum_handler,
+                           nullptr, io_double, lastOptions);
+        first.start(); last.start();
+        check(first.producer_handle().try_send({1, 0}) &&
+              last.producer_handle().try_send({2, 0}),
+              "cohort final-failure fixture could not admit both frames");
+        check(until([&] { return firstState.resumed.load() >= 3 &&
+                                lastState.resumed.load() >= 3; }, 1s),
+              "cohort final-failure fixture did not reach CPU suspension");
+        std::atomic<bool> monitor_done{false}, false_proof{false};
+        std::thread observer([&] {
+            while (!monitor_done.load(std::memory_order_acquire)) {
+                if (cohort->ready_for_retirement())
+                    false_proof.store(true, std::memory_order_relaxed);
+                std::this_thread::yield();
+            }
+            if (cohort->ready_for_retirement())
+                false_proof.store(true, std::memory_order_relaxed);
+        });
+        std::thread join_first([&] { first.join(); });
+        std::thread join_last([&] { last.join(); });
+        join_first.join(); join_last.join();
+        monitor_done.store(true, std::memory_order_release);
+        observer.join();
+        check(!false_proof.load(std::memory_order_acquire),
+              "racing failed cancellation produced a retirement quorum");
+        check(cohort->joined_lanes() == 2 && cohort->cleanup_failed() &&
+              !cohort->ready_for_retirement(),
+              "failed final lane did not poison fully joined cohort");
+        check(firstState.cleanups.load() == 1 &&
+              lastState.cleanups.load() == 1,
+              "concurrent lane shutdown did not run both cleanup hooks once");
+        check(!first.retirement_proof().has_value() &&
+              !last.retirement_proof().has_value(),
+              "failed cohort minted a carrier-issued retirement proof");
+    }
+}
+
 static void test_self_join_rejected_during_external_join() {
     // Process isolation prevents expected std::terminate from killing CTest.
     // alarm() makes a newly introduced self-join deadlock observable as a
@@ -993,6 +1066,7 @@ int main() {
         test_cpu_affinity_fails_closed();
         test_strict_realtime_profiles_fail_closed();
         test_stop_completion_races();
+        test_failed_final_lane_never_publishes_retirement_quorum();
         test_self_join_rejected_during_external_join();
         test_join_initiates_stop();
         test_terminal_lifecycle_rejects_restart();
