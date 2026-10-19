@@ -26,6 +26,10 @@ int main() {
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
+    a.reserve(16);
+    check(a.get_row(h0) == std::make_tuple(1.5f, std::int64_t{100}, true));
+    a.set_row(h0, 1.5f, 100, true);
+    check(a.get_row(h0) == std::make_tuple(1.5f, std::int64_t{100}, true));
     expect<std::out_of_range>([&] { (void)b.get<0>(h1); });
     {
         auto r = a.borrow_read<0>();
@@ -36,6 +40,9 @@ int main() {
         check(r2.span()[0] == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
+        expect<std::logic_error>([&] { (void)a.get_row(h1); });
+        expect<std::logic_error>([&] { a.set_row(h0, 6.0f, 9, false); });
+        expect<std::logic_error>([&] { a.reserve(100); });
         expect<std::logic_error>([&] { a.set<0>(h0, 4.0f); });
         expect<std::logic_error>([&] { (void)a.push(4.0f, 400, true); });
         expect<std::logic_error>([&] { a.erase_swap(h0); });
@@ -64,6 +71,23 @@ int main() {
     });
     t1.join(); t2.join();
     check(a.get<0>(h0) == 2.5f && a.get<1>(h0) == 101);
+    // Coherent whole-row snapshots and updates under concurrent access.
+    Store row_coherent;
+    auto coherent = row_coherent.push(0.0f, 0, true);
+    std::atomic<bool> row_bad{false};
+    std::thread row_writer([&] {
+        for (int n = 0; n < 2000; ++n)
+            row_coherent.set_row(coherent, static_cast<float>(n), -static_cast<std::int64_t>(n), (n & 1) == 0);
+    });
+    std::thread row_reader([&] {
+        for (int n = 0; n < 2000; ++n) {
+            const auto [x, y, z] = row_coherent.get_row(coherent);
+            const auto number = static_cast<std::int64_t>(x);
+            if (number != -y || z != ((number & 1) == 0)) row_bad.store(true);
+        }
+    });
+    row_writer.join(); row_reader.join();
+    check(!row_bad.load());
     // A moved-out loan retains memory if its owner is destroyed.
     std::optional<Store::Loan<0, false>> carried;
     {
@@ -110,6 +134,7 @@ int main() {
             check(fuzz.get<0>(expected.handle) == expected.x);
             check(fuzz.get<1>(expected.handle) == expected.y);
             check(fuzz.get<2>(expected.handle) == expected.z);
+            check(fuzz.get_row(expected.handle) == std::make_tuple(expected.x, expected.y, expected.z));
         }
     }
 }
