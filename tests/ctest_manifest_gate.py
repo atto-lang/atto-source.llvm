@@ -43,6 +43,8 @@ CRITICAL_TESTS = (
     "portable_target_abi_v1",
     "source_actor_compiled_native_lifecycle",
     "source_actor_compiled_native_asan_ubsan",
+    "native_shared_guest_v1_real_compiler",
+    "native_shared_guest_v1_real_compiler_asan_ubsan",
     "native_supervisor_hierarchy_control",
     "native_supervisor_priority_control",
     "native_typed_exception_unwind",
@@ -91,6 +93,10 @@ GUEST_FIXTURES = {
 SOURCE_ACTOR_TESTS = frozenset({
     "source_actor_compiled_native_lifecycle",
     "source_actor_compiled_native_asan_ubsan",
+})
+SHARED_GUEST_TESTS = frozenset({
+    "native_shared_guest_v1_real_compiler",
+    "native_shared_guest_v1_real_compiler_asan_ubsan",
 })
 
 
@@ -168,6 +174,16 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
         if (("--sanitize" in command)
                 != (name == "source_actor_compiled_native_asan_ubsan")):
             raise ManifestFailure(f"source actor sanitizer mode differs from test name: {name}")
+    elif name in SHARED_GUEST_TESTS:
+        if (not python_program(command[0])
+                or len(command) not in (8, 9)
+                or not command[1].endswith("/tests/native_guest_parity_v1_source.py")
+                or Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc"
+                or not option_value(command, "--clang", name)
+                or not option_value(command, "--source-root", name)):
+            raise ManifestFailure(f"shared guest parity must invoke real native compiler and Clang: {name}")
+        if ("--sanitizers" in command) != (name == "native_shared_guest_v1_real_compiler_asan_ubsan"):
+            raise ManifestFailure(f"shared guest sanitizer flag mismatch: {name}")
     elif name.startswith("native_contract_harness_"):
         optimization = {
             "native_contract_harness_optimize_failclosed": [],
