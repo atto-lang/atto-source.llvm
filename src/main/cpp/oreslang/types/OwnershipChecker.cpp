@@ -624,6 +624,7 @@ void validate_i64_ownership(const Program& program) {
             verify_scalar_suspension(function.scalar_while->counter);
 
     Functions functions;
+    std::unordered_set<std::string> function_names;
     for (const auto& function : program.functions) {
         // Overload identity is caller-visible value arity, not parameter
         // types, return types, generic arity, or an internal receiver. Direct
@@ -634,15 +635,28 @@ void validate_i64_ownership(const Program& program) {
         if (!functions.emplace(slot, &function).second)
             throw std::runtime_error(
                 "ownership violation: duplicate callable user arity '" + slot + "'");
+        function_names.insert(function.name);
     }
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_public;
+    std::unordered_set<std::string> class_names;
     for (const auto& cls : program.classes) {
+        if (!class_names.insert(cls.name).second || function_names.count(cls.name))
+            throw std::runtime_error(
+                "ownership violation: duplicate class/function symbol '" + cls.name + "'");
         std::unordered_set<std::string> fields, arrays, finals, published;
+        std::unordered_set<std::string> constructor_parameters;
+        for (const auto& parameter : cls.constructor_parameters)
+            if (!constructor_parameters.insert(parameter).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate class constructor parameter '" +
+                    parameter + "'");
         for (const auto& field : cls.fields) {
-            fields.insert(field.name);
+            if (!fields.insert(field.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate class field '" + field.name + "'");
             if (field.int_array) arrays.insert(field.name);
             if (field.final_field) finals.insert(field.name);
             if (field.public_member) published.insert(field.name);
@@ -651,6 +665,142 @@ void validate_i64_ownership(const Program& program) {
         class_arrays.emplace(cls.name, std::move(arrays));
         class_finals.emplace(cls.name, std::move(finals));
         class_public.emplace(cls.name, std::move(published));
+    }
+
+    // Direct Program callers bypass Parser::validate_program(). Reconstruct
+    // the actor symbol/capability boundary before LLVM creates generated actor
+    // symbols or indexes actor maps. Otherwise an unknown spawn type reaches
+    // actorInits.at(), and a failed actor find_if is dereferenced by codegen.
+    std::unordered_map<std::string, const ActorDecl*> actor_types;
+    for (const auto& actor : program.actors) {
+        if (!actor_types.emplace(actor.name, &actor).second ||
+                class_names.count(actor.name) || function_names.count(actor.name))
+            throw std::runtime_error(
+                "ownership violation: duplicate actor/class/function symbol '" +
+                actor.name + "'");
+
+        const auto& method = actor.on_message;
+        if (method.name != "on_message" || method.parameters.size() != 1 ||
+                method.returns_void || !method.result ||
+                !method.generic_parameters.empty() || method.scalar_while ||
+                !method.locals.empty() || !method.statements.empty() ||
+                !method.early_returns.empty() || !method.actor_spawns.empty() ||
+                !method.actor_sends.empty() || !method.actor_stops.empty() ||
+                !method.actor_actions.empty() || method.caught_throw_value ||
+                !method.catch_binding.empty() || !method.caught_throw_defers.empty() ||
+                method.has_declared_effects)
+            throw std::runtime_error(
+                "ownership violation: malformed direct-AST actor handler");
+
+        const auto& parameter = method.parameters.front();
+        if (parameter.mode != Mode::Value || !parameter.class_name.empty() ||
+                !parameter.generic_type.empty())
+            throw std::runtime_error(
+                "ownership violation: native actor handler requires one scalar value parameter");
+
+        Locals actor_locals;
+        std::unordered_set<std::string> actor_fields;
+        const Functions no_functions;
+        for (const auto& field : actor.fields) {
+            if (!field.initializer || field.heap_owned || field.int_array ||
+                    !field.class_name.empty() || field.new_class || field.move_class ||
+                    !field.constructor_arguments.empty() || !field.move_source.empty())
+                throw std::runtime_error(
+                    "ownership violation: native actor state requires scalar initialized fields");
+            if (!actor_fields.insert(field.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate actor field '" + field.name + "'");
+            Locals no_locals;
+            check_value(*field.initializer, no_locals, no_functions);
+            LocalOwnership state;
+            state.mutable_owner = field.field_mutable;
+            actor_locals.emplace(field.name, std::move(state));
+        }
+        if (!actor_fields.insert(parameter.name).second)
+            throw std::runtime_error(
+                "ownership violation: actor parameter shadows field '" +
+                parameter.name + "'");
+        actor_locals.emplace(parameter.name, LocalOwnership{});
+        for (const auto& write : method.actor_field_writes) {
+            const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                [&](const LocalBinding& item) { return item.name == write.field; });
+            if (field == actor.fields.end() || !field->field_mutable)
+                throw std::runtime_error(
+                    "ownership violation: actor write targets immutable or unknown field '" +
+                    write.field + "'");
+            check_value(*write.expression, actor_locals, functions);
+        }
+        check_value(*method.result, actor_locals, functions);
+
+        if (function_names.count("oreslang_actor_" + actor.name + "_init") ||
+                function_names.count("oreslang_actor_" + actor.name + "_on_message"))
+            throw std::runtime_error(
+                "ownership violation: conflicting generated actor symbol");
+    }
+
+    for (const auto& function : program.functions) {
+        std::unordered_set<std::string> lexical_names;
+        for (const auto& param : function.parameters)
+            if (!lexical_names.insert(param.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate parameter '" + param.name + "'");
+
+        std::unordered_set<std::string> live_actors;
+        std::unordered_set<std::string> actor_references;
+        const bool has_actor_effects = !function.actor_spawns.empty() ||
+            !function.actor_sends.empty() || !function.actor_stops.empty();
+        if (has_actor_effects &&
+                (function.name != "main" || !function.parameters.empty() ||
+                 function.returns_void || !function.early_returns.empty() ||
+                 !function.statements.empty()))
+            throw std::runtime_error(
+                "ownership violation: source actor bootstrap requires zero-argument int main without early returns");
+
+        for (const auto& spawn : function.actor_spawns) {
+            if (spawn.declared_type.kind != SourceType::Kind::ActorRef ||
+                    spawn.declared_type.argument != spawn.actor_type)
+                throw std::runtime_error(
+                    "ownership violation: actor spawn declaration/type mismatch");
+            if (!actor_types.count(spawn.actor_type))
+                throw std::runtime_error(
+                    "ownership violation: unknown actor type '" + spawn.actor_type + "'");
+            if (!actor_references.insert(spawn.name).second ||
+                    lexical_names.count(spawn.name))
+                throw std::runtime_error(
+                    "ownership violation: duplicate actor reference '" + spawn.name + "'");
+            live_actors.insert(spawn.name);
+        }
+        for (const auto& binding : function.locals) {
+            if (actor_references.count(binding.name))
+                throw std::runtime_error(
+                    "ownership violation: scalar local shadows actor reference '" +
+                    binding.name + "'");
+            if (!lexical_names.insert(binding.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate owned local '" + binding.name + "'");
+        }
+        for (const auto& action : function.actor_actions) {
+            if (action.kind == ActorAction::Kind::Send) {
+                const auto& send = function.actor_sends.at(action.index);
+                if (!actor_references.count(send.reference))
+                    throw std::runtime_error(
+                        "ownership violation: unknown actor message receiver '" +
+                        send.reference + "'");
+                if (!live_actors.count(send.reference))
+                    throw std::runtime_error(
+                        "ownership violation: actor message sent after stop '" +
+                        send.reference + "'");
+            } else {
+                const auto& stop = function.actor_stops.at(action.index);
+                if (!live_actors.erase(stop))
+                    throw std::runtime_error(
+                        "ownership violation: invalid or repeated actor stop '" +
+                        stop + "'");
+            }
+        }
+        if (!live_actors.empty())
+            throw std::runtime_error(
+                "ownership violation: actor reference must be stopped before return");
     }
     for (const auto& function : program.functions) {
         Locals locals;
