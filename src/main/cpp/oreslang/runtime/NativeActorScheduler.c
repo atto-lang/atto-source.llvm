@@ -93,12 +93,17 @@ static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
 static int find_ready(OresNativeActorScheduler* s, size_t worker,
-                      size_t* actor, int* control) {
+                      unsigned local_burst, size_t* actor,
+                      int* control, int* preferred) {
     /* CONTROL remains globally first. Then prefer DATA most recently run by
      * this long-lived pthread, otherwise steal from any runnable actor.
      * Never wait for a busy preferred worker: starvation avoidance and actual
      * CONTROL delivery outrank cache hints. */
     for (int pass = 2; pass >= 0; --pass) {
+        /* After 8 local turns, force a globally fair DATA decision.
+         * Otherwise continuously runnable local actors can starve new
+         * remote/unknown-affinity actor lanes indefinitely. */
+        if (pass == 1 && local_burst >= 8) continue;
         for (size_t offset = 0; offset < s->actor_count; ++offset) {
             size_t i = (s->next_actor + offset) % s->actor_count;
             ActorLane* lane = &s->actors[i];
@@ -109,6 +114,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t worker,
             if (pass == 0 && !lane->queued) continue;
             *actor = i;
             *control = pass == 2;
+            *preferred = pass == 1;
             s->next_actor = (i + 1) % s->actor_count;
             return 1;
         }
@@ -156,11 +162,13 @@ static void* carrier(void* raw) {
     const int bind_cpu = s->cpu_affinity_opt_in;
     unlock(s);
     carrier_cpu_target = bind_cpu ? try_bind_allowed_cpu(worker) : -1;
+    unsigned local_burst = 0;
     for (;;) {
         lock(s);
         size_t i = 0;
         int control = 0;
-        while (!find_ready(s, worker, &i, &control)) {
+        int preferred = 0;
+        while (!find_ready(s, worker, local_burst, &i, &control, &preferred)) {
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 carrier_slot_plus_one = 0;
@@ -169,6 +177,9 @@ static void* carrier(void* raw) {
             }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
         }
+        /* CONTROL always resets DATA fairness; global passes replenish
+         * everyone's opportunity without transferring execution rights. */
+        local_burst = (control || !preferred) ? 0 : local_burst + 1;
         ActorLane* lane = &s->actors[i];
         uint64_t payload;
         OresNativeActorTerminalFailure failure = {0};
