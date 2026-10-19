@@ -11,7 +11,9 @@
 
 typedef struct {
     atomic_int hold, entered, processed, new_processed, control, parallel;
-    atomic_int wrong_order, version;
+    atomic_int wrong_order, version, attempted_own, attempted_cross;
+    OresNativeVM* vm;
+    OresNativeActorRef primary;
 } State;
 static void check(int condition) { if (!condition) abort(); }
 static void deliver(void* raw, size_t actor, uint64_t n) {
