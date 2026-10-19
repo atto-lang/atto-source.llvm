@@ -247,6 +247,23 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    // Bounds apply to the *entire* CFG, including unreachable blocks. Use
+    // subtraction instead of unchecked addition to avoid size_t overflow.
+    constexpr std::size_t kMaxBlocks = 16384;
+    constexpr std::size_t kMaxOperations = 65536;
+    constexpr std::size_t kMaxEdges = 65536;
+    constexpr std::size_t kMaxEntryPlaces = 16384;
+    if (graph.blocks.size() > kMaxBlocks || graph.entry.size() > kMaxEntryPlaces)
+        throw std::runtime_error("ownership violation: CFG exceeds place/block budget");
+    std::size_t op_count = 0;
+    std::size_t edge_count = 0;
+    for (const auto& block : graph.blocks) {
+        if (block.operations.size() > kMaxOperations - op_count ||
+                block.successors.size() > kMaxEdges - edge_count)
+            throw std::runtime_error("ownership violation: CFG exceeds operation/edge budget");
+        op_count += block.operations.size();
+        edge_count += block.successors.size();
+    }
     // Each lexical borrow must own a globally unique provenance token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
