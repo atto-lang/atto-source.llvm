@@ -34,11 +34,16 @@ static LocalBinding scalar_local(std::string name, std::int64_t initial) {
 template<class Action>
 static void expect_rejection(Action&& action, const std::string& diagnostic) {
     bool matched = false;
+    std::string actual = "<no runtime_error>";
     try { action(); }
     catch (const std::runtime_error& e) {
-        matched = std::string(e.what()).find(diagnostic) != std::string::npos;
+        actual = e.what();
+        matched = actual.find(diagnostic) != std::string::npos;
     }
-    check(matched, "unsafe or malformed AST passed the LLVM emission gate");
+    if (!matched)
+        throw std::runtime_error(
+            "unsafe or malformed AST passed the LLVM emission gate; expected diagnostic '" +
+            diagnostic + "', got '" + actual + "'");
 }
 static Program main_with_use_after_take() {
     Program p;
