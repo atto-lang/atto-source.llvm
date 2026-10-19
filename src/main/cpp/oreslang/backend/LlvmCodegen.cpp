@@ -2,6 +2,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
+#include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -273,6 +274,11 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    // A Program may be constructed, cloned or transformed without going
+    // through parse_program(). Never trust caller-controlled "verified" AST
+    // state: perform the full semantic ownership check at the irreversible
+    // LLVM emission boundary as well. The checker runs before any output IR.
+    validate_i64_ownership(source);
     // This is an independent emission-time guard, not an assertion that a
     // caller happened to invoke parse_program()/validate_i64_ownership().
     // No scalar frame may be emitted if its scheduling boundary was not
