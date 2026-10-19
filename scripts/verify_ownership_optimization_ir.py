@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 
 UNPROVEN = re.compile(r"!(?:tbaa(?:\.struct)?|alias\.scope|noalias|llvm\.loop|llvm\.access\.group|llvm\.mem\.parallel_loop_access|invariant\.(?:load|group))\b|\bnoalias\b")
+# Reject all LLVM fast-math flags, including compound flags and attributes.
+# This scanner is a conservative textual audit, not a complete LLVM parser.
 FAST_MATH = re.compile(r"\b(?:fneg|fadd|fsub|fmul|fdiv|frem|fcmp|select|phi|call|invoke)\s+(?:fast|nnan|ninf|nsz|arcp|contract|afn|reassoc)\b")
 
 
@@ -24,7 +26,7 @@ def inspect(ir):
     for line_number, raw in enumerate(ir.splitlines(), 1):
         # LLVM ';' comments are never optimization evidence.
         line = raw.split(";", 1)[0]
-        if UNPROVEN.search(line):
+        if UNPROVEN.search(line) or re.search(r"\\b(?:nonnull|dereferenceable(?:_or_null)?|nocapture|readonly|writeonly|align)\\b", line) and re.search(r"\\b(?:define|declare|call|invoke)\\b", line):
             findings.append(f"line {line_number}: alias/loop metadata without ownership proof")
         if FAST_MATH.search(line):
             findings.append(f"line {line_number}: floating-point fast-math requires explicit semantics")
