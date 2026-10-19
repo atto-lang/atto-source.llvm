@@ -41,6 +41,14 @@ The initial native reference admits only pointer-free arithmetic and enum scalar
 
 The existing native `DopLayout.hpp` covers homogeneous-width POD geometry and remains authoritative for its current CPU/GPU kernel ABI. The new `DopInvertedColumns.hpp` is a CPU reference collection for **heterogeneous** trivial field types; it is not wired to LLVM IR or device dispatch and does not claim an ABI shared with Java yet.
 
+## Native reference additions / specific limits
+
+The native `InvertedColumns<Fields...>` model currently exposes `reserve(n)`, `push(...)`, `erase_swap(handle)`, `get<I>(handle)`, `set<I>(handle,value)`, `get_row(handle)`, `set_row(handle,...)`, and typed `borrow_read<I>()` / `borrow_write<I>()`. `get_row` and `set_row` take the same store lock to avoid exposing partially updated whole-row values. Resizing/reallocation and row changes are rejected while any field is loaned. Huge allocations can fail without changing logical row count or handle validity.
+
+Owner IDs saturate rather than wrap, and slot generations never revive a stale handle. After owner destruction, a loan cannot issue a *new* span, though an existing raw C++ `span` may outlive its scope if host code misuses it. The source compiler must prohibit such escape; this C++ reference alone is **not** an actor-isolation or teardown-revocation proof.
+
+[Native exact-source carrier audit #39182285383](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39182285383): 4/4 GCC/Clang normal/ASan+UBSan matrix passed with exact file SHA verification, negative type admission, deterministic row property stress and concurrency cases. This is host-model evidence only, not full LLVM CMake/CTest or Java guest compilation evidence.
+
 ## Borrow and concurrency rules
 
 A column view is zero-copy and tied to its owning store; compiler-enforced, nonescaping lifetime is mandatory. Read loans on a field may coexist; a write loan excludes all other same-field access. Disjoint columns may have independent write loans. Structural changes (push, erase, reorder, reserve/reallocate, close, ownership transfer) require quiescence across *all* columns; no suspension or `await` may extend an unsafe exclusive loan without an explicit proof. A raw host-language `span` must not escape its loan; the compiler is responsible for enforcing this when lowered to Oreslang.
