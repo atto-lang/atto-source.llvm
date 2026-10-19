@@ -1751,6 +1751,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_shared_actor_turn_gate_pthread_contention
         PROPERTIES TIMEOUT 30)
 
+    # Local atomics/quotas stress does not require the guest compiler or VM.
+    add_executable(oreslang-native-shard-budget-stress-test
+        tests/native_actor_shard_budget_stress_test.cpp)
+    target_include_directories(oreslang-native-shard-budget-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-shard-budget-stress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shard-budget-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_and_vm_shard_budget_contention
+        COMMAND oreslang-native-shard-budget-stress-test)
+    set_tests_properties(native_actor_and_vm_shard_budget_contention
+        PROPERTIES TIMEOUT 30)
+
     # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
     # The actor scheduler certifies owner identity; no source-level lowering.
     add_executable(oreslang-native-actor-shard-layout-test
