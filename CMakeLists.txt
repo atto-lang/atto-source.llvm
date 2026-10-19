@@ -1692,6 +1692,21 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Native scheduler cache-locality hint: bounded same-carrier reuse is
+    # preempted by CONTROL and yields to competing actor lanes.
+    add_executable(oreslang-native-actor-carrier-locality-test
+        tests/native_actor_carrier_locality_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-carrier-locality-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-carrier-locality-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-carrier-locality-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_carrier_locality_control_priority
+        COMMAND oreslang-native-actor-carrier-locality-test)
+    set_tests_properties(native_actor_carrier_locality_control_priority
+        PROPERTIES TIMEOUT 30)
+
     # Opt-in budget-aware sizing; legacy VM defaults remain unchanged.
     add_executable(oreslang-native-vm-cpu-budget-test
         tests/native_vm_cpu_budget_test.c
