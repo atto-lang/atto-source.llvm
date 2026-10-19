@@ -125,12 +125,6 @@ public:
 
     ~ActorColumnSnapshot() { close(); }
 
-    void write_from_owner(std::size_t i, double value) {
-        require_owner();
-        std::lock_guard<std::mutex> hold(lock_);
-        require_open();
-        values_.at(i) = value;
-    }
     double read(std::size_t i) const {
         require_owner();
         std::lock_guard<std::mutex> hold(lock_);
@@ -158,6 +152,13 @@ public:
         vm_budget_.release(reserved_bytes_);
     }
 private:
+    friend class ActorShardColumns; // Only the creating shard can populate a snapshot.
+    void write_from_owner(std::size_t i, double value) {
+        require_owner();
+        std::lock_guard<std::mutex> hold(lock_);
+        require_open();
+        values_.at(i) = value;
+    }
     void require_owner() const {
         if (!scheduler_ || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
             throw std::logic_error("native snapshot requires its owner actor turn");
