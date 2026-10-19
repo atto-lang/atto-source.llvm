@@ -11,6 +11,21 @@ three negatives to prevent accidental unsafe native IR emission.
 **This is lexical recognition and explicit rejection, not usable source
 scheduler, Region, ActorGroup compute, or native lambda support.**
 
+The native frontend also explicitly rejects the product literal surfaces that
+Java/Graal now distinguishes semantically:
+
+```ores
+record { x: 3, y: 4 }                         // structural record
+infer struct { x: 3, y: 4 }                   // concrete inferred struct
+struct { x: int, y: int } { x: 3, y: 4 }      // explicit anonymous struct
+```
+
+These forms must not accidentally lower as scalar identifiers or as one common
+anonymous-object type. Native admission stays closed until LLVM has distinct
+record-vs-struct type identity, exact struct-shape checking, ownership/drop
+plans, ABI/layout rules, and cross-backend conformance. Dedicated CTest
+fixtures require rejection before LLVM IR publication.
+
 ---
 
 # Scheduler / ActorGroup / Region compute syntax — cross-backend contract (2026-10-19)
