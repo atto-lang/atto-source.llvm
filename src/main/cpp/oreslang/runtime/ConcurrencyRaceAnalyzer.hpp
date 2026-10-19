@@ -20,6 +20,12 @@ namespace oreslang::runtime {
  * This header is NOT wired into generated guest loads/stores yet. A clean report
  * does not establish race freedom until the compiler emits complete access and
  * synchronization events. It has no platform/OS dependency beyond C++17.
+ *
+ * Participant IDs MUST be per independently executing logical task/message
+ * lifetime, including separate simultaneous lanes inside a multi-thread actor.
+ * Actor reference IDs and carrier thread IDs are not sound participant IDs:
+ * the former merges concurrent clocks, the latter breaks on carrier migration.
+ * Complete compiler/runtime instrumentation must enforce participant identity.
  */
 class ConcurrencyRaceAnalyzer final {
  public:
