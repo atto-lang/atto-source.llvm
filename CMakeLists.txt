@@ -563,6 +563,15 @@ if(BUILD_TESTING)
     add_test(NAME dop_hostbuffer_multithread_read_loan_quiescence
         COMMAND oreslang-dop-read-loan-thread-test)
     set_tests_properties(dop_hostbuffer_multithread_read_loan_quiescence PROPERTIES TIMEOUT 25)
+    # Pure compile-time ECS component/chunk dependency planning. No guest
+    # multi-threaded lowering or actor-state loan splitting is implied.
+    add_executable(oreslang-dop-access-planner-test tests/dop_system_access_planner_test.cpp)
+    target_include_directories(oreslang-dop-access-planner-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-dop-access-planner-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME dop_static_access_batch_conflicts
+        COMMAND oreslang-dop-access-planner-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
