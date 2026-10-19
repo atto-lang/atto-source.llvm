@@ -86,6 +86,7 @@ static Program actor_bootstrap_program() {
     state.initializer = make_expression(Expression::Kind::Integer, {}, 0);
     actor.fields.push_back(std::move(state));
     actor.on_message.name = "on_message";
+    actor.on_message.exported = true;
     Parameter message;
     message.name = "message";
     actor.on_message.parameters.push_back(std::move(message));
@@ -242,6 +243,55 @@ int main() {
     inconsistent_scalar_field_literal.functions.push_back(std::move(literal_main));
     expect_rejection([&] { (void)emit_verified_llvm_ir(inconsistent_scalar_field_literal); },
                      "malformed native ownership AST: scalar class field literal cache disagrees with initializer");
+
+    Program ordinary_actor_field_write;
+    Function forged_actor_write;
+    forged_actor_write.name = "main";
+    ActorFieldWrite ignored_write;
+    ignored_write.field = "count";
+    ignored_write.expression =
+        make_expression(Expression::Kind::Integer, {}, 1);
+    forged_actor_write.actor_field_writes.push_back(std::move(ignored_write));
+    forged_actor_write.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    ordinary_actor_field_write.functions.push_back(std::move(forged_actor_write));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(ordinary_actor_field_write); },
+                     "malformed native ownership AST: ordinary function contains actor field writes");
+
+    Program invalid_parameter_mode;
+    Function bad_mode;
+    bad_mode.name = "identity";
+    Parameter bad_parameter;
+    bad_parameter.name = "value";
+    bad_parameter.mode = static_cast<Parameter::Mode>(255);
+    bad_mode.parameters.push_back(std::move(bad_parameter));
+    bad_mode.result = variable("value");
+    invalid_parameter_mode.functions.push_back(std::move(bad_mode));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_parameter_mode); },
+                     "ownership violation: unknown parameter ownership mode");
+
+    Program reserved_runtime_symbol;
+    Function forged_abort;
+    forged_abort.name = "abort";
+    forged_abort.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    reserved_runtime_symbol.functions.push_back(std::move(forged_abort));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(reserved_runtime_symbol); },
+                     "ownership violation: reserved native runtime ABI symbol 'abort'");
+
+    Program invalid_function_identifier;
+    Function malformed_name;
+    malformed_name.name = "bad-name";
+    malformed_name.result =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    invalid_function_identifier.functions.push_back(std::move(malformed_name));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(invalid_function_identifier); },
+                     "ownership violation: invalid native function identifier");
+
+    auto unexported_actor = actor_bootstrap_program();
+    unexported_actor.actors.front().on_message.exported = false;
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unexported_actor); },
+                     "ownership violation: native actor handler must be exported");
 
     // Source-impossible statement payloads must not be merely traversed:
     // later ownership/codegen switches consume only fields for the active kind.
