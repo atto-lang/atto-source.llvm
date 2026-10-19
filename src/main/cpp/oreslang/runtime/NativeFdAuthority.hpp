@@ -67,6 +67,12 @@ public:
     void test_deny_next_consume(unsigned count = 1) noexcept {
         test_consume_denials_.store(count, std::memory_order_release);
     }
+    void test_deny_next_begin(unsigned count = 1) noexcept {
+        test_begin_denials_.store(count, std::memory_order_release);
+    }
+    void test_deny_next_reclaim(unsigned count = 1) noexcept {
+        test_reclaim_denials_.store(count, std::memory_order_release);
+    }
 #endif
 
     // A revoked logical slot remains unavailable until confirm_reclaimed().
@@ -213,6 +219,73 @@ public:
         return e ? std::optional<Phase>(e->phase) : std::nullopt;
     }
 private:
+    // Only the trusted host broker may compose a logical transition with a
+    // physical operation. Caller-supplied guest callbacks are prohibited.
+    friend class NativeFdAuthorityBroker;
+
+    template <typename Open>
+    std::optional<Capability> try_mint_with(
+        std::uint64_t owner, unsigned rights, Open&& physical_open) noexcept {
+        if (!owner || !(rights & readiness) ||
+                (rights & ~(readiness | transfer))) return std::nullopt;
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock.owns_lock() || !next_generation_ ||
+                next_generation_ == UINT64_MAX) return std::nullopt;
+        for (std::size_t slot = 0; slot < capacity; ++slot) {
+            auto& e = slots_[slot];
+            if (e.phase != Phase::vacant && e.phase != Phase::revoked) continue;
+            // Open the FD exactly once, only after an authority slot was
+            // found. Failed physical open leaves the ledger untouched.
+            if (!physical_open()) return std::nullopt;
+            const auto generation = take_generation();
+            e = Entry{Phase::owned, generation, owner, rights, 0, 0};
+            return Capability{authority_, generation,
+                              static_cast<std::uint16_t>(slot)};
+        }
+        return std::nullopt;
+    }
+
+    template <typename Admit>
+    bool try_begin_watch_with(Capability cap, std::uint64_t caller,
+                              Admit&& physical_admit) noexcept {
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock.owns_lock()) return false;
+        auto* e = owned_entry(cap, caller);
+        if (!e || !(e->rights & readiness)) return false;
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+        auto remaining = test_begin_denials_.load(std::memory_order_relaxed);
+        while (remaining && !test_begin_denials_.compare_exchange_weak(
+                remaining, remaining - 1, std::memory_order_relaxed)) {}
+        if (remaining) return false; // no physical epoll operation performed
+#endif
+        if (!physical_admit()) return false;
+        e->phase = Phase::watching; // atomic with successful epoll admission
+        return true;
+    }
+
+    template <typename Close>
+    bool try_confirm_reclaimed_with(Capability cap, std::uint64_t owner,
+                                    Close&& physical_close) noexcept {
+        std::unique_lock<std::mutex> lock(mu_, std::try_to_lock);
+        if (!lock.owns_lock()) return false;
+        auto* e = lookup(cap);
+        if (!e || !owner || e->owner != owner ||
+                e->phase != Phase::reclaim_pending) return false;
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+        auto remaining = test_reclaim_denials_.load(std::memory_order_relaxed);
+        while (remaining && !test_reclaim_denials_.compare_exchange_weak(
+                remaining, remaining - 1, std::memory_order_relaxed)) {}
+        if (remaining) return false; // do not close a real descriptor
+#endif
+        if (!physical_close()) return false; // do not forge cleanup receipt
+        e->phase = Phase::revoked;
+        e->owner = 0;
+        e->rights = 0;
+        e->sequence = 0;
+        e->destination = 0;
+        return true;
+    }
+
     struct Entry {
         Phase phase = Phase::vacant;
         std::uint64_t generation = 0;
@@ -252,6 +325,8 @@ private:
     std::uint64_t next_sequence_ = 1;
 #if defined(ORESLANG_NIO_TEST_HOOKS)
     std::atomic<unsigned> test_consume_denials_{0};
+    std::atomic<unsigned> test_begin_denials_{0};
+    std::atomic<unsigned> test_reclaim_denials_{0};
 #endif
 };
 } // namespace oreslang::runtime

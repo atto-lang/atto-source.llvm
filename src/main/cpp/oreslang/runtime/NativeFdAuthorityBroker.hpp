@@ -60,15 +60,16 @@ public:
         for (std::size_t i = 0; i < capacity; ++i)
             if (!entries_[i].active) { slot = i; break; }
         if (slot == capacity) return std::nullopt;
-        auto capability = authority_.mint(trusted_owner, NativeFdAuthority::readiness);
+        // The authority slot and physical eventfd are minted under one
+        // trusted-host nonparking transaction. No rollback can fail after
+        // opening a descriptor, leaving an unowned FD or poisoned broker.
+        std::optional<NativeEpollReactorManager::OwnedEventFd> owned;
+        auto capability = authority_.try_mint_with(
+            trusted_owner, NativeFdAuthority::readiness, [&]() noexcept {
+                owned = manager_.open_owned_eventfd();
+                return owned.has_value();
+            });
         if (!capability) return std::nullopt;
-        auto owned = manager_.open_owned_eventfd();
-        if (!owned) {
-            if (!authority_.revoke(*capability, trusted_owner) ||
-                    !authority_.confirm_reclaimed(*capability, trusted_owner))
-                poisoned_ = true;
-            return std::nullopt;
-        }
         Token token{instance_, next_generation_++, static_cast<std::uint16_t>(slot)};
         entries_[slot] = Entry{true, token, trusted_owner, *capability,
                                *owned, std::nullopt};
@@ -84,16 +85,16 @@ public:
         if (!guard.owns_lock() || poisoned_) return false;
         if (stopped_) return false; // no new I/O admission after shutdown
         auto* e = lookup(token, trusted_owner);
-        if (!e || e->watch || e->needs_drain ||
-                authority_.phase(e->capability) != NativeFdAuthority::Phase::owned)
-            return false;
-        auto watch = manager_.try_watch(e->owned, events);
-        if (!watch) return false;
-        if (!authority_.begin_watch(e->capability, trusted_owner)) {
-            poisoned_ = true;
-            return false;
-        }
-        e->watch = *watch;
+        if (!e || e->watch || e->needs_drain) return false;
+        // Hold the logical authority gate before registering the kernel
+        // watch. A transient gate denial leaves NO accepted epoll ticket.
+        std::optional<NativeEpollReactorManager::Watch> accepted;
+        if (!authority_.try_begin_watch_with(
+                e->capability, trusted_owner, [&]() noexcept {
+                    accepted = manager_.try_watch(e->owned, events);
+                    return accepted.has_value();
+                })) return false;
+        e->watch = *accepted;
         return true;
     }
 
@@ -204,15 +205,13 @@ public:
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
-        if (!e || e->watch ||
-                authority_.phase(e->capability) !=
-                    NativeFdAuthority::Phase::reclaim_pending)
-            return false;
-        if (!manager_.close_owned_eventfd(e->owned)) return false;
-        if (!authority_.confirm_reclaimed(e->capability, trusted_owner)) {
-            poisoned_ = true; // physical close completed: quarantine
-            return false;
-        }
+        if (!e || e->watch) return false;
+        // Authenticate pending reclamation BEFORE physical close, and
+        // tombstone under the same authority gate after it succeeds.
+        if (!authority_.try_confirm_reclaimed_with(
+                e->capability, trusted_owner, [&]() noexcept {
+                    return manager_.close_owned_eventfd(e->owned);
+                })) return false;
         *e = Entry{};
         return true;
     }
@@ -236,6 +235,12 @@ public:
     }
     void test_deny_next_terminal_consume(unsigned count = 1) noexcept {
         authority_.test_deny_next_consume(count);
+    }
+    void test_deny_next_watch_begin(unsigned count = 1) noexcept {
+        authority_.test_deny_next_begin(count);
+    }
+    void test_deny_next_cleanup(unsigned count = 1) noexcept {
+        authority_.test_deny_next_reclaim(count);
     }
     bool test_has_pending_terminal(bool require_published = false) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);

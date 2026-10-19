@@ -179,6 +179,57 @@ static void test_real_mutex_denies_partial_mint() {
     require(broker.revoke(*token, 50));
     require(broker.confirm_reclaimed(*token, 50));
 }
+
+static void test_atomic_host_admission_under_denial() {
+    NativeFdAuthorityBroker broker;
+    auto token = broker.mint_eventfd(72);
+    require(token.has_value());
+    require(broker.started_threads() == 0);
+    broker.test_deny_next_watch_begin(2);
+    require(!broker.try_watch(*token, 72));
+    require(!broker.try_watch(*token, 72));
+    // Both denials happened before epoll could allocate a watch or pthread.
+    require(broker.started_threads() == 0);
+    require(!broker.try_pop());
+    require(broker.try_watch(*token, 72));
+    require(broker.revoke(*token, 72));
+    auto terminal = next_terminal(broker);
+    require(terminal.owner == 72);
+    require(broker.confirm_reclaimed(*token, 72));
+}
+static void test_physical_close_only_after_authenticated_receipt() {
+    NativeFdAuthorityBroker broker;
+    auto token = broker.mint_eventfd(73);
+    require(token.has_value());
+    require(broker.revoke(*token, 73));
+    broker.test_deny_next_cleanup(2);
+    require(!broker.confirm_reclaimed(*token, 73));
+    require(!broker.confirm_reclaimed(*token, 73));
+    // Ledger denial cannot close the descriptor or consume the token;
+    // a subsequent authenticated receipt succeeds without retrying close.
+    require(broker.confirm_reclaimed(*token, 73));
+    require(!broker.confirm_reclaimed(*token, 73));
+    require(!broker.try_watch(*token, 73));
+    auto replacement = broker.mint_eventfd(73);
+    require(replacement.has_value());
+    require(broker.revoke(*replacement, 73));
+    require(broker.confirm_reclaimed(*replacement, 73));
+}
+static void test_real_gate_contention_during_cleanup() {
+    NativeFdAuthorityBroker broker;
+    auto token = broker.mint_eventfd(74);
+    require(token.has_value());
+    require(broker.revoke(*token, 74));
+    std::atomic<bool> acquired{false}, released{false};
+    std::thread blocker([&] {
+        broker.test_hold_authority_gate_until(acquired, released);
+    });
+    wait_until(acquired);
+    require(!broker.confirm_reclaimed(*token, 74));
+    released.store(true, std::memory_order_release);
+    blocker.join();
+    require(broker.confirm_reclaimed(*token, 74));
+}
 static void test_all_orderings_of_signal_cancel_revoke_stop() {
     // All 24 serial orderings at the trusted-host API boundary. Kernel
     // readiness versus cancellation may resolve differently; all outcomes
@@ -235,6 +286,9 @@ int main() {
     test_consumption_retry_exactly_once();
     test_real_mutex_contention_does_not_lose_terminal();
     test_real_mutex_denies_partial_mint();
+    test_atomic_host_admission_under_denial();
+    test_physical_close_only_after_authenticated_receipt();
+    test_real_gate_contention_during_cleanup();
     test_all_orderings_of_signal_cancel_revoke_stop();
     return 0;
 }
