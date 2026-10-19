@@ -44,3 +44,29 @@ native tests cover STOP-vs-DONE and invalid-protocol cleanup races. It tests
 -O2 and -O3/-DNDEBUG with live checks. Future work: owned fields inside real
 source actor frames, pinned-loan admission (#45), explicit cancellation/drop
 receipts, and cross-backend fairness and latency.
+
+
+## LLVM codegen-side ownership revalidation
+
+`parse_program()` invokes the native source ownership checker, but
+`emit_verified_llvm_ir()` is also callable directly with an in-memory
+`Program`. A generated/transformed AST must not be treated as trusted
+merely because the caller skips the parser. Before emitting any LLVM IR,
+the emitter repeats `validate_i64_ownership()`. The specialized scalar
+continuation path first fail-closes on malformed frame structure, then
+runs that same ownership check before lowering.
+
+The standalone scalar frame still supports **only** its single initialized
+stack-scalar counter, a direct return of that counter, a bounded scalar
+loop, and no classes, extra locals, calls, actor effects, borrowed
+parameters, exception path, mixed functions or target-specific devices.
+It is NOT permission for general actor-owned objects to survive an
+`await` or `select`. Those source forms still require pinned-frame loans,
+per-field ownership flags and verified cancellation/drop glue.
+
+`native_llvm_emission_checks_ownership_and_frame_layout` is the direct
+LLVM-emitter API regression: it constructs source-bypassing `Program`
+instances, including use-after-move, extra owners, null initializer,
+mismatched initialization and extra functions, and tests a valid program
+and valid scalar frame as positive controls. A successful source-org
+CTEST/LLVM-linked run is required before crediting this test as executed.
