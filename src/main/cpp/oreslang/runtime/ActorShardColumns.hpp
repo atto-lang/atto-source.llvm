@@ -58,13 +58,27 @@ public:
             && owner_.generation == owner.generation;
     }
     bool vm_wide() const noexcept { return scheduler_ == nullptr; }
+    bool retired() const noexcept {
+        return retired_.load(std::memory_order_acquire);
+    }
+    /** Call only after the native scheduler confirms this actor is done.
+     * Existing snapshots remain charged until destruction, but every access
+     * and all new reservations are rejected before scheduler reclamation. */
+    void mark_retired_after_done() noexcept {
+        retired_.store(true, std::memory_order_release);
+    }
 
     bool try_reserve(std::uint64_t bytes) noexcept {
-        if (bytes == 0 || bytes > maximum_) return false;
+        if (retired_.load(std::memory_order_acquire)
+                || bytes == 0 || bytes > maximum_) return false;
         std::uint64_t used = used_.load(std::memory_order_relaxed);
         while (used <= maximum_ - bytes) {
             if (used_.compare_exchange_weak(used, used + bytes,
-                    std::memory_order_acq_rel, std::memory_order_relaxed)) return true;
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                if (!retired_.load(std::memory_order_acquire)) return true;
+                release(bytes);
+                return false;
+            }
         }
         return false;
     }
@@ -81,7 +95,26 @@ private:
     OresNativeActorScheduler* scheduler_ = nullptr;
     OresNativeActorRef owner_ = {};
     std::atomic<std::uint64_t> used_{0};
+    std::atomic<bool> retired_{false};
 };
+
+/**
+ * Trusted host retirement barrier. The scheduler MUST remain alive throughout
+ * this call. Stop the actor first; waiting from an actor carrier is rejected by
+ * NativeActorScheduler. Host must destroy outstanding shard/snapshot objects
+ * before destroying the actor/VM budget ledgers.
+ */
+inline bool retire_actor_shard_budget_after_done(
+        OresNativeActorScheduler* scheduler, OresNativeActorRef owner,
+        ActorShardBudget& actor_budget) {
+    if (!scheduler || !actor_budget.matches_owner(scheduler, owner))
+        return false;
+    if (actor_budget.retired()) return true;
+    if (!ores_native_actor_scheduler_wait_done(scheduler, owner))
+        return false;
+    actor_budget.mark_retired_after_done();
+    return true;
+}
 
 /**
  * Detached but owner-fenced snapshot with explicit, accounted native storage.
@@ -164,8 +197,9 @@ private:
         values_.at(i) = value;
     }
     void require_owner() const {
-        if (!scheduler_ || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
-            throw std::logic_error("native snapshot requires its owner actor turn");
+        if (actor_budget_.retired() || !scheduler_
+                || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
+            throw std::logic_error("native snapshot retired or foreign owner turn");
         }
     }
     void require_open() const {
@@ -306,8 +340,9 @@ public:
 
 private:
     void require_owner() const {
-        if (!scheduler_ || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
-            throw std::logic_error("actor shard requires its live owning actor turn");
+        if (actor_budget_.retired() || !scheduler_
+                || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
+            throw std::logic_error("actor shard retired or foreign owner turn");
         }
     }
     std::size_t index(std::size_t row, std::uint32_t field) const {
