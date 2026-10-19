@@ -14,8 +14,14 @@ snapshot verifies `ores_native_actor_scheduler_is_current_actor`.
 Pointers never leave this host API. An actor's logical heap/region
 identity is NOT tied to the pthread selected for its next mailbox turn.
 
-The fixed 16 MiB cap does not replace the actor arena's aggregate quota.
-Memory uses explicit C++ allocation/destruction, with no tracing GC.
+In addition to the fixed 16 MiB per-shard limit, constructors now require
+distinct trusted host `ActorShardBudget` ledgers for the actor and its VM.
+Both are atomically reserved *before* allocation, rolled back on failure,
+and released after zeroing the stored scalars in the shard destructor.
+The host must keep both budgets alive longer than every associated shard
+and must pass the actor's correct budget; the ledgers themselves grant no
+access to data. This is a host-accounting substrate, **not** a verified
+compiler-generated actor arena or zero-copy borrow model.
 
 Strict warning CTest:
 `native_actor_owned_aos_soa_aosoa_dense_kernel`. Manual benchmark:
