@@ -137,14 +137,23 @@ public:
         require_open();
         return values_.at(i);
     }
-    std::size_t length() const noexcept { return values_.size(); }
+    std::size_t length() const {
+        require_owner();
+        std::lock_guard<std::mutex> hold(lock_);
+        require_open();
+        return values_.size();
+    }
     void close() noexcept {
         std::lock_guard<std::mutex> hold(lock_);
         if (revoked_) return;
         revoked_ = true;
-        volatile double* raw = values_.data();
-        for (std::size_t i = 0; i < values_.size(); ++i) raw[i] = 0.0;
-        std::atomic_signal_fence(std::memory_order_seq_cst);
+        {
+            std::vector<double> released;
+            released.swap(values_);
+            volatile double* raw = released.data();
+            for (std::size_t i = 0; i < released.size(); ++i) raw[i] = 0.0;
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+        } // vector allocation is actually freed before refunding quota
         actor_budget_.release(reserved_bytes_);
         vm_budget_.release(reserved_bytes_);
     }
@@ -214,12 +223,13 @@ public:
     }
 
     ~ActorShardColumns() {
-        // The data is actor-private even on non-tracing heaps. Volatile
-        // stores prevent a compiler from eliminating the scrubbing as dead
-        // writes immediately before vector destruction.
-        volatile double* bytes = data_.data();
-        for (std::size_t i = 0; i < data_.size(); ++i) bytes[i] = 0.0;
-        std::atomic_signal_fence(std::memory_order_seq_cst);
+        {
+            std::vector<double> released;
+            released.swap(data_);
+            volatile double* bytes = released.data();
+            for (std::size_t i = 0; i < released.size(); ++i) bytes[i] = 0.0;
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+        } // free native allocation before permitting another actor reservation
         actor_budget_.release(reserved_bytes_);
         vm_budget_.release(reserved_bytes_);
     }
