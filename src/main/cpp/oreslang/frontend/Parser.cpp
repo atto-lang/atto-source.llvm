@@ -1102,6 +1102,9 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
+            if (token_.text == "+=") {
+                fail("native compound assignment requires single-evaluation write and borrow lowering");
+            }
             if (action->kind == Expression::Kind::Field && accept("=")) {
                 // No nested assignment may resolve through a flattened field.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
