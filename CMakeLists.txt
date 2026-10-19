@@ -2004,3 +2004,17 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Actor-independent Arc-style immutable buffer reference. This validates
+# host ownership/pinning only; it does not establish Oreslang guest lowering.
+if(BUILD_TESTING)
+    add_executable(oreslang-dop-shared-immutable-test tests/dop_shared_immutable_test.cpp)
+    target_include_directories(oreslang-dop-shared-immutable-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-dop-shared-immutable-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-dop-shared-immutable-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME dop_shared_immutable_actor_independent
+        COMMAND oreslang-dop-shared-immutable-test)
+    set_tests_properties(dop_shared_immutable_actor_independent PROPERTIES TIMEOUT 20)
+endif()
