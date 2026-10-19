@@ -136,7 +136,11 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (source_.substr(at_, 2) == "+=") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
+        if (std::string_view("()[]{},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1270,6 +1274,10 @@ private:
         }
         if (token_.kind == Kind::SymbolLiteral)
             fail("native Symbol literal requires tagged-value and symbol identity lowering");
+        if (token_.text == "[")
+            fail("native inline list requires typed aggregate storage and cleanup lowering");
+        if (token_.text == "fnc")
+            fail("native anonymous fnc requires callable capture and closure lowering");
         if (token_.text == "Scheduler" || token_.text == "Region")
             fail("native Scheduler/Region source lowering unsupported: typed configuration, "
                  "field permits and safe-point scheduler ABI required");
