@@ -119,5 +119,27 @@ class CGLAdmissionTests(unittest.TestCase):
             self.assertEqual(report["compatibility"], "fail")
 
 
+    def test_wrong_architecture_is_not_admitted(self):
+        other = 183 if probe.platform.machine().lower() == "x86_64" else 62
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "foreign"
+            target.write_bytes(elf(machine=other))
+            target.chmod(0o755)
+            report = probe.preflight(binary=target)
+            self.assertEqual(report["compatibility"], "fail")
+            self.assertIn("ELF machine does not match host architecture", report["errors"])
+
+    def test_seeded_malformed_elf_mutation_never_admitted(self):
+        import random
+        rng = random.Random(20261018)
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "mutant"
+            for _ in range(128):
+                target.write_bytes(rng.randbytes(rng.randrange(0, 256)))
+                target.chmod(0o755)
+                with self.assertRaises(ValueError):
+                    probe.inspect_elf(target)
+
+
 if __name__ == "__main__":
     unittest.main()
