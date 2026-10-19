@@ -671,8 +671,12 @@ int main() {
     Program duplicate_class_fields;
     ClassDecl duplicate_class;
     duplicate_class.name = "Pair";
-    duplicate_class.fields.push_back(ClassField{"x"});
-    duplicate_class.fields.push_back(ClassField{"x"});
+    ClassField duplicate_x_first;
+    duplicate_x_first.name = "x";
+    duplicate_class.fields.push_back(std::move(duplicate_x_first));
+    ClassField duplicate_x_second;
+    duplicate_x_second.name = "x";
+    duplicate_class.fields.push_back(std::move(duplicate_x_second));
     duplicate_class_fields.classes.push_back(std::move(duplicate_class));
     Function class_main;
     class_main.name = "main";
