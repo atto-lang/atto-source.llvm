@@ -95,6 +95,22 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             }
             assert(mismatched_budget_rejected);
             assert(incorrect.used_bytes() == 0);
+            // A valid slot does not authorize a budget from an old or
+            // future generation: hot reload/retire fencing is exact.
+            ActorShardBudget wrong_generation(
+                65536, state.scheduler,
+                OresNativeActorRef{state.owner.scheduler_domain,
+                    state.owner.actor_slot, state.owner.generation + 1});
+            bool stale_generation_rejected = false;
+            try {
+                ActorShardColumns wrong(state.scheduler, state.owner,
+                    wrong_generation, state.vm_budget, state.layout, 65, 3,
+                    state.layout == Layout::AoSoA ? 8 : 1);
+            } catch (const std::invalid_argument&) {
+                stale_generation_rejected = true;
+            }
+            assert(stale_generation_rejected);
+            assert(wrong_generation.used_bytes() == 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
             state.published = state.region->snapshot_column(0);
