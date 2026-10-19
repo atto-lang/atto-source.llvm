@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeCpuBudget.h"
+#include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
 #include <stdlib.h>
 
