@@ -1,8 +1,10 @@
 # Oreslang parameter defaults via annotations — staged cross-backend v1
 
 Status: PROPOSAL + PURE POLICY, NOT EXECUTABLE GUEST SYNTAX.
-The Java parser deliberately rejects @Default today. The LLVM parser must
-also fail closed until correct annotation AST, type checking and lowering exist.
+The Java parser now retains strictly closed @Default literals as staged
+parameter AST annotations and rejects their execution in TypeChecker and
+OwnershipChecker. The LLVM parser must still fail closed until correct
+annotation AST, type checking and lowering exist.
 This contract extends contracts/v2/OPTION_FORMAL_OMISSION_V2.md.
 
 ## Canonical grammar, not JavaScript's equals syntax
@@ -108,9 +110,10 @@ and versioned ABI fingerprint. Public default changes are API changes.
 Unknown annotations cannot be silently treated as inert metadata.
 
 The Java draft includes a compiler-only DefaultArgumentPolicy, an
-OptionalCallShapeBinder bridge, and source JUnit tests; parameter syntax
-is intentionally parser-gated. LLVM is specification-only. Neither
-compiler currently proves executable @Default behavior.
+OptionalCallShapeBinder bridge, parser-preserved formal-local literal metadata,
+an AST-to-checked-literal bridge and source JUnit tests. Java parameter syntax
+is **parse-only** and rejected by the semantic admission gate. LLVM is
+specification-only. Neither compiler proves executable @Default behavior.
 
 Enable guest syntax only after parameter-local annotation parser/AST,
 closed typed constant evaluator, type/effect/ownership admission,
