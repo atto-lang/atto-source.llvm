@@ -1995,3 +1995,23 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# These profiles are deliberately non-emitting until independent eBPF,
+# carrier-Linux, FPGA and ASIC artifact validators are implemented.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_executable(oreslang-deployment-profile-admission-test
+        tests/deployment_profile_admission_test.cpp)
+    target_include_directories(oreslang-deployment-profile-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-deployment-profile-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME deployment_profile_static_fail_closed
+        COMMAND oreslang-deployment-profile-admission-test)
+    add_test(NAME deployment_profile_compiler_negative_matrix
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/deployment_profile_cli_admission.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(deployment_profile_static_fail_closed
+        deployment_profile_compiler_negative_matrix PROPERTIES TIMEOUT 30)
+endif()
