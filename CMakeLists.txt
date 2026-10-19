@@ -1020,6 +1020,18 @@ if(BUILD_TESTING)
     else()
         message(STATUS "Native actor checkpoint/code-only integration needs OpenSSL Crypto")
     endif()
+    # Source-only parser oracle runs even when the compiler cannot execute.
+    # Optimized Python must not silently remove any admission checks.
+    add_test(NAME native_source_actor_pic_abi_fixture_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_actor_pic_layout.py")
+    add_test(NAME native_source_actor_pic_abi_fixture_python_O
+        COMMAND "${Python3_EXECUTABLE}" -O
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_source_actor_pic_layout.py")
+    set_tests_properties(
+        native_source_actor_pic_abi_fixture_failclosed
+        native_source_actor_pic_abi_fixture_python_O
+        PROPERTIES TIMEOUT 20)
     # REAL .ores -> LLVM IR -> PIC shared images -> live actor-owned i64 heap.
     # Distinct from symbolic code-label/native-static-callback tests. This is
     # an internal trusted-host AOT fixture only, NOT a signed production
