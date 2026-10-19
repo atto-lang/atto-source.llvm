@@ -177,8 +177,6 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(module_wrapped); },
                      "one standalone native function");
 
-    std::cout << "NATIVE_LLVM_EMISSION_REVALIDATION_OK\n";
-
     // Direct callers must not sneak unlowered users, extra frames, reserved
     // source identifiers, or incompatible targets past the parser's contract.
     auto cooperative = cooperative_source_frame();
@@ -225,5 +223,6 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(cooperative, false, true); },
                      "one standalone suspend function");
 
+    std::cout << "NATIVE_LLVM_EMISSION_REVALIDATION_OK\n";
     return 0;
 }
