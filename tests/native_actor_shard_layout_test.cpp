@@ -18,12 +18,22 @@ struct TestState {
     Layout layout = Layout::SoA;
     std::unique_ptr<ActorShardColumns> region;
     std::vector<double> published;
+    bool foreign_rejected = false;
     bool failed = false;
 };
 
 static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
     auto& state = *static_cast<TestState*>(ctx);
     try {
+        if (actor == 1 && step == 3) {
+            try {
+                (void)state.region->read(0, 0);
+                state.failed = true;
+            } catch (const std::logic_error&) {
+                state.foreign_rejected = true;
+            }
+            return;
+        }
         assert(actor == 0);
         if (step == 1) {
             auto region = std::make_unique<ActorShardColumns>(
@@ -54,7 +64,7 @@ int main() {
     for (auto layout : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
         TestState state;
         state.layout = layout;
-        state.scheduler = ores_native_actor_scheduler_open(1, 4, 2, on_message, &state);
+        state.scheduler = ores_native_actor_scheduler_open(2, 4, 2, on_message, &state);
         assert(state.scheduler != nullptr);
         state.owner = ores_native_actor_scheduler_spawn(state.scheduler, 0);
         assert(state.owner.scheduler_domain != 0);
@@ -73,6 +83,13 @@ int main() {
             rejected = true;
         }
         assert(rejected && "host must not read live actor-owned columns");
+        OresNativeActorRef other =
+            ores_native_actor_scheduler_spawn(state.scheduler, 1);
+        assert(other.scheduler_domain && other.actor_slot != state.owner.actor_slot);
+        assert(ores_native_actor_scheduler_send(state.scheduler, other, 3));
+        assert(ores_native_actor_scheduler_drain(state.scheduler));
+        assert(!state.failed && state.foreign_rejected &&
+               "a different actor in the same scheduler cannot borrow the shard");
         ores_native_actor_scheduler_retire(state.scheduler);
         assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
         state.region.reset();
