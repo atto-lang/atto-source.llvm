@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -18,36 +20,54 @@ namespace oreslang::dop {
  */
 enum class AccessMode { Read, Write };
 
-struct SystemAccessSpan {
-    const void* allocation = nullptr;
-    std::uint64_t begin = 0;
-    std::uint64_t end = 0;
-    AccessMode mode = AccessMode::Read;
-
+class SystemAccessSpan {
+public:
     SystemAccessSpan(const void* id, std::uint64_t first,
                      std::uint64_t last, AccessMode access)
-        : allocation(id), begin(first), end(last), mode(access) {
+        : allocation_(id), begin_(first), end_(last), mode_(access) {
         if (first >= last) throw std::invalid_argument("empty ECS byte span");
+        if (access != AccessMode::Read && access != AccessMode::Write)
+            throw std::invalid_argument("invalid ECS access mode");
     }
+
+    const void* allocation() const noexcept { return allocation_; }
+    std::uint64_t begin() const noexcept { return begin_; }
+    std::uint64_t end() const noexcept { return end_; }
+    AccessMode mode() const noexcept { return mode_; }
+
+private:
+    // Private fields prevent callers from mutating a validated interval into
+    // an invalid/overlapping interval or forging an out-of-range mode.
+    const void* allocation_;
+    std::uint64_t begin_;
+    std::uint64_t end_;
+    AccessMode mode_;
 };
 
-struct SystemFootprint {
-    std::string name;
-    std::vector<SystemAccessSpan> spans;
-
+class SystemFootprint {
+public:
     SystemFootprint(std::string system_name, std::vector<SystemAccessSpan> accesses)
-        : name(std::move(system_name)), spans(std::move(accesses)) {
-        if (name.empty()) throw std::invalid_argument("ECS system name is empty");
+        : name_(std::move(system_name)), spans_(std::move(accesses)) {
+        if (name_.empty() || std::all_of(name_.begin(), name_.end(),
+                [](unsigned char c) { return std::isspace(c) != 0; }))
+            throw std::invalid_argument("ECS system name is empty");
     }
+
+    const std::string& name() const noexcept { return name_; }
+    const std::vector<SystemAccessSpan>& spans() const noexcept { return spans_; }
+
+private:
+    std::string name_;
+    std::vector<SystemAccessSpan> spans_;
 };
 
 inline bool access_conflicts(const SystemFootprint& a, const SystemFootprint& b) noexcept {
-    for (const auto& left : a.spans) {
-        for (const auto& right : b.spans) {
-            if (left.mode == AccessMode::Read && right.mode == AccessMode::Read) continue;
-            if (left.allocation == nullptr || right.allocation == nullptr) return true;
-            if (left.allocation != right.allocation) continue;
-            if (left.begin < right.end && right.begin < left.end) return true;
+    for (const auto& left : a.spans()) {
+        for (const auto& right : b.spans()) {
+            if (left.mode() == AccessMode::Read && right.mode() == AccessMode::Read) continue;
+            if (left.allocation() == nullptr || right.allocation() == nullptr) return true;
+            if (left.allocation() != right.allocation()) continue;
+            if (left.begin() < right.end() && right.begin() < left.end()) return true;
         }
     }
     return false;
