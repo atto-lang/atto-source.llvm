@@ -1728,6 +1728,23 @@ if(BUILD_TESTING)
     add_test(NAME native_ores_vm_four_carrier_domains
         COMMAND oreslang-native-ores-vm-test)
     set_tests_properties(native_ores_vm_four_carrier_domains PROPERTIES TIMEOUT 30)
+    # Trusted host actor hot-upgrade admission at the real OresVM
+    # scheduler mailbox mutex: already-accepted FIFO drains on old code,
+    # CONTROL continues and stop cannot be undone by a stale upgrade token.
+    # This is not compiler-generated code-image/await/FFI integration.
+    add_executable(oreslang-native-vm-upgrade-ingress-test
+        tests/native_vm_upgrade_ingress_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-upgrade-ingress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-upgrade-ingress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-upgrade-ingress-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_vm_hot_upgrade_mailbox_linearization
+        COMMAND oreslang-native-vm-upgrade-ingress-test)
+    set_tests_properties(native_vm_hot_upgrade_mailbox_linearization
+        PROPERTIES TIMEOUT 30)
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
