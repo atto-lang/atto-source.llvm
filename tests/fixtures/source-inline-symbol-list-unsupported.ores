@@ -1,0 +1,2 @@
+// Valid list token surface must fail closed until aggregate cleanup lowering.
+pub fnc main(): int { return [#aos, #soa, #aosoa]; }
