@@ -1995,3 +1995,30 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+
+# Shared-source v1 parity snapshot: executable LLVM IR + linked native guests
+# from byte-identical, SHA-pinned common-source #92 fixtures. These are
+# compiler/backend execution obligations, not universal AOT/GC certification.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_NATIVE_GUEST_V1_CLANG NAMES clang-19 clang-18 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_NATIVE_GUEST_V1_CLANG)
+        set(ORE_NATIVE_GUEST_V1_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-native-guest-v1-clang")
+    endif()
+    add_test(NAME native_shared_guest_v1_real_compiler
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_parity_v1_source.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NATIVE_GUEST_V1_CLANG}"
+          --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME native_shared_guest_v1_real_compiler_asan_ubsan
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_guest_parity_v1_source.py"
+          --compiler "$<TARGET_FILE:oreslang-llvmc>"
+          --clang "${ORE_NATIVE_GUEST_V1_CLANG}"
+          --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+          --sanitizers)
+    set_tests_properties(native_shared_guest_v1_real_compiler
+        native_shared_guest_v1_real_compiler_asan_ubsan PROPERTIES TIMEOUT 180)
+endif()
