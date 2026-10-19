@@ -4,8 +4,14 @@
 #include <chrono>
 #include <cstdlib>
 #include <thread>
+#include <type_traits>
 using oreslang::runtime::NativeFdAuthorityBroker;
 using oreslang::runtime::NativeEpollReactor;
+static_assert(!std::is_constructible_v<NativeFdAuthorityBroker::Token,
+                                       std::uint64_t, std::uint64_t, std::uint16_t>,
+              "Guest-accessible code must not synthesize broker capabilities");
+static_assert(!std::is_aggregate_v<NativeFdAuthorityBroker::Token>,
+              "Opaque host token must not permit aggregate initialization");
 static void check(bool ok) { if (!ok) std::abort(); }
 
 static NativeFdAuthorityBroker::Completion wait_done(
@@ -61,6 +67,7 @@ int main() {
         check(token.has_value());
         check(broker.try_watch(*token, 41));
         check(broker.revoke(*token, 41));
+        check(!broker.try_cancel(*token, 41)); // no rights after revoke
         check(!broker.confirm_reclaimed(*token, 41));
         check(!broker.signal(*token, 41));
         auto done = wait_done(broker);
@@ -125,6 +132,8 @@ int main() {
         check(!broker.try_pop());
         check(broker.revoke(*first, 81));
         check(broker.revoke(*second, 82));
+        check(!broker.try_cancel(*first, 81));
+        check(!broker.try_cancel(*second, 82));
         check(broker.confirm_reclaimed(*first, 81));
         check(broker.confirm_reclaimed(*second, 82));
     }

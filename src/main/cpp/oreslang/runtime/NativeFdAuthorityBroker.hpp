@@ -110,7 +110,11 @@ public:
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
-        return e && e->watch && manager_.try_cancel(*e->watch);
+        // A revoked owner cannot invoke the ordinary cancellation API:
+        // only trusted broker teardown may cancel revoking watches.
+        return e && e->watch &&
+            authority_.phase(e->capability) == NativeFdAuthority::Phase::watching &&
+            manager_.try_cancel(*e->watch);
     }
 
     bool revoke(Token token, std::uint64_t trusted_owner) noexcept {
