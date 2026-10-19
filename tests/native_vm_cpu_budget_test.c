@@ -1,5 +1,8 @@
 #include "oreslang/runtime/NativeCpuBudget.h"
 #include "oreslang/runtime/NativeOresVM.h"
+#if defined(NDEBUG)
+#undef NDEBUG // Tests must not silently disappear in optimized CMake builds
+#endif
 #include <assert.h>
 #include <stdio.h>
 
