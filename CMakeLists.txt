@@ -1764,6 +1764,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_and_vm_shard_budget_contention
         PROPERTIES TIMEOUT 30)
 
+    # Standalone exact header CTest; its mock scheduler certifies one
+    # physical actor turn, while reservations use the real shard code.
+    add_executable(oreslang-native-actor-shard-snapshot-test
+        tests/native_actor_shard_snapshot_unit_test.cpp)
+    target_include_directories(oreslang-native-actor-shard-snapshot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-snapshot-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-snapshot-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_shard_snapshot_quota_and_generation
+        COMMAND oreslang-native-actor-shard-snapshot-test)
+    set_tests_properties(native_actor_shard_snapshot_quota_and_generation
+        PROPERTIES TIMEOUT 30)
+
     # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
     # The actor scheduler certifies owner identity; no source-level lowering.
     add_executable(oreslang-native-actor-shard-layout-test
