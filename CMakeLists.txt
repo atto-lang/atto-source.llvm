@@ -1760,6 +1760,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-upgrade-ingress-race-test)
     set_tests_properties(native_actor_upgrade_admission_contention
         PROPERTIES TIMEOUT 45)
+    # STOP must win if code generation activation precedes the physical
+    # scheduler route epoch update; never roll back by reopening DATA.
+    add_executable(oreslang-native-actor-upgrade-partial-publish-test
+        tests/native_actor_upgrade_partial_publication_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-upgrade-partial-publish-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-upgrade-partial-publish-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-upgrade-partial-publish-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_upgrade_partial_publish_terminal_stop
+        COMMAND oreslang-native-actor-upgrade-partial-publish-test)
+    set_tests_properties(native_actor_upgrade_partial_publish_terminal_stop
+        PROPERTIES TIMEOUT 30)
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
