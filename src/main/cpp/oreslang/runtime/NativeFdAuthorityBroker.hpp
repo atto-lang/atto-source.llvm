@@ -106,6 +106,21 @@ public:
                manager_.signal_owned_eventfd(e->owned);
     }
 
+    // An eventfd stays readable until its counter is explicitly consumed.
+    // The trusted owner must acknowledge a delivered READY completion before
+    // registering a fresh watch; otherwise a persistent kernel counter could
+    // generate spurious immediate readiness on every rearm. Never drain an
+    // active watch or after revocation/shutdown.
+    bool drain_eventfd(Token token, std::uint64_t trusted_owner) noexcept {
+        std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
+        if (!guard.owns_lock() || stopped_ || poisoned_) return false;
+        auto* e = lookup(token, trusted_owner);
+        if (!e || e->watch ||
+                authority_.phase(e->capability) != NativeFdAuthority::Phase::owned)
+            return false;
+        return manager_.drain_owned_eventfd(e->owned);
+    }
+
     // Cancellation is not a terminal receipt: try_pop must drain the result.
     bool try_cancel(Token token, std::uint64_t trusted_owner) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
