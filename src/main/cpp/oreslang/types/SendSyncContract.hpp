@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -8,8 +9,9 @@
 
 namespace oreslang::types {
 
-// Conservative native/compiler-side marker model. This is NOT yet source-level
-// syntax or a certified LLVM lowering. Unknown FFI/host allocations fail closed.
+// Conservative compiler-side marker reference, NOT actual LLVM guest lowering.
+// The frontend must mint Shape/Primitive and trusted nominal provenance;
+// source-level strings and guest-declared classes may not forge these tags.
 enum class WorkerMarker { Send, Sync };
 enum class Shape {
     Primitive, Named, Record, Tuple, List, Union, BorrowShared, BorrowMut,
@@ -22,50 +24,98 @@ struct WorkerType {
 };
 using VerifiedNominal = std::function<bool(const WorkerType&, WorkerMarker)>;
 
-inline bool worker_marker(const WorkerType& type, WorkerMarker marker,
-                          const VerifiedNominal& nominal) {
+inline bool worker_marker_proven(const WorkerType& type, WorkerMarker marker,
+                                const VerifiedNominal& nominal,
+                                std::size_t depth, std::size_t& remaining) {
+    // Bounded, fail-closed checks on recursively supplied type descriptions.
+    if (depth >= 128 || remaining == 0) return false;
+    --remaining;
+    const auto child = [&](const WorkerType& nested, WorkerMarker required) {
+        return worker_marker_proven(nested, required, nominal, depth + 1, remaining);
+    };
+
     switch (type.shape) {
-    case Shape::Primitive: return type.name != "null";
+    case Shape::Primitive: {
+        if (!type.args.empty()) return false;
+        const auto& n = type.name;
+        // void/null/unknown host primitive names are never owned Send/Sync data.
+        return n == "bool" || n == "int" || n == "uint"
+            || n == "i8" || n == "i16" || n == "i32" || n == "i64"
+            || n == "u8" || n == "u16" || n == "u32" || n == "u64"
+            || n == "f32" || n == "f64" || n == "float" || n == "decimal"
+            || n == "bigint" || n == "string"
+            || n == "complex" || n == "complex64" || n == "complex128";
+    }
     case Shape::Unknown: case Shape::Generic: case Shape::Callable:
     case Shape::ActorStorage: case Shape::Negative: return false;
     case Shape::BorrowShared:
-        return type.args.size() == 1 &&
-               worker_marker(type.args.front(), WorkerMarker::Sync, nominal);
+        return type.args.size() == 1
+               && child(type.args.front(), WorkerMarker::Sync);
     case Shape::BorrowMut:
-        return type.args.size() == 1 &&
-               worker_marker(type.args.front(), marker == WorkerMarker::Sync
-                   ? WorkerMarker::Sync : WorkerMarker::Send, nominal);
-    case Shape::Record: case Shape::Tuple: case Shape::List: case Shape::Union:
+        return type.args.size() == 1
+               && child(type.args.front(), marker == WorkerMarker::Sync
+                   ? WorkerMarker::Sync : WorkerMarker::Send);
+    case Shape::Record:
+        // Readonly *views* are not immutable allocations. Other aliases
+        // may mutate the backing storage. Require a separate frozen value
+        // proof before any structural record receives Sync.
+        if (marker == WorkerMarker::Sync || type.args.empty()) return false;
+        for (const auto& arg : type.args)
+            if (!child(arg, WorkerMarker::Send)) return false;
+        return true;
+    case Shape::List:
+        // A movable List<T> can be Send, but mutable backing lacks Sync.
+        if (marker == WorkerMarker::Sync || type.args.size() != 1) return false;
+        return child(type.args.front(), WorkerMarker::Send);
+    case Shape::Tuple: case Shape::Union:
         if (type.args.empty()) return false;
         for (const auto& arg : type.args)
-            if (!worker_marker(arg, marker, nominal)) return false;
+            if (!child(arg, marker)) return false;
         return true;
     case Shape::Named: {
         const auto& n = type.name;
         const auto& args = type.args;
+        // Intrinsic identity must be proven by compiler metadata before
+        // accepting an Option/Result/IteratorResult spelling. The callback
+        // is trusted compiler-only and never a guest-supplied assertion.
         if (n == "Option" || n == "IteratorResult")
-            return args.size() == 1 && worker_marker(args[0], marker, nominal);
+            return args.size() == 1 && nominal(type, marker)
+                   && child(args[0], marker);
         if (n == "Result")
-            return args.size() == 2 && worker_marker(args[0], marker, nominal)
-                   && worker_marker(args[1], marker, nominal);
-        if (n == "OptionUnwrapError") return args.empty();
-        if (n == "Channel")
-            return args.size() == 1 &&
-                   worker_marker(args[0], WorkerMarker::Send, nominal);
-        if (n == "Shared" || n == "ActorRef" || n == "Mutex" ||
+            return args.size() == 2 && nominal(type, marker)
+                   && child(args[0], marker) && child(args[1], marker);
+        if (n == "OptionUnwrapError")
+            return args.empty() && nominal(type, marker);
+        // No worker-safe Channel/Arc/Mutex/actor/FFI ABI is proven yet.
+        // Even a permissive nominal callback must not enable these.
+        if (n == "Channel" || n == "Arc" || n == "Weak" ||
+            n == "Shared" || n == "RwLock" || n == "Mutex" ||
             n == "MutexGuard" || n == "SharedMutex" || n == "Future" ||
-            n == "Task" || n == "NativeHandle" || n == "GpuContext" ||
-            n == "ThreadToken" || n == "Iterator" || n == "AsyncIterator" ||
+            n == "Task" || n == "ActorRef" || n == "ActorMail" ||
+            n == "ActorGroup" || n == "Supervisor" || n == "TRef" ||
+            n == "Ref" || n == "UnsafeCell" || n == "AtomicRef" ||
+            n == "NativeHandle" || n == "FfiHandle" ||
+            n == "RawPointer" || n == "NativePointer" ||
+            n == "ThreadLocal" || n == "ThreadBound" ||
+            n == "GpuContext" || n == "ThreadToken" ||
+            n == "Iterator" || n == "AsyncIterator" ||
             n == "TcpConnection" || n == "HttpExchange" ||
             n == "HttpServer" || n == "HttpHandler")
             return false;
         for (const auto& arg : args)
-            if (!worker_marker(arg, marker, nominal)) return false;
+            if (!child(arg, marker)) return false;
         return nominal(type, marker);
     }
     }
     return false;
 }
+
+inline bool worker_marker(const WorkerType& type, WorkerMarker marker,
+                          const VerifiedNominal& nominal) {
+    std::size_t remaining = 4096;
+    return worker_marker_proven(type, marker, nominal, 0, remaining);
+}
+
 inline void require_worker_marker(const WorkerType& type, WorkerMarker marker,
                                   const VerifiedNominal& nominal) {
     if (!worker_marker(type, marker, nominal))
