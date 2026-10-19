@@ -35,7 +35,9 @@ class ConcurrencyRaceAnalyzer final {
     const auto id = key(location);
     const auto access = tick(participant);
     auto& state = locations_[id];
-    conflict(id, state.last_write, access, "write-read");
+    for (const auto& writer : state.writes) {
+      conflict(id, std::optional<Access>(writer.second), access, "write-read");
+    }
     state.reads[participant] = access;
   }
 
@@ -45,12 +47,14 @@ class ConcurrencyRaceAnalyzer final {
     const auto id = key(location);
     const auto access = tick(participant);
     auto& state = locations_[id];
-    conflict(id, state.last_write, access, "write-write");
+    for (const auto& writer : state.writes) {
+      conflict(id, std::optional<Access>(writer.second), access, "write-write");
+    }
     for (const auto& pair : state.reads) {
       conflict(id, std::optional<Access>(pair.second), access, "read-write");
     }
-    state.reads.clear();
-    state.last_write = access;
+    // Do not erase other participants' histories when one writer commits.
+    state.writes[participant] = access;
   }
 
   void send(const std::string& participant, const std::string& message_id) {
@@ -99,6 +103,11 @@ class ConcurrencyRaceAnalyzer final {
     return events_;
   }
 
+  std::uint64_t conflict_count() const {
+    std::lock_guard<std::mutex> hold(mu_);
+    return conflicts_;
+  }
+
  private:
   using Clock = std::map<std::string, std::uint64_t>;
   struct Access {
@@ -106,7 +115,7 @@ class ConcurrencyRaceAnalyzer final {
     Clock clock;
   };
   struct Location {
-    std::optional<Access> last_write;
+    std::unordered_map<std::string, Access> writes;
     std::unordered_map<std::string, Access> reads;
   };
 
@@ -124,7 +133,13 @@ class ConcurrencyRaceAnalyzer final {
   }
 
   Clock& clock(const std::string& participant) {
-    return clocks_[key(participant)];
+    const auto id = key(participant);
+    auto it = clocks_.find(id);
+    if (it != clocks_.end()) return it->second;
+    if (clocks_.size() >= 256) {
+      throw std::logic_error("race analyzer participant budget exhausted");
+    }
+    return clocks_.emplace(id, Clock{}).first->second;
   }
 
   static void merge(Clock& target, const Clock& source) {
@@ -153,15 +168,21 @@ class ConcurrencyRaceAnalyzer final {
 
   void conflict(const std::string& location, const std::optional<Access>& previous,
                 const Access& current, const char* kind) {
-    if (previous && !happens_before(previous->clock, current.clock) &&
-        findings_.size() < 1000) {
-      findings_.push_back(Finding{location, previous->participant,
-                                  current.participant, kind});
+    if (previous && !happens_before(previous->clock, current.clock)) {
+      if (conflicts_ == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("race conflict count exhausted");
+      }
+      ++conflicts_;
+      if (findings_.size() < 1000) {
+        findings_.push_back(Finding{location, previous->participant,
+                                    current.participant, kind});
+      }
     }
   }
 
   mutable std::mutex mu_;
   std::size_t events_ = 0;
+  std::uint64_t conflicts_ = 0;
   std::unordered_map<std::string, Clock> clocks_;
   std::unordered_map<std::string, Location> locations_;
   std::unordered_map<std::string, Clock> messages_;
