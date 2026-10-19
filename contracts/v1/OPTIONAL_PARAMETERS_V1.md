@@ -1,5 +1,11 @@
 # Optional value parameters — cross-backend v1 contract
 
+> **Forward-looking v2 design:** See [Option-typed formal omission v2](../v2/OPTION_FORMAL_OMISSION_V2.md).
+> V1 keeps `Option<T> x` **required** unless marked `T? x`; v2 proposes
+> automatically omittable resolved Option formals and contextual
+> `required Option<T>` to enforce caller presence. This is gated and does
+> not rewrite the v1 reference vectors or authorize compiler execution.
+
 Status (2026-10-18): SPECIFICATION / REFERENCE-BINDER TESTS ONLY; not executable guest-language support. Do not claim acceptance on either compiler until parser, type checker, ownership checker, interpreter/native lowering and conformance are green.
 
 This contract extends named value arguments from mandatory-only slots to omittable slots for functions (fnc), routines, class instance and static methods, explicit constructors, and eventually actor methods/interface methods. It does not add default-expression evaluation or nullable references.
