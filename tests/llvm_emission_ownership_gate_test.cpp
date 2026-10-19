@@ -82,6 +82,72 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(invalid); },
                      "use of explicitly moved int");
 
+    // Caller-constructed ordinary ASTs need the same fail-closed structural
+    // admission as specialized frames. Null nodes must report a compiler
+    // diagnostic instead of crashing the process before ownership checking.
+    auto missing_local = main_with_use_after_take();
+    missing_local.functions.front().locals.front().initializer.reset();
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_local); },
+                     "malformed native ownership AST: local has no initializer");
+
+    auto missing_binary = main_with_use_after_take();
+    missing_binary.functions.front().result->right.reset();
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_binary); },
+                     "malformed native ownership AST: missing binary operand");
+
+    Program missing_call_argument;
+    Function bad_call;
+    bad_call.name = "main";
+    auto call = make_expression(Expression::Kind::Call, "callee");
+    call->arguments.push_back(nullptr);
+    bad_call.result = std::move(call);
+    missing_call_argument.functions.push_back(std::move(bad_call));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_call_argument); },
+                     "malformed native ownership AST: missing expression");
+
+    Program missing_guard;
+    Function bad_guard;
+    bad_guard.name = "main";
+    GuardedReturn guard;
+    guard.lhs = make_expression(Expression::Kind::Integer, {}, 1);
+    guard.result = make_expression(Expression::Kind::Integer, {}, 9);
+    bad_guard.early_returns.push_back(std::move(guard));
+    bad_guard.result = make_expression(Expression::Kind::Integer, {}, 2);
+    missing_guard.functions.push_back(std::move(bad_guard));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_guard); },
+                     "malformed native ownership AST: guarded return has missing expression");
+
+    Program missing_scoped;
+    Function bad_scoped;
+    bad_scoped.name = "main";
+    Statement scoped;
+    scoped.kind = Statement::Kind::ScopedLocal;
+    bad_scoped.statements.push_back(std::move(scoped));
+    bad_scoped.result = make_expression(Expression::Kind::Integer, {}, 0);
+    missing_scoped.functions.push_back(std::move(bad_scoped));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_scoped); },
+                     "malformed native ownership AST: scoped local has no binding");
+
+    Program missing_actor_payload;
+    Function bad_sender;
+    bad_sender.name = "main";
+    ActorSend send;
+    send.reference = "actor";
+    bad_sender.actor_sends.push_back(std::move(send));
+    bad_sender.result = make_expression(Expression::Kind::Integer, {}, 0);
+    missing_actor_payload.functions.push_back(std::move(bad_sender));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_actor_payload); },
+                     "malformed native ownership AST: missing expression");
+
+    Program hidden_leaf;
+    Function bad_leaf;
+    bad_leaf.name = "main";
+    bad_leaf.result = make_expression(Expression::Kind::Integer, {}, 0);
+    bad_leaf.result->left = make_expression(Expression::Kind::Take);
+    hidden_leaf.functions.push_back(std::move(bad_leaf));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_leaf); },
+                     "malformed native ownership AST: scalar leaf contains hidden operands");
+
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
         "pub fnc main(): int { val x: int = 42; return x; }");
