@@ -575,6 +575,10 @@ static void test_terminal_lifecycle_rejects_restart() {
     catch (const std::logic_error&) { rejected = true; }
     check(rejected, "start() resurrected actor threads after physical retirement proof");
     check(!producer.try_send({1, 1}), "closed producer admitted post-retirement work");
+    bool lane_rejected = false;
+    try { (void)actor.register_spsc_producer(); }
+    catch (const std::logic_error&) { lane_rejected = true; }
+    check(lane_rejected, "retired, never-started actor admitted a new SPSC producer");
     actor.join(); // Repeated terminal join must remain idempotent.
     check(actor.retirement_proof().has_value(),
           "repeat join revoked an already safe terminal proof");
@@ -588,6 +592,10 @@ static void test_terminal_lifecycle_rejects_restart() {
     check(rejected, "start() admitted an actor stopped before initial startup");
     stopped.join();
     check(stopped.stopped(), "pre-stopped actor remained logically running after join");
+    lane_rejected = false;
+    try { (void)stopped.register_spsc_producer(); }
+    catch (const std::logic_error&) { lane_rejected = true; }
+    check(lane_rejected, "stopped actor admitted producer after terminal join");
 }
 
 // Startup must not race ahead of a terminal join and publish a new worker
