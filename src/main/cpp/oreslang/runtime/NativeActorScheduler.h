@@ -91,6 +91,15 @@ int ores_native_actor_scheduler_publish_control(
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure);
+/* Diagnostic only: 0-based pthread-carrier slot during a real actor turn.
+ * Returns -1 outside native scheduler carriers. Not actor identity or a
+ * capability, and not an OS core number or hard CPU affinity guarantee. */
+int ores_native_actor_scheduler_current_carrier_slot(void);
+/* Soft reuse vs migration statistics; no correctness may depend on them. */
+uint64_t ores_native_actor_scheduler_preferred_carrier_hits(
+    OresNativeActorScheduler* scheduler);
+uint64_t ores_native_actor_scheduler_carrier_migrations(
+    OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
