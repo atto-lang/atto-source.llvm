@@ -29,3 +29,11 @@ Worker-indexed immutable metadata and per-actor hot scheduler slots improve the 
 **Not yet proven:** source compiler Task handoffs, exact-head CMake/CTest, native ASan/UBSan, actual OS migration/cycle measurements, LLC/NUMA topology discovery, hard-core guarantees, and Java/LLVM source-level affinity syntax parity. Optimize only after source-exact CI and benchmark evidence against the unmodified shared ready scan.
 
 Related: Java #301, Java #303, Java #1025, LLVM #15, Java triple-layout #1480, and `oreslang-common-source` typed Task ownership #90.
+
+## Audit hardening — October 19, 2026
+
+- The native scheduling loop now forces a globally fair DATA decision after at most eight successive preferred-worker DATA choices. CONTROL retains global priority at every decision.
+- A regression queues 32 hot-actor messages against one new cold actor on a single worker and checks the cold actor is dispatched within the first nine hot callbacks.
+- Opt-in Linux CPU affinity distributes the first carriers of independent scheduler domains by scheduler-domain ID; otherwise all domains could be pinned to the same first allowed CPU.
+- Default affinity is still off, masks remain OS restricted, and failure falls back to ordinary Linux scheduling. No hard realtime, OS-thread ownership or NUMA-local memory guarantee is claimed.
+- Native compiler, ASan/UBSan, and exact-head CTest remain mandatory merge gates.
