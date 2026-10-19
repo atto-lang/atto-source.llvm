@@ -196,9 +196,16 @@ static void* carrier(void* raw) {
 
         lock(s);
         if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
-        /* Leave is called after the guest callback returned. Duplicate/stale
-         * completion cannot release the actor's next carrier owner. */
+        /* Leave the generation-checked guest execution claim first, but
+         * keep lane.active/outstanding until the gate has completed its
+         * cross-domain wakeup. Otherwise drain() may report quiescence and
+         * the VM may destroy a scheduler while a gate-release callback is
+         * still trying to signal that scheduler. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
+        unlock(s);
+        if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
+        lock(s);
+        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
         s->outstanding--;
         s->completed++;
@@ -221,9 +228,6 @@ static void* carrier(void* raw) {
             if (s->retired) pthread_cond_broadcast(&s->ready);
         }
         unlock(s);
-        /* Notify other scheduler domains only after dropping the local pool
-         * mutex: cross-pool wakeups must never form a lock-order cycle. */
-        if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
     }
 }
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
