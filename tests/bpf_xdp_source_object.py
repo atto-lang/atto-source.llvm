@@ -245,6 +245,66 @@ def main():
             "nodes": [{"id": "ores_xdp", "targets": ["ebpf"],
                        "requires": ["bpf.packet.read"], "imports": []}]
         }, "checked packet access must infer effect but never self-grant it")
+        # The effect inference must not depend on a particular packet
+        # offset, comparison operand ordering, or a single guarded return.
+        # These are compiler/IR tests; kernel verifier admission is separate.
+        for index, offset in enumerate((0, 14, 255, 4095)):
+            equality = ("ctx.packet_u8(%d) == 8" % offset
+                        if index % 2 == 0
+                        else "8 == ctx.packet_u8(%d)" % offset)
+            variant = (
+                "pub fnc ores_xdp(borrow XdpContext ctx): int {\\n"
+                "  if (%s) { return 1; } fi\\n"
+                "  return 2;\\n"
+                "}\\n"
+            ) % equality
+            src.write_text(variant, encoding="utf-8")
+            denied = run(cmd)
+            require(denied.returncode != 0 and denied.stdout == "" and
+                    "bpf.packet.read" in denied.stderr,
+                    "packet effect inferred incorrectly for offset/order " + str(offset))
+            inferred = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--emit-target-closure", str(src)])
+            require(inferred.returncode == 0 and json.loads(inferred.stdout) == packet_graph,
+                    "packet closure drift at offset/order " + str(offset))
+            emitted = run(packet_cmd)
+            require(emitted.returncode == 0 and "load i8" in emitted.stdout,
+                    "checked byte access lost at offset/order " + str(offset))
+
+        # The grammar's eight-guard limit should remain an effect-preserving
+        # upper bound. A ninth guard must fail without partial IR/JSON.
+        eight_guards = (
+            "pub fnc ores_xdp(borrow XdpContext ctx): int {\\n" +
+            "".join(
+                "  if (ctx.packet_u8(%d) == %d) { return 1; } fi\\n" %
+                (offset, index) for index, offset in enumerate(
+                    (0, 1, 14, 16, 64, 255, 1023, 4095))
+            ) +
+            "  return 2;\\n}\\n"
+        )
+        src.write_text(eight_guards, encoding="utf-8")
+        eight = run(packet_cmd)
+        require(eight.returncode == 0 and
+                all("packet.load.%d" % i in eight.stdout for i in range(8)),
+                "eight bounded byte guards failed checked IR lowering")
+        eight_closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--emit-target-closure", str(src)])
+        require(eight_closure.returncode == 0 and
+                json.loads(eight_closure.stdout) == packet_graph,
+                "eight bounded packet reads must infer one exact ungranted effect")
+        nine_guards = eight_guards.replace("  return 2;\\n",
+                                           "  if (ctx.packet_u8(2) == 0) { return 1; } fi\\n"
+                                           "  return 2;\\n")
+        src.write_text(nine_guards, encoding="utf-8")
+        ninth = run(packet_cmd)
+        require(ninth.returncode != 0 and ninth.stdout == "",
+                "ninth guarded XDP packet read bypassed bounded CFG admission")
+        ninth_closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                             "--emit-target-closure", str(src)])
+        require(ninth_closure.returncode != 0 and ninth_closure.stdout == "",
+                "invalid ninth guard emitted an apparently valid effect closure")
+        src.write_text(packet_source, encoding="utf-8")
+
         require("packet.load.0" in packet_ir and "packet.next.0" in packet_ir,
                 "packet_u8 lowering lacks explicit checked CFG")
         require("icmp ule" in packet_ir and "load i8" in packet_ir,
