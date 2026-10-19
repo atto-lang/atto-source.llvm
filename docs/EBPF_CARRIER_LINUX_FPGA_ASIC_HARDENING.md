@@ -11,7 +11,7 @@ The LLVM CLI recognizes five explicit deployment profiles:
 | `fpga-hls` | Synthesizable RTL, co-simulation, implementation and timing evidence | Blocked |
 | `asic-rtl` | Formally checked RTL, DFT, STA and physical signoff evidence | Blocked |
 
-Explicit selections fail before source I/O or LLVM IR emission (exit 2).
+Explicit selections **without experimental backend flags** fail before source I/O or LLVM IR emission (exit 2).
 Neither `--target=host` nor `--target=wasm32` bypasses this rejection.
 Unknown names, aliases and duplicates fail closed. Host emission without an
 explicit deployment profile retains its existing **uncertified** meaning.
@@ -98,6 +98,14 @@ Full LLVM CTest also runs the negative compiler CLI matrix.
 When private GHA minutes are exhausted, mirror only an *identical Git tree*
 into a funded trusted org, verify tree SHAs and run without cross-org secrets.
 No CI result replaces hardware/kernel verification.
+
+**Experimental exception (separate stacked PR):**
+`--deployment-profile=ebpf-xdp --experimental-ebpf-xdp-ir` emits only the
+admitted packet-nonempty XDP LLVM IR prototype, subject to an actual BPF ELF
+object test and independent target-kernel verifier before deployment. It does
+not enable the production/certified eBPF profile or any other profile. See
+`docs/EXPERIMENTAL_EBPF_XDP_SCALAR.md`.
+
 
 Official references:
 - https://docs.kernel.org/bpf/standardization/instruction-set.html
