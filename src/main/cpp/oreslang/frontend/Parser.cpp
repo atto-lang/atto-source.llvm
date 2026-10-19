@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, Symbol, SymbolLiteral, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -115,6 +115,21 @@ public:
                 ++at_;
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
+        }
+        // Recognize valid bare Symbol spelling even before tagged Symbol
+        // runtime/LLVM lowering exists. Never treat it as an identifier/string.
+        if (ch == '#') {
+            ++at_;
+            if (at_ == source_.size() || !identifier_start(source_[at_])) {
+                throw std::runtime_error("expected Symbol name after '#' at byte "
+                                         + std::to_string(start));
+            }
+            while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+            if (at_ - start - 1 > 128) {
+                throw std::runtime_error("unquoted Symbol literal exceeds 128 ASCII bytes at byte "
+                                         + std::to_string(start));
+            }
+            return {Kind::SymbolLiteral, source_.substr(start, at_ - start), start};
         }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
@@ -1253,6 +1268,11 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        if (token_.kind == Kind::SymbolLiteral)
+            fail("native Symbol literal requires tagged-value and symbol identity lowering");
+        if (token_.text == "Scheduler" || token_.text == "Region")
+            fail("native Scheduler/Region source lowering unsupported: typed configuration, "
+                 "field permits and safe-point scheduler ABI required");
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
