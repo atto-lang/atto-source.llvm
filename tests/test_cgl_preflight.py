@@ -15,7 +15,8 @@ spec.loader.exec_module(probe)
 
 def elf(*, machine=62, kind=2, elf_class=2, endian=1, osabi=0,
         version=1, load=True, interpreter=None, phoff=64, phentsize=56,
-        phnum=None, load_offset=0, load_filesz=0):
+        phnum=None, load_offset=0, load_filesz=0, load_memsz=0,
+        load_vaddr=0, load_align=4096):
     count = (1 if load else 0) + (1 if interpreter is not None else 0)
     if phnum is None:
         phnum = count
@@ -26,7 +27,8 @@ def elf(*, machine=62, kind=2, elf_class=2, endian=1, osabi=0,
     struct.pack_into("<HHH", h, 52, 64, phentsize, phnum)
     ph = bytearray()
     if load:
-        ph += struct.pack("<IIQQQQQQ", 1, 5, load_offset, 0, 0, load_filesz, 0, 4096)
+        ph += struct.pack("<IIQQQQQQ", 1, 5, load_offset, load_vaddr, 0,
+                          load_filesz, load_memsz, load_align)
     if interpreter is not None:
         offset = 64 + 56 * count
         ph += struct.pack("<IIQQQQQQ", 3, 4, offset, 0, 0, len(interpreter), len(interpreter), 1)
@@ -66,6 +68,23 @@ class CGLAdmissionTests(unittest.TestCase):
         for data in (elf(load=False), elf(load_filesz=100000)):
             with self.assertRaises(ValueError):
                 self.inspect(data)
+
+    def test_load_segment_memory_and_alignment_fail_closed(self):
+        invalid = (
+            elf(load_filesz=1, load_memsz=0),  # file bytes cannot exceed mapped memory
+            elf(load_align=3),  # alignment must be a power of two
+            elf(load_offset=1, load_vaddr=0, load_align=4096),  # not congruent
+            elf(load_offset=2, load_vaddr=1, load_align=2),  # mismatched mod 2
+        )
+        for data in invalid:
+            with self.subTest(data=data[:96]), self.assertRaises(ValueError):
+                self.inspect(data)
+        # Valid corner cases must not become false rejections.
+        for align in (0, 1, 4096):
+            with self.subTest(align=align):
+                self.assertEqual(self.inspect(elf(load_align=align))["machine"], 62)
+        self.assertEqual(
+            self.inspect(elf(load_filesz=1, load_memsz=1))["machine"], 62)
 
     def test_reject_shared_object_and_relative_interpreter(self):
         for data in (elf(kind=3), elf(kind=3, interpreter=b"relative/ld.so\0"),
