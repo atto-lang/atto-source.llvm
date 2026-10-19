@@ -258,6 +258,9 @@ static void stale_generation_and_foreign_heap_rejected() {
           "reused slot did not advance generation");
     must_reject([&]{ (void)first.is_linked(alice, reused, old); },
                 "stale generation target accepted by graph edge query");
+    must_reject([&]{ (void)first.is_linked(alice, reused,
+                   Heap::Handle{old.heap, static_cast<std::uint32_t>(12345), old.generation}); },
+                "invalid graph edge target slot accepted");
     must_reject([&]{ (void)first.is_linked(alice, old, reused); },
                 "stale generation source accepted by graph edge query");
     must_reject([&]{ (void)first.copy_out(bob, reused, &data, sizeof(data)); },
@@ -521,6 +524,122 @@ static void atomic_mutation_vs_loan_races() {
 
 // Model-test edge accounting under slot reuse, self-cycles and partial
 // deletion. The model has independent edge and liveness storage.
+static void model_check_graph_reuse_and_stale_handles(std::uint32_t seed) {
+    using Heap = ActorOwnedGraphHeap<8, 16, 3>;
+    const ActorHeapIdentity owner{71, 19, 5};
+    Heap graph(owner);
+    std::array<std::optional<Heap::Handle>, 8> live{};
+    std::array<std::optional<Heap::Handle>, 8> stale{};
+    std::array<std::array<bool, 8>, 8> edges{};
+    std::array<std::uint8_t, 8> values{};
+    auto random = [&]() noexcept -> std::uint32_t {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    };
+    auto choose_live = [&](std::uint32_t hint) -> int {
+        for (int j = 0; j < 8; ++j) {
+            const int candidate = static_cast<int>((hint + j) % 8);
+            if (live[candidate].has_value()) return candidate;
+        }
+        return -1;
+    };
+    for (int step = 0; step < 2048; ++step) {
+        const auto operation = random() % 8;
+        if (operation < 2) {
+            const std::uint8_t byte = static_cast<std::uint8_t>(step);
+            auto next = graph.allocate(owner, &byte, 1);
+            int free_slots = 0;
+            for (const auto& handle : live) if (!handle) ++free_slots;
+            check(next.has_value() == (free_slots > 0),
+                  "bounded graph allocator/model capacity disagreement");
+            if (next) {
+                const std::size_t slot = next->slot;
+                check(slot < live.size() && !live[slot], "allocator reused live node");
+                if (stale[slot])
+                    check(next->generation > stale[slot]->generation,
+                          "graph slot recycled without generation advance");
+                live[slot] = *next;
+                values[slot] = byte;
+            }
+        } else if (operation == 2) {
+            const int index = choose_live(random());
+            if (index >= 0) {
+                const auto old = *live[index];
+                graph.remove(owner, old);
+                stale[index] = old;
+                live[index].reset();
+                for (int j = 0; j < 8; ++j) {
+                    edges[index][j] = false;
+                    edges[j][index] = false;
+                }
+                std::uint8_t probe = 0;
+                must_reject([&] { (void)graph.copy_out(owner, old, &probe, 1); },
+                            "retired graph handle resurrected after node removal");
+            }
+        } else if (operation < 6) {
+            const int a = choose_live(random());
+            const int b = choose_live(random());
+            if (a >= 0 && b >= 0) {
+                int outgoing = 0;
+                for (int j = 0; j < 8; ++j) if (edges[a][j]) ++outgoing;
+                const bool expected = !edges[a][b] && outgoing < 3;
+                check(graph.link(owner, *live[a], *live[b]) == expected,
+                      "graph link/model disagreement");
+                if (expected) edges[a][b] = true;
+            }
+        } else {
+            const int index = choose_live(random());
+            if (index >= 0) {
+                const std::uint8_t changed = static_cast<std::uint8_t>(random());
+                graph.write(owner, *live[index], &changed, 1);
+                values[index] = changed;
+            }
+        }
+        std::size_t nodes = 0, links = 0;
+        for (int a = 0; a < 8; ++a) {
+            if (!live[a]) continue;
+            ++nodes;
+            std::uint8_t copied = 0;
+            check(graph.copy_out(owner, *live[a], &copied, 1) == 1 &&
+                      copied == values[a], "graph payload changed after reuse");
+            for (int b = 0; b < 8; ++b) {
+                if (!live[b]) {
+                    check(!edges[a][b], "model retained link to dead slot");
+                    continue;
+                }
+                check(graph.is_linked(owner, *live[a], *live[b]) == edges[a][b],
+                      "graph adjacency/model disagreement");
+                if (edges[a][b]) ++links;
+            }
+        }
+        // A stale handle must remain invalid even after thousands of later
+        // allocations and recycling cycles; test across multiple states,
+        // not only at the instant of removal.
+        if (step % 31 == 0) {
+            for (const auto& former : stale) {
+                if (former) {
+                    std::uint8_t discarded = 0;
+                    must_reject([&] {
+                        (void)graph.copy_out(owner, *former, &discarded, 1);
+                    }, "stale actor handle revived after generation recycling");
+                }
+            }
+        }
+        check(graph.live_nodes(owner) == nodes, "graph node accounting drift");
+        check(graph.live_edges(owner) == links, "graph edge accounting drift");
+    }
+    HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
+    carrier.start();
+    carrier.join();
+    const auto proof = carrier.retirement_proof();
+    check(proof.has_value(), "model stress lacked trusted retirement proof");
+    graph.retire(owner, *proof);
+    check(graph.retired(), "model stress failed zero-tracing-GC retirement");
+    std::cout << "PASS seeded differential graph ownership and ABA stress\\n";
+}
+
 static void graph_accounting_model_stress() {
     using Heap = ActorOwnedGraphHeap<6, 8, 3>;
     using Handle = Heap::Handle;
@@ -694,6 +813,12 @@ int main() {
     heap_identity_unique_across_graph_specializations();
     concurrent_graph_read_write_links_are_exclusive();
     concurrent_retirement_drops_once();
+    // Preserve the independently seeded payload and stale-slot model merged
+    // from main as well as the PR's larger lifetime/accounting model.
+    for (std::uint32_t seed : {0x51ABCAFEu, 0xA19C7813u,
+                               0xC0DEC0DEu, 0xDEADBEEFu}) {
+        model_check_graph_reuse_and_stale_handles(seed);
+    }
     graph_accounting_model_stress();
     standalone_borrow_gate_destruction_fail_closed();
     atomic_mutation_vs_loan_races();
