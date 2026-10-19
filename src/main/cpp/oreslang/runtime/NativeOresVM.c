@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeOresVM.h"
+#include "oreslang/runtime/NativeCpuBudget.h"
 #include <pthread.h>
 #include <stdlib.h>
 
@@ -67,6 +68,24 @@ failed:
         free(vm->supervisors[i]);
     free(vm);
     return NULL;
+}
+
+size_t ores_native_vm_effective_cpu_budget(void) {
+    return ores_native_cpu_effective();
+}
+
+OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config) {
+    if (!config) return NULL;
+    OresNativeVMConfig copy = *config;
+    size_t requested[ORES_NATIVE_VM_DOMAIN_COUNT] = {0};
+    size_t allocated[ORES_NATIVE_VM_DOMAIN_COUNT] = {0};
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        requested[i] = copy.domains[i].carrier_workers;
+    ores_native_cpu_distribute(
+        ores_native_cpu_effective(), requested, allocated);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        copy.domains[i].carrier_workers = allocated[i];
+    return ores_native_vm_open(&copy);
 }
 
 size_t ores_native_vm_started_carriers(
