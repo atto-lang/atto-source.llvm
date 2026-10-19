@@ -1,0 +1,31 @@
+name: Experimental Oreslang XDP IR and BPF ELF
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  experimental-bpf-object:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install LLVM and Clang with BPF target
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Require real BPF target support
+        run: |
+          set -euo pipefail
+          clang -print-targets | grep -Eq "^ *bpf"
+      - name: Configure and compile exact source tree
+        run: |
+          cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2
+      - name: Validate source admission, profile fallback and BPF ELF
+        run: |
+          ctest --test-dir build -R "^(experimental_ebpf_xdp_|deployment_profile_)" --output-on-failure
+      - name: Scope warning
+        run: |
+          echo "EXPERIMENTAL ONLY: EM_BPF ELF output is not evidence of kernel verifier acceptance."
+          echo "No privileged program load, kernel attachment, or packet tests performed."
