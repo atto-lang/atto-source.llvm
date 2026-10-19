@@ -194,7 +194,13 @@ public:
         }
     };
 
-    SharedDomainArena() : identity_(allocate_identity()) {}
+    SharedDomainArena() : identity_(allocate_identity()) {
+        // C++17 does not promise useful initial values for every default-
+        // constructed atomic specialization. Initialize each member counter
+        // explicitly before permitting any concurrent admission.
+        for (auto& count : member_pins_)
+            count.store(0, std::memory_order_relaxed);
+    }
     Control take_control() {
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
