@@ -86,6 +86,16 @@ class InvertedColumns {
         (std::get<I>(s.columns).push_back(std::get<I>(values)), ...);
     }
     template<std::size_t... I>
+    static std::tuple<Fields...> snapshot_columns(const State& s, std::size_t row,
+                                                  std::index_sequence<I...>) {
+        return std::tuple<Fields...>{std::get<I>(s.columns)[row]...};
+    }
+    template<std::size_t... I>
+    static void update_columns(State& s, std::size_t row,
+                               const std::tuple<Fields...>& values, std::index_sequence<I...>) {
+        ((std::get<I>(s.columns)[row] = std::get<I>(values)), ...);
+    }
+    template<std::size_t... I>
     static void erase_columns(State& s, std::size_t row, std::size_t last,
                               std::index_sequence<I...>) {
         ((std::get<I>(s.columns)[row] = std::get<I>(s.columns)[last],
@@ -158,6 +168,17 @@ public:
         ensure_open(*state_);
         return state_->row_slots.size();
     }
+    // Explicit growth avoids reallocations inside future append batches.
+    // Reserving any field is structural and excludes every outstanding loan.
+    void reserve(std::size_t capacity) {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        State& s = *state_;
+        ensure_open(s);
+        if (any_loans(s)) throw std::logic_error("cannot reserve borrowed inverted columns");
+        s.row_slots.reserve(capacity);
+        s.slots.reserve(capacity);
+        reserve_columns(s, capacity, std::index_sequence_for<Fields...>{});
+    }
     Handle push(Fields... fields) {
         std::lock_guard<std::mutex> lock(state_->mutex);
         State& s = *state_;
@@ -205,6 +226,24 @@ public:
             ++slot.generation;
             s.free_slots.push_back(h.slot);
         }
+    }
+    // A complete row snapshot observes a single checked storage state.
+    // An outstanding mutable field loan prevents snapshotting the row.
+    std::tuple<Fields...> get_row(Handle h) const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = resolve(*state_, h);
+        for (bool writer : state_->writers)
+            if (writer) throw std::logic_error("row has a mutably borrowed column");
+        return snapshot_columns(*state_, row, std::index_sequence_for<Fields...>{});
+    }
+    // Single-lock update of all columns: no reader observes partially updated
+    // rows. A complete update requires exclusivity over all columns.
+    void set_row(Handle h, Fields... fields) {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        const auto row = resolve(*state_, h);
+        if (any_loans(*state_)) throw std::logic_error("row update conflicts with active column loan");
+        update_columns(*state_, row, std::tuple<Fields...>(fields...),
+                       std::index_sequence_for<Fields...>{});
     }
     template<std::size_t I>
     auto get(Handle h) const -> std::tuple_element_t<I, std::tuple<Fields...>> {
