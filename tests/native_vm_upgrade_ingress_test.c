@@ -72,6 +72,8 @@ int main(void) {
     State state = {0};
     atomic_store(&state.hold, 1);
     atomic_store(&state.version, 1);
+    atomic_store(&state.attempted_own, -1);
+    atomic_store(&state.attempted_cross, -1);
     OresNativeVMConfig cfg = {0};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         cfg.domains[i].actor_slots = i == ORES_NATIVE_VM_MAIN ? 2 : 1;
@@ -87,6 +89,14 @@ int main(void) {
     OresNativeActorRef a = ores_native_vm_spawn(vm, main_domain, 0);
     OresNativeActorRef other = ores_native_vm_spawn(vm, main_domain, 1);
     check(a.scheduler_domain && other.scheduler_domain);
+    state.vm = vm;
+    state.primary = a;
+    OresNativeActorRef untrusted = ores_native_vm_spawn(
+        vm, ORES_NATIVE_VM_UNTRUSTED, 0);
+    check(untrusted.scheduler_domain != 0);
+    check(ores_native_vm_try_send(vm, ORES_NATIVE_VM_UNTRUSTED, untrusted, 123)
+          == ORES_NATIVE_SEND_ACCEPTED);
+    until(&state.attempted_cross, 0);
     check(ores_native_vm_upgrade_epoch(vm, main_domain, a) == 1);
     check(ores_native_vm_try_send(vm, main_domain, a, 0)
           == ORES_NATIVE_SEND_ACCEPTED);
