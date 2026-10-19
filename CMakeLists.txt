@@ -42,6 +42,53 @@ if(BUILD_TESTING)
     set_tests_properties(native_enum_case_overload_static_policy
         PROPERTIES TIMEOUT 10)
 
+    # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
+    # is freestanding and nonparking; pthreads are used only in this test.
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-core-sync-test tests/native_core_sync_test.c)
+    set_target_properties(oreslang-native-core-sync-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-core-sync-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-core-sync-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-core-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    # Keep assert() live in Release/NDEBUG: these are security admission checks.
+    target_compile_options(oreslang-native-core-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-UNDEBUG>)
+    add_test(NAME native_core_atomic_mutex_rw_admission
+        COMMAND oreslang-native-core-sync-test)
+    set_tests_properties(native_core_atomic_mutex_rw_admission
+        PROPERTIES TIMEOUT 45)
+    # Oreslang stdlib scheduler adapter: bounded nonparking logical tickets,
+    # FIFO mutex, reader cohorts, physical-quiescence fences and cancellation.
+    add_executable(oreslang-native-std-sync-test tests/native_std_sync_admission_test.c)
+    set_target_properties(oreslang-native-std-sync-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-std-sync-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-std-sync-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-std-sync-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_stdlib_mutex_rw_queue_and_quiescence
+        COMMAND oreslang-native-std-sync-test)
+    set_tests_properties(native_stdlib_mutex_rw_queue_and_quiescence
+        PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-actor-state-rw-test
+        tests/native_actor_state_rw_admission_test.c)
+    set_target_properties(oreslang-native-actor-state-rw-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-actor-state-rw-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-state-rw-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-state-rw-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_state_rw_critical_using_admission
+        COMMAND oreslang-native-actor-state-rw-test)
+    set_tests_properties(native_actor_state_rw_critical_using_admission
+        PROPERTIES TIMEOUT 60)
+
     # Native host-only CoreLog diagnostics. This test does not require guest
     # source/OTel modules or grant the compiled program a logging capability.
     find_package(Threads REQUIRED)
@@ -170,6 +217,19 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
+    # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
+    # Four portable cases have lossless exit status; DO NOT claim seven.
+    find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
+    if(NOT ORE_SOURCE_I64_CLANG)
+        message(WARNING "Portable native i64 execution gate will fail: Clang not found")
+        set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
+    endif()
+    add_test(NAME native_source_i64_os_exit_subset
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
@@ -1772,6 +1832,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_send_stop_linearizable_race
         COMMAND oreslang-native-send-stop-race-test)
     set_tests_properties(native_actor_send_stop_linearizable_race PROPERTIES TIMEOUT 30)
+
+    # Integration of the *actual native C scheduler* with the actor-owned C++
+    # graph heap under two distinct actor lanes. No source-language actor
+    # lowering or guest-state-loan enforcement is claimed by this host test.
+    add_executable(oreslang-native-actor-graph-scheduler-bridge-test
+        tests/native_actor_scheduler_graph_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-actor-graph-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_scheduler_graph_heap_host_integration
+        COMMAND oreslang-native-actor-graph-scheduler-bridge-test)
+    set_tests_properties(native_actor_scheduler_graph_heap_host_integration
+        PROPERTIES TIMEOUT 30)
 
     # ActorRef scheduler domains are capabilities: exhaustion must not wrap
     # and concurrent opens near UINT64_MAX must never issue duplicates.
