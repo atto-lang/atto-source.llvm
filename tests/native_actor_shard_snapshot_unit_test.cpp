@@ -12,6 +12,15 @@
 struct OresNativeActorScheduler { int marker; };
 static thread_local OresNativeActorScheduler* current_scheduler = nullptr;
 static thread_local OresNativeActorRef current_actor = {};
+static bool mock_actor_done = false;
+
+extern "C" int ores_native_actor_scheduler_wait_done(
+        OresNativeActorScheduler* scheduler, OresNativeActorRef owner) {
+    return mock_actor_done && scheduler == current_scheduler
+        && owner.scheduler_domain == current_actor.scheduler_domain
+        && owner.actor_slot == current_actor.actor_slot
+        && owner.generation == current_actor.generation;
+}
 
 extern "C" int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* scheduler, OresNativeActorRef actor) {
@@ -85,6 +94,25 @@ int main() {
                 assert(exhausted);
             }
             assert(small.used_bytes() == 0);
+            auto outstanding = shard.snapshot_column_leased(1);
+            assert(!oreslang::runtime::retire_actor_shard_budget_after_done(
+                    &scheduler, owner, actor));
+            assert(!actor.retired());
+            mock_actor_done = true;
+            assert(oreslang::runtime::retire_actor_shard_budget_after_done(
+                    &scheduler, owner, actor));
+            assert(actor.retired());
+            assert(!actor.try_reserve(8));
+            bool retired_read = false;
+            try { (void)outstanding->read(0); }
+            catch (const std::logic_error&) { retired_read = true; }
+            assert(retired_read);
+            bool retired_shard = false;
+            try { (void)shard.read(64, 1); }
+            catch (const std::logic_error&) { retired_shard = true; }
+            assert(retired_shard);
+            outstanding.reset(); // refunds even after actor stop
+            mock_actor_done = false;
         }
         assert(actor.used_bytes() == 0 && vm.used_bytes() == 0);
     }
