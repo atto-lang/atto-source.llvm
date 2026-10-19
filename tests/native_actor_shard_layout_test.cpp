@@ -64,6 +64,22 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             }
             assert(insufficient_budget);
             assert(tiny.used_bytes() == 0);
+            ActorShardBudget tiny_vm{64};
+            bool insufficient_vm_budget = false;
+            try {
+                ActorShardColumns excess(state.scheduler, state.owner,
+                    state.actor_budget, tiny_vm, state.layout, 65, 3,
+                    state.layout == Layout::AoSoA ? 8 : 1);
+            } catch (const std::length_error&) {
+                insufficient_vm_budget = true;
+            }
+            assert(insufficient_vm_budget);
+            assert(tiny_vm.used_bytes() == 0);
+            assert(state.actor_budget.used_bytes() ==
+                   state.region->rows() * state.region->fields() *
+                   sizeof(double) +
+                   (state.layout == Layout::AoSoA ? 7 * state.region->fields() *
+                   sizeof(double) : 0));
             assert(state.actor_budget.used_bytes() > 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
