@@ -1,0 +1,2 @@
+// Bare symbols are lexed, but native tagged Symbol lowering is not yet admitted.
+pub fnc main(): int { return #auto; }
