@@ -568,6 +568,8 @@ void preflight_native_ast_shape(const Program& program) {
                 if (stmt.branch_local || stmt.expression || stmt.array_commit_length ||
                         !stmt.array_commit_values.empty())
                     fail("conditional contains fields incompatible with its kind", stmt.offset);
+                if (stmt.then_statements.size() > 16 || stmt.else_statements.size() > 16)
+                    fail("conditional arm count exceeds parser bound", stmt.offset);
                 break;
             case S::ScopedLocal:
                 if (!stmt.branch_local)
@@ -585,6 +587,8 @@ void preflight_native_ast_shape(const Program& program) {
                         stmt.condition_lhs || stmt.condition_rhs ||
                         !stmt.then_statements.empty() || !stmt.else_statements.empty())
                     fail("array commit contains fields incompatible with its kind", stmt.offset);
+                if (stmt.array_commit_values.size() != 4)
+                    fail("array commit fill count must equal four", stmt.offset);
                 break;
             default:
                 fail("unknown statement kind", stmt.offset);
@@ -618,6 +622,14 @@ void preflight_native_ast_shape(const Program& program) {
             statement(nested, depth + 1);
     };
     const auto function = [&](const Function& fn, bool actor_handler) {
+        if (fn.early_returns.size() > 8)
+            fail("guarded return count exceeds parser bound", fn.offset);
+        const auto conditional_count = static_cast<std::size_t>(std::count_if(
+            fn.statements.begin(), fn.statements.end(), [](const Statement& stmt) {
+                return stmt.kind == Statement::Kind::Conditional;
+            }));
+        if (conditional_count > 8)
+            fail("conditional CFG count exceeds parser bound", fn.offset);
         // Parser-produced functions always have a terminal value exactly when
         // their declared result is non-void. Direct AST callers must not let
         // LLVM receive a null return operand or smuggle an ignored value/effect
@@ -644,6 +656,8 @@ void preflight_native_ast_shape(const Program& program) {
                 fail("caught throw contains incompatible control effects", fn.offset);
             if (fn.caught_throw_defers.size() > 8)
                 fail("caught throw defer count exceeds parser bound", fn.offset);
+            if (fn.statements.size() > 16)
+                fail("caught throw finally statement count exceeds parser bound", fn.offset);
             for (const auto& cleanup : fn.caught_throw_defers)
                 if (cleanup.kind != Statement::Kind::FieldWrite)
                     fail("caught throw scoped defer is not a field write", cleanup.offset);
