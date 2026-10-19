@@ -276,9 +276,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     // A Program may be constructed, cloned or transformed without going
     // through parse_program(). Never trust caller-controlled "verified" AST
-    // state: perform the full semantic ownership check at the irreversible
-    // LLVM emission boundary as well. The checker runs before any output IR.
-    validate_i64_ownership(source);
+    // state: perform semantic ownership validation before emitting any IR.
+    // The specialized scalar path first validates its structural shape so
+    // malformed directly created ASTs fail before ownership walk dereferences
+    // a potentially absent initializer.
     // This is an independent emission-time guard, not an assertion that a
     // caller happened to invoke parse_program()/validate_i64_ownership().
     // No scalar frame may be emitted if its scheduling boundary was not
@@ -337,8 +338,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 !fn.caught_throw_defers.empty() || fn.has_declared_effects)
             throw std::runtime_error(
                 "experimental scalar frame AST contains unlowered owners or effects");
+        validate_i64_ownership(source);
         return emit_scalar_while_frame_llvm_ir(loop);
     }
+    validate_i64_ownership(source);
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
     // Its state lives in private Wasm globals owned by exactly one Worker.
