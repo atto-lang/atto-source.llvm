@@ -59,7 +59,9 @@ def main():
     must_reject(lambda b: b.__setitem__(0x80, 0x00))               # no BPF_EXIT
     must_reject(lambda b: struct.pack_into("<I", b, 448, 11))    # duplicate xdp section
     must_reject(lambda b: struct.pack_into("<Q", b, 448 + 8, 4)) # executable license
-    print("PASS: standalone BPF ELF parser, fourteen hostile-machine/code/section probes")
+    must_reject(lambda b: struct.pack_into("<Q", b, 328, 4))     # hidden executable string section
+    must_reject(lambda b: b.__setitem__(0x90, 0))                # false license bytes
+    print("PASS: standalone BPF ELF parser, sixteen hostile-machine/code/section probes")
 
 
 if __name__ == "__main__":
