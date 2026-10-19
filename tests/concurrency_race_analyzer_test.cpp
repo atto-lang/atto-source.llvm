@@ -57,5 +57,17 @@ int main() {
     model.write("b", "counter");
     assert(model.findings().empty());
   }
+  {
+    ConcurrencyRaceAnalyzer model;
+    model.write("a", "counter");
+    model.write("b", "counter");
+    model.send("b", "b-to-c");
+    model.receive("c", "b-to-c");
+    model.read("c", "counter");
+    assert(model.conflict_count() == 2);
+    const auto races = model.findings();
+    assert(races[1].prior_participant == "a");
+    assert(races[1].current_participant == "c");
+  }
   return 0;
 }
