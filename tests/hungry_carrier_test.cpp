@@ -307,6 +307,45 @@ static void test_pending_io_stop_runs_frame_cancel_before_retirement() {
     }
 }
 
+// STOP can race the moment a handler returns AWAIT_IO. A pending terminal
+// must be canceled exactly once even if it was published after the first
+// stop check; physical cohort retirement remains impossible without this.
+static void test_stop_versus_await_registration_never_leaves_pending_terminal() {
+    constexpr int iterations = 128;
+    for (int round = 0; round < iterations; ++round) {
+        PendingCancelState state;
+        const ActorHeapIdentity owner{403, 404, static_cast<std::uint64_t>(round + 1)};
+        HungryCarrier::Options options{};
+        options.heap_owner = owner;
+        options.cancel_handler = pending_cancel_cleanup;
+        HungryCarrier actor(&state, pending_cancel_handler, &state,
+                            pending_cancel_io, options);
+        actor.start();
+        check(actor.producer_handle().try_send({1, 0}),
+              "await-registration fixture could not send message");
+        check(until([&] { return state.initials.load(std::memory_order_acquire) != 0; },
+                    1s), "await-registration handler did not enter");
+        // Alternate immediate stop and one scheduler handoff. The broker
+        // only returns on cancellation and cannot legitimately complete.
+        if ((round & 1) != 0) std::this_thread::yield();
+        actor.request_stop();
+        actor.join();
+        const auto stats = actor.stats();
+        check(state.callbacks.load() == 1 && stats.cancel_callbacks == 1,
+              "await-registration race skipped or doubled frame cleanup");
+        check(state.violations.load() == 0 && state.resumes.load() == 0,
+              "canceled await resumed guest code or lost heap authority");
+        check(stats.completed == 0 && stats.abandoned_on_stop == 1 &&
+              stats.protocol_failures == 0,
+              "await-registration race corrupted terminal turn accounting");
+        check(stats.canceled_inflight <= 1 && stats.cancel_callback_failures == 0,
+              "await-registration stop canceled twice or rejected cleanup");
+        const auto proof = actor.retirement_proof();
+        check(proof.has_value() && proof->owner() == owner,
+              "await-registration stop left uncanceled terminal or missed cleanup");
+    }
+}
+
 struct DoneRaceState {
     std::atomic<bool> entered{false};
     std::atomic<bool> release{false};
@@ -1055,6 +1094,7 @@ int main() {
         test_fixed_arena_bounds_and_alignment();
         test_cancel_hook_runs_once_on_actor_thread();
         test_pending_io_stop_runs_frame_cancel_before_retirement();
+        test_stop_versus_await_registration_never_leaves_pending_terminal();
         test_stop_racing_done_does_not_cancel_completed_turn();
         test_protocol_failure_still_cancels_active_owned_frame();
         test_actor_heap_bound_to_carrier_across_await();
