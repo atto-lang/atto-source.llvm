@@ -258,6 +258,15 @@ int main(int argc, char** argv) {
         require(rejects([&] { (void)gate.freeze(id, 1); }),
                 "stale supervisor revision admitted");
 
+        require(ores_native_actor_scheduler_stop(scheduler, actor),
+                "native source actor stop refused");
+        require(ores_native_actor_scheduler_wait_done(scheduler, actor),
+                "actor callback did not complete before image retirement");
+        ores_native_actor_scheduler_retire(scheduler);
+        require(ores_native_actor_scheduler_drain(scheduler),
+                "native mailbox had outstanding DATA or CONTROL");
+        require(ores_native_actor_scheduler_try_destroy(scheduler),
+                "native scheduler did not reclaim worker pool");
         // Persistent actor heap is retired independently from code pages.
         gate.close();
         require(second_unloaded == 1,
