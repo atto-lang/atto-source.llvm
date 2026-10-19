@@ -76,6 +76,36 @@ static Program bounded_scalar_frame() {
     p.functions.push_back(std::move(f));
     return p;
 }
+static Program actor_bootstrap_program() {
+    Program p;
+    ActorDecl actor;
+    actor.name = "Worker";
+    LocalBinding state;
+    state.name = "count";
+    state.field_mutable = true;
+    state.initializer = make_expression(Expression::Kind::Integer, {}, 0);
+    actor.fields.push_back(std::move(state));
+    actor.on_message.name = "on_message";
+    Parameter message;
+    message.name = "message";
+    actor.on_message.parameters.push_back(std::move(message));
+    actor.on_message.result = variable("message");
+    p.actors.push_back(std::move(actor));
+
+    Function main;
+    main.name = "main";
+    ActorSpawnBinding spawn;
+    spawn.name = "worker";
+    spawn.actor_type = "Worker";
+    spawn.declared_type.kind = SourceType::Kind::ActorRef;
+    spawn.declared_type.argument = "Worker";
+    main.actor_spawns.push_back(std::move(spawn));
+    main.actor_stops.push_back("worker");
+    main.actor_actions.push_back({ActorAction::Kind::Stop, 0});
+    main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    p.functions.push_back(std::move(main));
+    return p;
+}
 int main() {
     // A direct C++ caller must not bypass parse_program's ownership check.
     auto invalid = main_with_use_after_take();
@@ -282,6 +312,74 @@ int main() {
     hidden_leaf_metadata.functions.push_back(std::move(metadata_fn));
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_leaf_metadata); },
                      "malformed native ownership AST: non-call expression contains unlowered call metadata");
+
+    // Direct-AST actor bootstraps must rebuild the parser's capability and
+    // symbol tables before LLVM indexes generated actor maps.
+    auto actor_program = actor_bootstrap_program();
+    const auto actor_ir = emit_verified_llvm_ir(actor_program);
+    check(actor_ir.find("oreslang_source_actor_spawn") != std::string::npos,
+          "valid direct-AST actor bootstrap was rejected");
+
+    auto unknown_actor_type = actor_bootstrap_program();
+    unknown_actor_type.functions.front().actor_spawns.front().actor_type = "Ghost";
+    unknown_actor_type.functions.front().actor_spawns.front().declared_type.argument = "Ghost";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unknown_actor_type); },
+                     "unknown actor type 'Ghost'");
+
+    auto mismatched_actor_type = actor_bootstrap_program();
+    mismatched_actor_type.functions.front().actor_spawns.front().declared_type.argument = "Other";
+    expect_rejection([&] { (void)emit_verified_llvm_ir(mismatched_actor_type); },
+                     "actor spawn declaration/type mismatch");
+
+    auto unstopped_actor = actor_bootstrap_program();
+    unstopped_actor.functions.front().actor_stops.clear();
+    unstopped_actor.functions.front().actor_actions.clear();
+    expect_rejection([&] { (void)emit_verified_llvm_ir(unstopped_actor); },
+                     "actor reference must be stopped before return");
+
+    auto send_after_stop = actor_bootstrap_program();
+    ActorSend late_send;
+    late_send.reference = "worker";
+    late_send.payload = make_expression(Expression::Kind::Integer, {}, 1);
+    send_after_stop.functions.front().actor_sends.push_back(std::move(late_send));
+    send_after_stop.functions.front().actor_actions.push_back(
+        {ActorAction::Kind::Send, 0});
+    expect_rejection([&] { (void)emit_verified_llvm_ir(send_after_stop); },
+                     "actor message sent after stop 'worker'");
+
+    auto missing_actor_parameter = actor_bootstrap_program();
+    missing_actor_parameter.actors.front().on_message.parameters.clear();
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_actor_parameter); },
+                     "malformed direct-AST actor handler");
+
+    auto hidden_actor_storage = actor_bootstrap_program();
+    hidden_actor_storage.actors.front().fields.front().initializer.reset();
+    hidden_actor_storage.actors.front().fields.front().int_array = true;
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_actor_storage); },
+                     "native actor state requires scalar initialized fields");
+
+    Program duplicate_class_fields;
+    ClassDecl duplicate_class;
+    duplicate_class.name = "Pair";
+    duplicate_class.fields.push_back(ClassField{"x"});
+    duplicate_class.fields.push_back(ClassField{"x"});
+    duplicate_class_fields.classes.push_back(std::move(duplicate_class));
+    Function class_main;
+    class_main.name = "main";
+    class_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    duplicate_class_fields.functions.push_back(std::move(class_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_class_fields); },
+                     "duplicate class field 'x'");
+
+    Program duplicate_locals;
+    Function duplicate_local_main;
+    duplicate_local_main.name = "main";
+    duplicate_local_main.locals.push_back(scalar_local("x", 1));
+    duplicate_local_main.locals.push_back(scalar_local("x", 2));
+    duplicate_local_main.result = variable("x");
+    duplicate_locals.functions.push_back(std::move(duplicate_local_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_locals); },
+                     "duplicate owned local 'x'");
 
     // Keep a positive ordinary source program and specialized scalar frame.
     auto simple = parse_program(
