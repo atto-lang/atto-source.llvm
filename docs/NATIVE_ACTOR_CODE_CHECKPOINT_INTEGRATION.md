@@ -227,3 +227,39 @@ execution, guest `await` generation pin, scheduler mailbox freeze, user
 `ActorRef` continuity, multi-threaded DATA execution or state-schema
 migration is claimed here. The runtime-owned scheduler linearization
 described above remains mandatory.
+
+## AOT/PIC vertical-slice audit hardening (2026-10-18)
+
+The source-PIC fixture now verifies its two actor field declarations with
+a restrictive, fail-closed, independently parsed TEST layout oracle before
+invoking any compiler or loader. The oracle requires the exact ordered
+`const base: int`, `val delta: int`, `let total: int` fields, and refuses
+field renames, type/mutability drift, extra/reordered fields and unexpected
+handler syntax. Eight source-only selftests are registered both ordinarily
+and with Python `-O`; a malformed source cannot silently use an arbitrary
+hard-coded C++ `Shape` as evidence of compatibility. This is a limited
+fixture check, **not** a general compiler-authenticated ABI manifest, which
+remains required for production under #607.
+
+The native fixture also:
+- Pins the initial code image before executing compiler-generated `init`.
+- Simulates a live suspended code pin, deliberately attempts publication
+  while pinned, and requires rejection/reclamation of the rejected image
+  without unloading the active code.
+- Rejects foreign actor heap identity and post-close code leases.
+- Checks code-only heap continuity and final DSO/heap reclamation.
+
+**Execution status:** Eight independent source-free ABI mutation checks
+were exercised locally using a separately authored synthetic test under
+normal Python and `-O` (8/8 each). The separate source-free actor
+reference model also passed 20/20 locally. The **committed CTest scripts
+and native C++ files have not executed**: source-organization GitHub jobs
+continue to fail before a runner executes steps. Local reference checks
+are not equivalent to exact Git-blob native ABI/compiler evidence.
+
+Do not mirror this private source into an alternate GitHub organization
+just to obtain runner minutes. Platform-conformance #22/#77 and #69
+require independent exact-destination/source export approval; no such
+approval has been verified here. Use a vetted source-org runner or
+approved in-boundary source-local ephemeral machine. Source-free tests
+may run separately on a funded org without any private source transfer.
