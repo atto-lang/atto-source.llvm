@@ -12,8 +12,11 @@ cd "$root"
 if ! command -v "$CXX_CLANG" >/dev/null 2>&1 ||
    ! command -v "$CXX_GCC" >/dev/null 2>&1 ||
    ! command -v "$CLANG" >/dev/null 2>&1 ||
-   ! command -v "$PYTHON" >/dev/null 2>&1; then
-    echo "ERROR: Clang, GCC and Python 3 required for exact-source enum AOT qualification" >&2
+   ! command -v "$PYTHON" >/dev/null 2>&1 ||
+   ! command -v cmake >/dev/null 2>&1 ||
+   ! command -v ctest >/dev/null 2>&1 ||
+   ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: Git, CMake, CTest, Clang, GCC and Python 3 are required for exact-source enum AOT qualification" >&2
     exit 2
 fi
 tmp="$(mktemp -d)"
@@ -64,11 +67,46 @@ UBSAN_OPTIONS=halt_on_error=1 "$tmp/enum-aot-asan-ubsan"
 build="$tmp/build"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE="$CMAKE_BUILD_TYPE" \
     -DBUILD_TESTING=ON
-cmake --build "$build" --target oreslang-llvmc oreslang-enum-source-aot-plan-test oreslang-enum-tag-boundary-test \
-    --parallel 2
+# Build every host test whose result we intend to call release evidence.
+cmake --build "$build" --parallel 2 --target \
+    oreslang-llvmc \
+    oreslang-native-enum-case-overload-policy-test \
+    oreslang-enum-tag32-layout-test \
+    oreslang-enum-case-aot-link-test \
+    oreslang-enum-tag-boundary-test \
+    oreslang-enum-source-aot-plan-test
+
+# Prevent vacuous green CI: CTest normally exits successfully when -R
+# matches zero tests. Require the complete bounded enum AOT test inventory.
+ctest --test-dir "$build" --show-only=json-v1 > "$tmp/ctest-inventory.json"
+"$PYTHON" - "$tmp/ctest-inventory.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+required = {
+    "native_enum_case_overload_static_policy",
+    "native_enum_case_exhaustive_relation_python",
+    "native_enum_case_exhaustive_relation_python_O",
+    "native_enum_case_eos2_abi_golden_python",
+    "native_enum_case_eos2_abi_golden_python_O",
+    "native_enum_case_nullary_tag32_schema_python",
+    "native_enum_case_nullary_tag32_schema_python_O",
+    "native_enum_tag32_aot_layout",
+    "native_enum_case_eos2_closed_aot_link",
+    "native_enum_tag_boundary",
+    "native_enum_source_aot_plan_integrity",
+    "native_enum_guest_aot_executable",
+}
+registered = {item["name"] for item in json.loads(Path(sys.argv[1]).read_text())["tests"]}
+missing = sorted(required - registered)
+if missing:
+    sys.exit("ERROR: required exact-source enum AOT CTests absent: " + ", ".join(missing))
+print(f"PASS: all {len(required)} required enum AOT tests registered")
+PY
+
 ctest --test-dir "$build" \
-    -R 'native_enum_(source_aot_plan_integrity|tag_boundary|guest_aot_executable)' \
-    --output-on-failure --timeout 120
+    -R '^native_enum_' --output-on-failure --timeout 120
 
 "$PYTHON" tests/native_enum_guest_aot.py \
     --compiler "$(realpath "$build/oreslang-llvmc")" \
