@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
+#include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
