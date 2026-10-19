@@ -113,6 +113,32 @@ def main():
         sections = elf_sections(raw)
         require({"xdp", "license"}.issubset(sections),
                 "BPF object lacks xdp/license section: " + repr(sections))
+        # A syntactically correct XDP/ELF could still be an optimized
+        # constant-return stub, silently ignoring guest packet policy.
+        # Inspect the real BPF instruction bytes rather than only LLVM IR.
+        start, length, _, _ = sections["xdp"]
+        instructions = [raw[start + k:start + k + 8] for k in range(0, length, 8)]
+        # LDX W (0x61) at ctx+0 and ctx+4, or an LLVM-combined
+        # LDX DW (0x79) at ctx+0. A successful Clang codegen must preserve
+        # both XDP context inputs to the checked nonempty predicate.
+        word_offsets = {struct.unpack_from("<h", insn, 2)[0]
+                        for insn in instructions if insn[0] == 0x61}
+        double_offsets = {struct.unpack_from("<h", insn, 2)[0]
+                          for insn in instructions if insn[0] == 0x79}
+        require({0, 4}.issubset(word_offsets) or 0 in double_offsets,
+                "XDP object does not load both ctx.data and ctx.data_end")
+        # At least one conditional jump is required to distinguish the
+        # empty/nonempty packet test, not simply a constant action.
+        conditional_jumps = {
+            0x15, 0x1d, 0x25, 0x2d, 0x35, 0x3d, 0x45, 0x4d,
+            0x55, 0x5d, 0x65, 0x6d, 0x75, 0x7d, 0xa5, 0xad,
+            0xb5, 0xbd, 0xc5, 0xcd, 0xd5, 0xdd,
+            0x16, 0x1e, 0x26, 0x2e, 0x36, 0x3e, 0x46, 0x4e,
+            0x56, 0x5e, 0x66, 0x6e, 0x76, 0x7e, 0xa6, 0xae,
+            0xb6, 0xbe, 0xc6, 0xce, 0xd6, 0xde,
+        }
+        require(any(insn[0] in conditional_jumps for insn in instructions),
+                "XDP policy compiled to a constant/unconditional action")
         # Prove the ELF parser itself rejects forged host objects and helper
         # calls; otherwise a broken test could give false-green confidence.
         for offset, replacement in [(18, bytes((0x3e, 0))), (16, bytes((2, 0)))]:
