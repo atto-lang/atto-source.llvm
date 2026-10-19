@@ -6,6 +6,7 @@
 #include "oreslang/runtime/NativeEpollReactorManager.hpp"
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -120,6 +121,8 @@ public:
 
     // No synthetic terminal: first pop the actual kernel-reactor record,
     // then publish/consume it in the authority under the broker gate.
+    // An incomplete ledger transition retains one exact pending terminal
+    // instead of silently losing a consumed manager completion.
     std::optional<Completion> try_pop() noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || poisoned_) return std::nullopt;
@@ -129,24 +132,39 @@ public:
                         NativeFdAuthority::Phase::revoking_watch)
                 (void)manager_.try_cancel(*e.watch);
         }
-        auto completed = manager_.try_pop();
-        if (!completed) return std::nullopt;
-        for (auto& e : entries_) {
-            if (!e.active || !e.watch ||
-                    e.watch->reactor != completed->reactor ||
-                    e.watch->ticket.value != completed->event.ticket.value)
-                continue;
-            if (!authority_.publish_terminal(e.capability, e.owner) ||
-                    !authority_.consume_terminal(e.capability, e.owner)) {
-                poisoned_ = true;
+        // A real epoll terminal is removed from the manager once popped.
+        // Preserve it until BOTH ledger transitions succeed; a nonparking
+        // try_lock denial is not permission to drop terminal evidence.
+        if (!pending_) {
+            auto completed = manager_.try_pop();
+            if (!completed) return std::nullopt;
+            for (std::size_t i = 0; i < capacity; ++i) {
+                const auto& e = entries_[i];
+                if (e.active && e.watch &&
+                        e.watch->reactor == completed->reactor &&
+                        e.watch->ticket.value == completed->event.ticket.value) {
+                    pending_ = Pending{i, *completed, false};
+                    break;
+                }
+            }
+            if (!pending_) {
+                poisoned_ = true; // Unknown terminal never crosses owners.
                 return std::nullopt;
             }
-            e.watch.reset();
-            return Completion{e.token, completed->event.outcome,
-                              completed->event.events};
         }
-        poisoned_ = true; // Unknown terminal must never cross ownership.
-        return std::nullopt;
+        auto& e = entries_[pending_->slot];
+        if (!pending_->published) {
+            if (!authority_.publish_terminal(e.capability, e.owner))
+                return std::nullopt; // Retain the one pending event.
+            pending_->published = true;
+        }
+        if (!authority_.consume_terminal(e.capability, e.owner))
+            return std::nullopt; // Retry without publishing twice.
+        const Completion verified{e.token, pending_->event.event.outcome,
+                                  pending_->event.event.events};
+        e.watch.reset();
+        pending_.reset();
+        return verified;
     }
 
     // Physical close succeeds only after the manager retires the epoll claim.
@@ -186,6 +204,11 @@ private:
         NativeEpollReactorManager::OwnedEventFd owned{};
         std::optional<NativeEpollReactorManager::Watch> watch{};
     };
+    struct Pending {
+        std::size_t slot;
+        NativeEpollReactorManager::Completion event;
+        bool published;
+    };
     Entry* lookup(Token token, std::uint64_t trusted_owner) noexcept {
         if (token.broker_ != instance_ || !token.generation_ ||
                 token.slot_ >= capacity) return nullptr;
@@ -207,6 +230,7 @@ private:
     const std::uint64_t instance_;
     std::uint64_t next_generation_ = 1;
     std::array<Entry, capacity> entries_{};
+    std::optional<Pending> pending_{};
     mutable std::mutex mu_{};
     bool poisoned_ = false;
 };
