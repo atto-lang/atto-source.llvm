@@ -401,23 +401,27 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(const Program& program) {
-    // The real compiled cooperative scalar frame must cross the same reusable
-    // suspension boundary as future await/select/readch lowering. Its sole
-    // frame-owned scalar remains owned, but no lexical/shared/exclusive loan
-    // may survive the physical carrier handoff. The narrow grammar currently
-    // cannot create such a loan; keeping Suspend in this source-to-MIR path
-    // prevents later grammar expansion from silently bypassing the invariant.
-    for (const auto& loop : program.cooperative_loops) {
-        ownership::Graph suspension;
-        suspension.entry = {{loop.variable,
-            {ownership::kOwned, 0, false}}};
-        suspension.blocks = {{{
-            {ownership::Operation::Kind::Read, loop.variable},
+    // Both admitted native scalar continuation forms must visit the SAME
+    // reusable MIR suspension boundary. One is a cooperative 'suspend fnc'
+    // declaration, the other a fuel-bounded --experimental-rt-scalar-loop
+    // function that lowers into a pinned frame via ScalarLoopLowering.
+    // Today each grammar holds only one owned i64 and no lexical loans.
+    // Future expansion must not bypass this full-place suspend fence.
+    const auto verify_scalar_suspension = [](const std::string& variable) {
+        ownership::Graph graph;
+        graph.entry = {{variable, {ownership::kOwned, 0, false}}};
+        graph.blocks = {{{
+            {ownership::Operation::Kind::Read, variable},
             {ownership::Operation::Kind::Suspend, ""},
-            {ownership::Operation::Kind::Read, loop.variable}
+            {ownership::Operation::Kind::Read, variable}
         }, {}}};
-        ownership::verify(suspension);
-    }
+        ownership::verify(graph);
+    };
+    for (const auto& loop : program.cooperative_loops)
+        verify_scalar_suspension(loop.variable);
+    for (const auto& function : program.functions)
+        if (function.scalar_while)
+            verify_scalar_suspension(function.scalar_while->counter);
 
     Functions functions;
     for (const auto& function : program.functions)
