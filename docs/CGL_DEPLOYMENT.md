@@ -40,3 +40,38 @@ Blocking implementation references: LLVM issues #15 (privileged OS admission), #
 ## Native C++ host admission gate
 
 A native, read-only C++ host probe is now exposed at src/main/cpp/oreslang/runtime/CglHostAdmission.hpp. It inspects the caller's effective CPU mask, monotonic-clock availability, scheduler policy and PREEMPT_RT sysfs state. The CTest native_cgl_linux_host_admission exercises both live probing and negative policy/flag parsing cases. It **does not** request scheduler privileges, change CPU pinning, or get called by compiled Oreslang actors yet.
+
+## Audit and security gates (October 2026)
+
+The hardened host preflight now requires a regular executable ELF64 little-endian
+image, supported OS ABI, bounded and in-file program headers, at least one
+PT_LOAD segment, host-matching e_machine and an existing PT_INTERP loader for
+dynamic PIE. Symlinked files are rejected. This deliberately excludes
+ET_DYN without PT_INTERP (including possible static PIE builds) from the
+first pilot; extend only with dedicated source/ABI tests. No ELF-only check
+proves that glibc versions, shared libraries or runtime syscalls are compatible.
+
+PREEMPT_RT sysfs values are tri-state: only exact 1/0 count as known values;
+missing or malformed values are unknown. A required RT proof fails closed.
+That setting is not proof of deadline latency, privileged scheduling
+admission, CPU exclusivity, or carrier-grade certification.
+
+The negative test matrix covers foreign ELF architecture, malformed headers,
+program-header bounds, missing load segments and loader, wrong permissions,
+symlinked executables, 128 reproducible malformed payloads, missing binaries
+and unknown PREEMPT_RT state. The LLVM native C++ admission test also avoids
+assert-dependent side effects, allowing it to fail even with NDEBUG enabled.
+
+Private source must not be mirrored just because another organization has
+available Actions minutes. The protected source Java allowlist
+.github/private-ci-approved-repositories.txt is currently empty, and Java
+security issue #962 prohibits exporting source until independent security
+approval and complete provenance checks are in force. The suggested
+sagitta-stack/sagitta-infra destination is awaiting approval in Java draft
+PR #1326. No private-source Git blobs, trees, or branches were published to
+another repository by this CGL audit.
+
+Local validation is limited to the self-contained preflight/host probe.
+Actual compiler execution on the exact PR Git tree, a real MontaVista/CGL
+image, PREEMPT_RT deadlines, and >24h telecom fault-soak remain UNVERIFIED
+until the named jobs record executed test steps on approved runners.
