@@ -14,7 +14,11 @@ namespace oreslang::runtime {
 // A bounded, HOST-ONLY ownership ledger for supervisor-issued logical FD
 // identities. This is not an FD identity oracle, a guest ABI, or a cross-process
 // broker. Only a trusted issuer may bind an identity to an OS descriptor.
-// Every hot-path transition uses try_lock and makes no OS calls/allocations.
+// Standalone ledger transitions use try_lock and make no OS calls.
+// Private broker-only composite transitions acquire this authority gate
+// *before* a trusted, nonreentrant host operation (eventfd/epoll/close), so
+// failure cannot strand a kernel watch or fabricate a cleanup receipt.
+// Those callbacks are host operations, never guest or RT actor callbacks.
 class NativeFdAuthority final {
 public:
     static constexpr std::size_t capacity = 128;

@@ -150,3 +150,37 @@ The broker is still an opt-in trusted C++ host model; it does not implement auth
 ### Strict dirty-eventfd rearm admission
 
 Broker admission now tracks whether any trusted `signal` successfully incremented the underlying eventfd counter. A subsequent `try_watch` is **denied** until the previously delivered terminal has been consumed **and** the authenticated owner successfully drains the counter. The dirty bit is cleared only after the kernel `read(eventfd)` succeeds. A clean CANCELLED terminal with no successful signal may rearm without a spurious drain. Revocation and host shutdown still block rearm. This prevents a stale eventfd counter from producing repeated immediate READY completions and avoids mistaking cancellation for acknowledgment.
+
+## Atomic authority-to-kernel transactions (2026-10-19)
+
+The host FD broker previously performed kernel registration and *then*
+attempted a separate `NativeFdAuthority::begin_watch()` try-lock. A transient
+ledger-contention failure could therefore strand an epoll ticket, globally
+poison the broker and prevent terminal cleanup. Similarly, closing the
+physical eventfd before acquiring a ledger reclamation lock could leave
+an already-closed FD in a logically pending state.
+
+The broker now uses private, friend-limited composite ledger transitions:
+`try_mint_with`, `try_begin_watch_with` and
+`try_confirm_reclaimed_with`. Each acquires the ledger lock *before*
+invoking its trusted physical open/watch/close operation. On denial, the
+physical operation is **not invoked**; a subsequent invocation may retry
+safely. After a successful kernel operation, the authority state is
+committed before the lock is released. Ordinary public ledger-only
+methods remain separate for host-model conformance tests. The composite
+callback must be the trusted manager's narrow synchronous operation,
+never guest code, user callbacks, actor state loans or untrusted plugins.
+
+The extra source-local state-machine regression injects two denied
+watch admissions, two denied reclamation receipts, a real held ledger
+mutex during cleanup, and verifies no phantom epoll registrations,
+incorrect physical close, poisoned healthy broker or stale capability
+reuse. These cases are in the existing native ownership GCC / Clang
+ASan+UBSan / GCC TSan workflow and the native-VM lifecycle sanitizer
+script. They are still **NOT_EXECUTED** until a real source-local runner
+starts and actual build/test steps complete.
+
+No private-source mirror, cross-organization checkout, or CI policy
+authorization was introduced. This remains a trusted-host Linux
+eventfd-specific integration, not guest actor ownership or
+Future-to-await conformance.
