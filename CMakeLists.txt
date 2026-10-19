@@ -1721,6 +1721,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-cpu-budget-test)
     set_tests_properties(native_vm_cgroup_cpu_budgeted_carrier_admission
         PROPERTIES TIMEOUT 30)
+    # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
+    # The actor scheduler certifies owner identity; no source-level lowering.
+    add_executable(oreslang-native-actor-shard-layout-test
+        tests/native_actor_shard_layout_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shard-layout-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-layout-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-layout-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_aos_soa_aosoa_dense_kernel
+        COMMAND oreslang-native-actor-shard-layout-test)
+    set_tests_properties(native_actor_owned_aos_soa_aosoa_dense_kernel
+        PROPERTIES TIMEOUT 30)
+
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
