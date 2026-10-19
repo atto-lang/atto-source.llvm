@@ -1,6 +1,15 @@
 # Oreslang v3 proposal: type optionality versus argument presence
 
-Status: **draft design and pure contract only**. Not currently executable guest syntax.
+Status: **staged Java parser/AST plus pure contract; no executable v3 guest calls**.
+A tooling-only `Parser.parseStagedV3` entry point recognizes this spelling and
+retains independent `Ast.Param.argumentOmittable` and declaration-local
+`Ast.Annotation.namedDefaults` metadata. The normal compiler entry point keeps
+the legacy grammar. `V3DefaultArgValsPolicy.validateDeclaration` checks closed
+literal/default/presence shape only, not nominal Option identity or ownership.
+The v3 selector is a source-free binder preview; existing runtime ABI and
+legacy binder reject v3 presence until complete lowering. LLVM's scalar parser
+rejects v3 syntax with explicit diagnostics. This is NOT Java/GraalVM/LLVM
+executable language parity.
 This is a proposed *revision* of the staged v1/v2 T? parameter contract.
 Do not silently reinterpret an old module's `T? name` declaration.
 The current Java parser uses `T? name` for an omittable Option parameter;
