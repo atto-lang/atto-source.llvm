@@ -2,7 +2,7 @@
 """Standalone hostile-ELF selftest for eBPF object admission (no LLVM needed)."""
 import struct
 
-from experimental_ebpf_xdp_source_object import elf_sections
+from experimental_ebpf_xdp_source_object import elf_sections, verify_packet_dependent_machine_code
 
 
 def fixture():
@@ -41,6 +41,36 @@ def must_reject(mutator):
     raise AssertionError("hostile ELF modification was not denied")
 
 
+def policy_fixture():
+    obj = fixture()
+    # Construct an artificial program, not an actual compiler output:
+    # two LDX-W context loads, a conditional JNE, and EXIT. This only
+    # unit-tests machine-code admission predicates.
+    code = bytearray(32)
+    code[0] = 0x61
+    code[8] = 0x61
+    struct.pack_into("<h", code, 8 + 2, 4)
+    code[16] = 0x55
+    code[24] = 0x95
+    obj[0xa0:0xc0] = code
+    obj[0xd0:0xd4] = b"MIT\\0"
+    struct.pack_into("<Q", obj, 384 + 24, 0xa0)
+    struct.pack_into("<Q", obj, 384 + 32, len(code))
+    struct.pack_into("<Q", obj, 448 + 24, 0xd0)
+    return obj
+
+
+def must_reject_bad_policy(mutator):
+    obj = policy_fixture()
+    mutator(obj)
+    sections = elf_sections(obj)
+    try:
+        verify_packet_dependent_machine_code(obj, sections)
+    except RuntimeError:
+        return
+    raise AssertionError("packet-independent BPF stub passed policy machine checks")
+
+
 def main():
     obj = fixture()
     sections = elf_sections(obj)
@@ -61,7 +91,11 @@ def main():
     must_reject(lambda b: struct.pack_into("<Q", b, 448 + 8, 4)) # executable license
     must_reject(lambda b: struct.pack_into("<Q", b, 328, 4))     # hidden executable string section
     must_reject(lambda b: b.__setitem__(0x90, 0))                # false license bytes
-    print("PASS: standalone BPF ELF parser, sixteen hostile-machine/code/section probes")
+    valid_policy = policy_fixture()
+    verify_packet_dependent_machine_code(valid_policy, elf_sections(valid_policy))
+    must_reject_bad_policy(lambda b: b.__setitem__(0xa0 + 8, 0))  # missing data_end load
+    must_reject_bad_policy(lambda b: b.__setitem__(0xa0 + 16, 0)) # missing branch
+    print("PASS: synthetic ELF parser 16 corruptions and policy machine-code 2 negative probes")
 
 
 if __name__ == "__main__":
