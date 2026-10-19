@@ -24,6 +24,8 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    unsigned upgrade_frozen;
+    uint64_t route_epoch, upgrade_ticket;
     uint64_t generation;
     OresNativeExecutionAuthority authority;
 } ActorLane;
@@ -271,6 +273,7 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
+        || s->actors[i].upgrade_frozen
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted == UINT64_MAX) {
         if (s->rejected != UINT64_MAX) s->rejected++;
@@ -302,6 +305,7 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
+    a->route_epoch = 1;
     a->generation = a->authority.generation;
     OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
     unlock(s);
@@ -319,6 +323,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
+        } else if (lane->upgrade_frozen) {
+            status = ORES_NATIVE_SEND_UPGRADE_FROZEN;
         } else if (lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
         } else if (s->accepted == UINT64_MAX) {
@@ -341,6 +347,77 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         s->rejected++;
     unlock(s);
     return status;
+}
+/* The mailbox lock is the upgrade linearization point. Freezing cannot
+ * overtake an earlier acknowledged send and cannot allow a later send
+ * through until an authorized old-route abort or committed promotion. */
+int ores_native_actor_scheduler_upgrade_freeze(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t expected_route_epoch, uint64_t* ticket_out) {
+    if (!s || !ticket_out || !expected_route_epoch) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        ok = !lane->retired && !lane->upgrade_frozen
+            && lane->route_epoch == expected_route_epoch
+            && lane->upgrade_ticket < UINT64_MAX;
+        if (ok) {
+            ++lane->upgrade_ticket;
+            lane->upgrade_frozen = 1;
+            *ticket_out = lane->upgrade_ticket;
+        }
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_upgrade_quiesced(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t ticket) {
+    if (!s || !ticket) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired;
+    if (ok) {
+        const ActorLane* lane = &s->actors[actor.actor_slot];
+        ok = !lane->retired && lane->upgrade_frozen
+            && lane->upgrade_ticket == ticket
+            && !lane->queued && !lane->active && !lane->has_control;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_upgrade_finish(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t ticket, int committed) {
+    if (!s || !ticket || (committed != 0 && committed != 1)) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired;
+    if (ok) {
+        ActorLane* lane = &s->actors[actor.actor_slot];
+        ok = !lane->retired && lane->upgrade_frozen
+            && lane->upgrade_ticket == ticket;
+        if (ok && committed) {
+            ok = !lane->active && !lane->queued && !lane->has_control
+                && lane->route_epoch < UINT64_MAX;
+        }
+        if (ok) {
+            if (committed) ++lane->route_epoch;
+            lane->upgrade_frozen = 0;
+        }
+    }
+    unlock(s);
+    return ok;
+}
+uint64_t ores_native_actor_scheduler_upgrade_epoch(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t epoch = 0;
+    if (matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired)
+        epoch = s->actors[actor.actor_slot].route_epoch;
+    unlock(s);
+    return epoch;
 }
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {
