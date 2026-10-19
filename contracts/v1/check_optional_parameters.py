@@ -38,6 +38,12 @@ def check_value(item, formal):
         raise ValueError("null is forbidden; use Option")
     if expr == "omit":
         raise ValueError("omit must be a tagged omission item")
+    # Type metadata is supplied by the fixture, not a parser. Still reject
+    # claims that the intrinsic None expression has a non-Option type; never
+    # turn forged "string None" into Some(None).
+    if expr == "None" and not (
+            value_type.startswith("Option<") and value_type.endswith(">")):
+        raise ValueError("None requires a typed Option value")
     if formal.get("optional", False):
         if value_type == expected_option:
             return expr, "explicit_none" if expr == "None" else "provided"
@@ -54,6 +60,10 @@ def check_pack(item, formal):
     if kind not in ("spread", "pack"):
         raise ValueError("rest must use a pack or variadic positional element")
     typ = formal["type"]
+    # An absence keyword is not a sequence, even when a synthetic fixture
+    # dishonestly assigns it a collection type.
+    if item.get("expr") in ("None", "null", "void", "omit", "_"):
+        raise ValueError("rest pack requires a real collection expression")
     accepted = {"List<" + typ + ">", "Array<" + typ + ">", "Slice<" + typ + ">"}
     if item.get("value_type") not in accepted:
         raise ValueError("type mismatch: rest pack expected " + typ)
@@ -90,6 +100,10 @@ def bind(formals, actuals):
             raise ValueError("underscore is a call-item omission, not a value")
         if kind not in ("value", "omit", "spread", "pack"):
             raise ValueError("invalid call argument kind")
+        if kind == "spread" and label is not None:
+            raise ValueError("named spread is not a named rest pack")
+        if kind == "pack" and label is None:
+            raise ValueError("rest pack must be named")
         if label is not None:
             seen_named = True
             if label not in lookup:
