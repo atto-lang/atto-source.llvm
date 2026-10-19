@@ -124,13 +124,16 @@ static int find_ready(OresNativeActorScheduler* s, size_t worker,
 /* Opt-in host deployment hint only. Does not establish exclusive cores,
  * hard realtime, or actor-to-pthread ownership. Empty/non-Linux/large CPU
  * masks fail back to normal OS scheduling; no affinity is required to run. */
-static int try_bind_allowed_cpu(size_t worker) {
+static int try_bind_allowed_cpu(size_t worker, uint64_t domain) {
 #ifdef __linux__
     cpu_set_t allowed;
     if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) return -1;
     int count = CPU_COUNT(&allowed);
     if (count <= 0) return -1;
-    size_t ordinal = worker % (size_t)count;
+    /* Distinct VM scheduling domains should not all pin carrier 0 to
+     * the first eligible CPU. Spread pools by stable scheduler domain, while
+     * keeping the requested CPU within the effective allowed mask. */
+    size_t ordinal = (worker + (size_t)((domain - 1) % (uint64_t)count)) % (size_t)count;
     for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
         if (!CPU_ISSET(cpu, &allowed)) continue;
         if (ordinal-- != 0) continue;
@@ -142,6 +145,7 @@ static int try_bind_allowed_cpu(size_t worker) {
     }
 #else
     (void)worker;
+    (void)domain;
 #endif
     return -1;
 }
@@ -160,8 +164,9 @@ static void* carrier(void* raw) {
     if (worker == s->started_workers) abort();
     carrier_slot_plus_one = worker + 1;
     const int bind_cpu = s->cpu_affinity_opt_in;
+    const uint64_t bind_domain = s->domain;
     unlock(s);
-    carrier_cpu_target = bind_cpu ? try_bind_allowed_cpu(worker) : -1;
+    carrier_cpu_target = bind_cpu ? try_bind_allowed_cpu(worker, bind_domain) : -1;
     unsigned local_burst = 0;
     for (;;) {
         lock(s);
