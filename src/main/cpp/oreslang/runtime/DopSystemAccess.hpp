@@ -62,6 +62,9 @@ private:
 };
 
 inline bool access_conflicts(const SystemFootprint& a, const SystemFootprint& b) noexcept {
+    // Until a separate compiler effect proof is wired in, "no declared
+    // accesses" means unknown side effects, not proven thread-safe purity.
+    if (a.spans().empty() || b.spans().empty()) return true;
     for (const auto& left : a.spans()) {
         for (const auto& right : b.spans()) {
             if (left.mode() == AccessMode::Read && right.mode() == AccessMode::Read) continue;
