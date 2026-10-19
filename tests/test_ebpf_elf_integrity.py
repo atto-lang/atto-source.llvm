@@ -7,8 +7,10 @@ from experimental_ebpf_xdp_source_object import elf_sections
 
 def fixture():
     raw = bytearray(512)
-    raw[:6] = b"\x7fELF\x02\x01"
+    raw[:7] = b"\x7fELF\x02\x01\x01"
     struct.pack_into("<H", raw, 16, 1)  # ET_REL
+    struct.pack_into("<I", raw, 20, 1)  # ELF current version
+    struct.pack_into("<H", raw, 52, 64) # ELF64 header size
     struct.pack_into("<H", raw, 18, 247)  # EM_BPF
     struct.pack_into("<Q", raw, 40, 256)  # section header table offset
     struct.pack_into("<H", raw, 58, 64)  # section header entry size
@@ -45,6 +47,10 @@ def main():
     assert "xdp" in sections and "license" in sections
     must_reject(lambda b: struct.pack_into("<H", b, 18, 62))       # x86_64
     must_reject(lambda b: struct.pack_into("<H", b, 16, 2))        # executable vs ET_REL
+    must_reject(lambda b: b.__setitem__(6, 2))                    # invalid ELF version
+    must_reject(lambda b: struct.pack_into("<I", b, 20, 2))       # bad ELF header version
+    must_reject(lambda b: struct.pack_into("<H", b, 52, 52))      # bad ELF64 header size
+    must_reject(lambda b: struct.pack_into("<H", b, 56, 1))       # extra program headers
     must_reject(lambda b: struct.pack_into("<H", b, 62, 99))       # bad shstrndx
     must_reject(lambda b: struct.pack_into("<Q", b, 40, 0xffff))   # bad table offset
     must_reject(lambda b: struct.pack_into("<Q", b, 384 + 8, 2))  # xdp non-exec
@@ -53,7 +59,7 @@ def main():
     must_reject(lambda b: b.__setitem__(0x80, 0x00))               # no BPF_EXIT
     must_reject(lambda b: struct.pack_into("<I", b, 448, 11))    # duplicate xdp section
     must_reject(lambda b: struct.pack_into("<Q", b, 448 + 8, 4)) # executable license
-    print("PASS: standalone BPF ELF parser, ten hostile-machine/code/section probes")
+    print("PASS: standalone BPF ELF parser, fourteen hostile-machine/code/section probes")
 
 
 if __name__ == "__main__":
