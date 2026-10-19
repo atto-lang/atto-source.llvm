@@ -38,6 +38,28 @@ int main() {
     rejects({{"Bad", PipeRole::readable, "Event", "Result"}, sink}, "only emit");
     rejects({{"Bad", PipeRole::readable, "", ""}, sink}, "only emit");
     rejects({{"Bad", PipeRole::duplex, "", "Result"}, sink}, "input and output");
+    // Distinct physical actor instances may share one nominal Worker type.
+    // Linear source->worker-a->worker-b->sink must route by instance ID.
+    const auto duplicates = check_actor_pipeline({
+        {"Producer", PipeRole::readable, "", "Event", "source-1"},
+        {"Worker", PipeRole::transform, "Event", "Event", "worker-a"},
+        {"Worker", PipeRole::transform, "Event", "Event", "worker-b"},
+        {"Sink", PipeRole::writable, "Event", "", "sink-1"}
+    });
+    check(duplicates.size() == 3
+            && duplicates[0].source == "source-1"
+            && duplicates[0].target == "worker-a"
+            && duplicates[1].source == "worker-a"
+            && duplicates[1].target == "worker-b"
+            && duplicates[2].source == "worker-b"
+            && duplicates[2].target == "sink-1",
+            "linear pipeline collapsed same-type worker instances");
+    rejects({{"Producer", PipeRole::readable, "", "Event", "same"},
+             {"Consumer", PipeRole::writable, "Event", "", "same"}},
+            "unique bounded actor instance IDs");
+    rejects({{"Producer", PipeRole::readable, "", "Event"},
+             {"Producer", PipeRole::writable, "Event", ""}},
+            "unique bounded actor instance IDs");
     auto d = PipeStage{"Duplex", PipeRole::duplex, "Event", "Result"};
     check(check_actor_pipeline({source, d, sink}).size() == 2, "duplex stage lost");
 }
