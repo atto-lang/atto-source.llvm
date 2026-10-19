@@ -47,6 +47,10 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
                 snapshot_rejected = true;
             }
             assert(snapshot_rejected);
+            bool close_rejected = false;
+            try { state.snapshots.back()->close(); }
+            catch (const std::logic_error&) { close_rejected = true; }
+            assert(close_rejected);
             return;
         }
         assert(actor == 0);
