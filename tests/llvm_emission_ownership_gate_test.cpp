@@ -531,6 +531,54 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_local_metadata); },
                      "malformed native ownership AST: non-constructor local contains hidden constructor arguments");
 
+    Program class_heap_variant_conflict;
+    ClassDecl variant_class;
+    variant_class.name = "Box";
+    ClassField variant_field;
+    variant_field.name = "value";
+    variant_field.initial = 0;
+    variant_field.initializer_expression =
+        make_expression(Expression::Kind::Integer, {}, 0);
+    variant_class.fields.push_back(std::move(variant_field));
+    class_heap_variant_conflict.classes.push_back(std::move(variant_class));
+    Function variant_main;
+    variant_main.name = "main";
+    LocalBinding conflicting_class;
+    conflicting_class.name = "box";
+    conflicting_class.new_class = true;
+    conflicting_class.class_name = "Box";
+    conflicting_class.heap_owned = true;
+    variant_main.locals.push_back(std::move(conflicting_class));
+    variant_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    class_heap_variant_conflict.functions.push_back(std::move(variant_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(class_heap_variant_conflict); },
+                     "malformed native ownership AST: specialized local cannot also be heap-owned");
+
+    Program scalar_with_class_metadata;
+    Function scalar_class_metadata_main;
+    scalar_class_metadata_main.name = "main";
+    auto scalar_with_class = scalar_local("x", 1);
+    scalar_with_class.class_name = "Box";
+    scalar_class_metadata_main.locals.push_back(std::move(scalar_with_class));
+    scalar_class_metadata_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    scalar_with_class_metadata.functions.push_back(std::move(scalar_class_metadata_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(scalar_with_class_metadata); },
+                     "malformed native ownership AST: local class metadata does not match storage variant");
+
+    Program array_with_class_metadata;
+    Function array_class_metadata_main;
+    array_class_metadata_main.name = "main";
+    LocalBinding array_with_class;
+    array_with_class.name = "items";
+    array_with_class.int_array = true;
+    array_with_class.owner_mutable = true;
+    array_with_class.class_name = "Box";
+    array_class_metadata_main.locals.push_back(std::move(array_with_class));
+    array_class_metadata_main.result = make_expression(Expression::Kind::Integer, {}, 0);
+    array_with_class_metadata.functions.push_back(std::move(array_class_metadata_main));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(array_with_class_metadata); },
+                     "malformed native ownership AST: local class metadata does not match storage variant");
+
     // actor_actions is not advisory: it is the exact source-order plan used
     // by codegen. Reject malformed indexes and omitted effects before LLVM.
     Program bad_actor_action_index;
