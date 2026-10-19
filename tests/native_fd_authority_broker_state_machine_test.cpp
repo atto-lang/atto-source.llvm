@@ -69,6 +69,7 @@ static void test_counter_drain_and_rearm() {
     require(one.owner == 20 && one.outcome == Outcome::ready);
     require(!broker.try_pop());
     require(!broker.drain_eventfd(*token, 21));
+    require(!broker.try_watch(*token, 20)); // dirty counter forbids rearm
     require(broker.drain_eventfd(*token, 20));
     require(!broker.drain_eventfd(*token, 20)); // kernel counter is now zero
     require(broker.try_watch(*token, 20));
@@ -88,6 +89,28 @@ static void test_counter_drain_and_rearm() {
     require(broker.revoke(*token, 20));
     require(!broker.drain_eventfd(*token, 20));
     require(broker.confirm_reclaimed(*token, 20));
+}
+static void test_clean_cancel_can_rearm_without_drain() {
+    using Outcome = NativeEpollReactor::Outcome;
+    NativeFdAuthorityBroker broker;
+    auto token = broker.mint_eventfd(25);
+    require(token.has_value());
+    require(broker.try_watch(*token, 25));
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(4);
+    while (!broker.try_cancel(*token, 25)) {
+        if (std::chrono::steady_clock::now() >= deadline) std::abort();
+        std::this_thread::yield();
+    }
+    auto result = next_terminal(broker);
+    require(result.outcome == Outcome::cancelled && result.owner == 25);
+    // No successful signal occurred; there is no dirty counter to drain.
+    require(!broker.drain_eventfd(*token, 25));
+    require(broker.try_watch(*token, 25));
+    require(broker.revoke(*token, 25));
+    auto terminal = next_terminal(broker);
+    require(terminal.outcome == Outcome::cancelled && terminal.owner == 25);
+    require(broker.confirm_reclaimed(*token, 25));
 }
 static void test_consumption_retry_exactly_once() {
     using Outcome = NativeEpollReactor::Outcome;
@@ -208,6 +231,7 @@ static void test_all_orderings_of_signal_cancel_revoke_stop() {
 int main() {
     test_revoked_and_stopped_rights();
     test_counter_drain_and_rearm();
+    test_clean_cancel_can_rearm_without_drain();
     test_consumption_retry_exactly_once();
     test_real_mutex_contention_does_not_lose_terminal();
     test_real_mutex_denies_partial_mint();

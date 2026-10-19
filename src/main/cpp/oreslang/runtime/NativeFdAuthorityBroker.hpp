@@ -84,7 +84,7 @@ public:
         if (!guard.owns_lock() || poisoned_) return false;
         if (stopped_) return false; // no new I/O admission after shutdown
         auto* e = lookup(token, trusted_owner);
-        if (!e || e->watch ||
+        if (!e || e->watch || e->needs_drain ||
                 authority_.phase(e->capability) != NativeFdAuthority::Phase::owned)
             return false;
         auto watch = manager_.try_watch(e->owned, events);
@@ -101,9 +101,13 @@ public:
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || stopped_ || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
-        return e && e->watch &&
-               authority_.phase(e->capability) == NativeFdAuthority::Phase::watching &&
-               manager_.signal_owned_eventfd(e->owned);
+        if (!e || !e->watch ||
+                authority_.phase(e->capability) != NativeFdAuthority::Phase::watching ||
+                !manager_.signal_owned_eventfd(e->owned)) return false;
+        // A successful signal dirties the kernel eventfd counter even if
+        // a concurrent cancellation later wins the terminal outcome.
+        e->needs_drain = true;
+        return true;
     }
 
     // An eventfd stays readable until its counter is explicitly consumed.
@@ -115,10 +119,12 @@ public:
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         if (!guard.owns_lock() || stopped_ || poisoned_) return false;
         auto* e = lookup(token, trusted_owner);
-        if (!e || e->watch ||
+        if (!e || e->watch || !e->needs_drain ||
                 authority_.phase(e->capability) != NativeFdAuthority::Phase::owned)
             return false;
-        return manager_.drain_owned_eventfd(e->owned);
+        if (!manager_.drain_owned_eventfd(e->owned)) return false;
+        e->needs_drain = false;
+        return true;
     }
 
     // Cancellation is not a terminal receipt: try_pop must drain the result.
@@ -246,6 +252,7 @@ private:
         NativeFdAuthority::Capability capability{};
         NativeEpollReactorManager::OwnedEventFd owned{};
         std::optional<NativeEpollReactorManager::Watch> watch{};
+        bool needs_drain = false; // broker-owned, never guest-settable
     };
     struct Pending {
         std::size_t slot;
