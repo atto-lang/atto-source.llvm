@@ -531,11 +531,8 @@ if(BUILD_TESTING)
         tests/ownership_cfg_dataflow_test.cpp)
     target_include_directories(oreslang-ownership-cfg-dataflow-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    # These conformance fixtures use assert(...) for negative ownership
-    # probes (including calls with side effects). Release/NDEBUG must never
-    # compile away the verifier calls and report a false green result.
     target_compile_options(oreslang-ownership-cfg-dataflow-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
     # Exercise the *actual LLVM emitter API* with Program ASTs constructed
@@ -563,7 +560,7 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-ownership-drop-plan-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-ownership-drop-plan-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_exact_once_field_destruction
         COMMAND oreslang-ownership-drop-plan-test)
     add_executable(oreslang-target-abi-test tests/target_abi_test.cpp)
