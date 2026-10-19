@@ -21,6 +21,8 @@ add_executable(oreslang-llvmc
 
 target_include_directories(oreslang-llvmc PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+)
+target_include_directories(oreslang-llvmc SYSTEM PRIVATE
     "${LLVM_INCLUDE_DIRS}"
 )
 add_definitions(${LLVM_DEFINITIONS})
@@ -544,7 +546,9 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/backend/LlvmCodegen.cpp
         src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
     target_include_directories(oreslang-llvm-emission-ownership-gate-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-llvm-emission-ownership-gate-test SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-llvm-emission-ownership-gate-test PRIVATE
         ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-llvm-emission-ownership-gate-test PRIVATE
