@@ -61,12 +61,26 @@ class ActorHeapRetirementCohort final {
     }
 
     void acknowledge_lane(bool cleanup_ok) noexcept {
+        // A failed cleanup must be published before the successful join RMW
+        // that can complete the retirement quorum. Likewise, a duplicate or
+        // otherwise unregistered acknowledgement must never advance joined_
+        // and transiently manufacture a complete quorum before its failure is
+        // visible to ready_for_retirement().
         if (!cleanup_ok)
             cleanup_failed_.store(true, std::memory_order_release);
-        const auto before = joined_lanes_.fetch_add(1, std::memory_order_acq_rel);
-        const auto registered = registered_lanes_.load(std::memory_order_acquire);
-        if (before >= expected_lanes_ || before >= registered)
-            cleanup_failed_.store(true, std::memory_order_release);
+        auto joined = joined_lanes_.load(std::memory_order_acquire);
+        for (;;) {
+            const auto registered =
+                registered_lanes_.load(std::memory_order_acquire);
+            if (joined >= expected_lanes_ || joined >= registered) {
+                cleanup_failed_.store(true, std::memory_order_release);
+                return;
+            }
+            if (joined_lanes_.compare_exchange_weak(
+                    joined, joined + 1,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return;
+        }
     }
 
 public:
