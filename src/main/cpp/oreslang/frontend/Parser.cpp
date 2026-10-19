@@ -1281,6 +1281,8 @@ private:
             fail("native inline list requires typed aggregate storage and cleanup lowering");
         if (token_.text == "fnc")
             fail("native anonymous fnc requires callable capture and closure lowering");
+        if (token_.text == "record" || token_.text == "infer" || token_.text == "struct")
+            fail("native record/struct literal lowering unsupported: distinct structural-record vs concrete-struct identity, ownership and layout/drop lowering required");
         if (token_.text == "Scheduler" || token_.text == "Region")
             fail("native Scheduler/Region source lowering unsupported: typed configuration, "
                  "field permits and safe-point scheduler ABI required");
