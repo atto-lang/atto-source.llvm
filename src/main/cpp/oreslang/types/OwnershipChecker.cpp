@@ -6,6 +6,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -316,11 +317,16 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
-        case Expression::Kind::Call:
-            if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
+        case Expression::Kind::Call: {
+            const auto found = functions.find(
+                native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end())
+                reject(expr, "internal ownership error: unresolved function");
+            if (found->second->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
             return;
+        }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
@@ -686,6 +692,9 @@ void validate_i64_ownership(const Program& program) {
             throw std::runtime_error(std::string("ownership violation: invalid native ") +
                                      role + " identifier '" + std::string(value) + "'");
     };
+    if (!program.module.empty())
+        require_identifier(program.module, "module");
+
     const auto reserved_runtime_symbol = [&](const std::string& name) {
         if (name.rfind("oreslang_int_array_", 0) == 0) return true;
         if (!program.module.empty()) return false;
@@ -759,11 +768,38 @@ void validate_i64_ownership(const Program& program) {
                 throw std::runtime_error(
                     "ownership violation: duplicate class constructor parameter '" +
                     parameter + "'");
+
+        std::function<void(const Expression&)> validate_constructor_expression;
+        validate_constructor_expression = [&](const Expression& expr) {
+            using K = Expression::Kind;
+            switch (expr.kind) {
+                case K::Integer:
+                    return;
+                case K::Variable:
+                    if (!constructor_parameters.count(expr.name))
+                        reject(expr, "ownership violation: unknown class constructor parameter '" +
+                                     expr.name + "'");
+                    return;
+                case K::Negate:
+                    validate_constructor_expression(*expr.left);
+                    return;
+                case K::Add:
+                case K::Subtract:
+                case K::Multiply:
+                    validate_constructor_expression(*expr.left);
+                    validate_constructor_expression(*expr.right);
+                    return;
+                default:
+                    reject(expr,
+                        "ownership violation: class field initializer requires pure scalar constructor expression");
+            }
+        };
         for (const auto& field : cls.fields) {
             if (!fields.insert(field.name).second)
                 throw std::runtime_error(
                     "ownership violation: duplicate class field '" + field.name + "'");
             if (field.int_array) arrays.insert(field.name);
+            else validate_constructor_expression(*field.initializer_expression);
             if (field.final_field) finals.insert(field.name);
             if (field.public_member) published.insert(field.name);
         }
