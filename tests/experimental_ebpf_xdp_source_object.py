@@ -102,7 +102,7 @@ def main():
                 "BPF object lacks xdp/license section: " + repr(sections))
         # Prove the ELF parser itself rejects forged host objects and helper
         # calls; otherwise a broken test could give false-green confidence.
-        for offset, replacement in [(18, b"\x3e\\x00"), (16, b"\x02\\x00")]:
+        for offset, replacement in [(18, bytes((0x3e, 0))), (16, bytes((2, 0)))]:
             corrupted = bytearray(raw)
             corrupted[offset:offset + 2] = replacement
             try:
