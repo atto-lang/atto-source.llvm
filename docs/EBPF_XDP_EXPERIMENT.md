@@ -103,6 +103,28 @@ Constant-return XDP emits `requires: []`; checked packet-byte guards emit
 independent build policy must explicitly grant that capability and have its
 resolved graph checked. An invalid program emits neither a closure nor IR.
 
+## Explicit packet-read acknowledgement on IR emission
+
+The XDP compiler no longer silently issues packet-access LLVM IR: normal
+IR emission of a program with any checked `packet_u8` guard requires the
+explicit argument `--bpf-grants=bpf.packet.read`. Constant-action
+programs require no option, and reject this unused grant. Unknown,
+duplicate or compound grants are rejected. The option is invalid for
+host compilation and for `--emit-target-closure` mode.
+
+```sh
+./build/oreslang-llvmc --target=bpfel --bpf-program=xdp \
+  --bpf-grants=bpf.packet.read examples/xdp_packet_u8.ores > /tmp/packet.ll
+```
+
+**Security boundary:** This flag is a compile-time acknowledgement of a
+capability; it is not an authorization. A caller can set the flag, so
+a trusted build controller must separately check the compiler-produced
+closure against policy-pinned grant declarations and bind the approved
+source tree, IR and kernel object in a protected attestation. The
+compiler still emits `grants:[]` in closure mode, and kernel verifier
+admission + program attach permission remain separate release gates.
+
 The manifest is **not** an attestation, signed permission, kernel-verifier
 approval, compatible program-type/attach-ABI proof, or a certification that
 the emitted BPF object belongs to the same source; it is only the compiler's
