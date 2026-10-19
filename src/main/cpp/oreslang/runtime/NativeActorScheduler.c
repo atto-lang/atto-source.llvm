@@ -354,7 +354,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
 int ores_native_actor_scheduler_upgrade_freeze(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         uint64_t expected_route_epoch, uint64_t* ticket_out) {
-    if (!s || !ticket_out || !expected_route_epoch) return 0;
+    if (!s || executing == s || !ticket_out || !expected_route_epoch) return 0;
     lock(s);
     int ok = matching(s, actor) && !s->retired;
     if (ok) {
@@ -374,7 +374,7 @@ int ores_native_actor_scheduler_upgrade_freeze(
 int ores_native_actor_scheduler_upgrade_quiesced(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         uint64_t ticket) {
-    if (!s || !ticket) return 0;
+    if (!s || executing == s || !ticket) return 0;
     lock(s);
     int ok = matching(s, actor) && !s->retired;
     if (ok) {
@@ -389,7 +389,7 @@ int ores_native_actor_scheduler_upgrade_quiesced(
 int ores_native_actor_scheduler_upgrade_finish(
         OresNativeActorScheduler* s, OresNativeActorRef actor,
         uint64_t ticket, int committed) {
-    if (!s || !ticket || (committed != 0 && committed != 1)) return 0;
+    if (!s || executing == s || !ticket || (committed != 0 && committed != 1)) return 0;
     lock(s);
     int ok = matching(s, actor) && !s->retired;
     if (ok) {
@@ -410,7 +410,7 @@ int ores_native_actor_scheduler_upgrade_finish(
 }
 uint64_t ores_native_actor_scheduler_upgrade_epoch(
         OresNativeActorScheduler* s, OresNativeActorRef actor) {
-    if (!s) return 0;
+    if (!s || executing == s) return 0;
     lock(s);
     uint64_t epoch = 0;
     if (matching(s, actor) && !s->retired
