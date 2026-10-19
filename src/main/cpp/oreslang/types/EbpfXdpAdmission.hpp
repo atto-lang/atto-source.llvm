@@ -13,7 +13,7 @@ struct EbpfXdpAdmission final {
       throw std::runtime_error("eBPF XDP requires one pure scalar function and no modules/actors/classes");
     const auto& fn = source.functions.front();
     if (fn.name != "xdp_action" || !fn.exported || fn.returns_void || !fn.result ||
-        fn.parameters.size() != 1 || fn.parameters.front().name != "packet_bytes" ||
+        fn.parameters.size() != 1 || fn.parameters.front().name != "packet_nonempty" ||
         fn.parameters.front().mode != Parameter::Mode::Value ||
         !fn.parameters.front().class_name.empty() ||
         !fn.parameters.front().generic_type.empty() ||
@@ -23,7 +23,7 @@ struct EbpfXdpAdmission final {
         !fn.actor_stops.empty() || !fn.actor_actions.empty() ||
         !fn.actor_field_writes.empty() || fn.caught_throw_value ||
         !fn.caught_throw_defers.empty() || fn.has_declared_effects)
-      throw std::runtime_error("eBPF XDP requires pub fnc xdp_action(int packet_bytes): int, scalar return and equality guards only");
+      throw std::runtime_error("eBPF XDP requires pub fnc xdp_action(int packet_nonempty): int, scalar return and equality guards only");
     std::size_t nodes = 0;
     check_expr(*fn.result, 0, nodes);
     for (const auto& guard : fn.early_returns) {
@@ -48,8 +48,8 @@ private:
           throw std::runtime_error("eBPF XDP malformed integer node");
         return;
       case Kind::Variable:
-        if (e.left || e.right || e.name != "packet_bytes")
-          throw std::runtime_error("eBPF XDP only permits packet_bytes variable");
+        if (e.left || e.right || e.name != "packet_nonempty")
+          throw std::runtime_error("eBPF XDP only permits packet_nonempty variable");
         return;
       case Kind::Negate:
         if (!e.left || e.right) break;
