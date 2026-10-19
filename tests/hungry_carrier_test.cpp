@@ -564,7 +564,7 @@ static void test_terminal_lifecycle_rejects_restart() {
     HungryCarrier::Options options{};
     options.heap_owner = owner;
     HungryCarrier actor(&state, handle, nullptr, io_double, options);
-    const auto handle = actor.producer_handle();
+    const auto producer = actor.producer_handle();
     actor.join(); // Valid terminal shutdown without ever starting.
     const auto proof = actor.retirement_proof();
     check(proof.has_value() && proof->owner() == owner,
@@ -573,7 +573,7 @@ static void test_terminal_lifecycle_rejects_restart() {
     try { actor.start(); }
     catch (const std::logic_error&) { rejected = true; }
     check(rejected, "start() resurrected actor threads after physical retirement proof");
-    check(!handle.try_send({1, 1}), "closed producer admitted post-retirement work");
+    check(!producer.try_send({1, 1}), "closed producer admitted post-retirement work");
     actor.join(); // Repeated terminal join must remain idempotent.
     check(actor.retirement_proof().has_value(),
           "repeat join revoked an already safe terminal proof");
