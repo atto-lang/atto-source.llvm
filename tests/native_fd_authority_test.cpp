@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeFdAuthority.hpp"
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <thread>
@@ -42,6 +43,42 @@ int main() {
     check(a.publish_terminal(*replacement, 30));
     check(a.consume_terminal(*replacement, 30));
     check(a.revoke(*replacement, 30));
+
+    // Exhaustion rejects without evicting any live owner. Reusing a revoked
+    // slot rotates its generation, so an old copied handle remains invalid.
+    {
+        NativeFdAuthority saturated;
+        std::array<NativeFdAuthority::Capability, NativeFdAuthority::capacity> keys{};
+        for (auto& key : keys) {
+            auto issued = saturated.mint(77, NativeFdAuthority::readiness);
+            check(issued.has_value());
+            key = *issued;
+        }
+        check(!saturated.mint(77, NativeFdAuthority::readiness));
+        check(!saturated.begin_transfer(keys[0], 77, 88));
+        check(saturated.revoke(keys[0], 77));
+        auto recycled = saturated.mint(99, NativeFdAuthority::readiness);
+        check(recycled.has_value());
+        check(!saturated.begin_watch(keys[0], 77));
+        check(!saturated.begin_watch(keys[0], 99));
+        check(saturated.begin_watch(*recycled, 99));
+        check(saturated.publish_terminal(*recycled, 99));
+        check(saturated.revoke(*recycled, 99));
+        check(saturated.consume_terminal(*recycled, 99));
+        check(saturated.phase(*recycled) == P::revoked);
+    }
+    // Foreign authority instances cannot acknowledge another broker's
+    // pending handoff, even when their local slot and generation coincide.
+    {
+        NativeFdAuthority origin, foreign;
+        auto key = origin.mint(11, NativeFdAuthority::readiness | NativeFdAuthority::transfer);
+        check(key.has_value());
+        auto pending = origin.begin_transfer(*key, 11, 22);
+        check(pending.has_value());
+        check(!foreign.acknowledge(*pending, 22));
+        check(origin.revoke(*key, 11));
+        check(!origin.acknowledge(*pending, 22));
+    }
 
     for (int round = 0; round < 1000; ++round) {
         auto key = a.mint(1, NativeFdAuthority::readiness | NativeFdAuthority::transfer);
