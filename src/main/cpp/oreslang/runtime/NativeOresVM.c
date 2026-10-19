@@ -100,6 +100,7 @@ OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config)
     vm->physical_gate.context = vm;
     vm->physical_gate.notify_free = wake_physical_turn_domains;
     atomic_init(&vm->physical_gate.admitted, 0);
+    atomic_init(&vm->physical_gate.waiting, 0);
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         if (!ores_native_actor_scheduler_configure_turn_gate(
                 vm->schedulers[i], &vm->physical_gate)) {
@@ -119,6 +120,7 @@ OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
     vm->physical_gate.context = vm;
     vm->physical_gate.notify_free = wake_physical_turn_domains;
     atomic_init(&vm->physical_gate.admitted, 0);
+    atomic_init(&vm->physical_gate.waiting, 0);
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         if (!ores_native_actor_scheduler_configure_turn_gate(
                 vm->schedulers[i], &vm->physical_gate)) {
