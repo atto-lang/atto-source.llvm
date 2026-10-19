@@ -113,6 +113,19 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             assert(wrong_generation.used_bytes() == 0);
         } else if (step == 2) {
             state.region->integrate(0, 1, 1);
+            std::vector<double> into(67, -1.0);
+            state.region->copy_column_into(0, into.data() + 1, 65);
+            assert(into[0] == -1.0 && into[66] == -1.0);
+            for (std::size_t i = 0; i < 65; ++i) {
+                assert(into[i + 1] == static_cast<double>(4 * i));
+            }
+            bool short_copy_rejected = false;
+            try {
+                state.region->copy_column_into(0, into.data(), 64);
+            } catch (const std::out_of_range&) {
+                short_copy_rejected = true;
+            }
+            assert(short_copy_rejected);
             state.published = state.region->snapshot_column(0);
             auto copy = state.region->snapshot_column(1);
             copy[0] = 123456;
