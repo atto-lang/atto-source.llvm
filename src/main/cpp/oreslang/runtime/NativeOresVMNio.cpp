@@ -70,6 +70,9 @@ extern "C" int ores_native_vm_nio_try_cancel(
 }
 extern "C" int ores_native_vm_nio_try_pop(
     OresNativeVM* vm, OresNativeNioCompletion* output) {
+    // A missing/retired NIO lease must not preserve a stale terminal record
+    // from an earlier successful call. The C backend also clears on denial.
+    if (output) *output = OresNativeNioCompletion{};
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     return backend ? ores_native_nio_try_pop(backend, output) : 0;

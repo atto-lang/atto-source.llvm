@@ -51,6 +51,10 @@ size_t ores_native_nio_started_reactors(const OresNativeNio* manager);
 int ores_native_nio_try_watch(
     OresNativeNio* manager, int fd, uint32_t events, OresNativeNioWatch* output);
 int ores_native_nio_try_cancel(OresNativeNio* manager, OresNativeNioWatch watch);
+/* Fail-closed result storage: on any unsuccessful pop with non-null output,
+ * all fields are reset to zero, including the ticket, FD, and outcome.
+ * The caller must still check the return code; zero is not a terminal.
+ */
 int ores_native_nio_try_pop(OresNativeNio* manager, OresNativeNioCompletion* output);
 int ores_native_nio_completion_fd(const OresNativeNio* manager, size_t reactor);
 

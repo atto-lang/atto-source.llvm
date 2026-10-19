@@ -39,6 +39,10 @@ extern "C" int ores_native_nio_try_cancel(OresNativeNio* runtime, OresNativeNioW
             oreslang::runtime::NativeEpollReactor::Ticket{watch.ticket}}) ? 1 : 0;
 }
 extern "C" int ores_native_nio_try_pop(OresNativeNio* runtime, OresNativeNioCompletion* output) {
+    // A denied pop must not leave an earlier terminal's ticket/FD in the
+    // caller's buffer. Preserve the same fail-closed output contract as
+    // try_watch, including a missing runtime and nonparking lock denial.
+    if (output) *output = OresNativeNioCompletion{};
     if (!runtime || !output) return 0;
     auto completion = runtime->manager.try_pop();
     if (!completion) return 0;

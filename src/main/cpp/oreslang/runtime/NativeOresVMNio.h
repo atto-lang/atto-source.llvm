@@ -20,6 +20,9 @@ size_t ores_native_vm_nio_started(OresNativeVM* vm);
 int ores_native_vm_nio_try_watch(OresNativeVM* vm, int fd, uint32_t events,
                                  OresNativeNioWatch* output);
 int ores_native_vm_nio_try_cancel(OresNativeVM* vm, OresNativeNioWatch watch);
+/* No completion or retired/missing VM lease resets non-null output to
+ * zero so previously delivered tickets cannot masquerade as fresh results.
+ */
 int ores_native_vm_nio_try_pop(OresNativeVM* vm, OresNativeNioCompletion* output);
 /* Collect up to min(capacity, 256) completed tickets into caller-owned
  * storage under one VM backend lease. Each record is consumed exactly once.

@@ -45,7 +45,13 @@ int main() {
         require(!ores_native_vm_nio_try_cancel(
             vm, OresNativeNioWatch{UINT64_MAX, UINT8_MAX}));
         OresNativeNioCompletion done{};
+        done.watch = OresNativeNioWatch{UINT64_MAX, UINT8_MAX};
+        done.fd = 12345;
+        done.events = UINT32_MAX;
+        done.outcome = ORES_NATIVE_NIO_READY;
         require(!ores_native_vm_nio_try_pop(vm, &done));
+        require(done.watch.ticket == 0 && done.watch.reactor == 0 &&
+                done.fd == 0 && done.events == 0 && done.outcome == 0);
         require(ores_native_vm_nio_try_pop_batch(vm, &done, 1) == 0);
         require(ores_native_vm_nio_completion_fd(vm, 0) == -1);
         ores_native_vm_nio_drain_signal(vm, 0);
