@@ -253,10 +253,10 @@ def main():
                         if index % 2 == 0
                         else "8 == ctx.packet_u8(%d)" % offset)
             variant = (
-                "pub fnc ores_xdp(borrow XdpContext ctx): int {\\n"
-                "  if (%s) { return 1; } fi\\n"
-                "  return 2;\\n"
-                "}\\n"
+                "pub fnc ores_xdp(borrow XdpContext ctx): int {\n"
+                "  if (%s) { return 1; } fi\n"
+                "  return 2;\n"
+                "}\n"
             ) % equality
             src.write_text(variant, encoding="utf-8")
             denied = run(cmd)
@@ -274,13 +274,13 @@ def main():
         # The grammar's eight-guard limit should remain an effect-preserving
         # upper bound. A ninth guard must fail without partial IR/JSON.
         eight_guards = (
-            "pub fnc ores_xdp(borrow XdpContext ctx): int {\\n" +
+            "pub fnc ores_xdp(borrow XdpContext ctx): int {\n" +
             "".join(
-                "  if (ctx.packet_u8(%d) == %d) { return 1; } fi\\n" %
+                "  if (ctx.packet_u8(%d) == %d) { return 1; } fi\n" %
                 (offset, index) for index, offset in enumerate(
                     (0, 1, 14, 16, 64, 255, 1023, 4095))
             ) +
-            "  return 2;\\n}\\n"
+            "  return 2;\n}\n"
         )
         src.write_text(eight_guards, encoding="utf-8")
         eight = run(packet_cmd)
@@ -292,9 +292,9 @@ def main():
         require(eight_closure.returncode == 0 and
                 json.loads(eight_closure.stdout) == packet_graph,
                 "eight bounded packet reads must infer one exact ungranted effect")
-        nine_guards = eight_guards.replace("  return 2;\\n",
-                                           "  if (ctx.packet_u8(2) == 0) { return 1; } fi\\n"
-                                           "  return 2;\\n")
+        nine_guards = eight_guards.replace("  return 2;\n",
+                                           "  if (ctx.packet_u8(2) == 0) { return 1; } fi\n"
+                                           "  return 2;\n")
         src.write_text(nine_guards, encoding="utf-8")
         ninth = run(packet_cmd)
         require(ninth.returncode != 0 and ninth.stdout == "",
