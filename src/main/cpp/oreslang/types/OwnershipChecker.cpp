@@ -461,9 +461,23 @@ void preflight_native_ast_shape(const Program& program) {
             expression(arg.get(), depth + 1);
     };
     const auto local = [&](const LocalBinding& binding) {
+        const unsigned specialized =
+            static_cast<unsigned>(binding.int_array) +
+            static_cast<unsigned>(binding.new_class) +
+            static_cast<unsigned>(binding.move_class);
+        if (specialized > 1)
+            fail("local selects multiple storage variants", binding.offset);
         if (!binding.int_array && !binding.new_class &&
                 !binding.move_class && !binding.initializer)
             fail("local has no initializer", binding.offset);
+        if (binding.initializer && specialized != 0)
+            fail("specialized local contains hidden initializer", binding.offset);
+        if (!binding.new_class && !binding.constructor_arguments.empty())
+            fail("non-constructor local contains hidden constructor arguments", binding.offset);
+        if (!binding.move_class && !binding.move_source.empty())
+            fail("non-move local contains hidden move source", binding.offset);
+        if (binding.move_class && binding.move_source.empty())
+            fail("class move local has no source", binding.offset);
         if (binding.initializer) expression(binding.initializer.get(), 0);
         for (const auto& arg : binding.constructor_arguments)
             expression(arg.get(), 0);
@@ -477,18 +491,35 @@ void preflight_native_ast_shape(const Program& program) {
             case S::FieldWrite:
             case S::Defer:
                 if (!stmt.expression) fail("statement has no expression", stmt.offset);
+                if (stmt.branch_local || stmt.array_commit_length ||
+                        !stmt.array_commit_values.empty() ||
+                        stmt.condition_lhs || stmt.condition_rhs ||
+                        !stmt.then_statements.empty() || !stmt.else_statements.empty())
+                    fail("statement contains fields incompatible with its kind", stmt.offset);
                 break;
             case S::Conditional:
                 if (!stmt.condition_lhs || !stmt.condition_rhs)
                     fail("conditional missing guard", stmt.offset);
+                if (stmt.branch_local || stmt.expression || stmt.array_commit_length ||
+                        !stmt.array_commit_values.empty())
+                    fail("conditional contains fields incompatible with its kind", stmt.offset);
                 break;
             case S::ScopedLocal:
                 if (!stmt.branch_local)
                     fail("scoped local has no binding", stmt.offset);
+                if (stmt.expression || stmt.array_commit_length ||
+                        !stmt.array_commit_values.empty() ||
+                        stmt.condition_lhs || stmt.condition_rhs ||
+                        !stmt.then_statements.empty() || !stmt.else_statements.empty())
+                    fail("scoped local contains fields incompatible with its kind", stmt.offset);
                 break;
             case S::ArrayCommitFilled:
                 if (!stmt.array_commit_length)
                     fail("array commit has no length", stmt.offset);
+                if (stmt.branch_local || stmt.expression ||
+                        stmt.condition_lhs || stmt.condition_rhs ||
+                        !stmt.then_statements.empty() || !stmt.else_statements.empty())
+                    fail("array commit contains fields incompatible with its kind", stmt.offset);
                 break;
             default:
                 fail("unknown statement kind", stmt.offset);
@@ -521,6 +552,37 @@ void preflight_native_ast_shape(const Program& program) {
             expression(send.payload.get(), 0);
         for (const auto& write : fn.actor_field_writes)
             expression(write.expression.get(), 0);
+
+        // actor_actions is the sole source-order plan consumed by LLVM
+        // emission. A transformed Program must not omit, duplicate, or
+        // mis-index a send/stop and thereby silently change actor effects.
+        std::vector<bool> send_seen(fn.actor_sends.size(), false);
+        std::vector<bool> stop_seen(fn.actor_stops.size(), false);
+        for (const auto& action : fn.actor_actions) {
+            switch (action.kind) {
+                case ActorAction::Kind::Send:
+                    if (action.index >= send_seen.size())
+                        fail("actor send action index is out of range", fn.offset);
+                    if (send_seen[action.index])
+                        fail("actor send action is duplicated", fn.offset);
+                    send_seen[action.index] = true;
+                    break;
+                case ActorAction::Kind::Stop:
+                    if (action.index >= stop_seen.size())
+                        fail("actor stop action index is out of range", fn.offset);
+                    if (stop_seen[action.index])
+                        fail("actor stop action is duplicated", fn.offset);
+                    stop_seen[action.index] = true;
+                    break;
+                default:
+                    fail("unknown actor action kind", fn.offset);
+            }
+        }
+        if (std::find(send_seen.begin(), send_seen.end(), false) != send_seen.end())
+            fail("actor send is missing from source-order action plan", fn.offset);
+        if (std::find(stop_seen.begin(), stop_seen.end(), false) != stop_seen.end())
+            fail("actor stop is missing from source-order action plan", fn.offset);
+
         if (fn.caught_throw_value) expression(fn.caught_throw_value.get(), 0);
         if (fn.result) expression(fn.result.get(), 0);
     };

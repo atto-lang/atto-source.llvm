@@ -139,6 +139,80 @@ int main() {
     expect_rejection([&] { (void)emit_verified_llvm_ir(missing_actor_payload); },
                      "malformed native ownership AST: missing expression");
 
+    // Source-impossible statement payloads must not be merely traversed:
+    // later ownership/codegen switches consume only fields for the active kind.
+    Program hidden_statement_field;
+    Function bad_statement_fn;
+    bad_statement_fn.name = "main";
+    Statement bad_statement;
+    bad_statement.kind = Statement::Kind::Call;
+    bad_statement.expression = make_expression(Expression::Kind::Call, "callee");
+    bad_statement.condition_lhs = make_expression(Expression::Kind::Take);
+    bad_statement_fn.statements.push_back(std::move(bad_statement));
+    bad_statement_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    hidden_statement_field.functions.push_back(std::move(bad_statement_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_statement_field); },
+                     "malformed native ownership AST: statement contains fields incompatible with its kind");
+
+    // Ordinary locals have exactly one storage/initialization form. Hidden
+    // constructor or move metadata on a scalar initializer would otherwise
+    // be structurally walked but ignored by the normal ownership branch.
+    Program hidden_local_metadata;
+    Function bad_local_fn;
+    bad_local_fn.name = "main";
+    auto bad_local = scalar_local("x", 1);
+    bad_local.constructor_arguments.push_back(
+        make_expression(Expression::Kind::Take));
+    bad_local_fn.locals.push_back(std::move(bad_local));
+    bad_local_fn.result = variable("x");
+    hidden_local_metadata.functions.push_back(std::move(bad_local_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(hidden_local_metadata); },
+                     "malformed native ownership AST: non-constructor local contains hidden constructor arguments");
+
+    // actor_actions is not advisory: it is the exact source-order plan used
+    // by codegen. Reject malformed indexes and omitted effects before LLVM.
+    Program bad_actor_action_index;
+    Function bad_action_fn;
+    bad_action_fn.name = "main";
+    ActorSend indexed_send;
+    indexed_send.reference = "actor";
+    indexed_send.payload = make_expression(Expression::Kind::Integer, {}, 1);
+    bad_action_fn.actor_sends.push_back(std::move(indexed_send));
+    bad_action_fn.actor_actions.push_back(
+        ActorAction{ActorAction::Kind::Send, 1});
+    bad_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    bad_actor_action_index.functions.push_back(std::move(bad_action_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(bad_actor_action_index); },
+                     "malformed native ownership AST: actor send action index is out of range");
+
+    Program missing_actor_action;
+    Function missing_action_fn;
+    missing_action_fn.name = "main";
+    ActorSend unplanned_send;
+    unplanned_send.reference = "actor";
+    unplanned_send.payload = make_expression(Expression::Kind::Integer, {}, 1);
+    missing_action_fn.actor_sends.push_back(std::move(unplanned_send));
+    missing_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    missing_actor_action.functions.push_back(std::move(missing_action_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(missing_actor_action); },
+                     "malformed native ownership AST: actor send is missing from source-order action plan");
+
+    Program duplicate_actor_action;
+    Function duplicate_action_fn;
+    duplicate_action_fn.name = "main";
+    ActorSend duplicate_send;
+    duplicate_send.reference = "actor";
+    duplicate_send.payload = make_expression(Expression::Kind::Integer, {}, 1);
+    duplicate_action_fn.actor_sends.push_back(std::move(duplicate_send));
+    duplicate_action_fn.actor_actions.push_back(
+        ActorAction{ActorAction::Kind::Send, 0});
+    duplicate_action_fn.actor_actions.push_back(
+        ActorAction{ActorAction::Kind::Send, 0});
+    duplicate_action_fn.result = make_expression(Expression::Kind::Integer, {}, 0);
+    duplicate_actor_action.functions.push_back(std::move(duplicate_action_fn));
+    expect_rejection([&] { (void)emit_verified_llvm_ir(duplicate_actor_action); },
+                     "malformed native ownership AST: actor send action is duplicated");
+
     Program hidden_leaf;
     Function bad_leaf;
     bad_leaf.name = "main";
