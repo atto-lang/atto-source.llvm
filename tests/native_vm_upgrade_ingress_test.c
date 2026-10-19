@@ -24,7 +24,18 @@ static void deliver(void* raw, size_t actor, uint64_t n) {
         return;
     }
     if (actor != 0) abort();
+    if (n == 123) {
+        uint64_t forbidden = 0;
+        atomic_store(&s->attempted_cross,
+            ores_native_vm_upgrade_freeze(s->vm, ORES_NATIVE_VM_MAIN,
+                                          s->primary, 1, &forbidden));
+        return;
+    }
     if (n == 0) {
+        uint64_t forbidden = 0;
+        atomic_store(&s->attempted_own,
+            ores_native_vm_upgrade_freeze(s->vm, ORES_NATIVE_VM_MAIN,
+                                          s->primary, 1, &forbidden));
         atomic_store(&s->entered, 1);
         while (atomic_load(&s->hold)) sched_yield();
     }
