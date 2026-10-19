@@ -11,3 +11,8 @@ Before promoting real ECS and layout-selectable native regions:
 - Prove authority generation/epoch fencing, runtime arena lifetime, pinned row/field borrows, atomic strong-read reconcile and cancellation rollback.
 - Check per-tenant budgets, scratch transpose space, overflow, alignment, schema/ABI and AoSoA tail padding for widths beyond two.
 - Run actual all-steps-executed exact-head CI with native sanitizers, not a zero-step billing/startup failure.
+
+
+## Added verification hardening
+
+A second mutation forges a fresh SoA version without transposing its stale payload; a third mutates physical authoritative bytes without publishing a logical commit. Both must be rejected by independent content checking. A malformed AoSoA second-tile stride creates overlapping offsets and is compared with the actual native planner. Hydrating absent residency must throw. The mutation checks are part of the same exact-source compiled C++ executable; they are **reference-level** checks rather than proof of atomic runtime implementation or concurrent linearizability.
