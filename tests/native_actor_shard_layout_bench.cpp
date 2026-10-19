@@ -11,6 +11,7 @@
 #include <memory>
 
 using oreslang::runtime::ActorShardColumns;
+using oreslang::runtime::ActorShardBudget;
 using oreslang::dop::Layout;
 
 struct Run {
@@ -19,6 +20,8 @@ struct Run {
     Layout layout = Layout::SoA;
     std::size_t rows = 0;
     double nanoseconds = 0.0;
+    ActorShardBudget actor_budget{16U * 1024U * 1024U};
+    ActorShardBudget vm_budget{64U * 1024U * 1024U};
     bool failed = false;
 };
 
@@ -27,7 +30,8 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t iterations) {
     try {
         assert(actor == 0);
         ActorShardColumns shard(
-            run.scheduler, run.owner, run.layout, run.rows, 3,
+            run.scheduler, run.owner, run.actor_budget, run.vm_budget,
+            run.layout, run.rows, 3,
             run.layout == Layout::AoSoA ? 8 : 1);
         for (std::size_t i = 0; i < run.rows; ++i) {
             shard.write(i, 0, static_cast<double>(i));
@@ -65,6 +69,8 @@ int main() {
                     rows, static_cast<int>(layout), run.nanoseconds / (200.0 * rows));
             ores_native_actor_scheduler_retire(run.scheduler);
             assert(ores_native_actor_scheduler_try_destroy(run.scheduler));
+            assert(run.actor_budget.used_bytes() == 0);
+            assert(run.vm_budget.used_bytes() == 0);
         }
     }
     return 0;
