@@ -313,7 +313,7 @@ int main() {
                 "define model Tax(rate: float = 0.15) as Apply(rate) end");
             throw std::runtime_error("native compiler silently admitted unlowered model");
         } catch (const std::exception& e) {
-            check(std::string_view(e.what()).find("MODEL_LOWERING_UNSUPPORTED") != std::string_view::npos,
+            check(std::string_view(e.what()).find("MODEL_LOWERING_NOT_IMPLEMENTED") != std::string_view::npos,
                   "native typed lowering must fail closed: " + std::string(e.what()));
         }
         std::cout << "PASS native model parser positive, negative and unimplemented lowering boundaries\n";
