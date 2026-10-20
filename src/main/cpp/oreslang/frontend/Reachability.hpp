@@ -223,13 +223,19 @@ inline ReachabilityResult analyze_reachability(
     std::map<std::string, const ClassDecl*> classes;
     std::map<std::string, const CooperativeScalarLoop*> cooperative_loops;
     std::set<std::string> semantic_names;
+    std::map<std::string, std::size_t> function_family_sizes;
+    std::set<std::string> function_names;
 
     for (const auto& fn : program.functions) {
-        if (!functions.emplace(fn.name, &fn).second)
-            throw std::runtime_error("native reachability rejects overloaded function name: " + fn.name);
-        if (!semantic_names.insert(fn.name).second)
-            throw std::runtime_error("native reachability semantic symbol collision: " + fn.name);
+        const std::string slot =
+                native_function_slot(fn.name, fn.parameters.size());
+        if (!functions.emplace(slot, &fn).second)
+            throw std::runtime_error(
+                    "native reachability duplicate function name/arity: " + slot);
+        ++function_family_sizes[fn.name];
+        function_names.insert(fn.name);
     }
+    semantic_names.insert(function_names.begin(), function_names.end());
     for (const auto& actor : program.actors) {
         if (!actors.emplace(actor.name, &actor).second)
             throw std::runtime_error("native reachability rejects duplicate actor name: " + actor.name);
