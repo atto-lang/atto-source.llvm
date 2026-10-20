@@ -1,4 +1,8 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
+/* The admission/ownership proofs must execute even in Release CTest. */
+#if defined(NDEBUG)
+#undef NDEBUG
+#endif
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdint.h>
