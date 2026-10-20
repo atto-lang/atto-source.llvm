@@ -123,6 +123,28 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(pure("leaf", integer(1)));
+        Function main = pure("main", integer(0));
+        main.statements.reserve(realtime_detail::kMaxRealtimeCallEdges + 1);
+        for (std::size_t i = 0; i <= realtime_detail::kMaxRealtimeCallEdges; ++i) {
+            Statement statement;
+            statement.kind = Statement::Kind::Call;
+            statement.expression = call("leaf");
+            main.statements.push_back(std::move(statement));
+        }
+        program.functions.push_back(std::move(main));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "call graph beyond edge qualification ceiling must reject");
+        require(report.diagnostic == "RT003_WCET_UNPROVEN",
+                "call-edge qualification diagnostic");
+        require(report.reason ==
+                    "hard-RT call-edge count exceeds compiler qualification ceiling",
+                "call-edge qualification reason");
+    }
+
+    {
+        Program program;
         constexpr int chain = 65;
         for (int i = 0; i < chain; ++i) {
             const std::string name = "depth_" + std::to_string(i);
