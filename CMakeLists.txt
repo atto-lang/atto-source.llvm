@@ -39,8 +39,7 @@ if(BUILD_TESTING)
     set_target_properties(oreslang-realtime-actor-arena-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(oreslang-realtime-actor-arena-test PRIVATE
-        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>
-        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+        -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_realtime_actor_arena_contract
         COMMAND oreslang-realtime-actor-arena-test)
     set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
