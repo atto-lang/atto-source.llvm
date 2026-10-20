@@ -1,8 +1,10 @@
 #include "oreslang/runtime/FailureDispatchPipeline.hpp"
 
+#include <array>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define CHECK(expr) do { if (!(expr)) throw std::runtime_error("failed: " #expr); } while (false)
@@ -264,7 +266,54 @@ int main() {
                         "fatal code=4294967293");
     }
 
-    // 7. Diagnostic failure must not suppress terminal control flow. A stale
+    // 7. Concurrent carriers may capture the same current logical execution.
+    // Each capture pins it independently and publishes to a distinct reserved
+    // supervisor slot; no stale-root race or lost CONTROL event is allowed.
+    {
+        constexpr std::size_t count = 8;
+        std::array<Key, count> actors{{
+            key(100), key(101), key(102), key(103),
+            key(104), key(105), key(106), key(107)
+        }};
+        for (const auto& actor : actors) parent.reserve_child(actor);
+
+        std::array<bool, count> published{};
+        std::array<bool, count> captured{};
+        std::array<std::thread, count> threads;
+        for (std::size_t i = 0; i < count; ++i) {
+            threads[i] = std::thread([&, i] {
+                EffectUnwind<0> frame;
+                FailureDispatchScratch scratch;
+                const auto result = FailureDispatchPipeline::finish_capture_dispatch(
+                    frame,
+                    {EffectKind::Panic, static_cast<std::uint32_t>(300 + i)},
+                    executions, continuations, resumed, scratch,
+                    nullptr, nullptr, nullptr, parent, actors[i], "root");
+                published[i] = result.supervisor_published;
+                captured[i] = scratch.trace_captured
+                    && !scratch.trace_capture_failed
+                    && scratch.trace.kind == ORES_FAILURE_TRACE_PANIC;
+            });
+        }
+        for (auto& thread : threads) thread.join();
+        for (std::size_t i = 0; i < count; ++i) {
+            CHECK(published[i]);
+            CHECK(captured[i]);
+        }
+        CHECK(parent.pending_count() == count);
+        const int before = parent_hooks.callbacks;
+        for (std::size_t i = 0; i < count; ++i) {
+            CHECK(parent.admit_turn(parent_hooks, false)
+                == SupervisorControlTurn::Admitted::Control);
+            CHECK(parent_hooks.last_kind == Lane::Kind::Panic);
+            CHECK(parent_hooks.last_origin == Lane::Kind::Panic);
+            CHECK(parent_hooks.last_summary.find("panic code=") == 0);
+        }
+        CHECK(parent_hooks.callbacks == before + static_cast<int>(count));
+        CHECK(parent.pending_count() == 0);
+    }
+
+    // 8. Diagnostic failure must not suppress terminal control flow. A stale
     // current execution yields a bounded fallback summary and still publishes
     // the original Throw through CONTROL.
     {
