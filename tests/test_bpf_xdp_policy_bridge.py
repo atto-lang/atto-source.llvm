@@ -52,7 +52,7 @@ class AdmissionTests(unittest.TestCase):
     def test_duplicate_or_nonfinite_json_rejected(self):
         bad = [
             b'{"target":"ebpf","target":"server"}',
-            b'{"target":"ebpf","tar\u0067et":"server"}',
+            b'{"target":"ebpf","tar\\u0067et":"server"}',
             b'{"x":NaN}', b'{"x":Infinity}', b'{"x":-Infinity}',
             b'\xff', b'\xef\xbb\xbf{}',
         ]
