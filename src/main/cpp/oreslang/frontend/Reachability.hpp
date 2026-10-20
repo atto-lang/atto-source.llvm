@@ -785,6 +785,46 @@ inline void validate_reachability_result(const ReachabilityResult& result) {
         else
             ++removed;
     }
+
+    for (std::size_t i = 0; i < result.root_reasons.size(); ++i) {
+        const auto& item = result.root_reasons[i];
+        validate_reachability_symbol(item.symbol);
+        if (!std::binary_search(
+                result.roots.begin(), result.roots.end(), item.symbol))
+            throw std::runtime_error(
+                    "native reachability provenance names a non-root: " +
+                    item.symbol);
+        if (i != 0) {
+            const auto& previous = result.root_reasons[i - 1];
+            if (std::tie(previous.symbol, previous.reason) >=
+                std::tie(item.symbol, item.reason))
+                throw std::runtime_error(
+                        "native reachability root provenance must be sorted unique");
+        }
+    }
+
+    for (std::size_t i = 0; i < result.edges.size(); ++i) {
+        const auto& edge = result.edges[i];
+        validate_reachability_symbol(edge.from);
+        validate_reachability_symbol(edge.to);
+        if (!std::binary_search(
+                    result.retained_symbols.begin(),
+                    result.retained_symbols.end(),
+                    edge.from) ||
+            !std::binary_search(
+                    result.retained_symbols.begin(),
+                    result.retained_symbols.end(),
+                    edge.to))
+            throw std::runtime_error(
+                    "native reachability provenance edge leaves retained closure");
+        if (i != 0) {
+            const auto& previous = result.edges[i - 1];
+            if (std::tie(previous.from, previous.to, previous.reason) >=
+                std::tie(edge.from, edge.to, edge.reason))
+                throw std::runtime_error(
+                        "native reachability edge provenance must be sorted unique");
+        }
+    }
 }
 
 inline std::string canonical_reachability_json(
