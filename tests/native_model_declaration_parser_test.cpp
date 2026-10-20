@@ -1,6 +1,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/ModelGraphAdmission.hpp"
 #include "oreslang/frontend/ModelRunFencing.hpp"
+#include "oreslang/frontend/PortableModelGraphDigestV1.hpp"
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -52,22 +53,50 @@ int main() {
               "nominal typed USD ports");
         check(hir.upper_bound_bytes == 32, "conservative buffer budget");
         check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
-        const auto descriptor = oreslang::model::canonical_descriptor(hir, "app::Tax@v1");
-        check(descriptor.size() == 514, "canonical descriptor byte length");
-        check(oreslang::model::graph_digest(hir, "app::Tax@v1") ==
-                  "7ffbb2b813a560a93cda79dfcdcd999183b65b1bfe2562002e85f5a7ba0b3545",
-              "portable graph digest golden");
-        check(oreslang::model::graph_digest(hir, "app::Tax@v1") !=
-                  oreslang::model::graph_digest(hir, "other::Tax@v1"),
-              "nominal model type must affect graph digest");
+        namespace pv1 = oreslang::model::portable_v1;
+        const pv1::NominalPort price{"finance.Price@v1", 16};
+        const pv1::Profile pp{true, "none", true};
+        auto portable_sig = [&](char digest_char, std::vector<std::string> kinds,
+                                std::vector<pv1::Port> inputs) {
+            return pv1::Signature{std::move(inputs), price, "pure", false, 0,
+                "ores.model.op.v1", std::string(64, digest_char), "verified-ores",
+                std::move(kinds), pp};
+        };
+        pv1::Graph portable{1, "finance.PriceEstimate@v1", {
+            {"source", "finance.PriceInput", {}, {},
+                portable_sig('1', {}, {})},
+            {"tax", "finance.ApplyTaxBps", {"source"}, {{"i64", "1500"}},
+                portable_sig('2', {"i64"}, {price})},
+            {"round", "finance.RoundCents", {"tax"}, {},
+                portable_sig('3', {}, {price})}
+        }, {"round"}};
+        check(pv1::canonical_bytes(portable).size() == 544, "portable digest byte length");
+        const auto graph_id = pv1::digest(portable);
+        check(graph_id == "e4b3337bd3e8b71d8f062afc7fcad5646fa8ad567bfe009e3d02f599b3ee833c",
+              "shared portable graph digest");
+        auto constant_change = portable;
+        constant_change.nodes[1].const_args[0].value = "1501";
+        check(pv1::digest(constant_change) ==
+                  "1dcfd1569621a30e53c969b9bf0e2add7fe94a04c2bf4474fae821555996d21b",
+              "static constant digest mutation");
+        auto implementation_change = portable;
+        implementation_change.nodes[1].signature.impl_digest = std::string(64, '4');
+        check(pv1::digest(implementation_change) ==
+                  "cdb96a21464b7fbeeaa3c7fade033780785c7849bf15a6033634b060b597e5ce",
+              "implementation digest mutation");
+        auto renamed = portable;
+        renamed.nodes[0].id = "a";
+        renamed.nodes[1].id = "b"; renamed.nodes[1].inputs = {"a"};
+        renamed.nodes[2].id = "c"; renamed.nodes[2].inputs = {"b"};
+        renamed.outputs = {"c"};
+        check(pv1::digest(renamed) == graph_id, "temporary node IDs are nonsemantic");
 
-        const auto graph_id = oreslang::model::graph_digest(hir, "app::Tax@v1");
         const std::string profile(64, 'b');
         const oreslang::model::ModelOwner owner{
-            "app::Tax@v1", graph_id, 7, "instance-1", 11, profile
+            "finance.PriceEstimate@v1", graph_id, 7, "instance-1", 11, profile
         };
         const oreslang::model::RunStamp run{
-            "run-1", "app::Tax@v1", graph_id, 7, "instance-1", 11, profile
+            "run-1", "finance.PriceEstimate@v1", graph_id, 7, "instance-1", 11, profile
         };
         auto ledger = oreslang::model::validate_and_commit(owner, run, {});
         check(ledger.committed_run_ids.count("run-1") == 1, "run stamp commit");
