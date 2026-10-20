@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <charconv>
 #include <functional>
+#include <limits>
 #include <cctype>
 #include <stdexcept>
 #include <string>
