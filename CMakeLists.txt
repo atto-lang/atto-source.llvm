@@ -58,6 +58,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-realtime-actor-arena-test)
     set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
 
+    # Experimental native compiler AST safety graph; not a full security proof.
+    add_executable(oreslang-native-static-safety-test
+        tests/native_static_safety_test.cpp)
+    target_include_directories(oreslang-native-static-safety-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-static-safety-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_static_safety_ast_contract
+        COMMAND oreslang-native-static-safety-test)
+    set_tests_properties(native_static_safety_ast_contract PROPERTIES TIMEOUT 15)
+
     # Compiler-owned transitive effect/call-graph hard-RT admission.
     add_executable(oreslang-realtime-analysis-test
         tests/realtime_analysis_test.cpp)
