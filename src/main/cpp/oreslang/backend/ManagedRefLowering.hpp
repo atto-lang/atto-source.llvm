@@ -116,6 +116,10 @@ inline llvm::Value* emit_checked_actor_ref32_address(
 
     auto* width = llvm::ConstantInt::get(i64, access_bytes);
     auto* span_enough = builder.CreateICmpUGE(access.actor_arena_span, width);
+    // An actor arena exceeding the compressed encoding's addressable span
+    // must have been assigned native64 by the physical-layout planner.
+    auto* span_compatible = builder.CreateICmpULE(access.actor_arena_span,
+        llvm::ConstantInt::get(i64, UINT64_C(34359738360)));
     auto* max_offset = builder.CreateSub(access.actor_arena_span, width);
     auto* inside = builder.CreateICmpULE(offset, max_offset);
 
@@ -133,7 +137,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* no_wrap = builder.CreateICmpULE(base,
         builder.CreateSub(llvm::ConstantInt::getAllOnesValue(i64), access_end));
     auto* admitted = builder.CreateAnd(
-        builder.CreateAnd(span_enough, inside),
+        builder.CreateAnd(builder.CreateAnd(span_enough, span_compatible), inside),
         builder.CreateAnd(base_nonzero, builder.CreateAnd(aligned, no_wrap)));
     builder.CreateCondBr(admitted, safe_block, trap_block);
 
