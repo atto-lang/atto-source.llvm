@@ -8,6 +8,9 @@
 
 namespace {
 
+constexpr const char* kSharedExecutableCorpusRevision =
+    "model-core-i64-v1.2026-10-20.1";
+
 void expect_error(const std::string& code, const std::string& source) {
     try {
         (void)oreslang::parse_program(source);
@@ -20,6 +23,8 @@ void expect_error(const std::string& code, const std::string& source) {
 } // namespace
 
 int main() {
+    assert(std::string(kSharedExecutableCorpusRevision) ==
+           "model-core-i64-v1.2026-10-20.1");
     assert(oreslang::model_sha256("abc") ==
            "ba7816bf8f01cfea414140de5dae2223"
            "b00361a396177a9cb410ff61f20015ad");
