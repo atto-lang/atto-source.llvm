@@ -305,11 +305,29 @@ inline ReachabilityResult analyze_reachability(
     std::set<std::string> retained_actors;
     std::set<std::string> retained_classes;
     std::set<std::string> root_symbols;
+    std::set<std::tuple<std::string, ReachabilityReason>> root_reason_set;
+    std::set<std::tuple<std::string, std::string, ReachabilityReason>> edge_set;
 
     const auto function_semantic_name =
             [&](const std::string& slot, const Function& fn) {
         return function_family_sizes.at(fn.name) > 1 ? slot : fn.name;
     };
+    const auto add_root_reason =
+            [&](const std::string& semantic, ReachabilityReason reason) {
+        const std::string symbol = reachability_detail::qualify(program, semantic);
+        root_symbols.insert(symbol);
+        root_reason_set.emplace(symbol, reason);
+    };
+    const auto add_edge =
+            [&](const std::string& from,
+                const std::string& to,
+                ReachabilityReason reason) {
+        edge_set.emplace(
+                reachability_detail::qualify(program, from),
+                reachability_detail::qualify(program, to),
+                reason);
+    };
+
     const auto resolve_function_root = [&](const std::string& requested) {
         const auto exact = functions.find(requested);
         if (exact != functions.end()) return requested;
