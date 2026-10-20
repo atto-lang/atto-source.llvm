@@ -180,6 +180,9 @@ int main(int argc, char** argv) {
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
 
+        if (rt_report_seen && path != nullptr && rt_report_path == path)
+            throw std::runtime_error("rt-report path must not overwrite source input");
+
         if (native_hard_rt_profile || rt_report_seen) {
             const auto report = oreslang::analyze_native_hard_rt(ast, rt_entry);
             const std::string report_json = report.to_json();
