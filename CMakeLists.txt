@@ -2210,3 +2210,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+# Advisory v0 only: compiler-backed literal-main facts, no actor/termination claims.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME llvm_static_facts_v0_negative
+        COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/static_facts_v0.py" --self-test)
+    add_test(NAME llvm_static_facts_v0_real_compiler
+        COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/static_facts_v0.py"
+        --compiler "$<TARGET_FILE:oreslang-llvmc>"
+        --source "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/fixtures/literal-42.ores")
+    set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
+        PROPERTIES TIMEOUT 30)
+endif()
