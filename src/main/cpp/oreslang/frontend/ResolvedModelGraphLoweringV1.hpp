@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ModelGraphAdmission.hpp"
 #include "oreslang/frontend/PortableModelGraphDigestV1.hpp"
 #include <charconv>
 #include <cstdint>
@@ -45,14 +46,24 @@ inline Graph lower(const ModelDecl& source,
                    const Registry& trusted,
                    const Overrides& overrides = {}) {
     if (source.operations.empty()) throw std::runtime_error("MODEL_EMPTY_BODY");
+    if (source.operations.size() > 64) throw std::runtime_error("MODEL_NODE_BUDGET");
+    if (source.formals.size() > 16) throw std::runtime_error("MODEL_FORMAL_BUDGET");
     std::unordered_map<std::string,std::string> config;
     std::unordered_set<std::string> declared;
     for (const auto& formal : source.formals) {
+        if (!model_identifier(formal.name))
+            throw std::runtime_error("MODEL_NONCONSTANT_CONFIG");
         if (!declared.insert(formal.name).second)
             throw std::runtime_error("MODEL_DUPLICATE_FORMAL");
+        // Validate even unused or overridden defaults before dead fields
+        // can be silently omitted from the emitted portable graph.
+        validate_default(formal);
         auto override = overrides.find(formal.name);
-        if (override != overrides.end()) config.emplace(formal.name, override->second);
-        else if (!formal.default_value.empty()) config.emplace(formal.name, formal.default_value);
+        if (override != overrides.end()) {
+            validate_scalar(override->second, false, false, formal.type);
+            config.emplace(formal.name, override->second);
+        } else if (!formal.default_value.empty())
+            config.emplace(formal.name, formal.default_value);
         else throw std::runtime_error("MODEL_NONCONSTANT_CONFIG");
     }
     for (const auto& [name, value] : overrides) {
@@ -72,6 +83,7 @@ inline Graph lower(const ModelDecl& source,
         if (sig.effect != "pure") throw std::runtime_error("MODEL_EFFECTFUL_OP");
         if (index == 0 && sig.inputs.size() > 1) throw std::runtime_error("MODEL_ARITY_MISMATCH");
         if (index > 0 && sig.inputs.size() != 1) throw std::runtime_error("MODEL_ARITY_MISMATCH");
+        if (op.arguments.size() > 16) throw std::runtime_error("MODEL_ARGUMENT_BUDGET");
         if (op.arguments.size() != sig.const_kinds.size())
             throw std::runtime_error("MODEL_CONST_ARITY_MISMATCH");
 
@@ -87,6 +99,8 @@ inline Graph lower(const ModelDecl& source,
                 if (it == config.end()) throw std::runtime_error("MODEL_UNKNOWN_FORMAL");
                 value = it->second;
             }
+            validate_scalar(value, false, false,
+                            sig.const_kinds[i] == "i64" ? "int" : sig.const_kinds[i]);
             constants.push_back(canonical_value(value, sig.const_kinds[i]));
         }
 
