@@ -210,11 +210,18 @@ public:
     // Diagnose the whole contextual prefix before any source IR can be emitted.
     void reject_unlowered_actor_protocol() {
         std::string modifiers;
+        // All specialized roles are unsupported in this native subset.
+        // Bound diagnostic construction even for attacker-controlled source
+        // containing thousands of repeated contextual modifier tokens.
+        constexpr std::size_t kMaxActorProtocolModifiers = 9;
+        std::size_t modifier_count = 0;
         while (token_.text == "serial" || token_.text == "unary"
                 || token_.text == "stream" || token_.text == "http"
                 || token_.text == "ipc" || token_.text == "tcp"
                 || token_.text == "ffi" || token_.text == "proxy"
                 || token_.text == "websocket") {
+            if (++modifier_count > kMaxActorProtocolModifiers)
+                fail("native actor protocol modifier list exceeds bounded admission");
             if (!modifiers.empty()) modifiers += " ";
             modifiers += token_.text;
             token_ = lexer_.next();
