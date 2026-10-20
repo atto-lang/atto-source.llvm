@@ -31,6 +31,28 @@ static Function fn(const std::string& name, std::unique_ptr<Expression> result, 
     return out;
 }
 
+static std::unique_ptr<Expression> call_arity(
+        const std::string& name, std::size_t arity) {
+    auto expr = call(name);
+    for (std::size_t i = 0; i < arity; ++i)
+        expr->arguments.push_back(integer(static_cast<std::int64_t>(i + 1)));
+    return expr;
+}
+
+static Function fn_arity(
+        const std::string& name,
+        std::size_t arity,
+        std::unique_ptr<Expression> result,
+        bool exported = false) {
+    Function out = fn(name, std::move(result), exported);
+    for (std::size_t i = 0; i < arity; ++i) {
+        Parameter parameter;
+        parameter.name = "p" + std::to_string(i);
+        out.parameters.push_back(std::move(parameter));
+    }
+    return out;
+}
+
 static bool has(const std::vector<std::string>& values, const std::string& value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
@@ -359,6 +381,46 @@ int main() {
                 std::move(wasm_program), {}, false, {"Worker"}, {}, true, false);
         assert(!wasm_shaken.runtime_features.contains(
                 RuntimeFeature::ActorNativeRuntime));
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn_arity("pick", 1, integer(1)));
+        program.functions.push_back(fn_arity("pick", 2, integer(2)));
+        program.functions.push_back(fn_arity("pick", 3, integer(3)));
+
+        auto sum = std::make_unique<Expression>();
+        sum->kind = Expression::Kind::Add;
+        sum->left = call_arity("pick", 1);
+        sum->right = call_arity("pick", 2);
+        program.functions.push_back(fn("main", std::move(sum)));
+
+        auto shaken = tree_shake_program(std::move(program), {"main"}, false);
+        assert(has(shaken.reachability.retained_symbols,
+                   "__root__.pick$arity1"));
+        assert(has(shaken.reachability.retained_symbols,
+                   "__root__.pick$arity2"));
+        assert(has(shaken.reachability.removed_symbols,
+                   "__root__.pick$arity3"));
+        assert(shaken.program.functions.size() == 3);
+        assert(std::none_of(
+                shaken.program.functions.begin(),
+                shaken.program.functions.end(),
+                [](const Function& item) {
+                    return item.name == "pick" &&
+                           item.parameters.size() == 3;
+                }));
+
+        bool ambiguous = false;
+        try {
+            Program roots;
+            roots.functions.push_back(fn_arity("pick", 1, integer(1)));
+            roots.functions.push_back(fn_arity("pick", 2, integer(2)));
+            (void)analyze_reachability(roots, {"pick"}, false);
+        } catch (const std::runtime_error&) {
+            ambiguous = true;
+        }
+        assert(ambiguous && "bare overloaded root must remain ambiguous");
     }
 
     {
