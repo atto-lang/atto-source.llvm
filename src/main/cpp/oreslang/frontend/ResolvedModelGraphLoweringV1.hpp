@@ -100,6 +100,9 @@ inline Graph lower(const ModelDecl& source,
         graph.nodes.push_back(std::move(node));
     }
     graph.outputs.push_back(prior);
+    // Fail closed at the lowering boundary, not only if the caller later
+    // chooses to request a portable hash.
+    (void)portable_v1::canonical_bytes(graph);
     return graph;
 }
 
