@@ -112,7 +112,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--live", action="store_true",
-                        help="require live source identity and protected-main checks")
+                        help="validate the preferred protected-main authority mode")
     args = parser.parse_args()
     try:
         approved = check_policy_files(args.root)
