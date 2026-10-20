@@ -49,6 +49,7 @@ struct RuntimeFeatureSet {
                     break;
             }
         }
+        std::sort(out.begin(), out.end());
         return out;
     }
 
