@@ -43,6 +43,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Effect IR is deliberately a header-only, bounded AST admission pass.
+    # Exercise its fixtures and fail-closed negative cases independently of
+    # executing guest code or granting a realtime target certificate.
+    add_executable(oreslang-native-scalar-effect-ir-test
+        tests/native_scalar_effect_ir_test.cpp)
+    target_include_directories(oreslang-native-scalar-effect-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-effect-ir-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_scalar_effect_ir_v1_admission
+        COMMAND oreslang-native-scalar-effect-ir-test)
+    set_tests_properties(native_scalar_effect_ir_v1_admission PROPERTIES TIMEOUT 20)
+
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
     add_executable(oreslang-realtime-actor-arena-test
