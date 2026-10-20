@@ -44,11 +44,11 @@ int main() {
 
         auto too_big = graph({"source"}, {price});
         too_big.nodes[1].signature.output =
-            p::BufferPort{"f64", {static_cast<std::uint64_t>(INT64_MAX)}, "contiguous", std::nullopt};
+            p::BufferPort{"f64", {static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())}, "contiguous", std::nullopt};
         deny("MODEL_SIZE_OVERFLOW", too_big);
         auto zero_extent = graph({"source"}, {price});
         zero_extent.nodes[1].signature.output =
-            p::BufferPort{"f64", {static_cast<std::uint64_t>(INT64_MAX), 0}, "contiguous", std::nullopt};
+            p::BufferPort{"f64", {static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()), 0}, "contiguous", std::nullopt};
         require(p::digest(zero_extent).size() == 64, "zero extents must not overflow");
         require(p::digest(graph({"source"}, {price})).size() == 64,
                 "valid model cannot be digested");
