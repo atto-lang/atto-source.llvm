@@ -33,3 +33,13 @@ Positive and negative native C++ tests exercise the source-independent CFG
 transition, establishing a testable refinement obligation against the TLA+ model.
 The LLVM source frontend does **not** yet lower all await/suspend constructs
 through this gate; therefore this is not evidence of guest Task/await safety.
+
+## Cross-backend scalar execution, not effect parity
+
+CTest `native_rust_scalar_guest_parity` invokes
+`tests/native_rust_scalar_guest_parity.py` to compile four scalar
+expressions, lower to LLVM IR, link with Clang, execute native processes,
+and compare exit values (42, 7, 21, 38). An overflowing i64 literal must
+fail compilation with no emitted LLVM IR. This is a runtime semantic
+refinement probe, **not** evidence that LLVM produces the same checked
+effect-IR as Rust. Full source/CFG/effect provenance remains outstanding.
