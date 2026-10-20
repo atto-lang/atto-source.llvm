@@ -70,3 +70,19 @@ equivalent native actor execution, source effects, async or exception lowering.
 
 Until every blocking row is implemented and differentially tested, maintain
 the source PRs as drafts and describe both compilers as **not yet at parity**.
+
+### Batch 12: typed-effect signatures and bounded native diagnostics
+
+The LLVM scalar frontend rejects proposed postfix `throws`, `raises`,
+`panics` at its return-signature/effect boundary with a dedicated
+compiler diagnostic and no IR (including bare clauses and after `using`).
+Executable callable effects and typed exception lowering remain **blocked**.
+
+The native *control-plane reference policy* now caps the suppressed failure
+tree at 64 nodes and depth 16. When a suppressed subtree would exceed either
+budget, dominance and the original failure kind are preserved while a
+saturating omission counter records diagnostic loss. This prevents unbounded
+native-control metadata during a cleanup storm, but is **not yet identical**
+to Java's in-process `Throwable.addSuppressed` diagnostic retention.
+Cross-backend delivery parity requires a common bounded notice encoding and
+actual actor CONTROL execution; source-compiled effect tests are not proven.

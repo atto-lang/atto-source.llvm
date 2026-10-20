@@ -48,6 +48,28 @@ CASES = {
         "expected int expression",
     ),
     # Exceptional controls must fail closed without emitting LLVM IR.
+    # Typed effect rows are not lowered: all variants need a dedicated
+    # compiler-owned diagnostic rather than an incidental brace parse error.
+    "throws-signature": (
+        "pub fnc main(): int throws(Error) { return 42; }",
+        "native postfix exceptional effect 'throws'",
+    ),
+    "raises-signature": (
+        "pub fnc main(): int raises(SecurityError) { return 42; }",
+        "native postfix exceptional effect 'raises'",
+    ),
+    "panics-signature": (
+        "pub fnc main(): int panics(InvariantError) { return 42; }",
+        "native postfix exceptional effect 'panics'",
+    ),
+    "bare-throws-signature": (
+        "pub fnc main(): int throws { return 42; }",
+        "native postfix exceptional effect 'throws'",
+    ),
+    "post-using-raises": (
+        "pub fnc main(): int using io raises(Error) { return 42; }",
+        "native postfix exceptional effect 'raises'",
+    ),
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
         "native exceptional-control boundary unsupported",
