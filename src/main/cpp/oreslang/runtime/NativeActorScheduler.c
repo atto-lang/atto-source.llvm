@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
+#include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
 #include <stdint.h>
@@ -38,6 +39,7 @@ struct OresNativeActorScheduler {
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
     uint64_t domain;
+    uint64_t next_execution;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
     OresNativeActorTaskFn callback;
@@ -49,6 +51,7 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
@@ -174,6 +177,9 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (!s->next_execution) abort();
+        const uint64_t execution_id = s->next_execution;
+        s->next_execution = execution_id == UINT64_MAX ? 0 : execution_id + 1;
         OresExecutionClaim execution_claim = {0};
         /* Only this scheduler can certify that the dequeued envelope was
          * admitted before retirement. Never time out an active guest owner. */
@@ -186,12 +192,24 @@ static void* carrier(void* raw) {
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
+        executing_context = (OresNativeExecutionContext){
+            .id = {s->domain, execution_id},
+            .allocation = {
+                ORES_ALLOCATION_DOMAIN_ACTOR,
+                s->domain,
+                (uint64_t)i,
+                lane->generation
+            },
+            .parent_execution = 0,
+            .continuation = 0
+        };
         executing = s;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
+        executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
         lock(s);
@@ -247,6 +265,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
+    s->next_execution = 1;
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
     s->callback = callback;
@@ -586,6 +605,16 @@ int ores_native_actor_scheduler_is_current_actor(
     // An active callback pins its scheduler/lane; only the authority mutex
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
+}
+int ores_native_actor_scheduler_current_execution_context(
+        OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
+    if (!s || !out || executing != s || !executing_context.id.runtime_domain
+            || !executing_context.id.execution)
+        return 0;
+    if (!ores_native_actor_scheduler_is_current_actor(s, executing_actor))
+        return 0;
+    *out = executing_context;
+    return 1;
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
