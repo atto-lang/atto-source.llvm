@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -210,7 +211,9 @@ inline DirectFacts direct_facts(const Function& function) {
         const auto initial = function.scalar_while->initial;
         const auto upper = function.scalar_while->upper_bound;
         if (upper > initial)
-            facts.loop_iterations = static_cast<std::uint64_t>(upper - initial);
+            facts.loop_iterations =
+                static_cast<std::uint64_t>(upper) -
+                static_cast<std::uint64_t>(initial);
     }
 
     return facts;
@@ -300,6 +303,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     bool bounded_calls = true;
     bool unsupported_runtime = false;
     std::string failure;
+    std::string failure_diagnostic;
 
     std::function<FunctionEffects(const std::string&)> visit =
         [&](const std::string& key) -> FunctionEffects {
@@ -307,12 +311,14 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         if (cached != closed_effects.end()) return cached->second;
         if (!active.insert(key).second) {
             failure = "recursive call graph is not admitted";
+            failure_diagnostic = "RT008_UNBOUNDED_LOOP";
             return {};
         }
 
         const auto found = functions.find(key);
         if (found == functions.end()) {
             failure = "unresolved or external call: " + key;
+            failure_diagnostic = "RT005_DYNAMIC_CODE";
             active.erase(key);
             return {};
         }
@@ -339,6 +345,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
             const auto child_loops = closed_loops.at(child);
             if (child_loops > UINT64_MAX - loops) {
                 failure = "bounded loop count overflow";
+                failure_diagnostic = "RT008_UNBOUNDED_LOOP";
                 active.erase(key);
                 return {};
             }
@@ -349,6 +356,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
             if (!function->declared_effects.valid() ||
                 !function->declared_effects.permits(effects)) {
                 failure = "declared using-effects do not cover transitive inferred effects for " + key;
+                failure_diagnostic = "RT009_SCHEDULING_UNPROVEN";
                 active.erase(key);
                 return {};
             }
@@ -357,6 +365,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
             if (realtime_detail::disallowed_effects(
                     function->declared_effects, diagnostic, reason)) {
                 failure = "hard-RT entry reaches function declaring disallowed capability: " + key;
+                failure_diagnostic = diagnostic;
                 active.erase(key);
                 return {};
             }
@@ -375,9 +384,9 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     report.bounded_calls = bounded_calls;
 
     if (!failure.empty()) {
-        report.diagnostic = failure.find("recursive") != std::string::npos
-            ? "RT008_UNBOUNDED_LOOP"
-            : "RT005_DYNAMIC_CODE";
+        report.diagnostic = failure_diagnostic.empty()
+            ? "RT009_SCHEDULING_UNPROVEN"
+            : failure_diagnostic;
         report.reason = failure;
         return report;
     }
