@@ -42,6 +42,7 @@ struct OresNativeActorScheduler {
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
+    ReadyBits control_ready, data_ready;
     uint64_t* slots;
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
@@ -92,34 +93,114 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+
+/* Scheduler-owned, preallocated two-level index. Only touched under lock.
+ * One bit per eligible actor, never one bit per message. */
+typedef struct {
+    uint64_t* words;
+    uint64_t* summary;
+    size_t word_count, summary_count;
+} ReadyBits;
+static int ready_bits_init(ReadyBits* b, size_t actors) {
+    b->word_count = (actors + 63) / 64;
+    b->summary_count = (b->word_count + 63) / 64;
+    b->words = (uint64_t*)calloc(b->word_count, sizeof(uint64_t));
+    b->summary = (uint64_t*)calloc(b->summary_count, sizeof(uint64_t));
+    return b->words && b->summary;
+}
+static void ready_bits_destroy(ReadyBits* b) {
+    free(b->words);
+    free(b->summary);
+}
+/* Constant-time indexed insertion/removal. No heap work while dispatching. */
+static void ready_bits_assign(ReadyBits* b, size_t actor, int set) {
+    size_t w = actor / 64;
+    uint64_t bit = UINT64_C(1) << (actor % 64);
+    if (set) b->words[w] |= bit;
+    else b->words[w] &= ~bit;
+    uint64_t group_bit = UINT64_C(1) << (w % 64);
+    if (b->words[w]) b->summary[w / 64] |= group_bit;
+    else b->summary[w / 64] &= ~group_bit;
+}
+/* Portable count-trailing-zero for nonzero words, at most 63 iterations. */
+static unsigned ready_low_bit(uint64_t v) {
+    unsigned i = 0;
+    while (!(v & UINT64_C(1))) { v >>= 1; ++i; }
+    return i;
+}
+static size_t ready_range_first(const ReadyBits* b, size_t low, size_t high) {
+    if (low >= high) return SIZE_MAX;
+    size_t first_word = low / 64;
+    size_t last_word = (high - 1) / 64;
+    for (size_t group = first_word / 64; group <= last_word / 64; ++group) {
+        uint64_t available = b->summary[group];
+        if (group == first_word / 64)
+            available &= UINT64_MAX << (first_word % 64);
+        if (group == last_word / 64 && last_word % 64 != 63)
+            available &= (UINT64_C(1) << ((last_word % 64) + 1)) - 1;
+        while (available) {
+            size_t w = group * 64 + ready_low_bit(available);
+            uint64_t bits = b->words[w];
+            if (w == first_word) bits &= UINT64_MAX << (low % 64);
+            if (w == last_word && high % 64)
+                bits &= (UINT64_C(1) << (high % 64)) - 1;
+            if (bits) return w * 64 + ready_low_bit(bits);
+            available &= available - 1;
+        }
+    }
+    return SIZE_MAX;
+}
+static size_t ready_next(const ReadyBits* b, size_t start, size_t actors) {
+    size_t found = ready_range_first(b, start, actors);
+    return found != SIZE_MAX ? found : ready_range_first(b, 0, start);
+}
+static void sync_ready_bits(OresNativeActorScheduler* s, size_t actor) {
+    ActorLane* lane = &s->actors[actor];
+    int can_run = lane->spawned && !lane->active;
+    ready_bits_assign(&s->control_ready, actor, can_run && lane->has_control);
+    ready_bits_assign(&s->data_ready, actor,
+                      can_run && !lane->has_control && lane->queued > 0);
+}
+
 static int find_ready(OresNativeActorScheduler* s, size_t worker,
                       unsigned local_burst, size_t* actor,
                       int* control, int* preferred) {
-    /* CONTROL remains globally first. Then prefer DATA most recently run by
-     * this long-lived pthread, otherwise steal from any runnable actor.
-     * Never wait for a busy preferred worker: starvation avoidance and actual
-     * CONTROL delivery outrank cache hints. */
-    for (int pass = 2; pass >= 0; --pass) {
-        /* After 8 local turns, force a globally fair DATA decision.
-         * Otherwise continuously runnable local actors can starve new
-         * remote/unknown-affinity actor lanes indefinitely. */
-        if (pass == 1 && local_burst >= 8) continue;
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
-            ActorLane* lane = &s->actors[i];
-            if (lane->active) continue;
-            if (pass == 2 && !lane->has_control) continue;
-            if (pass == 1 && (!lane->queued
-                || lane->last_carrier_plus_one != worker + 1)) continue;
-            if (pass == 0 && !lane->queued) continue;
-            *actor = i;
-            *control = pass == 2;
-            *preferred = pass == 1;
-            s->next_actor = (i + 1) % s->actor_count;
-            return 1;
+    /* CONTROL always wins globally, including across cache/NUMA domains.
+     * The two-level word index never scans all actor slots per dispatch. */
+    size_t found = ready_next(&s->control_ready, s->next_actor, s->actor_count);
+    if (found != SIZE_MAX) {
+        *actor = found;
+        *control = 1;
+        *preferred = 0;
+        s->next_actor = (found + 1) % s->actor_count;
+        return 1;
+    }
+    /* Bounded locality probes. Scanning all local actors would restore
+     * O(actor-count) dispatch with tens of thousands of logical actors.
+     * Every eighth preferred turn forces an unbiased global DATA choice. */
+    if (local_burst < 8) {
+        size_t first = ready_next(&s->data_ready, s->next_actor, s->actor_count);
+        size_t candidate = first;
+        for (unsigned attempt = 0; candidate != SIZE_MAX && attempt < 32; ++attempt) {
+            if (s->actors[candidate].last_carrier_plus_one == worker + 1) {
+                *actor = candidate;
+                *control = 0;
+                *preferred = 1;
+                s->next_actor = (candidate + 1) % s->actor_count;
+                return 1;
+            }
+            candidate = ready_next(&s->data_ready,
+                                   (candidate + 1) % s->actor_count, s->actor_count);
+            if (candidate == first) break;
         }
     }
-    return 0;
+    found = ready_next(&s->data_ready, s->next_actor, s->actor_count);
+    if (found == SIZE_MAX) return 0;
+    *actor = found;
+    *control = 0;
+    *preferred = 0;
+    s->next_actor = (found + 1) % s->actor_count;
+    return 1;
 }
 /* Opt-in host deployment hint only. Does not establish exclusive cores,
  * hard realtime, or actor-to-pthread ownership. Empty/non-Linux/large CPU
@@ -212,6 +293,7 @@ static void* carrier(void* raw) {
         }
         lane->last_carrier_plus_one = worker + 1;
         lane->active = 1;
+        sync_ready_bits(s, i);
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -231,6 +313,7 @@ static void* carrier(void* raw) {
          * completion cannot release the actor's next carrier owner. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
         lane->active = 0;
+        sync_ready_bits(s, i);
         s->outstanding--;
         s->completed++;
         /* A lane contributes at most one runnable turn regardless of how
@@ -258,7 +341,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
     OresNativeActorPanicFn panic_callback, void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
+    if (!callback || !actors || actors > 65536 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
@@ -268,6 +351,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
+    if (!ready_bits_init(&s->control_ready, actors)
+        || !ready_bits_init(&s->data_ready, actors)) goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
@@ -299,6 +384,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    ready_bits_destroy(&s->control_ready);
+    ready_bits_destroy(&s->data_ready);
     free(s->threads);
     free(s->slots);
     free(s->actors);
@@ -371,6 +458,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    sync_ready_bits(s, i);
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
@@ -460,6 +548,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        sync_ready_bits(s, (size_t)parent.actor_slot);
         ++s->accepted;
         ++s->outstanding;
         pthread_cond_signal(&s->ready);
@@ -492,6 +581,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        sync_ready_bits(s, (size_t)parent.actor_slot);
         s->accepted++;
         s->outstanding++;
         pthread_cond_signal(&s->ready);
@@ -655,6 +745,8 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    ready_bits_destroy(&s->control_ready);
+    ready_bits_destroy(&s->data_ready);
     free(s->threads);
     free(s->slots);
     free(s->actors);
