@@ -43,6 +43,32 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
+    # arena with no system allocator or lock path after initialization.
+    add_executable(oreslang-realtime-actor-arena-test
+        tests/realtime_actor_arena_test.cpp
+        src/main/cpp/oreslang/runtime/RealtimeActorArena.c)
+    target_include_directories(oreslang-realtime-actor-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-realtime-actor-arena-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-realtime-actor-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_realtime_actor_arena_contract
+        COMMAND oreslang-realtime-actor-arena-test)
+    set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
+
+    # Compiler-owned transitive effect/call-graph hard-RT admission.
+    add_executable(oreslang-realtime-analysis-test
+        tests/realtime_analysis_test.cpp)
+    target_include_directories(oreslang-realtime-analysis-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-realtime-analysis-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_realtime_transitive_effect_analysis
+        COMMAND oreslang-realtime-analysis-test)
+    set_tests_properties(native_realtime_transitive_effect_analysis PROPERTIES TIMEOUT 15)
+
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
@@ -169,6 +195,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_realtime_profile_cli
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
+
     # Executable source admission gate: function values are not nominal classes.
     add_test(NAME native_callable_nominal_boundary
         COMMAND "${Python3_EXECUTABLE}"
