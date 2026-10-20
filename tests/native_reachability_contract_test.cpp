@@ -4,6 +4,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace oreslang;
 
@@ -33,6 +34,16 @@ static bool has(const std::vector<std::string>& values, const std::string& value
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+static void expect_rejected(const ReachabilityResult& result) {
+    bool rejected = false;
+    try {
+        (void)canonical_reachability_json(result, false);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    assert(rejected);
+}
+
 int main() {
     {
         Program program;
@@ -47,6 +58,12 @@ int main() {
         assert(has(result.retained_symbols, "__root__.live"));
         assert(has(result.retained_symbols, "__root__.leaf"));
         assert(has(result.removed_symbols, "__root__.dead"));
+        assert(canonical_reachability_json(result, false) ==
+               "{\"format\":\"ores-reachability/1\",\"buildKind\":\"executable\","
+               "\"roots\":[\"__root__.main\"],"
+               "\"retainedSymbols\":[\"__root__.leaf\",\"__root__.live\",\"__root__.main\"],"
+               "\"removedSymbols\":[\"__root__.dead\"],"
+               "\"compileTimeConstants\":{}}");
     }
 
     {
@@ -85,6 +102,61 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("class_init", integer(7)));
+
+        ClassDecl box;
+        box.name = "Box";
+        ClassField field;
+        field.name = "value";
+        field.initializer_expression = call("class_init");
+        box.fields.push_back(std::move(field));
+        program.classes.push_back(std::move(box));
+
+        Function main = fn("main", integer(0));
+        LocalBinding local;
+        local.name = "box";
+        local.class_name = "Box";
+        local.new_class = true;
+        main.locals.push_back(std::move(local));
+        program.functions.push_back(std::move(main));
+
+        const auto result = analyze_reachability(program, {"main"}, false);
+        assert(has(result.retained_symbols, "__root__.Box"));
+        assert(has(result.retained_symbols, "__root__.class_init"));
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("ctor_arg", integer(3)));
+
+        ClassDecl box;
+        box.name = "Box";
+        program.classes.push_back(std::move(box));
+
+        Function main = fn("main", integer(0));
+        Statement conditional;
+        conditional.kind = Statement::Kind::Conditional;
+        conditional.condition_lhs = integer(1);
+        conditional.condition_rhs = integer(1);
+
+        Statement scoped;
+        scoped.kind = Statement::Kind::ScopedLocal;
+        scoped.branch_local = std::make_unique<LocalBinding>();
+        scoped.branch_local->name = "box";
+        scoped.branch_local->class_name = "Box";
+        scoped.branch_local->new_class = true;
+        scoped.branch_local->constructor_arguments.push_back(call("ctor_arg"));
+        conditional.then_statements.push_back(std::move(scoped));
+        main.statements.push_back(std::move(conditional));
+        program.functions.push_back(std::move(main));
+
+        const auto result = analyze_reachability(program, {"main"}, false);
+        assert(has(result.retained_symbols, "__root__.Box"));
+        assert(has(result.retained_symbols, "__root__.ctor_arg"));
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("main", call("missing")));
         bool rejected = false;
         try {
@@ -93,6 +165,21 @@ int main() {
             rejected = true;
         }
         assert(rejected && "unknown native direct calls must fail closed");
+    }
+
+    {
+        expect_rejected(ReachabilityResult{
+            {"__root__.main"},
+            {"__root__.main", "__root__.live"},
+            {"__root__.live"}});
+        expect_rejected(ReachabilityResult{
+            {"__root__.missing"},
+            {"__root__.main"},
+            {}});
+        expect_rejected(ReachabilityResult{
+            {"__root__.main"},
+            {"__root__.main", "__root__.main"},
+            {}});
     }
 
     return 0;
