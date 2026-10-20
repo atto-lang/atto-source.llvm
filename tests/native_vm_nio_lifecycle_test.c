@@ -408,6 +408,25 @@ int main(void) {
             check(ores_native_vm_close(all[i]));
         }
     }
+    // Integration-only cross-contract regression: the upstream physical-turn
+    // gate and the NIO backend lease share this concrete C VM object.
+    // A same-thread close must retire the VM without destroying its gate
+    // or blocking on the caller's own lease. External retry after release
+    // must reclaim both lifetimes. Run under GCC/Clang ASan+UBSan.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        OresNativeVM* combined =
+            ores_native_vm_open_with_physical_turn_limit(&cfg, 1);
+        check(combined != NULL);
+        check(ores_native_vm_active_physical_turns(combined) == 0);
+        check(ores_native_vm_enable_nio(combined, 1, 0, 1));
+        void* lease = ores_native_vm_nio_acquire(combined);
+        check(lease != NULL);
+        check(!ores_native_vm_close(combined));
+        check(ores_native_vm_active_physical_turns(combined) == 0);
+        check(ores_native_vm_nio_acquire(combined) == NULL);
+        ores_native_vm_nio_release(combined, lease);
+        check(ores_native_vm_close(combined));
+    }
     // The actual native VM, scheduler, C ABI, and C++ NIO adapter are all
     // linked by the native lifecycle workflow, not replaced by test doubles.
     for (int iteration = 0; iteration < 32; ++iteration) {
