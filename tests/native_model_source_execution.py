@@ -29,6 +29,28 @@ pub define model PriceAdjust(delta: int = 2) as
 end
 pub fnc main(): int { return PriceAdjust(3).run(39); }
 """, 42),
+    "negative-default": ("""fnc Identity(int input): int { return input; }
+fnc AddDelta(int delta, int input): int { return input + delta; }
+pub define model PriceAdjust(delta: int = -2) as
+    Identity()
+    AddDelta(delta)
+end
+pub fnc main(): int { return PriceAdjust().run(40); }
+""", 38),
+    "negative-explicit": ("""fnc Identity(int input): int { return input; }
+fnc AddDelta(int delta, int input): int { return input + delta; }
+pub define model PriceAdjust(delta: int = -2) as
+    Identity()
+    AddDelta(delta)
+end
+pub fnc main(): int { return PriceAdjust(-3).run(40); }
+""", 37),
+    "negative-static": ("""fnc AddDelta(int delta, int input): int { return input + delta; }
+define model Fixed as
+    AddDelta(-2)
+end
+pub fnc main(): int { return Fixed().run(5); }
+""", 3),
 }
 
 REJECT = {
