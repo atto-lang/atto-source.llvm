@@ -121,7 +121,22 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        // V3 question-mark types/argument presence require a proof-carrying
+        // Option/default/native ABI; never reinterpret them as scalar parameters.
+        if (ch == '?') {
+            throw std::runtime_error("native v3 '?' type/argument syntax requires "
+                                     "versioned Option and default ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
+            throw std::runtime_error("native @DefaultArgVals declaration requires "
+                                     "checked named defaults, ownership and ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        // Admit '@' as a TOKEN only so existing parameter-local @Default guards
+        // can issue their specific fail-closed diagnostic instead of a generic
+        // unsupported-token error. No annotation execution is enabled.
+        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -315,6 +330,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -363,6 +379,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -585,6 +603,8 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
