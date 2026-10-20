@@ -70,7 +70,8 @@ inline llvm::Value* emit_checked_actor_ref32_address(
 
     // The initial compressed actor region contract is native-64-only.
     // Never emit ptrtoint i64 for a wasm32 or unknown target layout.
-    if (module.getDataLayout().getPointerSizeInBits(0) != 64)
+    if (module.getDataLayoutStr().empty() ||
+        module.getDataLayout().getPointerSizeInBits(0) != 64)
         throw std::invalid_argument("actor-local ref32 requires a proven native64 target ABI");
 
     auto* active = builder.GetInsertBlock();
@@ -94,9 +95,13 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     builder.CreateCondBr(not_null, proof_block, trap_block);
 
     builder.SetInsertPoint(proof_block);
+    auto* auth_proof = builder.CreatePointerCast(
+        access.original_proof, check_ty->getParamType(0));
+    auto* auth_base = builder.CreatePointerCast(
+        access.actor_arena_base, check_ty->getParamType(1));
     auto* authorized = builder.CreateCall(access.proof_check,
-        {access.original_proof, access.actor_arena_base,
-         access.actor_arena_span, encoded}, "ref32.authenticated");
+        {auth_proof, auth_base, access.actor_arena_span, encoded},
+        "ref32.authenticated");
     builder.CreateCondBr(authorized, bounds_block, trap_block);
 
     builder.SetInsertPoint(bounds_block);
@@ -108,7 +113,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* offset = builder.CreateShl(index, llvm::ConstantInt::get(i64, 3),
                                     "ref32.byte_offset");
 
-    const auto* width = llvm::ConstantInt::get(i64, access_bytes);
+    auto* width = llvm::ConstantInt::get(i64, access_bytes);
     auto* span_enough = builder.CreateICmpUGE(access.actor_arena_span, width);
     auto* max_offset = builder.CreateSub(access.actor_arena_span, width);
     auto* inside = builder.CreateICmpULE(offset, max_offset);
