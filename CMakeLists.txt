@@ -963,6 +963,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
+    oreslang_contract_test(reject_source_actor_await_callable_result
+        source-actor-await-ready-impure-result.ores
+        --diagnostic "await get_ready requires side-effect-free scalar return")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
     # These tests reject nested type declarations BEFORE member-call lowering.
