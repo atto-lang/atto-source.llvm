@@ -1,6 +1,7 @@
 #include "oreslang/backend/NativeAssertScalarIR.hpp"
 #include "oreslang/runtime/NativeAssertScalarAbi.hpp"
 
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 
