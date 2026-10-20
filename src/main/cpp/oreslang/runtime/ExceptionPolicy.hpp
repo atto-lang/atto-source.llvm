@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -54,6 +55,12 @@ constexpr bool admits_guest_failure(
 }
 
 constexpr std::size_t max_control_diagnostic_bytes = 1024;
+
+// Native supervisor CONTROL envelopes must not grow unbounded through a
+// cascade of defer/finally failures. These are diagnostic graph budgets,
+// not guest-exception admission or executable unwind contracts.
+constexpr std::size_t max_control_suppressed_nodes = 64;
+constexpr std::size_t max_control_suppression_depth = 16;
 
 // Immutable-on-delivery, value-only metadata for a native supervisor.
 // Invalid UTF-8 bytes become '?' rather than crossing actor boundaries.
@@ -116,6 +123,9 @@ public:
     FailureKind kind() const noexcept { return kind_; }
     const std::string& diagnostic() const noexcept { return diagnostic_; }
     const std::vector<Failure>& suppressed() const noexcept { return suppressed_; }
+    std::size_t suppressed_nodes() const noexcept { return nodes_; }
+    std::size_t suppressed_depth() const noexcept { return depth_; }
+    std::size_t omitted_suppressed_subtrees() const noexcept { return omitted_; }
 
 private:
     Failure(FailureKind kind, std::string diagnostic)
@@ -124,6 +134,9 @@ private:
     FailureKind kind_;
     std::string diagnostic_;
     std::vector<Failure> suppressed_;
+    std::size_t nodes_ = 1;
+    std::size_t depth_ = 1;
+    std::size_t omitted_ = 0;
 
     friend Failure combine_failure(Failure pending, Failure cleanup);
 };
@@ -132,12 +145,23 @@ private:
 // Higher priority replaces lower priority; equal priority retains the first
 // failure, matching the JVM exception policy and Java suppressed ordering.
 inline Failure combine_failure(Failure pending, Failure cleanup) {
-    if (failure_priority(cleanup.kind()) > failure_priority(pending.kind())) {
-        cleanup.suppressed_.push_back(std::move(pending));
-        return cleanup;
+    const bool cleanup_wins =
+        failure_priority(cleanup.kind()) > failure_priority(pending.kind());
+    Failure& winner = cleanup_wins ? cleanup : pending;
+    Failure& loser = cleanup_wins ? pending : cleanup;
+    // Keep dominant kind/identity independent of diagnostics truncation.
+    // Omitted count tracks subtrees, so it is bounded even for malicious
+    // callers presenting enormous chains; no recursive copying on overflow.
+    if (loser.nodes_ > max_control_suppressed_nodes - winner.nodes_ ||
+            loser.depth_ >= max_control_suppression_depth) {
+        if (winner.omitted_ != std::numeric_limits<std::size_t>::max())
+            ++winner.omitted_;
+    } else {
+        winner.nodes_ += loser.nodes_;
+        winner.depth_ = std::max(winner.depth_, loser.depth_ + 1);
+        winner.suppressed_.push_back(std::move(loser));
     }
-    pending.suppressed_.push_back(std::move(cleanup));
-    return pending;
+    return cleanup_wins ? std::move(cleanup) : std::move(pending);
 }
 
 inline std::optional<Failure> combine_failure(
