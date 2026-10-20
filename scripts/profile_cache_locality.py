@@ -45,6 +45,13 @@ def parse_perf_stat(raw, required=EVENTS):
         value = float(parts[0])
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"invalid counter: {name}")
+        # perf may multiplex CPU counters and scale different workload
+        # phases independently; reject samples lacking full running coverage.
+        if len(parts) <= 4 or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", parts[4]):
+            raise ValueError(f"missing perf time-running percentage: {name}")
+        running = float(parts[4])
+        if not 98.0 <= running <= 100.1:
+            raise ValueError(f"multiplexed or invalid perf counter: {name}")
         values[name] = value
     missing = set(required) - values.keys()
     if missing:
