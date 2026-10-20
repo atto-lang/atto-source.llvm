@@ -1,6 +1,7 @@
 #include "oreslang/backend/ManagedRefMir.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 
