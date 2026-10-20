@@ -1,0 +1,8 @@
+# Security review for all changes that can authorize private-source exports.
+/.github/CODEOWNERS @ORESoftware
+/.github/private-ci-approved-repositories.txt @ORESoftware
+/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware
+/scripts/run-in-private-ci-destination.sh @ORESoftware
+/scripts/publish-private-ci-source.py @ORESoftware
+/scripts/test-private-ci-destination.sh @ORESoftware
+/scripts/test-publish-private-ci-source.py @ORESoftware
