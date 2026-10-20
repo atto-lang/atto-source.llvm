@@ -155,6 +155,30 @@ void check_geometry() {
     }
     check(plan(Layout::AoSoA).byte_length() == 96, "AoSoA padded tail geometry");
 }
+void check_rejection_atomicity() {
+    const Row guarded{1, 12, 1};
+    const Step a = reduce(guarded, 2); // Finish requires at least two ticks.
+    check(!a.accepted && a.next == guarded && a.effect == 0,
+          "failed FSM guard emitted output or changed state");
+    const Row capped{1, 33, 3};
+    const Step b = reduce(capped, 1); // Cannot tick past the fixed bound.
+    check(!b.accepted && b.next == capped && b.effect == 0,
+          "FSM counter cap violated");
+    const Row overflow{0, std::numeric_limits<std::uint32_t>::max(), 0};
+    const Step c = reduce(overflow, 0);
+    check(!c.accepted && c.next == overflow && c.effect == 0,
+          "FSM version overflow admitted");
+    const Row unknown{99, 2, 0};
+    const Step d = reduce(unknown, 0);
+    check(!d.accepted && d.next == unknown && d.effect == 0,
+          "unknown FSM state accepted");
+    Store store(Layout::SoA);
+    const Handle h = store.handle(0);
+    const Row before = store.read(h);
+    const Step e = store.apply(h, 2);
+    check(!e.accepted && e.effect == 0 && store.read(h) == before,
+          "rejected physical-store transition mutated data");
+}
 void check_trace_refinement() {
     std::uint32_t traces = 0;
     std::uint32_t permutations = 1;
@@ -223,6 +247,7 @@ void check_ecs_admission() {
 } // namespace
 int main() {
     check_geometry();
+    check_rejection_atomicity();
     check_trace_refinement();
     check_lifecycle();
     check_ecs_admission();
