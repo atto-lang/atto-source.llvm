@@ -123,8 +123,12 @@ std::string operation_impl_digest(const Function& fn) {
         model_fail("MODEL_INVALID_OP_SIGNATURE",
                    "operation '" + fn.name + "' has no return value");
     std::unordered_map<std::string, std::size_t> parameter_indexes;
-    for (std::size_t i = 0; i < fn.parameters.size(); ++i)
-        parameter_indexes.emplace(fn.parameters[i].name, i);
+    for (std::size_t i = 0; i < fn.parameters.size(); ++i) {
+        if (!parameter_indexes.emplace(fn.parameters[i].name, i).second)
+            model_fail("MODEL_INVALID_OP_SIGNATURE",
+                       "operation '" + fn.name + "' has duplicate parameter '" +
+                       fn.parameters[i].name + "'");
+    }
     const std::string canonical =
         operation_abi(fn.parameters.size()) + "|return=" +
         canonical_expression(*fn.result, parameter_indexes);
