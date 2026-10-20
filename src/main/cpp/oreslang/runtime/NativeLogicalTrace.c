@@ -21,8 +21,6 @@ int ores_native_logical_trace_snapshot(
 
     OresNativeExecutionHandle execution = current_execution;
     OresNativeContinuationHandle continuation = {0, 0};
-    int first_execution = 1;
-
     while (ores_native_store_handle_valid(execution)) {
         OresNativeExecutionContext context;
         if (!ores_native_execution_context_store_get(
@@ -30,10 +28,14 @@ int ores_native_logical_trace_snapshot(
             out->corrupt = 1;
             break;
         }
-        if (first_execution) {
+        /*
+         * continuation is the outgoing suspension created by an execution.
+         * A newly resumed current execution has no outgoing continuation yet,
+         * so walk toward its parent until the incoming boundary is found.
+         */
+        if (!ores_native_store_handle_valid(continuation)
+                && ores_native_store_handle_valid(context.continuation))
             continuation = context.continuation;
-            first_execution = 0;
-        }
         if (out->execution_count == execution_capacity) {
             out->execution_truncated = 1;
             break;
