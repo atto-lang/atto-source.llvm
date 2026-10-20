@@ -3,6 +3,7 @@
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
+#include "oreslang/types/RealtimeAnalysis.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -66,13 +67,43 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    bool native_hard_rt_profile = false;
+    bool profile_seen = false;
+    bool rt_check_only = false;
+    bool rt_entry_seen = false;
+    bool rt_report_seen = false;
+    std::string rt_entry = "main/0";
+    std::string rt_report_path;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--core-log-level=", 0) == 0) {
+        if (arg.rfind("--profile=", 0) == 0) {
+            if (profile_seen) { std::cerr << "duplicate profile option\n"; return 2; }
+            profile_seen = true;
+            const std::string profile = arg.substr(std::string_view("--profile=").size());
+            if (profile != "native-hard-rt") {
+                std::cerr << "unsupported native compiler profile: " << profile << '\n';
+                return 2;
+            }
+            native_hard_rt_profile = true;
+        } else if (arg == "--rt-check") {
+            if (rt_check_only) { std::cerr << "duplicate rt-check option\n"; return 2; }
+            rt_check_only = true;
+            native_hard_rt_profile = true;
+        } else if (arg.rfind("--rt-entry=", 0) == 0) {
+            if (rt_entry_seen) { std::cerr << "duplicate rt-entry option\n"; return 2; }
+            rt_entry_seen = true;
+            rt_entry = arg.substr(std::string_view("--rt-entry=").size());
+            if (rt_entry.empty()) { std::cerr << "rt-entry cannot be empty\n"; return 2; }
+        } else if (arg.rfind("--rt-report=", 0) == 0) {
+            if (rt_report_seen) { std::cerr << "duplicate rt-report option\n"; return 2; }
+            rt_report_seen = true;
+            rt_report_path = arg.substr(std::string_view("--rt-report=").size());
+            if (rt_report_path.empty()) { std::cerr << "rt-report path cannot be empty\n"; return 2; }
+        } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
             coreLogLevel = "off";
@@ -120,7 +151,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -141,8 +172,37 @@ int main(int argc, char** argv) {
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
+        if (native_hard_rt_profile && (wasm32_target || cortex_m_target))
+            throw std::runtime_error("native-hard-rt profile currently requires the host target");
+        if (native_hard_rt_profile && experimental_owned_int)
+            throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
+
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+
+        if (native_hard_rt_profile || rt_report_seen) {
+            const auto report = oreslang::analyze_native_hard_rt(ast, rt_entry);
+            const std::string report_json = report.to_json();
+            if (rt_report_seen) {
+                std::ofstream output(rt_report_path, std::ios::out | std::ios::trunc);
+                if (!output) throw std::runtime_error("cannot open rt-report output");
+                output.exceptions(std::ios::badbit | std::ios::failbit);
+                output << report_json;
+                output.flush();
+            }
+            if (rt_check_only) {
+                std::cout << report_json;
+                std::cout.flush();
+                if (coreLog) coreLog->dump(stderr);
+                return report.source_admitted ? 0 : 1;
+            }
+            if (native_hard_rt_profile && !report.source_admitted) {
+                throw std::runtime_error(
+                    "native-hard-rt admission failed [" + report.diagnostic +
+                    "]: " + report.reason);
+            }
+        }
+
         if (cortex_m_target) {
             // Deliberately small freestanding ABI: i64 scalar functions only.
             // Never lower native actors, heap regions or unverified host calls
