@@ -375,6 +375,39 @@ int main(void) {
         ores_native_vm_nio_release(leased, one);
         check(ores_native_vm_close(leased));
     }
+    // Exactly 16 distinct VM identities may be concurrently borrowed by
+    // one trusted host thread. Overflow cannot increment global VM borrows
+    // or strand teardown; releasing one identity permits a new VM borrow.
+    {
+        OresNativeVM* all[17] = {0};
+        void* held[17] = {0};
+        for (int i = 0; i < 17; ++i) {
+            all[i] = ores_native_vm_open(&cfg);
+            check(all[i] != NULL);
+            check(ores_native_vm_enable_nio(all[i], 1, 0, 1));
+            held[i] = ores_native_vm_nio_acquire(all[i]);
+            check((held[i] != NULL) == (i < 16));
+        }
+        // A denied lease does not prevent retiring this independent VM.
+        check(ores_native_vm_close(all[16]));
+        all[16] = NULL;
+        // Release a distinct slot, then use the same 17th identity index
+        // with a fresh VM. The caller's TLS ledger must not retain old
+        // pointers or count a denied acquisition as a successful lease.
+        ores_native_vm_nio_release(all[0], held[0]);
+        held[0] = NULL;
+        check(ores_native_vm_close(all[0]));
+        all[0] = NULL;
+        all[16] = ores_native_vm_open(&cfg);
+        check(all[16] != NULL);
+        check(ores_native_vm_enable_nio(all[16], 1, 0, 1));
+        held[16] = ores_native_vm_nio_acquire(all[16]);
+        check(held[16] != NULL);
+        for (int i = 1; i < 17; ++i) {
+            ores_native_vm_nio_release(all[i], held[i]);
+            check(ores_native_vm_close(all[i]));
+        }
+    }
     // The actual native VM, scheduler, C ABI, and C++ NIO adapter are all
     // linked by the native lifecycle workflow, not replaced by test doubles.
     for (int iteration = 0; iteration < 32; ++iteration) {
