@@ -7,7 +7,10 @@ LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-sourc
 
 - Zero or one `define module M [as] ... end` wrapper.
 - Multiple zero- or multi-argument `[pub] fnc`/`routine` declarations,
-  with `int` parameters and `: int` return annotation.
+  with `int` parameters and the legacy native `: int` return annotation.
+  Java/Graal's newer explicit `-> Type ... end` free/module body form is
+  recognized only far enough to emit a targeted fail-closed diagnostic; it is
+  not native lowering parity yet.
 - Exactly one `return <expr>;` statement per function.
 - Decimal int literals, unary negative, binary add/subtract/multiply, grouping,
   integer parameters, same-module function calls (including forward calls).
@@ -16,6 +19,37 @@ LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-sourc
 Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
+
+## Keyword-delimited callable and tuple return parity boundary
+
+Java/Graal admits a deliberately narrow free/module callable form:
+
+```ores
+fnc classify(int x) -> int
+    if x > 0 then
+        return 1
+    else
+        return 0
+    fi
+end
+```
+
+and contextual finite tuple return types such as
+`tuple (int, int, string)`. The native frontend is still a scalar i64
+compiler whose executable CFG/body grammar is braced. It must therefore
+**not** reinterpret the slim arrow as arithmetic symbols, infer a scalar ABI
+for a tuple, or emit partial LLVM IR before failing.
+
+The lexer recognizes contiguous `->` atomically and the function parser
+rejects it with a dedicated native parity diagnostic before body/IR lowering.
+Likewise, a `tuple` return type is rejected before the scalar return ABI is
+selected. Dedicated CTest fixtures require nonzero compiler exit and no
+partial LLVM IR. This is intentional rejection parity, not implementation
+parity.
+
+Native support should be enabled only after the frontend has the same typed
+return grammar, keyword-delimited CFG, all-path return proof, finite tuple ABI,
+ownership/drop rules, and differential Java/LLVM execution coverage.
 
 ## Numeric division fail-closed parity boundary
 
@@ -90,7 +124,7 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 
 | Java capability | LLVM status |
 | --- | --- |
-| Lexer, modules, functions | Partial i64-only subset, not full Java parity |
+| Lexer, modules, functions | Partial i64-only subset; new `-> Type ... end` callable form is targeted fail-closed, not executable parity |
 | Function calls, expressions | i64 arithmetic and same-module calls |
 | Type/ownership checking | Name/arity, i64 explicit moves and scoped nonescaping scalar loans; heap references and async unsupported |
 | LLVM IR verification | Implemented |
