@@ -2,6 +2,10 @@
 
 #include "oreslang/frontend/Parser.hpp"
 #include <cstdint>
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
+#include <cerrno>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -107,6 +111,53 @@ inline void charge(std::int64_t& total, std::int64_t amount,
     total += amount;
     if (total > limit) throw std::runtime_error("MODEL_MEMORY_BUDGET");
 }
+inline bool model_identifier(const std::string& name) {
+    if (name.empty() || name.size() > 128) return false;
+    auto alpha = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    };
+    if (!alpha(name.front())) return false;
+    for (char c : name)
+        if (!alpha(c) && !(c >= '0' && c <= '9') && c != '_') return false;
+    return true;
+}
+inline void validate_scalar(const std::string& value, bool formal_allowed,
+                            bool is_formal, const std::string& expected_type) {
+    require(value.size() <= 256, "MODEL_NONCONSTANT_CONFIG");
+    if (is_formal) {
+        require(formal_allowed && model_identifier(value), "MODEL_NONCONSTANT_CONFIG");
+        return;
+    }
+    if (expected_type == "bool") {
+        require(value == "true" || value == "false", "MODEL_INVALID_CONST");
+        return;
+    }
+    if (expected_type == "int") {
+        std::string stripped;
+        for (char c : value) if (c != '_') stripped.push_back(c);
+        require(!stripped.empty(), "MODEL_INVALID_CONST");
+        std::int64_t parsed = 0;
+        const auto res = std::from_chars(stripped.data(), stripped.data() + stripped.size(), parsed);
+        if (res.ec == std::errc::result_out_of_range) throw std::runtime_error("MODEL_CONST_OVERFLOW");
+        require(res.ec == std::errc{} && res.ptr == stripped.data() + stripped.size(),
+                "MODEL_INVALID_CONST");
+        return;
+    }
+    if (expected_type == "float" || expected_type == "f32" || expected_type == "f64") {
+        require(value.find('.') != std::string::npos, "MODEL_INVALID_CONST");
+        for (char c : value) {
+            require((c >= '0' && c <= '9') || c == '.' || c == 'e' ||
+                    c == 'E' || c == '+' || c == '-', "MODEL_INVALID_CONST");
+        }
+        char* end = nullptr;
+        errno = 0;
+        const double parsed = std::strtod(value.c_str(), &end);
+        require(end == value.c_str() + value.size(), "MODEL_INVALID_CONST");
+        require(std::isfinite(parsed), "MODEL_NONFINITE_CONST");
+        return;
+    }
+    throw std::runtime_error("MODEL_FORMAL_DEFAULT_TYPE_MISMATCH");
+}
 inline void validate_default(const ModelFormal& formal) {
     if (formal.default_value.empty()) return;
     const bool has_point = formal.default_value.find('.') != std::string::npos;
@@ -117,6 +168,7 @@ inline void validate_default(const ModelFormal& formal) {
     else if (formal.type == "bool")
         valid = formal.default_value == "true" || formal.default_value == "false";
     require(valid, "MODEL_FORMAL_DEFAULT_TYPE_MISMATCH");
+    validate_scalar(formal.default_value, false, false, formal.type);
 }
 
 inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
@@ -130,6 +182,7 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     std::unordered_set<std::string> formals;
     ModelGraph result;
     for (const auto& formal : source.formals) {
+        require(model_identifier(formal.name), "MODEL_NONCONSTANT_CONFIG");
         require(formals.insert(formal.name).second, "MODEL_DUPLICATE_FORMAL");
         validate_default(formal);
         const auto def = formal.default_value.empty() ? std::string("none") : formal.default_value;
@@ -139,6 +192,7 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     result.name = source.name;
     std::optional<Port> prior;
     for (const auto& operation : source.operations) {
+        require(operation.arguments.size() <= 16, "MODEL_ARGUMENT_BUDGET");
         const auto it = trusted.find(operation.name);
         if (it == trusted.end() || it->second.name != operation.name)
             throw std::runtime_error("MODEL_UNKNOWN_OP");
@@ -153,6 +207,11 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
         require(sig.scratch_bytes >= 0, "MODEL_INVALID_SCRATCH");
         std::vector<std::string> config;
         for (const auto& argument : operation.arguments) {
+            require(argument.label.empty(), "MODEL_NAMED_ARGUMENT_UNRESOLVED");
+            if (argument.formal_reference)
+                validate_scalar(argument.value, true, true, "");
+            else if (argument.value.size() > 256)
+                throw std::runtime_error("MODEL_NONCONSTANT_CONFIG");
             if (argument.formal_reference)
                 require(formals.find(argument.value) != formals.end(),
                         "MODEL_UNKNOWN_FORMAL");
