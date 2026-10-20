@@ -339,7 +339,10 @@ int main() {
         expect<std::logic_error>([&] {
             (void)claim_gpu_for_queue(operation, profile, input, output, valid);
         });
-        BufferFence::complete_pair(source, result, claimed.claim.tickets, true);
+        auto transferred = std::move(claimed);
+        expect<std::logic_error>([&] { (void)claimed.queue(); });
+        check(transferred.queue().queue_id == valid.queue_id);
+        BufferFence::complete_pair(source, result, transferred.claim.tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
     }
