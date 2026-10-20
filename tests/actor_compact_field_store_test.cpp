@@ -40,14 +40,10 @@ static void actor_isolation_and_compact_field_roundtrip() {
     check(alice.link(*a, 1, *a), "self edge rejected");
 
     const auto snapshot = alice.snapshot(*a);
-    const auto target = alice.snapshot(*b);
-    check(snapshot && target, "object snapshots missing");
+    check(snapshot.has_value(), "object snapshots missing");
     check(snapshot->links[0].storage() != 0
               && snapshot->links[1].storage() != 0,
           "compressed reference fields were not written");
-    check(snapshot->links[0].storage() == target->links[0].storage()
-              || snapshot->links[0].storage() != 0,
-          "compressed reference stored no information");
     check(alice.follow(*a, 0).state == State::Live
               && alice.follow(*a, 1).state == State::Live,
           "live compact edge lost original generation proof");
@@ -77,7 +73,7 @@ static void stale_generation_and_retirement() {
     check(!store.link(*source, 0, *target),
           "dead target handle reused as original generation proof");
     auto replacement = store.create(3);
-    check(replacement, "replacement allocation failed");
+    check(replacement.has_value(), "replacement allocation failed");
     check(store.follow(*source, 0).state == State::Stale,
           "new target resurrected a stale field");
     check(store.snapshot(*source)->links[0].storage() == stale_bits,
