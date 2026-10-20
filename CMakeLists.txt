@@ -2122,6 +2122,27 @@ if(BUILD_TESTING)
     set_tests_properties(native_failure_trace_throw_raise_panic_render
         PROPERTIES TIMEOUT 30)
 
+    # Completed lexical unwind -> logical trace capture -> actor-local hook ->
+    # supervisor CONTROL publication. This gate proves the ordering is part of
+    # one runtime API rather than convention at call sites.
+    add_executable(oreslang-failure-dispatch-pipeline-test
+        tests/failure_dispatch_pipeline_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
+    target_include_directories(oreslang-failure-dispatch-pipeline-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-failure-dispatch-pipeline-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-failure-dispatch-pipeline-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_failure_dispatch_unwind_trace_hooks_supervisor
+        COMMAND oreslang-failure-dispatch-pipeline-test)
+    set_tests_properties(native_failure_dispatch_unwind_trace_hooks_supervisor
+        PROPERTIES TIMEOUT 30)
+
     # Stop one child without waiting for an unrelated actor's busy turn.
     add_executable(oreslang-native-child-wait-test
         tests/native_actor_group_wait_done_test.c
