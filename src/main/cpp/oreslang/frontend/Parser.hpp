@@ -221,6 +221,7 @@ struct ModelDecl {
     std::vector<ModelParameter> parameters;
     std::vector<ModelOperation> operations;
     std::string graph_digest;
+    std::string portable_profile;
     bool exported = false;
     std::size_t offset = 0;
 };
