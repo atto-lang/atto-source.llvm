@@ -30,6 +30,8 @@ struct Signature {
     Port output;
     std::string effect;
     std::string abi;
+    std::string impl_digest;
+    std::string provenance;
     std::int64_t scratch_bytes = 0;
     bool vjp = false;
 };
@@ -42,6 +44,8 @@ struct Node {
     std::size_t id = 0;
     std::string op;
     std::string abi;
+    std::string impl_digest;
+    std::string provenance;
     std::vector<std::string> config;
     std::optional<Port> input;
     Port output;
@@ -59,6 +63,14 @@ using Registry = std::unordered_map<std::string, Signature>;
 
 inline void require(bool valid, const char* diagnostic) {
     if (!valid) throw std::runtime_error(diagnostic);
+}
+inline bool digest_hex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+}
+inline bool valid_digest(const std::string& digest) {
+    if (digest.size() != 64) return false;
+    for (char c : digest) if (!digest_hex(c)) return false;
+    return true;
 }
 inline bool unit_character(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -134,6 +146,9 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
         require(!sig.abi.empty() && sig.abi.size() <= 64, "MODEL_INVALID_OP_ABI");
         for (char c : sig.abi)
             require(unit_character(c) || c == '.', "MODEL_INVALID_OP_ABI");
+        require(valid_digest(sig.impl_digest), "MODEL_INVALID_IMPL_DIGEST");
+        require(sig.provenance == "verified-ores" || sig.provenance == "trusted-native",
+                "MODEL_INVALID_OP_PROVENANCE");
         require(sig.scratch_bytes >= 0, "MODEL_INVALID_SCRATCH");
         std::vector<std::string> config;
         for (const auto& argument : operation.arguments) {
@@ -155,7 +170,8 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
         }
         charge(result.upper_bound_bytes, output_bytes, limits.max_bytes);
         charge(result.upper_bound_bytes, sig.scratch_bytes, limits.max_bytes);
-        result.nodes.push_back({result.nodes.size(), operation.name, sig.abi, config,
+        result.nodes.push_back({result.nodes.size(), operation.name, sig.abi,
+                                sig.impl_digest, sig.provenance, config,
                                 sig.input, sig.output, sig.vjp});
         prior = sig.output;
     }
