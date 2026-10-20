@@ -341,6 +341,33 @@ inline Program prune_program(Program program, const ReachabilityResult& result) 
     return program;
 }
 
+
+struct TreeShakenProgram {
+    Program program;
+    ReachabilityResult reachability;
+};
+
+/**
+ * Production tree-shaking entry point. Analysis and deletion are deliberately
+ * coupled so a serialized/stale manifest is never accepted as deletion
+ * authority for a different compiler Program.
+ */
+inline TreeShakenProgram tree_shake_program(
+        Program program,
+        const std::vector<std::string>& explicit_function_roots,
+        bool preserve_exported_api,
+        const std::vector<std::string>& explicit_actor_roots = {},
+        const std::vector<std::string>& explicit_class_roots = {}) {
+    ReachabilityResult reachability = analyze_reachability(
+            program,
+            explicit_function_roots,
+            preserve_exported_api,
+            explicit_actor_roots,
+            explicit_class_roots);
+    program = prune_program(std::move(program), reachability);
+    return TreeShakenProgram{std::move(program), std::move(reachability)};
+}
+
 inline void append_reachability_json_string(std::string& out, std::string_view value) {
     out.push_back('"');
     static constexpr char hex[] = "0123456789abcdef";
