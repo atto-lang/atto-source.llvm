@@ -160,6 +160,39 @@ pointers stay separate physical categories; opaque capabilities never
 guess a native pointer width. Typed dense-row indices require their own
 row-identity/generation evidence.
 
+### Checked native LLVM lowering primitive
+
+`backend/ManagedRefLowering.hpp` now emits a verified LLVM control-flow
+fragment for a physical 32-bit `Ref<T>` field. It loads `i32`, checks
+non-null, invokes a **trusted original-generation validator** bound to
+the actor arena base/span and the exact stored bits, zero-extends the
+encoded offset to `i64`, shifts by 3, and checks requested access size,
+8-byte base alignment, bounds and 64-bit address wrap. Invalid paths
+emit a real `llvm.trap`; successful paths perform the native read/write
+through a non-`inbounds` byte GEP.
+
+The validator must authenticate the original allocation generation and
+current actor-heap incarnation. A guest-provided boolean or a newly
+reconstructed proof from the current offset is **not sufficient**. Input
+object field addresses also require compiler-authenticated source object
+ownership. The result pointer is ephemeral: it must not survive `await`,
+actor migration, retirement, an FFI call, or a new actor turn. Each
+resume must reload the admitted actor heap descriptor.
+
+Tests: `native_compact32_llvm_checked_load_store` verifies the actual
+generated module and expected LLVM instructions; when a compatible
+Clang is installed, `native_compact32_llvm_executable_e2e` compiles
+that IR to a native binary and executes live read/write plus death tests
+for stale-generation, retired, null, foreign arena and too-small-span
+paths. These are compiler IR tests, **not** arbitrary Oreslang
+source-program `Ref<T>` execution.
+
+The source AST/HIR frontend still does not admit general `Ref<T>`
+class fields. Compiler ownership/borrow proof wiring, persistent
+object arena allocation, generation proof acquisition, and scheduler
+resume-time base binding remain implementation gates. Never reinterpret
+existing `i64` or opaque `Array<int>` handles as these fields.
+
 This policy is a compiler-side building block, not yet wired to native
 Oreslang `Ref<T>` HIR or LLVM `getelementptr`/load/store emission.
 `native_compiler_managed_ref_layout_admission` tests both positive
