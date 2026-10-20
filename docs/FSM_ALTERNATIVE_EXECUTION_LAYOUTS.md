@@ -90,3 +90,81 @@ The fixture is a finite **host-side reference**: it does NOT test actual Oreslan
 - [ ] Record guest-backend end-to-end CI evidence on a complete exact source PR tree. A zero-step Actions startup failure is **no test evidence**. Any private full-tree mirror must be explicitly authorized private→private and prove identical root Git-tree SHA before execution. A scoped testing capsule must separately verify all transferred source Git blob SHAs and never claim full-tree identity.
 
 **Do not merge as a production FSM / ECS feature.** This PR is a reviewable design + host-model gate for the native backend, intentionally complementary to existing draft designs.
+
+
+## Milestone 2: checked table refinement and atomic effects (2026-10-20)
+
+The existing `tests/fsm_layout_alternatives_test.cpp` now also contains an
+**independently encoded closed A2 transition table**. Its rules are validated
+for duplicate (source,event) pairs and unknown target states. Against the
+existing A1 reducer, the model checks **300 bounded state/event/tick/version
+inputs**. Both agree on success, rejection, post-state/version and effect ID;
+a successful same-state Tick increments the version whereas rejected Tick and
+Finish leave state, version and effects unchanged.
+
+An explicitly scoped, non-production `Store.apply_batch` model stages
+**physical bytes and the effect outbox** before committing both by
+nonthrowing vector swaps. It rejects an insufficient outbox budget with no
+partial transition, runs a precommit fault-injection rollback check, preserves
+ascending stable entity-ID effect order, and enumerates **4,095**
+layout/trace combinations (all event words length 0..5 in three layouts).
+Within each batch, the five entities receive different events. This
+supplements the earlier 1,023 same-event cohort traces; it does not prove
+true simultaneous concurrency or durability. An external side-effect driver
+must drain only after commit; this reference deliberately does not perform
+irreversible I/O, database writes or message sends inside the staging phase.
+
+**Independent full-step test evidence:** transferred the exact *changed*
+reference-test Git blob `56ccea468e94745634e13c32da8d00b913e3775e`
+plus actual runtime `DopLayout.hpp` blob
+`fea958c2fffd2a3023819c7afff2a8ddc9e82db3` and verification
+script blob `b49d917d115f5007f1d91ea4bb83b73715dee871`
+into preflight-verified **private**
+`hacker-house-medellin-test/api-contract-e2e`.
+[Actions #39461016249](https://github.com/hacker-house-medellin-test/api-contract-e2e/actions/runs/39461016249)
+completed **both strict g++ and clang++ ASan/UBSan jobs successfully**.
+Both jobs verified the Git blobs *before* compiling/executing the expanded
+model. This is an exact-source-**blob** capsule, **not** the exact full LLVM
+repository Git tree; no host-model pass is a guest compiler proof.
+
+### Native guest-source gate added (pending executed evidence)
+
+`tests/fixtures/fsm-scalar-reducer.ores` implements a **pure scalar
+state-result subset** using the existing `fnc` and guarded-return grammar,
+not a new `fsm` keyword. `tests/native_fsm_scalar_guest.py` generates and
+executes **100** positive/rejected source cases through the **real**
+`oreslang-llvmc -> LLVM IR -> Clang -> native process` pipeline and checks
+an invalid duplicate function signature must reject without partial IR.
+The gate is integrated into the main LLVM `ci.yml` after compiler build.
+The harness **fails closed** if the compiler or toolchain is absent.
+
+**These 100 guest cases have not been reported as passing yet.** A
+corresponding executed source CI run or exact-full-tree authorized
+private→private mirror is required before asserting source-level parity. The
+scalar guest fixture currently exposes state/guard rejection only:
+versioning, effects, physical layouts, ECS, actor state loans and exact
+Java-vs-LLVM guest trace equivalence are still open work.
+
+### Outstanding implementation review
+
+- Promote a **language-neutral, versioned trace schema** in the shared
+  contract repository before treating host-only booleans/effect integers as
+  serialized stable Symbol IDs.
+- Keep **one authoritative physical store per cohort** in production. The
+  transactional reference copies pending buffers and is not a zero-allocation
+  or strict real-time implementation; add caller-bounded scratch and
+  compiler-verified region/partition loans for those profiles.
+- ECS query planning is optional and must check *proven region identity +
+  owner/generation + field read/write sets + structural epochs*, not only
+  collision-free component masks. Schema/layout migration and entity
+  swap-delete require generational handle invalidation.
+- **Actors are optional drivers**: concrete actor-owned persistent guest data
+  remains under its sole `state { ... }` schema, accessed through checked
+  critical state loans. Do not add side fields or share a mutable SoA column
+  directly between actors.
+- Production commit must handle cancellation, external effect dispatch,
+  durable outbox acknowledgments, crash recovery and version CAS; a pair
+  of local `vector::swap` calls alone is not a persistence/linearizability
+  proof.
+- Benchmark AoS/SoA/AoSoA against *identical logical work* and disclose tile
+  widths, temporary memory, CPU flags, warmup and latency distribution.
