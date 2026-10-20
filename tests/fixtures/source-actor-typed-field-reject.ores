@@ -1,15 +1,10 @@
-// Two fire-and-forget guest messages; stop drains the bounded FIFO.
+// A non-scalar final actor field requires typed initialization and ownership.
 define actor Worker as {
   final rooms: Map<RoomId, ActorGroup>
-  pub fnc on_message(int n): int {
-    total = total + n;
-    return total;
-  }
+  pub fnc on_message(int n): int { return n; }
 }
 pub fnc main(): int {
   const worker = spawn Worker();
-  worker.send(1);
-  worker.send(2);
   stop worker;
   return 43;
 }

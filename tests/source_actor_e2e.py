@@ -5,6 +5,10 @@ import pathlib
 import subprocess
 import tempfile
 
+# Every safety assertion below is part of the CI gate: never silently remove it.
+if not __debug__:
+    raise SystemExit("source actor execution gate forbids optimized Python (-O)")
+
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
@@ -21,19 +25,21 @@ def main():
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
-        ("source-actor-send.ores", 1, 2, 3),
+        # Verify real compiled guest execution, not just IR text admission,
+        # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
+        ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
+        ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
         "source-actor-static-method-reject.ores": "static method is invalid",
-        "source-actor-suspend-method-reject.ores": "native suspended actor methods require continuation lowering",
-        "source-actor-typed-field-reject.ores": "native actor member field requires int",
+        "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
@@ -55,6 +61,10 @@ def main():
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
+        # Explicitly refuse source contracts that need typed actor field
+        # ownership or suspension-aware continuation lowering.
+        "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
+        "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
         result = run([args.compiler, str(fixtures / name)])
@@ -68,7 +78,9 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
-            if name != "source-actor-spawn-stop.ores":
+            if name not in {
+                "source-actor-spawn-stop.ores",
+            }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
@@ -85,6 +97,7 @@ def main():
                 args.clang, *flags, "-x", "ir", str(ll),
                 "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
                 str(runtime / "NativeActorScheduler.c"),
+                str(runtime / "NativeOresVM.c"),
                 str(runtime / "SourceActorBootstrap.c"),
                 "-std=c11", "-pthread", "-I", str(source_dirs),
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
@@ -93,6 +106,11 @@ def main():
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+            vm_lines = [line for line in executed.stderr.splitlines()
+                        if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
+            assert len(vm_lines) == 1 and (
+                "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
+                name, vm_lines)
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)

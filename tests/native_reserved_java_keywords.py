@@ -6,6 +6,23 @@ import sys
 import tempfile
 
 CASES = {
+    # Enum/pattern declaration kinds are reserved; not executable source support yet.
+    "enum-function": (
+        "pub fnc enum(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "pattern-function": (
+        "pub fnc pattern(): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "enum-parameter": (
+        "pub fnc main(int enum): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
+    "pattern-parameter": (
+        "pub fnc main(int pattern): int { return 42; }",
+        "expected non-keyword identifier",
+    ),
     "over-function": (
         "pub fnc over(): int { return 42; }",
         "expected non-keyword identifier",
@@ -33,27 +50,27 @@ CASES = {
     # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
-        "expected non-keyword identifier",
+        "native exceptional-control boundary unsupported",
     ),
     "raise-function": (
         "pub fnc raise(): int { return 42; }",
-        "expected non-keyword identifier",
+        "native exceptional-control boundary unsupported",
     ),
     "panic-function": (
         "pub fnc panic(): int { return 42; }",
-        "expected non-keyword identifier",
+        "native exceptional-control boundary unsupported",
     ),
     "recover-parameter": (
         "pub fnc main(int recover): int { return 42; }",
-        "expected non-keyword identifier",
+        "native exceptional-control boundary unsupported",
     ),
     "throw-expression": (
         "pub fnc main(): int { return throw; }",
-        "expected int expression",
+        "native exceptional-control boundary unsupported",
     ),
     "panic-expression": (
         "pub fnc main(): int { return panic; }",
-        "expected int expression",
+        "native exceptional-control boundary unsupported",
     ),
     "trap-modifier": (
         "pub trap fnc main(): int { return 42; }",
@@ -61,23 +78,23 @@ CASES = {
     ),
     "raise-statement": (
         "pub fnc main(): int { raise 42; return 0; }",
-        "native exception/control effect unsupported",
+        "native exceptional-control boundary unsupported",
     ),
     "panic-statement": (
         "pub fnc main(): int { panic 42; return 0; }",
-        "native exception/control effect unsupported",
+        "native exceptional-control boundary unsupported",
     ),
     "throw-statement": (
         "pub fnc main(): int { throw 42; return 0; }",
-        "native exception/control effect unsupported",
+        "native exceptional-control boundary unsupported",
     ),
     "try-statement": (
         "pub fnc main(): int { try { return 42; } catch (err) { return 0; } }",
-        "native exception/control effect unsupported",
+        "expected 'finally'",
     ),
     "recover-statement": (
         "pub fnc main(): int { recover 42; return 0; }",
-        "native exception/control effect unsupported",
+        "native exceptional-control boundary unsupported",
     ),
 }
 

@@ -62,6 +62,34 @@ int main() {
         check(gate.release(token, PinnedContinuationGate::Loan::exclusive)
             && gate.try_retire(token), "exclusive cleanup leaked");
     }
+    // A synchronous producer callback may settle the operation before the
+    // registering host call unwinds. The metadata gate still cannot admit
+    // a guest continuation without explicit broker quiescence and a distinct
+    // scheduler-owned turn. This is a host-only no-Zalgo prerequisite, NOT a
+    // compiler-generated await/select conformance test.
+    {
+        AsyncIoTicket token{31, 11, 7};
+        PinnedContinuationGate gate(token);
+        std::atomic<bool> producer_was_inside_callback{false};
+        std::thread producer([&] {
+            producer_was_inside_callback.store(true, std::memory_order_release);
+            check(gate.settle(token, AsyncIoTerminal::success),
+                  "synchronous foreign callback failed to settle");
+            check(!gate.try_claim_resume(token),
+                  "foreign completion admitted guest resume before broker ACK");
+            producer_was_inside_callback.store(false, std::memory_order_release);
+        });
+        producer.join();
+        check(!producer_was_inside_callback.load(std::memory_order_acquire),
+              "foreign callback still executing");
+        check(!gate.try_claim_resume(token),
+              "registration-time completion was treated as an inline guest resume");
+        check(gate.broker_acknowledge(token), "registration quiescence ACK missing");
+        check(gate.try_claim_resume(token), "scheduler could not claim deferred guest work");
+        check(!gate.try_claim_resume(token), "same completion resumed twice");
+        check(gate.finish_resume(token) && gate.try_retire(token),
+              "guest cleanup or frame retirement missing");
+    }
     {
         AsyncIoTicket token{4, 8, 2};
         PinnedContinuationGate gate(token);

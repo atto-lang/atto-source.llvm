@@ -1,0 +1,7 @@
+// Experimental AOT scalar heap continuation; host owns the zeroed frame.
+suspend fnc spin():void {
+    val count: int = 41;
+    while (true) {
+        count = count + 1;
+    }
+}

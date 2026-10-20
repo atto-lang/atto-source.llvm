@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +28,15 @@ typedef void (*OresNativeActorPanicFn)(
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
  */
+/* Trusted host-only pre-admission wiring. Must be called before the first
+ * actor message/carrier starts. Gate outlives this scheduler and is released
+ * after its last callback finishes. A NULL gate leaves legacy dispatch intact. */
+int ores_native_actor_scheduler_configure_turn_gate(
+    OresNativeActorScheduler* scheduler, OresNativePhysicalTurnGate* gate);
+/* Wake idle carriers that lost a cross-domain permit race, including while
+ * the scheduler is retiring and still has admitted work to drain. Trusted
+ * VM-only call; not a guest CONTROL message. */
+void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* scheduler);
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
 /* Send succeeds only after atomic admission to a live, generation-matched
@@ -106,13 +116,30 @@ int ores_native_actor_scheduler_submit(
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
 /* Wait for every accepted callback to complete; may not be called from its worker. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
+/* Whether this OS thread is currently executing a callback from scheduler.
+ * Only intended for immediate deadlock prevention in VM teardown. */
+int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
+/* Exact live actor identity for trusted callback/FFI bridges only. */
+int ores_native_actor_scheduler_is_current_actor(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Host CONTROL-plane wake only: signals an existing scheduler condition.
+ * Does not admit actor mail, start workers, invoke guest code, or count as
+ * a supervisor delivery receipt. Returns zero once retired.
+ * Caller must fence the scheduler's lifetime. */
+int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
+/* Carriers created on demand, initially zero; includes workers until retirement. */
+size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
+/* Test-only deterministic worker-create failure; no production symbol. */
+void ores_native_actor_scheduler_test_fail_next_create(void);
+#endif
 #ifdef __cplusplus
 }
 #endif

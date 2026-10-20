@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <set>
@@ -10,6 +11,24 @@
 #include <utility>
 
 namespace oreslang::runtime {
+
+// Internal source for globally unique registry incarnation identifiers.
+// Never wrap: silently reissuing an old identifier would let a stale join
+// capability regain authority in a newly constructed registry.
+namespace detail {
+inline std::uint64_t take_nonwrapping_registry_id(
+        std::atomic<std::uint64_t>& sequence) {
+    std::uint64_t current = sequence.load(std::memory_order_relaxed);
+    for (;;) {
+        if (current == 0 || current == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("actor membership registry IDs exhausted");
+        if (sequence.compare_exchange_weak(
+                current, current + 1, std::memory_order_relaxed,
+                std::memory_order_relaxed))
+            return current;
+    }
+}
+} // namespace detail
 
 /**
  * Trusted native runtime cooperation-membership registry.
@@ -43,7 +62,7 @@ public:
         : runtime_id_(runtime_id),
           max_groups_(max_groups),
           max_groups_per_actor_(max_groups_per_actor),
-          instance_id_(next_instance_id().fetch_add(1, std::memory_order_relaxed)) {
+          instance_id_(detail::take_nonwrapping_registry_id(next_instance_id())) {
         if (runtime_id_ == 0 || max_groups_ == 0
             || max_groups_per_actor_ == 0 || instance_id_ == 0)
             throw std::invalid_argument("invalid actor membership registry limits");

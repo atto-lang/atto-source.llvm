@@ -1,0 +1,4 @@
+// Must not wrap to exit status 255.
+pub routine main(): int {
+    return -1;
+}

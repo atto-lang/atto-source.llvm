@@ -2,9 +2,12 @@
 
 #include <cmath>
 #include <iostream>
+#include <locale>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <type_traits>
+#include <limits>
 
 static void check(bool condition) {
     if (!condition) throw std::runtime_error("typed DOP kernel test failed");
@@ -15,8 +18,32 @@ static void expect(F fn) {
     throw std::runtime_error("expected DOP contract failure");
 }
 
+struct CommaPunct : std::numpunct<char> {
+protected:
+    char do_decimal_point() const override { return ','; }
+};
+
 int main() {
     using namespace oreslang::dop;
+    static_assert(!std::is_assignable<Kernel&, Kernel>::value,
+                  "an admitted native kernel must not be mutable");
+    static_assert(!std::is_assignable<decltype((std::declval<Kernel&>().scale)), float>::value,
+                  "F32 coefficients must remain finite after validation");
+    static_assert(!std::is_assignable<decltype((std::declval<Kernel&>().operation)), Op>::value,
+                  "operation tags must remain valid after validation");
+    // A valid POD layout with undersized scalar slots must never become a
+    // HostBuffer: F32 memcpy used to write past its allocation.
+    for (auto bytes : {1u, 2u, 8u}) {
+        Plan invalid_width(Layout::AoS, 1, 1, bytes, bytes, 1);
+        expect<std::invalid_argument>([&] { HostBuffer buffer(invalid_width); });
+    }
+    // Emitted OpenCL must not inherit the process locale.
+    const std::locale saved = std::locale();
+    std::locale::global(std::locale(std::locale::classic(), new CommaPunct));
+    const auto portable_constant = cl_float(1.25f);
+    std::locale::global(saved);
+    check(portable_constant.find("1.25") != std::string::npos);
+    check(portable_constant.find(',') == std::string::npos);
     for (auto layout : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
         const auto lanes = layout == Layout::AoSoA ? 4u : 1u;
         Plan p(layout, 7, 3, 4, 16, lanes);
@@ -39,8 +66,30 @@ int main() {
                   << generated.device_source << "\n";
     }
 
+    // CPU may handle empty data, but a GPU artifact must never attempt
+    // to dispatch an invalid zero-work NDRange or zero capacity profile.
+    for (auto kind : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        Plan empty(kind, 0, 2, 4, 16, kind == Layout::AoSoA ? 4u : 1u);
+        Kernel no_op(empty, Element::F32, Op::Scale, 2.0f, 0.0f);
+        HostBuffer zero_src(empty), zero_dst(empty);
+        execute_cpu(no_op, zero_src, zero_dst);
+        check(empty.byte_length() == 0);
+        expect<std::invalid_argument>([&] { (void)lower_opencl(no_op, {64, 4096, 10, true}); });
+    }
+    Plan live(Layout::AoS, 1, 1, 4, 4, 1);
+    Kernel admitted(live, Element::F32, Op::Scale, 2.0f, 0.0f);
+    expect<std::invalid_argument>([&] { (void)lower_opencl(admitted, {64, 0, 10, true}); });
+    expect<std::invalid_argument>([&] { (void)lower_opencl(admitted, {64, 4096, 0, true}); });
+
     Plan p(Layout::SoA, 2, 1, 4, 8, 1);
     Kernel k(p, Element::F32, Op::Scale, 2.0f, 0.0f);
+    expect<std::invalid_argument>([&] {
+        Kernel invalid_op(p, Element::F32, static_cast<Op>(255), 1.0f, 0.0f);
+    });
+    expect<std::invalid_argument>([&] {
+        Kernel nonfinite(p, Element::F32, Op::Scale,
+                         std::numeric_limits<float>::quiet_NaN(), 0.0f);
+    });
     HostBuffer original(p);
     {
         auto loan = original.borrow_read();
@@ -48,7 +97,11 @@ int main() {
         expect<std::logic_error>([&] { original.write(0, 0, 1); });
         expect<std::logic_error>([&] { original.close(); });
     }
+    // Snapshot must survive owner move, closure, and state reclamation.
+    const auto geometry = original.layout();
     auto moved = original.take();
+    check(geometry.byte_length() == p.byte_length());
+    expect<std::logic_error>([&] { (void)original.layout(); });
     expect<std::logic_error>([&] { (void)original.read(0, 0); });
     expect<std::invalid_argument>([&] { execute_cpu(k, moved, moved); });
     expect<std::invalid_argument>([&] { (void)lower_opencl(k, {64, 1, 10, true}); });
@@ -58,6 +111,8 @@ int main() {
     auto tinySource = lower_opencl(tiny, {64, 4096, 100, true}).device_source;
     check(tinySource.find("e-45f") != std::string::npos);
     moved.close();
+    expect<std::logic_error>([&] { (void)moved.layout(); });
     expect<std::logic_error>([&] { (void)moved.read(0, 0); });
+    check(geometry.byte_length() == p.byte_length());
     std::cout << "native CPU/DOP and emitted GPU kernel IR tests passed\n";
 }

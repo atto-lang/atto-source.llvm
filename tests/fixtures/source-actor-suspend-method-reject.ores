@@ -1,15 +1,11 @@
-// Two fire-and-forget guest messages; stop drains the bounded FIFO.
+// LLVM source compiler must call generated actor ctor on a scheduler worker.
 define actor Worker as {
+  const base: int = 40;
   let total: int = 0;
-  pub suspend method on_message(int n): int {
-    total = total + n;
-    return total;
-  }
+  pub suspend method on_message(int n): int { return base + n; }
 }
 pub fnc main(): int {
   const worker = spawn Worker();
-  worker.send(1);
-  worker.send(2);
   stop worker;
   return 43;
 }
