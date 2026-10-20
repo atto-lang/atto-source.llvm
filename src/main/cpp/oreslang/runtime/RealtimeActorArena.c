@@ -52,6 +52,8 @@ size_t ores_rt_actor_arena_required_bytes(
     const size_t alignment = _Alignof(max_align_t);
     size_t offset = 0;
     size_t bytes = 0;
+    size_t slot_stride = 0;
+    if (!align_up(slot_bytes, alignment, &slot_stride)) return 0;
 
     if (!align_up(offset, alignment, &offset)) return 0;
     if (!checked_mul(slot_count, sizeof(OresRealtimeArenaSlot), &bytes) ||
@@ -62,7 +64,7 @@ size_t ores_rt_actor_arena_required_bytes(
         !checked_add(offset, bytes, &offset)) return 0;
 
     if (!align_up(offset, alignment, &offset)) return 0;
-    if (!checked_mul(slot_count, slot_bytes, &bytes) ||
+    if (!checked_mul(slot_count, slot_stride, &bytes) ||
         !checked_add(offset, bytes, &offset)) return 0;
 
     if (!align_up(offset, alignment, &offset)) return 0;
@@ -146,6 +148,8 @@ OresRtArenaStatus ores_rt_actor_arena_init(
     arena->incarnation = incarnation;
     arena->slot_count = slot_count;
     arena->slot_bytes = slot_bytes;
+    if (!align_up(slot_bytes, alignment, &arena->slot_stride))
+        return ORES_RT_ARENA_CAPACITY;
     arena->scratch_bytes = scratch_bytes;
     arena->arena_bytes = required;
     arena->backing = (unsigned char*)backing;
@@ -165,7 +169,7 @@ OresRtArenaStatus ores_rt_actor_arena_init(
 
     (void)align_up(offset, alignment, &offset);
     arena->slab = arena->backing + offset;
-    (void)checked_mul(slot_count, slot_bytes, &bytes);
+    (void)checked_mul(slot_count, arena->slot_stride, &bytes);
     offset += bytes;
 
     (void)align_up(offset, alignment, &offset);
@@ -286,7 +290,7 @@ OresRtArenaStatus ores_rt_actor_arena_read(
         return ORES_RT_ARENA_INVALID;
     if (bytes != 0) {
         rt_copy(out,
-                arena->slab + (size_t)handle.index * arena->slot_bytes + offset,
+                arena->slab + (size_t)handle.index * arena->slot_stride + offset,
                 bytes);
     }
     return ORES_RT_ARENA_OK;
@@ -307,7 +311,7 @@ OresRtArenaStatus ores_rt_actor_arena_write(
     if (!span_ok(slot->length, offset, bytes) || (bytes != 0 && !src))
         return ORES_RT_ARENA_INVALID;
     if (bytes != 0) {
-        rt_copy(arena->slab + (size_t)handle.index * arena->slot_bytes + offset,
+        rt_copy(arena->slab + (size_t)handle.index * arena->slot_stride + offset,
                 src,
                 bytes);
     }
@@ -328,8 +332,8 @@ OresRtArenaStatus ores_rt_actor_arena_drop(
     if (arena->free_count >= arena->slot_count)
         return ORES_RT_ARENA_INVALID;
 
-    rt_zero(arena->slab + (size_t)handle.index * arena->slot_bytes,
-            arena->slot_bytes);
+    rt_zero(arena->slab + (size_t)handle.index * arena->slot_stride,
+            arena->slot_stride);
     slot->live = 0;
     slot->length = 0;
     ++slot->generation;
