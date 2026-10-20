@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ModelGraph.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 
 #include <algorithm>
@@ -234,27 +235,34 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("model")) program.models.push_back(model_declaration(false));
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
+                } else fail("expected 'module', 'model', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
-            if (accept("define")) {
+            if (pub_define_model_ahead()) {
+                require("pub");
+                require("define");
+                require("model");
+                program.models.push_back(model_declaration(true));
+            } else if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("model")) program.models.push_back(model_declaration(false));
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
+                } else fail("expected 'model', 'class' or 'actor'");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
@@ -264,18 +272,115 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.models.empty() && program.cooperative_loops.empty())
+            fail("expected at least one function, model or actor");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.actors.empty() || !program.classes.empty() ||
+                 !program.models.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        admit_and_lower_models(program);
         validate(program);
         return program;
     }
 
 private:
+    ModelStaticArg model_static_argument() {
+        ModelStaticArg argument;
+        if (accept("-")) {
+            if (token_.kind != Kind::Integer)
+                fail("MODEL_NONCONSTANT_CONFIG: expected integer literal after '-'");
+            argument.kind = ModelStaticArg::Kind::Integer;
+            const std::int64_t value = integer_literal();
+            if (value == std::numeric_limits<std::int64_t>::min())
+                fail("MODEL_CONST_OVERFLOW: negative static model argument overflows i64");
+            argument.integer = -value;
+            return argument;
+        }
+        if (token_.kind == Kind::Integer) {
+            argument.kind = ModelStaticArg::Kind::Integer;
+            argument.integer = integer_literal();
+            return argument;
+        }
+        if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+            argument.kind = ModelStaticArg::Kind::Parameter;
+            argument.parameter = identifier();
+            return argument;
+        }
+        fail("MODEL_NONCONSTANT_CONFIG: model operation arguments must be integer literals or model parameters");
+    }
+
+    ModelDecl model_declaration(bool exported) {
+        ModelDecl model;
+        model.offset = token_.offset;
+        model.name = identifier();
+        model.exported = exported;
+        if (callable_nominal_name(model.name))
+            fail("MODEL_TYPE_NAME_COLLISION: callable signatures cannot be model types");
+
+        if (accept("(")) {
+            bool seen_default = false;
+            std::unordered_set<std::string> names;
+            if (!accept(")")) {
+                do {
+                    if (model.parameters.size() == 64)
+                        fail("MODEL_CONFIG_BUDGET: native model parameter limit exceeded (64)");
+                    ModelParameter parameter;
+                    parameter.name = identifier();
+                    if (!names.insert(parameter.name).second)
+                        fail("MODEL_DUPLICATE_PARAMETER: duplicate model parameter '" + parameter.name + "'");
+                    require(":");
+                    require("int");
+                    if (accept("=")) {
+                        bool negative = accept("-");
+                        const std::int64_t value = integer_literal();
+                        if (negative && value == std::numeric_limits<std::int64_t>::min())
+                            fail("MODEL_CONST_OVERFLOW: model default overflows i64");
+                        parameter.has_default = true;
+                        parameter.default_value = negative ? -value : value;
+                        seen_default = true;
+                    } else if (seen_default) {
+                        fail("MODEL_CONFIG_DEFAULT_ORDER: required model parameters cannot follow defaults");
+                    }
+                    model.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+                require(")");
+            }
+        }
+
+        require("as");
+        std::size_t total_static_arguments = 0;
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End)
+                fail("expected 'end' after model declaration");
+            if (model.operations.size() == 4096)
+                fail("MODEL_NODE_BUDGET: native model node limit exceeded (4096)");
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("MODEL_EFFECTFUL_BODY: model body admits only statically named operation calls");
+            ModelOperation operation;
+            operation.offset = token_.offset;
+            operation.name = identifier();
+            require("(");
+            if (!accept(")")) {
+                do {
+                    if (operation.static_arguments.size() == 32)
+                        fail("MODEL_STATIC_ARG_BUDGET: native model op limit exceeded (32)");
+                    operation.static_arguments.push_back(model_static_argument());
+                    if (++total_static_arguments > 16384)
+                        fail("MODEL_STATIC_ARG_BUDGET: native model total static argument limit exceeded");
+                } while (accept(","));
+                require(")");
+            }
+            accept(";");
+            model.operations.push_back(std::move(operation));
+        }
+        require("end");
+        if (model.operations.empty())
+            fail("MODEL_EMPTY_BODY: native model requires at least one operation");
+        return model;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1359,6 +1464,14 @@ private:
         return expr;
     }
 
+    bool pub_define_model_ahead() const {
+        if (token_.text != "pub") return false;
+        Lexer lookahead = lexer_;
+        const Token define = lookahead.next();
+        if (define.text != "define") return false;
+        return lookahead.next().text == "model";
+    }
+
     bool named_argument_ahead() const {
         if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
         Lexer lookahead = lexer_;
@@ -1869,7 +1982,7 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
-             !program.module.empty()))
+             !program.models.empty() || !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
