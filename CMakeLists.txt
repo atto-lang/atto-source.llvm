@@ -632,15 +632,24 @@ if(BUILD_TESTING)
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     oreslang_contract_test(native_tree_shake_control_keeps_dead_function
-        tree-shake-dead-symbols.ores --ir "@dead_helper")
+        tree-shake-dead-symbols.ores
+        --ir "@dead_helper")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_array_runtime
+        tree-shake-dead-symbols.ores
+        --ir "@dead_array_runtime"
+        --ir "@oreslang_int_array_try_region_open")
     oreslang_contract_test(native_tree_shake_prunes_dead_semantic_ir
         tree-shake-dead-symbols.ores
         --tree-shake
         --ir "call i64 @live_helper"
         --ir-absent "@dead_helper"
+        --ir-absent "@dead_array_runtime"
         --ir-absent "DeadWorker"
         --ir-absent "DeadBox"
-        --ir-absent "oreslang_source_actor_spawn")
+        --ir-absent "oreslang_source_actor_spawn"
+        --ir-absent "oreslang_int_array_try_region_open"
+        --ir-absent "oreslang_int_array_try_new"
+        --ir-absent "oreslang_int_array_region_close")
     oreslang_contract_test(native_tree_shake_preflight_all_source
         tree-shake-dead-symbols.ores
         --target wasm32
@@ -651,7 +660,9 @@ if(BUILD_TESTING)
             tree-shake-dead-symbols.ores
             --tree-shake
             --ir-absent "@dead_helper"
+            --ir-absent "@dead_array_runtime"
             --ir-absent "oreslang_source_actor_spawn"
+            --ir-absent "oreslang_int_array_try_region_open"
             --run 42 --clang "${ORE_CLANG}")
     endif()
     oreslang_contract_test(native_tree_shake_overload_fails_closed
