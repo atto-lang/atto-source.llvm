@@ -67,7 +67,16 @@ Run standalone without LLVM installation:
 bash scripts/verify-fsm-layout-alternatives.sh
 ```
 
-The fixture is a finite **host-side reference**: it does NOT test actual Oreslang symbols, compiled `.ores` reducers, actor-state loans, provenance proofs, LLVM IR emission, AOT determinism, hot-reload atomicity, scalar effect outboxes, cross-backend parity or performance. The test's synthetic `proven_region` flag merely models a compiler-issued proof; users must never be able to forge one in production.
+The fixture is a finite **host-side reference**: it does NOT test actual Oreslang symbols, compiled `.ores` reducers, actor-state loans, provenance proofs, LLVM IR emission, AOT determinism, hot-reload atomicity, scalar effect outboxes, cross-backend parity or performance. The hardened host model **does not accept** a caller-supplied `proven_region` flag. Stores now mint unique, non-null allocation-identity tickets for ECS access plans and handles, and each borrow has a separate loan ticket; foreign stores, replayed/released views, and empty/fabricated loan tickets reject. Copy/move of a live Store is disabled to prevent accidental identity duplication. These C++ reference tickets are not a guest ABI, an actual compiler-issued proof, or cryptographically unforgeable user capabilities. Real guest provenance must be minted/verified by Oreslang's ownership and region admission logic.
+
+## Independent exact-source host validation (2026-10-20 UTC)
+
+- **Code commit:** `e3374602090bf6cfd28c46dadaa8f5c44536f373` on this LLVM draft PR, after cross-store/loan-replay/forged-access hardening.
+- **Private test destination:** `hacker-house-medellin-test/api-contract-e2e`, temporary `hardening/fsm-llvm-20261019`, commit `433dd5d1c4038f961d4268d89a217929002e895c`.
+- **Exact source blobs:** FSM C++ test `e3fa48de6c199cce8f9223e6d233df77993477fc`; repository production `DopLayout.hpp` `fea958c2fffd2a3023819c7afff2a8ddc9e82db3`; test script `b49d917d115f5007f1d91ea4bb83b73715dee871`. All three identities matched destination Git blobs and runner `git hash-object` checks.
+- **Successful [GitHub Actions run #39367374914](https://github.com/hacker-house-medellin-test/api-contract-e2e/actions/runs/39367374914):** both jobs completed, strict g++ C++17 compilation and clang++ C++17 + AddressSanitizer/UndefinedBehaviorSanitizer passed, each executed all 1,023 finite layout/trace combinations and adversarial cases.
+- **Security:** no cross-organization checkout token, newly introduced secret, or public mirror; pinned read-only checkout and exact-blob verification. Only the three necessary private source artifacts were transferred (plus destination-only CI workflow).
+- **Limits:** this is not the full LLVM repository tree and cannot prove guest compiler execution, region capabilities, real parallel ECS, crash consistency, WCET or AOT. Do not claim production readiness.
 
 ## Implementation / merge gates
 
@@ -77,6 +86,7 @@ The fixture is a finite **host-side reference**: it does NOT test actual Oreslan
 - [ ] Implement authenticated native region + generation IDs, compiler-checked field/partition loans, real ECS structural barriers, and rollback-safe migration. Compare against Java#1638 at real guest level.
 - [ ] Add fixed-seed and adversarial differential traces (states, rejection reason, effects, versions, cancellation order), exact source/blob and binary identities, sanitizers, and negative mutation checks on **both** backends.
 - [ ] Benchmark representative workload density (1, 16, 1,024, 1M entities), event skew, component cardinality, tile widths (2/4/8/16), cache misses, bytes/instance, SIMD throughput, mean/p95/p99, transposition cost and worst-case admission; report hardware/compiler flags. Do not assume SoA or AoSoA universally wins.
-- [ ] Record complete executed CI job steps on exact PR commit/tree; a zero-step Actions startup failure is **no test evidence**. Any private CI mirror must remain authorized private→private with tree SHA equality verified before execution.
+- [x] Execute the current native host fixture against the **exact three source blobs** in a private independent Actions capsule using strict g++ and clang++ ASan/UBSan checks. This is a source-blob-verified capsule, **not** a full-repository Git-tree mirror.
+- [ ] Record guest-backend end-to-end CI evidence on a complete exact source PR tree. A zero-step Actions startup failure is **no test evidence**. Any private full-tree mirror must be explicitly authorized private→private and prove identical root Git-tree SHA before execution. A scoped testing capsule must separately verify all transferred source Git blob SHAs and never claim full-tree identity.
 
 **Do not merge as a production FSM / ECS feature.** This PR is a reviewable design + host-model gate for the native backend, intentionally complementary to existing draft designs.
