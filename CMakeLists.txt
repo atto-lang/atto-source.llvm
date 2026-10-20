@@ -1099,6 +1099,21 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_llvm_actor_compact32_mir_scalar_c_abi
         COMMAND oreslang-managed-ref-mir-llvm-test)
+
+    # Compile the LLVM verifier-approved MIR into native object code, link
+    # against the REAL ActorArena.c, execute two actors with colliding i32
+    # offsets, verify slot quarantine and distinct actor-domain addressing.
+    # Does NOT claim source-language Ref<T> parser/ownership support.
+    if(ORE_CLANG)
+        add_test(NAME native_actor_compressed32_backend_llvm_aot_runtime
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compressed32_llvm_aot.py"
+                --producer "$<TARGET_FILE:oreslang-managed-ref-mir-llvm-test>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_actor_compressed32_backend_llvm_aot_runtime
+            PROPERTIES TIMEOUT 90)
+    endif()
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
