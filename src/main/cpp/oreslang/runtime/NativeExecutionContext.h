@@ -58,8 +58,10 @@ static inline OresNativeStoreHandle ores_native_store_handle_unpack(uint64_t pac
         (uint32_t)(packed & UINT64_C(0xffffffff)),
         (uint32_t)(packed >> 32)
     };
-    if (!ores_native_store_handle_valid(handle))
-        return (OresNativeStoreHandle){0, 0};
+    if (!ores_native_store_handle_valid(handle)) {
+        OresNativeStoreHandle empty = {0, 0};
+        return empty;
+    }
     return handle;
 }
 
