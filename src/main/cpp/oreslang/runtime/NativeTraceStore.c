@@ -115,7 +115,7 @@ OresNativeTraceHandle ores_native_execution_store_insert(
     return insert(store, 1, value);
 }
 OresNativeTraceHandle ores_native_continuation_store_insert(
-        OresNativeTraceStore* store, const OresNativeContinuationRecord* value) {
+        OresNativeTraceStore* store, const OresNativeTraceContinuationRecord* value) {
     return insert(store, 2, value);
 }
 
@@ -152,7 +152,7 @@ int ores_native_execution_store_load(OresNativeTraceStore* s,
     return load(s, 1, h, out);
 }
 int ores_native_continuation_store_load(OresNativeTraceStore* s,
-        OresNativeTraceHandle h, OresNativeContinuationRecord* out) {
+        OresNativeTraceHandle h, OresNativeTraceContinuationRecord* out) {
     return load(s, 2, h, out);
 }
 
