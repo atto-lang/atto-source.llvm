@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -157,6 +157,16 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     return result;
 }
 
+inline constexpr std::size_t kMaxNativeExpressionDepth = 64;
+
+inline void require_expression_depth(std::size_t depth, std::size_t offset) {
+    if (depth > kMaxNativeExpressionDepth) {
+        throw std::runtime_error(
+            "native expression nesting limit exceeded (64) at byte " +
+            std::to_string(offset));
+    }
+}
+
 // The first native terminal-try slice has no exceptional CFG. Restrict
 // protected return/guard expressions to primitive values or an addressable,
 // ownership-checked class field read: no nested calls or ownership transfers.
@@ -169,16 +179,17 @@ bool nonthrowing_protected_read(const Expression& expr) {
 
 // Arithmetic over checked scalar reads is nonthrowing. Never admit
 // general calls, array mutations, ownership transfers, or suspension.
-bool native_pure_scalar_tree(const Expression& expr) {
+bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
     if (expr.kind == Expression::Kind::Negate)
-        return expr.left && native_pure_scalar_tree(*expr.left);
+        return expr.left && native_pure_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply)
         return expr.left && expr.right &&
-            native_pure_scalar_tree(*expr.left) &&
-            native_pure_scalar_tree(*expr.right);
+            native_pure_scalar_tree(*expr.left, depth + 1) &&
+            native_pure_scalar_tree(*expr.right, depth + 1);
     return false;
 }
 
@@ -193,16 +204,18 @@ using NativeSignatures = std::unordered_map<
 // This proof is deliberately narrower than the general native scalar guard:
 // an unpublished constructor can read only integer literals and its own
 // explicitly typed scalar parameters, never arbitrary fields or operations.
-bool native_constructor_scalar_tree(const Expression& expr) {
+bool native_constructor_scalar_tree(const Expression& expr,
+                                    std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
     if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
     if (expr.kind == Kind::Negate)
-        return expr.left && native_constructor_scalar_tree(*expr.left);
+        return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply)
         return expr.left && expr.right &&
-            native_constructor_scalar_tree(*expr.left) &&
-            native_constructor_scalar_tree(*expr.right);
+            native_constructor_scalar_tree(*expr.left, depth + 1) &&
+            native_constructor_scalar_tree(*expr.right, depth + 1);
     return false;
 }
 
@@ -372,6 +385,10 @@ private:
         // quietly route a read declaration through the legacy write lane.
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+        }
+        if (accept("static")) {
+            if (accept("method")) fail("static method is invalid; use static fnc");
+            fail("native actor static fnc requires separate member lowering");
         }
         if (!accept("fnc")) accept("method"); // optional method marker
         if (at_unsupported_critical_mode()) {
@@ -600,8 +617,8 @@ private:
         }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            fail("native accelerator lowering unsupported");
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
@@ -1266,6 +1283,15 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+            --expression_depth_;
+            fail("native expression nesting limit exceeded (64)");
+        }
+        struct DepthGuard {
+            std::size_t& depth;
+            ~DepthGuard() { --depth; }
+        } depth_guard{expression_depth_};
+
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
@@ -1475,7 +1501,9 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const NativeSignatures& functions) {
+                                    const NativeSignatures& functions,
+                                    std::size_t depth = 1) {
+        require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1485,12 +1513,12 @@ private:
                 }
                 return;
             case Expression::Kind::Field:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
-                    validate_expression(*arg, parameters, functions);
+                    validate_expression(*arg, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
@@ -1576,7 +1604,7 @@ private:
                                                  + formals[slot] + "'");
                     bound[slot] = true;
                     // Check nested calls in lexical order, not formal-slot order.
-                    validate_expression(*expr.arguments[i], parameters, functions);
+                    validate_expression(*expr.arguments[i], parameters, functions, depth + 1);
                 }
                 return;
             }
@@ -1586,26 +1614,28 @@ private:
             case Expression::Kind::Share:
             case Expression::Kind::Borrow:
             case Expression::Kind::BorrowMut:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-                validate_expression(*expr.left, parameters, functions);
-                validate_expression(*expr.right, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
+                validate_expression(*expr.right, parameters, functions, depth + 1);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
 
-    static bool contains_callable_invocation(const Expression* expr) {
+    static bool contains_callable_invocation(
+            const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
+        require_expression_depth(depth, expr->offset);
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
-        if (contains_callable_invocation(expr->left.get()) ||
-            contains_callable_invocation(expr->right.get())) return true;
+        if (contains_callable_invocation(expr->left.get(), depth + 1) ||
+            contains_callable_invocation(expr->right.get(), depth + 1)) return true;
         for (const auto& item : expr->arguments)
-            if (contains_callable_invocation(item.get())) return true;
+            if (contains_callable_invocation(item.get(), depth + 1)) return true;
         return false;
     }
 
@@ -1874,10 +1904,14 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            throw std::runtime_error("native gpu/quantum boundary unsupported: "
-                    "validated effects, ownership, device lowering and explicit "
-                    "backend admission required; no implicit CPU fallback at byte "
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            const char* domain = token_.text == "cpu"
+                    ? "native cpu execution block boundary unsupported: "
+                    : "native gpu/quantum boundary unsupported: ";
+            throw std::runtime_error(std::string(domain)
+                    + "validated effects, ownership, host/device lowering and explicit "
+                    "backend admission required; nested cpu/gpu blocks cannot "
+                    "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
         }
         if (token_.text == "throw" || token_.text == "raise" ||
@@ -1908,6 +1942,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::size_t expression_depth_ = 0;
     bool actor_threads_enum_seen_ = false;
 };
 

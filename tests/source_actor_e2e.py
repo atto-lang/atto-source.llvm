@@ -27,8 +27,8 @@ def main():
         ("source-actor-spawn-stop.ores", 1, 0, None),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
-        ("source-actor-method-keyword.ores", 1, 0, None),
-        ("source-actor-bare-method.ores", 1, 0, None),
+        ("source-actor-method-keyword.ores", 1, 2, 3),
+        ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
@@ -38,6 +38,8 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-static-method-reject.ores": "static method is invalid",
+        "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
@@ -78,8 +80,6 @@ def main():
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
-                "source-actor-method-keyword.ores",
-                "source-actor-bare-method.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
