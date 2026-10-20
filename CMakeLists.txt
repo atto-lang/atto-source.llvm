@@ -563,6 +563,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_end_delimited_fnc_higher_order_failclosed
         end-delimited-fnc-higher-order-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+    oreslang_contract_test(native_end_delimited_fnc_comment_boundary_failclosed
+        end-delimited-fnc-comment-boundary-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
     oreslang_contract_test(native_tuple_return_type_failclosed
         tuple-return-type-reject.ores
         --diagnostic "native tuple return types require typed tuple ABI and lowering")
