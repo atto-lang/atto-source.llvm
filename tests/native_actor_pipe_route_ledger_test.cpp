@@ -170,6 +170,9 @@ int main() {
         auto origin = publication.ingress("source");
         {
             auto first = publication.claim_publication(origin);
+            publication.retire_if_active(origin);
+            check(publication.outstanding() == 1,
+                  "terminal cleanup erased an in-flight publication");
             rejected([&] { (void)publication.claim_publication(origin); },
                      "second native publisher stole a live route claim");
             rejected([&] { (void)publication.abort_and_advance(31); },
@@ -262,6 +265,36 @@ int main() {
         retry.commit();
         check(original->published(), "retry failed to commit accepted DATA");
         rejected_send.complete(original);
+    }
+
+    // Reverse DATA and terminal retirement must not overtake a one-shot
+    // publisher, including when a cleanup carrier races the publish claim.
+    {
+        ActorPipeRouteLedger protectedRoute(stages(), edges(), 58, 4);
+        auto root = protectedRoute.ingress("source");
+        auto mid = protectedRoute.round_robin(root);
+        {
+            auto reserved = protectedRoute.claim_publication(mid);
+            std::thread foreignCleanup([&] {
+                for (int i = 0; i < 1000; ++i)
+                    protectedRoute.retire_if_active(mid);
+            });
+            foreignCleanup.join();
+            check(protectedRoute.outstanding() == 2,
+                  "racing terminal callback refunded a claimed route");
+            rejected([&] { (void)protectedRoute.backward(mid); },
+                     "reverse hop bypassed active publisher claim");
+            rejected([&] { protectedRoute.abort_and_advance(59); },
+                     "generation retired claimed DATA after foreign cleanup");
+            reserved.abort();
+        }
+        auto reversed = protectedRoute.backward(mid);
+        check(reversed->receiver() == "source",
+              "failed publication could not retry authenticated reverse");
+        protectedRoute.retire_if_active(reversed);
+        protectedRoute.complete(root);
+        check(protectedRoute.outstanding() == 0,
+              "claimed-frame regression stranded route memory");
     }
 
     // Selection/retirement of 2000 independent child frames is synchronized.
