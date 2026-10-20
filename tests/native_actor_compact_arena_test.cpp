@@ -24,6 +24,16 @@ static int happy_path() {
     OresArenaHandle h = ores_actor_arena_alloc(a, turn, 16);
     OresArenaCompactHandle ref = ores_actor_arena_compact_encode(a, turn, h);
     CHECK(ref.bits == 1);
+    // Actual scalar ABI consumed by LLVM's verified managed-ref MIR.
+    // Host carries the authenticated actor-domain/epoch; i32 is storage only.
+    const uint32_t published = ores_actor_arena_compact_publish_i32(
+        a, turn.domain, turn.epoch, h.index, h.generation);
+    CHECK(published == ref.bits);
+    const uint64_t big = UINT64_C(0xFEDCBA9876543210);
+    ores_actor_arena_compact_store_i64(
+        a, turn.domain, turn.epoch, published, 8, big);
+    CHECK(ores_actor_arena_compact_load_i64(
+        a, turn.domain, turn.epoch, published, 8) == big);
     const std::uint32_t value = 0x12AB78EFu;
     ores_actor_arena_compact_write(a, turn, ref, 0, &value, sizeof(value));
     std::uint32_t restored = 0;
@@ -60,7 +70,9 @@ static int happy_path() {
 enum class Violation {
     StaleAfterDrop, CrossDomain, ForgedInterior, ForgedNull,
     UnpublishedSlot, BorrowedWrite, WrongCarrier, UnalignedSlot,
-    QuarantinedExhaustion, OutOfBounds, StaleTurn
+    QuarantinedExhaustion, OutOfBounds, StaleTurn,
+    ScalarForgedDomain, ScalarForgedInterior, ScalarForgedGeneration,
+    ScalarInvalidOffset, ScalarReadWrongCarrier
 };
 
 static void invalid(Violation violation) {
@@ -132,6 +144,30 @@ static void invalid(Violation violation) {
             (void) ores_actor_arena_enter(a, 91, 6);
             ores_actor_arena_compact_read(a, turn, r, 0, &value, sizeof(value));
             break;
+        case Violation::ScalarForgedDomain:
+            (void) ores_actor_arena_compact_load_i64(
+                a, turn.domain + 1, turn.epoch, r.bits, 0);
+            break;
+        case Violation::ScalarForgedInterior:
+            (void) ores_actor_arena_compact_load_i64(
+                a, turn.domain, turn.epoch, r.bits + 1, 0);
+            break;
+        case Violation::ScalarForgedGeneration:
+            (void) ores_actor_arena_compact_publish_i32(
+                a, turn.domain, turn.epoch, h.index, h.generation + 1);
+            break;
+        case Violation::ScalarInvalidOffset:
+            ores_actor_arena_compact_store_i64(
+                a, turn.domain, turn.epoch, r.bits, UINT64_MAX, 1);
+            break;
+        case Violation::ScalarReadWrongCarrier: {
+            std::thread other([&] {
+                (void) ores_actor_arena_compact_load_i64(
+                    a, turn.domain, turn.epoch, r.bits, 0);
+            });
+            other.join();
+            break;
+        }
     }
 }
 
@@ -187,7 +223,7 @@ int main() {
     CHECK(happy_path() == 0);
 #if defined(__unix__) || defined(__APPLE__)
     for (int n = static_cast<int>(Violation::StaleAfterDrop);
-         n <= static_cast<int>(Violation::StaleTurn); ++n)
+         n <= static_cast<int>(Violation::ScalarReadWrongCarrier); ++n)
         CHECK(must_abort(static_cast<Violation>(n)));
 #endif
 #ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
