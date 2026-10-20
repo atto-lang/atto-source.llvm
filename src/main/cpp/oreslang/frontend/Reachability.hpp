@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 
 #include <algorithm>
 #include <cstdint>
