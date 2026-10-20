@@ -292,3 +292,7 @@ is part of the exact-head source-local C VM+C actor scheduler+C++ NIO
 sanitizer script, not a source-free model. It is **not tested** until a
 real runner compiles and executes that script; do not infer an Actions PASS
 from a commit or source-free model.
+
+## NIO host borrow-owner self-close prevention (2026-10-19)
+
+The C VM could deadlock if a trusted host thread called `ores_native_vm_close` while holding its own `ores_native_vm_nio_acquire` lease: the closer waited on `nio_idle` for a borrow only it could release. The source now uses bounded (16 distinct VM identities) thread-local host lease tracking, rejects cross-thread release, and refuses same-thread close **before** destroying schedulers. It retains foreign-thread close waiting, nested borrow counts and external producer fences. Real native VM lifecycle source tests add 32 close/release/retry iterations. A local harness with the exact original close-function body plus acquisition/release transitions reproduced the original self-deadlock (timeout exit 124); the patched fragment passed GCC/Clang ASan+UBSan three runs each and GCC TSan twice (500 self-close and 100 foreign-close cases per run). Full source-local native VM/scheduler and LLVM CI execution remain required; fragment tests do not establish full-VM parity.

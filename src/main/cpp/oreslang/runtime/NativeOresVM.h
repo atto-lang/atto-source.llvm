@@ -146,18 +146,21 @@ int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm);
 void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
-/* Nonblocking trusted-host pin. Every successful acquisition requires one
- * release, including when VM retirement begins during an operation.
- * External callers must fence new API entry before freeing the VM object.
+/* Nonblocking trusted-host pin. Each successful acquire requires one release
+ * by the SAME host thread, including after VM retirement. Thread-local lease
+ * tracking is bounded to 16 distinct simultaneously borrowed VM identities;
+ * overflow denies acquisition. A host owning its own lease cannot close that
+ * VM until it releases the lease. External API/producer fencing is still
+ * required before final VM reclamation.
  */
 void* ores_native_vm_nio_acquire(OresNativeVM* vm);
 void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
- * close from a carrier callback. Close also returns 0 when the calling host
- * thread still owns an NIO bootstrap reservation: that caller must cancel
- * its reservation (or finish it before initiating close), then retry close.
+ * close from a carrier callback. Close also returns 0 while its calling
+ * thread owns an NIO bootstrap reservation or active host NIO backend lease:
+ * cancel/release locally and retry external close.
  * Both early rejections leave the VM retired but schedulers allocated for
  * a safe subsequent external close. Returns 1 after complete destruction.
  * No forceful termination of an uncooperative guest callback is attempted.

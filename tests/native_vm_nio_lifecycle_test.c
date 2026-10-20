@@ -359,6 +359,22 @@ int main(void) {
         ores_native_vm_nio_cancel_bootstrap(self_bootstrap);
         check(ores_native_vm_close(self_bootstrap));
     }
+    // Borrow-owner close must fail before teardown, even for nested pins.
+    // A foreign closer still waits, as covered by the races above.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        OresNativeVM* leased = ores_native_vm_open(&cfg);
+        check(leased != NULL);
+        check(ores_native_vm_enable_nio(leased, 1, 0, 1));
+        void* one = ores_native_vm_nio_acquire(leased);
+        void* two = ores_native_vm_nio_acquire(leased);
+        check(one != NULL && two == one);
+        check(!ores_native_vm_close(leased));
+        check(ores_native_vm_nio_acquire(leased) == NULL);
+        ores_native_vm_nio_release(leased, two);
+        check(!ores_native_vm_close(leased));
+        ores_native_vm_nio_release(leased, one);
+        check(ores_native_vm_close(leased));
+    }
     // The actual native VM, scheduler, C ABI, and C++ NIO adapter are all
     // linked by the native lifecycle workflow, not replaced by test doubles.
     for (int iteration = 0; iteration < 32; ++iteration) {
