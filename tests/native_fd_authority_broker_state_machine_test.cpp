@@ -250,6 +250,30 @@ static void test_real_gate_contention_during_cleanup() {
     blocker.join();
     require(broker.confirm_reclaimed(*token, 74));
 }
+static void test_uncertain_kernel_close_quarantines_manager_slot() {
+    // Source-local fault injection runs AFTER the real close(2) succeeds.
+    // Model an unexpected close result without leaking a live descriptor.
+    // The manager must fail closed and NOT offer the uncertain entry for
+    // reuse, even though the old capability has been invalidated.
+    using Manager = oreslang::runtime::NativeEpollReactorManager;
+    Manager manager(1);
+    auto original = manager.open_owned_eventfd();
+    require(original.has_value());
+    manager.test_uncertain_next_owned_close();
+    require(!manager.close_owned_eventfd(*original));
+    require(manager.test_quarantined_owned_slots() == 1);
+    require(!manager.signal_owned_eventfd(*original));
+    require(!manager.try_watch(*original, EPOLLIN));
+    require(!manager.close_owned_eventfd(*original));
+
+    auto replacement = manager.open_owned_eventfd();
+    require(replacement.has_value());
+    require(manager.test_quarantined_owned_slots() == 1);
+    require(manager.close_owned_eventfd(*replacement));
+    // Releasing a different slot must not clear the quarantine receipt.
+    require(manager.test_quarantined_owned_slots() == 1);
+}
+
 static void test_all_orderings_of_signal_cancel_revoke_stop() {
     // All 24 serial orderings at the trusted-host API boundary. Kernel
     // readiness versus cancellation may resolve differently; all outcomes
@@ -310,6 +334,7 @@ int main() {
     test_physical_close_only_after_authenticated_receipt();
     test_real_manager_bootstrap_open_denial_is_retry_safe();
     test_real_gate_contention_during_cleanup();
+    test_uncertain_kernel_close_quarantines_manager_slot();
     test_all_orderings_of_signal_cancel_revoke_stop();
     return 0;
 }
