@@ -1043,6 +1043,22 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+            if (token_.text == "await") {
+                const std::size_t await_offset = token_.offset;
+                advance();
+                if (!value.ready_await_actor.empty())
+                    fail("native source supports only one await get_ready continuation");
+                if (!value.actor_actions.empty() || !value.statements.empty())
+                    fail("await get_ready must precede post-await actor effects");
+                value.ready_await_actor = identifier();
+                value.ready_await_offset = await_offset;
+                require(".");
+                require("get_ready");
+                require("(");
+                require(")");
+                require(";");
+                continue;
+            }
             if (token_.text != "defer" && exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
             if (accept("defer")) {
@@ -1591,8 +1607,9 @@ private:
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
-        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
-                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+        if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
+                || !fn.actor_sends.empty() || !fn.actor_stops.empty()
+                || !fn.actor_field_writes.empty()) {
             throw std::runtime_error(
                 "using effects on actor actions requires trusted actor effect summaries");
         }
@@ -1726,10 +1743,12 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
-            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
+            if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
+                    || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
-                    throw std::runtime_error("source actor bootstrap requires zero-argument int main without early returns");
+                    throw std::runtime_error(
+                        "source actor bootstrap requires zero-argument int main without early returns");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
@@ -1738,6 +1757,19 @@ private:
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
+            }
+            if (!fn.ready_await_actor.empty()) {
+                /*
+                 * First executable suspension is deliberately tiny: one actor
+                 * capability, no scalar/class/array owner crossing suspension,
+                 * no defer/guard CFG, and no generic Future<T> representation.
+                 */
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "await get_ready requires one source actor without suspended locals");
+                if (!live_actors.count(fn.ready_await_actor))
+                    throw std::runtime_error(
+                        "await get_ready requires a live direct ActorRef receiver");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
