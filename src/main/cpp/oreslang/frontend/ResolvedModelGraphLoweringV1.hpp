@@ -69,8 +69,8 @@ inline Graph lower(const ModelDecl& source,
         if (found == trusted.end()) throw std::runtime_error("MODEL_UNKNOWN_OP");
         const auto& sig = found->second;
         if (sig.effect != "pure") throw std::runtime_error("MODEL_EFFECTFUL_OP");
-        const std::size_t expected_inputs = index == 0 ? 0 : 1;
-        if (sig.inputs.size() != expected_inputs) throw std::runtime_error("MODEL_ARITY_MISMATCH");
+        if (index == 0 && sig.inputs.size() > 1) throw std::runtime_error("MODEL_ARITY_MISMATCH");
+        if (index > 0 && sig.inputs.size() != 1) throw std::runtime_error("MODEL_ARITY_MISMATCH");
         if (op.arguments.size() != sig.const_kinds.size())
             throw std::runtime_error("MODEL_CONST_ARITY_MISMATCH");
 
