@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, Float, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -113,6 +113,11 @@ public:
             ++at_;
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
+            }
+            if (at_ + 1 < source_.size() && source_[at_] == '.' && digit(source_[at_ + 1])) {
+                at_ += 2;
+                while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) ++at_;
+                return {Kind::Float, source_.substr(start, at_ - start), start};
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
@@ -221,6 +226,8 @@ public:
             } else {
                 if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
+                else if (accept("model")) program.models.push_back(model_declaration());
+                else if (accept("model")) program.models.push_back(model_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
@@ -249,8 +256,8 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.cooperative_loops.empty() && program.models.empty())
+            fail("expected at least one function, actor or model declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
@@ -261,6 +268,95 @@ public:
     }
 
 private:
+    // The lexer treats 'model' contextually only after 'define'.
+    // The native subset parses a strict static operation chain, but never
+    // claims a compiled guest or trusts nominal operation names yet.
+    ModelDecl model_declaration() {
+        ModelDecl model;
+        model.name = identifier();
+        std::unordered_set<std::string> formals;
+        if (accept("(")) {
+            if (token_.text != ")") {
+                do {
+                    if (model.formals.size() >= 16)
+                        fail("MODEL_FORMAL_BUDGET: at most 16 formals");
+                    ModelFormal formal;
+                    formal.name = identifier();
+                    if (!formals.insert(formal.name).second)
+                        fail("MODEL_DUPLICATE_FORMAL: " + formal.name);
+                    require(":");
+                    // Native stage one supports only primitive scalar formal types.
+                    if (token_.text != "int" && token_.text != "float" &&
+                            token_.text != "f32" && token_.text != "f64" &&
+                            token_.text != "bool")
+                        fail("MODEL_TYPE_UNSUPPORTED: native syntax subset accepts primitive formals");
+                    formal.type = std::string(token_.text);
+                    advance();
+                    if (accept("="))
+                        formal.default_value = model_value(formals, false).value;
+                    model.formals.push_back(std::move(formal));
+                } while (accept(","));
+            }
+            require(")");
+        }
+        require("as");
+        while (token_.text != "end" && token_.kind != Kind::End) {
+            if (model.operations.size() >= 64)
+                fail("MODEL_NODE_BUDGET: at most 64 model operations");
+            ModelOperation operation;
+            operation.name = identifier();
+            require("(");
+            std::unordered_set<std::string> labels;
+            bool saw_named = false;
+            if (token_.text != ")") {
+                do {
+                    if (operation.arguments.size() >= 16)
+                        fail("MODEL_ARGUMENT_BUDGET: at most 16 operation arguments");
+                    ModelArgument argument;
+                    if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+                        Lexer lookahead = lexer_;
+                        if (lookahead.next().text == ":") {
+                            argument.label = identifier();
+                            require(":");
+                            if (!labels.insert(argument.label).second)
+                                fail("MODEL_DUPLICATE_ARGUMENT: " + argument.label);
+                            saw_named = true;
+                        }
+                    }
+                    if (argument.label.empty() && saw_named)
+                        fail("MODEL_POSITIONAL_AFTER_NAMED");
+                    auto parsed = model_value(formals, true);
+                    argument.value = std::move(parsed.value);
+                    argument.formal_reference = parsed.formal_reference;
+                    operation.arguments.push_back(std::move(argument));
+                } while (accept(","));
+            }
+            require(")");
+            accept(";");
+            model.operations.push_back(std::move(operation));
+        }
+        if (model.operations.empty()) fail("MODEL_EMPTY_BODY");
+        require("end");
+        return model;
+    }
+
+    struct ModelScalar { std::string value; bool formal_reference; };
+    ModelScalar model_value(const std::unordered_set<std::string>& formals, bool allow_formal) {
+        if (token_.kind == Kind::Integer || token_.kind == Kind::Float ||
+                token_.text == "true" || token_.text == "false") {
+            ModelScalar result{std::string(token_.text), false};
+            advance();
+            return result;
+        }
+        if (allow_formal && token_.kind == Kind::Identifier && !reserved(token_.text)) {
+            const std::string name(token_.text);
+            if (!formals.count(name)) fail("MODEL_UNKNOWN_FORMAL: " + name);
+            advance();
+            return {name, true};
+        }
+        fail("MODEL_DYNAMIC_ARGUMENT: only literals or declared model formals allowed");
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1842,10 +1938,17 @@ private:
 
 } // namespace
 
+std::vector<ModelDecl> parse_model_declarations(std::string_view source) {
+    return Parser(source, false, false).parse().models;
+}
+
 Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
+    if (!program.models.empty())
+        throw std::runtime_error("MODEL_LOWERING_UNSUPPORTED: typed model operator signatures, "
+                                 "effect checking and native guest lowering are not implemented");
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
