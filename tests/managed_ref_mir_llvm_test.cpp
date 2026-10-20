@@ -1,5 +1,6 @@
 #include "oreslang/backend/ManagedRefMirLowering.hpp"
 
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 
