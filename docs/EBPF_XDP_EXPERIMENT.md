@@ -155,6 +155,51 @@ for that exact source head. Do not promote the staged XDP implementation until
 those tests execute on an authorized runner and source/object provenance is
 independently pinned.
 
+## Local compiler-to-policy bridge (source-local, no cross-org checkout)
+
+The source-local `tests/bpf_xdp_policy_bridge.py` runs an **end-to-end
+build gate** when a trusted LLVM compiler, an independently pinned checkout
+of `oreslang-target-profiles`, Clang with the BPF backend, Node 22, and
+`readelf` are present. It never mirrors source or requests GitHub tokens.
+
+Run for each **exact, externally reviewed source** after a trusted build
+controller has pinned the compiler and policy CLI:
+
+```sh
+SOURCE=examples/xdp_packet_u8.ores
+COMPILER=build/oreslang-llvmc
+POLICY=../oreslang-target-profiles/bin/oreslang-target.mjs
+
+python3 tests/bpf_xdp_policy_bridge.py \
+  --source "$SOURCE" --compiler "$COMPILER" --policy-cli "$POLICY" \
+  --expected-source-sha256 "$(sha256sum "$SOURCE" | cut -d' ' -f1)" \
+  --expected-compiler-sha256 "$(sha256sum "$COMPILER" | cut -d' ' -f1)" \
+  --expected-policy-cli-sha256 "$(sha256sum "$POLICY" | cut -d' ' -f1)" \
+  --grants=bpf.packet.read
+```
+
+For a constant-only source, omit `--grants`. SHA values in this example
+are computed locally for demonstration; **a protected build controller must
+supply independently reviewed expected hashes** for them to be a meaningful
+provenance control. The CLI SHA does **not** pin its imported target-profile
+modules, profile registry or platform runtime. The caller must pin and verify
+that complete policy checkout separately.
+
+The bridge snapshots up to 4096 source bytes through a regular, non-symlink
+descriptor and checks the expected SHA; compiles *that exact snapshot* to
+an ungranted closure; refuses duplicate/unknown JSON keys, self-granted
+privileges, unknown effects or targets; asks the external target-policy CLI
+to authorize the exact inferred effects; and **only after policy success**
+emits BPF IR and an EM_BPF ELF object. It checks sections, symbols and
+relocations and reports unsigned SHA256 evidence for source, compiler,
+policy CLI, closure, IR and object. It does **not** attach to the kernel,
+verify on a running kernel, sign the receipt, or confer deployment authority.
+
+The separate `bpf_xdp_policy_bridge_failclosed_offline` CTest exercises
+the bridge's fail-closed logic with source-free mocks. A passing mock test
+is never a replacement for the end-to-end test against real, pinned
+executables, Linux verifier, and `BPF_PROG_TEST_RUN`.
+
 ## Evidence boundary
 
 The focused CTests cover positive XDP actions, packet-bound admission,
