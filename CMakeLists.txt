@@ -2144,6 +2144,22 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-domain-exhaustion-test)
     set_tests_properties(native_actor_domain_exhaustion_no_reuse PROPERTIES TIMEOUT 30)
 
+    # Logical execution ids are reserved at admission. The final UINT64_MAX id
+    # may execute exactly once; additional work must fail closed before dispatch.
+    add_executable(oreslang-native-execution-context-exhaustion-test
+        tests/native_execution_context_exhaustion_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-execution-context-exhaustion-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-execution-context-exhaustion-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-execution-context-exhaustion-test PRIVATE
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
+    target_compile_options(oreslang-native-execution-context-exhaustion-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_execution_context_exhaustion_admission
+        COMMAND oreslang-native-execution-context-exhaustion-test)
+    set_tests_properties(native_execution_context_exhaustion_admission PROPERTIES TIMEOUT 30)
+
     # Stop one child without waiting for an unrelated actor's busy turn.
     add_executable(oreslang-native-child-wait-test
         tests/native_actor_group_wait_done_test.c
