@@ -317,6 +317,8 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
+        oreslang::RuntimeFeatureSet retained_runtime_features;
+        const oreslang::RuntimeFeatureSet* expected_runtime_features = nullptr;
         if (tree_shake) {
             // Tree shaking must never make target-invalid or otherwise
             // unlowerable source appear valid. Verify the complete unpruned
@@ -355,9 +357,16 @@ int main(int argc, char** argv) {
                     preserve_exported_api,
                     actor_roots);
             ast = std::move(shaken.program);
+            retained_runtime_features = oreslang::analyze_runtime_features(
+                    ast, wasm32_target, cortex_m_target);
+            expected_runtime_features = &retained_runtime_features;
         }
 
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(
+                ast,
+                wasm32_target,
+                cortex_m_target,
+                expected_runtime_features);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
