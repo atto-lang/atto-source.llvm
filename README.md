@@ -152,6 +152,16 @@ retained/removed classification and runtime-feature drift fail closed.
 Rootless strict tree shaking also fails instead of silently producing an empty
 artifact.
 
+The compiler also keeps internal reachability provenance without changing the
+`ores-reachability/1` wire format. Roots are tagged with reasons such as
+`ROOT_ENTRY`, `ROOT_PUBLIC_API`, `ROOT_TARGET_ABI`, and
+`CONTINUATION_ABI`; dependency edges record reasons such as
+`DIRECT_CALL`, `ACTOR_SPAWN`, `CLASS_REFERENCE`,
+`CLASS_INITIALIZER`, and `EXPORTED_OVERLOAD_ABI`. Analyzer-produced
+provenance must explain every retained non-root and may not point outside the
+retained closure. `explain_reachability(...)` exposes the reasons for one
+retained semantic symbol to compiler/reporting code.
+
 Dynamic dispatch/reflection, FFI/hot-load roots, whole-stdlib/package pruning
 and final linked-section/byte attribution remain follow-up work. CTest contains
 both control and shaken IR checks, native execution equivalence, library-root
