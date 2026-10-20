@@ -641,6 +641,11 @@ if(BUILD_TESTING)
         --ir-absent "DeadWorker"
         --ir-absent "DeadBox"
         --ir-absent "oreslang_source_actor_spawn")
+    oreslang_contract_test(native_tree_shake_preflight_all_source
+        tree-shake-dead-symbols.ores
+        --target wasm32
+        --tree-shake
+        --diagnostic "wasm32 native caught-throw guest unsupported")
     if(ORE_CLANG)
         oreslang_contract_test(native_tree_shake_preserves_executable_behavior
             tree-shake-dead-symbols.ores
