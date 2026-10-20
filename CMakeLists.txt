@@ -5,6 +5,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Managed Oreslang references are a language/runtime storage policy, separate
+# from the native target ABI. Keep compact actor-local references as the
+# default on 64-bit hosts while preserving an explicit full-width mode.
+set(ORES_MANAGED_REF_MODE "compressed32" CACHE STRING
+    "Default native managed reference representation: compressed32 or native64")
+set_property(CACHE ORES_MANAGED_REF_MODE PROPERTY STRINGS compressed32 native64)
+if(ORES_MANAGED_REF_MODE STREQUAL "native64")
+    add_compile_definitions(ORES_MANAGED_REF_DEFAULT_NATIVE64=1)
+elseif(NOT ORES_MANAGED_REF_MODE STREQUAL "compressed32")
+    message(FATAL_ERROR
+        "ORES_MANAGED_REF_MODE must be compressed32 or native64; got '${ORES_MANAGED_REF_MODE}'")
+endif()
+message(STATUS "Oreslang managed reference mode: ${ORES_MANAGED_REF_MODE}")
+
 find_package(LLVM CONFIG REQUIRED)
 if(LLVM_VERSION_MAJOR LESS 14)
     message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
@@ -981,6 +995,13 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-dop-layout-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
+
+    add_executable(oreslang-managed-ref-test tests/managed_ref_test.cpp)
+    target_include_directories(oreslang-managed-ref-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_managed_reference_width_and_dod_layout
+        COMMAND oreslang-managed-ref-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
