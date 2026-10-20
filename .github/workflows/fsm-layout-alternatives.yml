@@ -5,6 +5,9 @@ on:
       - 'docs/FSM_ALTERNATIVE_EXECUTION_LAYOUTS.md'
       - 'src/main/cpp/oreslang/runtime/DopLayout.hpp'
       - 'tests/fsm_layout_alternatives_test.cpp'
+      - 'tests/fixtures/fsm-scalar-reducer.ores'
+      - 'tests/fixtures/fsm-duplicate-function-reject.ores'
+      - 'tests/native_fsm_scalar_guest.py'
       - 'scripts/verify-fsm-layout-alternatives.sh'
       - '.github/workflows/fsm-layout-alternatives.yml'
   workflow_dispatch:
