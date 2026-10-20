@@ -280,6 +280,7 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (actor.name == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
         require("as");
@@ -362,6 +363,7 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (result.name == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
         require("as");
@@ -611,6 +613,7 @@ private:
                                                     : Parameter::Mode::Borrow;
                 }
                 if (!accept("int")) {
+                    if (token_.text == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
                     const std::string type = identifier();
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
@@ -626,6 +629,7 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
+            if (token_.text == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
             const std::string type = identifier();
             const bool generic = std::any_of(value.generic_parameters.begin(),
                 value.generic_parameters.end(),
@@ -683,6 +687,7 @@ private:
                     require(")");
                     binding.int_array = true;
                 } else {
+                if (token_.text == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
                 binding.class_name = identifier();
                 binding.name = identifier();
                 require("=");
@@ -732,6 +737,7 @@ private:
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        if (token_.text == "Map") fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
@@ -1298,6 +1304,15 @@ private:
             // A local scalar named Entry remains legal without this suffix.
             if (next.text == "." || next.text == "<") {
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
+        }
+        if (token_.text == "Map") {
+            Lexer lookahead = lexer_;
+            const Token next = lookahead.next();
+            // Preserve an ordinary scalar/function identifier named Map.
+            // Only builtin namespace/generic product syntax is reserved.
+            if (next.text == "." || next.text == "<") {
+                fail("native Map<K,V> unsupported: canonical key storage, affine ownership and Map.from_entries lowering are not implemented");
             }
         }
 
