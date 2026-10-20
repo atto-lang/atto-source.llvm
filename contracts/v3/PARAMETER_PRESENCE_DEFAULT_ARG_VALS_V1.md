@@ -182,7 +182,10 @@ binary encoding (32-bit lengths/counts, big-endian primitive fields):
 - Closed defaults use **fixed stable wire tags**:
   integer=1 (signed int64), boolean=2, string=3 (UTF-8 length-prefixed),
   None=4 (no payload). The absent-default bit differs from None.
-  Malformed UTF-16 and type nesting beyond 64 are rejected.
+  Malformed UTF-16 is rejected. The Java tooling-only fingerprint
+  applies an **iterative preflight before recursive declaration validation**:
+  at most 64 type-nesting levels, 8,192 visited type nodes, and 1,024
+  formal parameters; violations reject the source contract before hashing.
 
 Equivalent `@DefaultArgVals(name: value)` and per-formal
 `@Default(value)` spellings yield the same normalized fingerprint;
