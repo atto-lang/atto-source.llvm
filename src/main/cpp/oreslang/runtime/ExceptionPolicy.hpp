@@ -152,10 +152,18 @@ inline Failure combine_failure(Failure pending, Failure cleanup) {
     // Keep dominant kind/identity independent of diagnostics truncation.
     // Omitted count tracks subtrees, so it is bounded even for malicious
     // callers presenting enormous chains; no recursive copying on overflow.
-    if (loser.nodes_ > max_control_suppressed_nodes - winner.nodes_ ||
-            loser.depth_ >= max_control_suppression_depth) {
-        if (winner.omitted_ != std::numeric_limits<std::size_t>::max())
-            ++winner.omitted_;
+    const bool truncate =
+        loser.nodes_ > max_control_suppressed_nodes - winner.nodes_ ||
+        loser.depth_ >= max_control_suppression_depth;
+    // Omission counts are aggregated across nested admitted subtrees. A
+    // dropped subtree counts as one omission and carries its prior count.
+    // Saturating arithmetic prevents even hostile metadata from wrapping.
+    const auto max_count = std::numeric_limits<std::size_t>::max();
+    const std::size_t increment = loser.omitted_;
+    winner.omitted_ = increment > max_count - winner.omitted_
+        ? max_count : winner.omitted_ + increment;
+    if (truncate) {
+        if (winner.omitted_ < max_count) ++winner.omitted_;
     } else {
         winner.nodes_ += loser.nodes_;
         winner.depth_ = std::max(winner.depth_, loser.depth_ + 1);
