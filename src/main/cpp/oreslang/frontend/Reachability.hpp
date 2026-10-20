@@ -21,6 +21,45 @@ struct ReachabilityResult {
     std::vector<std::string> removed_symbols;
 };
 
+enum class RuntimeFeature {
+    ActorNativeRuntime,
+    OwnedI64Region,
+    IntArrayRuntime
+};
+
+struct RuntimeFeatureSet {
+    std::set<RuntimeFeature> features;
+
+    bool contains(RuntimeFeature feature) const {
+        return features.find(feature) != features.end();
+    }
+
+    std::vector<std::string> names() const {
+        std::vector<std::string> out;
+        for (RuntimeFeature feature : features) {
+            switch (feature) {
+                case RuntimeFeature::ActorNativeRuntime:
+                    out.push_back("actor-native-runtime");
+                    break;
+                case RuntimeFeature::OwnedI64Region:
+                    out.push_back("owned-i64-region");
+                    break;
+                case RuntimeFeature::IntArrayRuntime:
+                    out.push_back("int-array-runtime");
+                    break;
+            }
+        }
+        return out;
+    }
+
+    bool operator==(const RuntimeFeatureSet& other) const {
+        return features == other.features;
+    }
+    bool operator!=(const RuntimeFeatureSet& other) const {
+        return !(*this == other);
+    }
+};
+
 inline void validate_reachability_result(const ReachabilityResult& result);
 
 namespace reachability_detail {
@@ -117,6 +156,54 @@ inline std::vector<std::string> sorted(const std::set<std::string>& values) {
  * native parser. Unknown direct calls fail closed. Backends must run this after
  * parsing/type admission and before target-specific lowering/linker DCE.
  */
+inline RuntimeFeatureSet analyze_runtime_features(
+        const Program& program,
+        bool wasm32_target = false,
+        bool cortex_m_target = false) {
+    (void)cortex_m_target;
+    RuntimeFeatureSet result;
+
+    if (!wasm32_target && !program.actors.empty())
+        result.features.insert(RuntimeFeature::ActorNativeRuntime);
+
+    for (const auto& fn : program.functions) {
+        for (const auto& local : fn.locals) {
+            if (local.heap_owned)
+                result.features.insert(RuntimeFeature::OwnedI64Region);
+            if (local.int_array) {
+                result.features.insert(RuntimeFeature::IntArrayRuntime);
+                continue;
+            }
+            if (!local.new_class || local.class_name.empty()) continue;
+            const auto klass = std::find_if(
+                    program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& candidate) {
+                        return candidate.name == local.class_name;
+                    });
+            if (klass == program.classes.end()) continue;
+            if (std::any_of(
+                    klass->fields.begin(), klass->fields.end(),
+                    [](const ClassField& field) { return field.int_array; }))
+                result.features.insert(RuntimeFeature::IntArrayRuntime);
+        }
+    }
+
+    return result;
+}
+
+inline void validate_runtime_features(
+        const Program& program,
+        bool wasm32_target,
+        bool cortex_m_target,
+        const RuntimeFeatureSet& expected) {
+    const RuntimeFeatureSet actual =
+            analyze_runtime_features(program, wasm32_target, cortex_m_target);
+    if (actual != expected) {
+        throw std::runtime_error(
+                "native runtime feature report drift: expected/actual feature sets differ");
+    }
+}
+
 inline ReachabilityResult analyze_reachability(
         const Program& program,
         const std::vector<std::string>& explicit_function_roots,
