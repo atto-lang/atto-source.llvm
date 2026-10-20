@@ -1282,6 +1282,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_user_tuple_call_is_ordinary
         native-user-tuple-call.ores
         --ir "call i64 @tuple")
+    oreslang_contract_test(native_local_entry_identifier_is_ordinary
+        native-local-entry-name.ores
+        --ir "ret i64 42")
     if(ORE_CLANG)
         oreslang_contract_test(native_user_tuple_call_executes
             native-user-tuple-call.ores
