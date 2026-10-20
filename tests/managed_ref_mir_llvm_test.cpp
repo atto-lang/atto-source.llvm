@@ -38,7 +38,11 @@ static ActorManagedRefMir checked_mir(ManagedRefAccess access) {
     return mir;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const bool emit_ir = argc == 2 && std::string(argv[1]) == "--emit-ir";
+    if (argc > 1 && !emit_ir)
+        throw std::invalid_argument("only --emit-ir is supported");
+
     llvm::LLVMContext context;
     llvm::Module module("oreslang.compact32.verified.actor.mir", context);
     module.setDataLayout("e-m:e-p:64:64-i64:64-n8:16:32:64-S128");
@@ -116,4 +120,6 @@ int main() {
             output.find("ptrtoint") == std::string::npos &&
             output.find("inttoptr") == std::string::npos,
             "LLVM bypassed runtime-mediated actor-provenance access");
+    if (emit_ir)
+        module.print(llvm::outs(), nullptr); // clang compiles this checked IR against REAL ActorArena.c
 }
