@@ -43,6 +43,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Host-only tagged Symbol property identity / static layout parity.
+    # This is NOT compiled guest Symbol source, a Unicode NFC decoder,
+    # actor admission or property-key codegen.
+    add_executable(oreslang-native-symbol-property-layout-v1-test
+        tests/symbol_property_layout_v1_test.cpp)
+    target_include_directories(oreslang-native-symbol-property-layout-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-symbol-property-layout-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_symbol_property_layout_host_only_v1
+        COMMAND oreslang-native-symbol-property-layout-v1-test)
+    set_tests_properties(native_symbol_property_layout_host_only_v1
+        PROPERTIES TIMEOUT 15)
+
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
     add_executable(oreslang-realtime-actor-arena-test
