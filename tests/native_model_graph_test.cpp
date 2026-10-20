@@ -2,11 +2,126 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <cassert>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
+
+#ifndef ORES_MODEL_CORPUS_PATH
+#error "ORES_MODEL_CORPUS_PATH must point to the vendored shared model corpus"
+#endif
+
+struct SharedCase {
+    std::string id;
+    std::string expect;
+    std::string java_mode;
+    std::string llvm_mode;
+    std::string diagnostic;
+    std::string llvm_diagnostic;
+    std::string graph_digest;
+    std::string configured_digest;
+    std::string semantic_result;
+    std::string source;
+};
+
+struct SharedIdentity {
+    std::string id;
+    bool expect_same = false;
+    std::string expected_graph_digest;
+    std::string variant_operation_digest;
+    std::string variant_graph_digest;
+    std::string baseline_source;
+    std::string variant_source;
+};
+
+struct SharedCorpus {
+    std::string revision;
+    std::string profile;
+    std::vector<SharedCase> cases;
+    std::vector<SharedIdentity> identities;
+};
+
+std::vector<std::string> split_fields(const std::string& line) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (true) {
+        const auto pos = line.find('|', start);
+        if (pos == std::string::npos) {
+            out.push_back(line.substr(start));
+            return out;
+        }
+        out.push_back(line.substr(start, pos - start));
+        start = pos + 1;
+    }
+}
+
+int hex_nibble(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return 10 + ch - 'a';
+    if (ch >= 'A' && ch <= 'F') return 10 + ch - 'A';
+    throw std::runtime_error("invalid shared corpus hex");
+}
+
+std::string decode_hex_ascii(const std::string& hex) {
+    if ((hex.size() & 1U) != 0U)
+        throw std::runtime_error("odd shared corpus hex length");
+    std::string out;
+    out.reserve(hex.size() / 2);
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const int value = (hex_nibble(hex[i]) << 4) | hex_nibble(hex[i + 1]);
+        if (value > 0x7f) throw std::runtime_error("non-ASCII shared corpus source");
+        out.push_back(static_cast<char>(value));
+    }
+    return out;
+}
+
+std::string dash_empty(const std::string& value) {
+    return value == "-" ? std::string{} : value;
+}
+
+SharedCorpus load_shared_corpus() {
+    std::ifstream input(ORES_MODEL_CORPUS_PATH);
+    if (!input) throw std::runtime_error("cannot open vendored shared model corpus");
+
+    std::string line;
+    if (!std::getline(input, line) || line != "ORESLANG_MODEL_EXECUTABLE_CASES_V1")
+        throw std::runtime_error("invalid shared model corpus header");
+
+    SharedCorpus corpus;
+    while (std::getline(input, line)) {
+        if (line.empty()) continue;
+        const auto fields = split_fields(line);
+        if (fields[0] == "revision") {
+            assert(fields.size() == 2);
+            corpus.revision = fields[1];
+        } else if (fields[0] == "profile") {
+            assert(fields.size() == 2);
+            corpus.profile = fields[1];
+        } else if (fields[0] == "case") {
+            assert(fields.size() == 11);
+            corpus.cases.push_back(SharedCase{
+                fields[1], fields[2], fields[3], fields[4],
+                dash_empty(fields[5]), dash_empty(fields[6]),
+                dash_empty(fields[7]), dash_empty(fields[8]),
+                dash_empty(fields[9]), decode_hex_ascii(fields[10])
+            });
+        } else if (fields[0] == "identity") {
+            assert(fields.size() == 8);
+            corpus.identities.push_back(SharedIdentity{
+                fields[1], fields[2] == "true",
+                dash_empty(fields[3]), dash_empty(fields[4]),
+                dash_empty(fields[5]), decode_hex_ascii(fields[6]),
+                decode_hex_ascii(fields[7])
+            });
+        } else {
+            throw std::runtime_error("unknown shared model corpus record");
+        }
+    }
+    return corpus;
+}
 
 constexpr const char* kSharedExecutableCorpusRevision =
     "model-core-i64-v1.2026-10-20.5";
@@ -28,6 +143,48 @@ int main() {
     assert(oreslang::model_sha256("abc") ==
            "ba7816bf8f01cfea414140de5dae2223"
            "b00361a396177a9cb410ff61f20015ad");
+
+    const auto shared_corpus = load_shared_corpus();
+    assert(shared_corpus.revision == kSharedExecutableCorpusRevision);
+    assert(shared_corpus.profile == "model-core-i64-v1");
+    assert(shared_corpus.cases.size() >= 15);
+    for (const auto& item : shared_corpus.cases) {
+        if (item.llvm_mode == "reject") {
+            const std::string expected =
+                item.llvm_diagnostic.empty() ? item.diagnostic : item.llvm_diagnostic;
+            expect_error(expected, item.source);
+            continue;
+        }
+
+        auto accepted = oreslang::parse_program(item.source);
+        assert(!accepted.models.empty());
+        assert(accepted.models.front().portable_profile == "model-core-i64-v1");
+        if (!item.graph_digest.empty())
+            assert(accepted.models.front().graph_digest == item.graph_digest);
+        if (!item.configured_digest.empty()) {
+            assert(!accepted.model_runs.empty());
+            assert(accepted.model_runs.front().configured_graph_digest ==
+                   item.configured_digest);
+        }
+    }
+    for (const auto& item : shared_corpus.identities) {
+        auto baseline = oreslang::parse_program(item.baseline_source);
+        auto variant = oreslang::parse_program(item.variant_source);
+        assert(!baseline.models.empty() && !variant.models.empty());
+        if (item.expect_same) {
+            assert(baseline.models.front().graph_digest ==
+                   variant.models.front().graph_digest);
+            if (!item.expected_graph_digest.empty())
+                assert(baseline.models.front().graph_digest ==
+                       item.expected_graph_digest);
+        } else {
+            assert(baseline.models.front().graph_digest !=
+                   variant.models.front().graph_digest);
+            if (!item.variant_graph_digest.empty())
+                assert(variant.models.front().graph_digest ==
+                       item.variant_graph_digest);
+        }
+    }
 
     const std::string source = R"ores(
         fnc Identity(int input): int {
