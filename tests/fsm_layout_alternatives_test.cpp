@@ -28,6 +28,7 @@ struct Step { bool accepted; Row next; std::uint32_t effect; };
 Step reduce(Row old, std::uint32_t event) {
     Row next = old;
     std::uint32_t effect = 0;
+    if (old.state > 2 || old.ticks > 3) return {false, old, 0};
     if (old.version == std::numeric_limits<std::uint32_t>::max())
         return {false, old, 0};
     if (old.state == 0 && event == 0) { next.state = 1; next.ticks = 0; effect = 1; }
@@ -64,6 +65,7 @@ bool table_well_formed(const TableRule* rules, std::size_t count) {
 }
 // Independently encoded, statically closed A2 table; must refine A1 reducer.
 Step reduce_table(Row old, std::uint32_t event) {
+    if (old.state > 2 || old.ticks > 3) return {false, old, 0};
     if (old.version == std::numeric_limits<std::uint32_t>::max())
         return {false, old, 0};
     for (const auto& r : kTable) {
@@ -280,6 +282,10 @@ void check_rejection_atomicity() {
     const Step c = reduce(overflow, 0);
     check(!c.accepted && c.next == overflow && c.effect == 0,
           "FSM version overflow admitted");
+    const Row bad_ticks{0, 2, 4};
+    const Step ticks_reject = reduce(bad_ticks, 0);
+    check(!ticks_reject.accepted && ticks_reject.next == bad_ticks &&
+          ticks_reject.effect == 0, "invalid tick snapshot accepted");
     const Row unknown{99, 2, 0};
     const Step d = reduce(unknown, 0);
     check(!d.accepted && d.next == unknown && d.effect == 0,
