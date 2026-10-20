@@ -293,10 +293,7 @@ private:
             if (token_.kind != Kind::Integer)
                 fail("MODEL_NONCONSTANT_CONFIG: expected integer literal after '-'");
             argument.kind = ModelStaticArg::Kind::Integer;
-            const std::int64_t value = integer_literal();
-            if (value == std::numeric_limits<std::int64_t>::min())
-                fail("MODEL_CONST_OVERFLOW: negative static model argument overflows i64");
-            argument.integer = -value;
+            argument.integer = negative_integer_literal();
             return argument;
         }
         if (token_.kind == Kind::Integer) {
@@ -334,12 +331,10 @@ private:
                     require(":");
                     require("int");
                     if (accept("=")) {
-                        bool negative = accept("-");
-                        const std::int64_t value = integer_literal();
-                        if (negative && value == std::numeric_limits<std::int64_t>::min())
-                            fail("MODEL_CONST_OVERFLOW: model default overflows i64");
+                        const bool negative = accept("-");
                         parameter.has_default = true;
-                        parameter.default_value = negative ? -value : value;
+                        parameter.default_value =
+                            negative ? negative_integer_literal() : integer_literal();
                         seen_default = true;
                     } else if (seen_default) {
                         fail("MODEL_CONFIG_DEFAULT_ORDER: required model parameters cannot follow defaults");
@@ -598,12 +593,36 @@ private:
             fail("class field requires ';' or a line break");
     }
 
-    std::int64_t integer_literal() {
+    std::string checked_integer_digits() const {
         if (token_.kind != Kind::Integer) fail("expected integer literal");
         std::string digits(token_.text);
         if (digits.front() == '_' || digits.back() == '_' ||
                 digits.find("__") != std::string::npos) fail("malformed integer separator");
         digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        return digits;
+    }
+
+    bool signed_min_magnitude_token() const {
+        return token_.kind == Kind::Integer &&
+            checked_integer_digits() == "9223372036854775808";
+    }
+
+    std::int64_t negative_integer_literal() {
+        std::string digits = checked_integer_digits();
+        if (digits == "9223372036854775808") {
+            advance();
+            return std::numeric_limits<std::int64_t>::min();
+        }
+        std::int64_t value = 0;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            fail("integer literal overflows signed 64-bit result");
+        advance();
+        return -value;
+    }
+
+    std::int64_t integer_literal() {
+        std::string digits = checked_integer_digits();
         std::int64_t value = 0;
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
         if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
@@ -1360,6 +1379,15 @@ private:
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
+            // The signed i64 endpoint has magnitude 2^63, which cannot be
+            // represented by the ordinary positive literal parser. Fold only
+            // that exact token into INT64_MIN; ordinary negatives retain the
+            // existing Negate AST and all non-model semantics.
+            if (token_.kind == Kind::Integer && signed_min_magnitude_token()) {
+                auto expr = make_expression(Expression::Kind::Integer, offset);
+                expr->integer = negative_integer_literal();
+                return expr;
+            }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
             return expr;
