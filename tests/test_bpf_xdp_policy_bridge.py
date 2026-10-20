@@ -186,6 +186,5 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(calls, [])
 
 
-
 if __name__ == '__main__':
     unittest.main()
