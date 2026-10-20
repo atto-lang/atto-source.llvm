@@ -17,8 +17,8 @@ Native Oreslang separates logical managed references from machine/ABI pointers.
 The CMake cache setting is:
 
 ```text
--D ORES_MANAGED_REF_MODE=compressed32   # default
--D ORES_MANAGED_REF_MODE=native64
+-DORES_MANAGED_REF_MODE=compressed32   # default
+-DORES_MANAGED_REF_MODE=native64
 ```
 
 (without the space after `-D` when invoking CMake).
