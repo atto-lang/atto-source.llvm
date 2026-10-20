@@ -20,6 +20,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
       - 'tests/native_vm_nio_lifecycle_test.c'
+      - 'tests/native_actor_scheduler_test.c'
+      - 'tests/native_ores_vm_test.c'
       - 'tests/native_epoll_reactor*'
       - 'tests/actor_max_threads_source_admission_test.cpp'
       - 'tests/test_native_nio_source_integrity.py'
