@@ -210,8 +210,12 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
             require(argument.label.empty(), "MODEL_NAMED_ARGUMENT_UNRESOLVED");
             if (argument.formal_reference)
                 validate_scalar(argument.value, true, true, "");
-            else if (argument.value.size() > 256)
-                throw std::runtime_error("MODEL_NONCONSTANT_CONFIG");
+            else if (argument.value == "true" || argument.value == "false")
+                validate_scalar(argument.value, false, false, "bool");
+            else if (argument.value.find('.') != std::string::npos)
+                validate_scalar(argument.value, false, false, "float");
+            else
+                validate_scalar(argument.value, false, false, "int");
             if (argument.formal_reference)
                 require(formals.find(argument.value) != formals.end(),
                         "MODEL_UNKNOWN_FORMAL");
