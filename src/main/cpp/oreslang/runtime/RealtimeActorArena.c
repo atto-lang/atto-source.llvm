@@ -196,13 +196,18 @@ OresRtArenaStatus ores_rt_actor_arena_seal(
         return ORES_RT_ARENA_INVALID;
 
     volatile unsigned char* bytes = arena->backing;
-    for (size_t i = 0; i < arena->arena_bytes; i += page_bytes) {
-        const unsigned char value = bytes[i];
-        bytes[i] = value;
+    size_t offset = 0;
+    for (;;) {
+        const unsigned char value = bytes[offset];
+        bytes[offset] = value;
+        if (page_bytes >= arena->arena_bytes - offset) break;
+        offset += page_bytes;
     }
     const size_t last = arena->arena_bytes - 1;
-    const unsigned char value = bytes[last];
-    bytes[last] = value;
+    if (offset != last) {
+        const unsigned char value = bytes[last];
+        bytes[last] = value;
+    }
     arena->sealed = 1;
     return ORES_RT_ARENA_OK;
 }
