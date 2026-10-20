@@ -104,7 +104,12 @@ class NativeNioWorktreeTests(unittest.TestCase):
         env['NIO_TEST_REAL_GIT'] = real_git
         env['PATH'] = str(shim_dir) + os.pathsep + env.get('PATH', '')
         result = self.gate_from_committed_shell(env=env)
-        self.assertNotEqual(0, result.returncode, result.stderr)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn('should-not-execute',
+                      (self.repo / 'scripts' / CHECKER.name).read_text(),
+                      'Git shim must actually swap the worktree helper')
+        self.assertIn('raw tracked blob mismatch', result.stderr,
+                      'a passing negative test must prove the committed checker ran')
         self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
 
     def reject(self, snippet):
