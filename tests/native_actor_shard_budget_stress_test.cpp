@@ -93,6 +93,43 @@ int main() {
     assert(post_retire_success.load() == 0);
     assert(!racing.try_reserve(1));
 
+    // Pair admission must serialize with actor retirement too. Once the
+    // retirement operation has completed, no paired actor/VM reservation may
+    // commit and the VM ledger must never retain a partial charge.
+    ActorShardBudget paired_actor(8192);
+    ActorShardBudget paired_vm(65536);
+    std::atomic<bool> paired_start{false}, paired_retired{false};
+    std::atomic<std::uint64_t> paired_post_retire_success{0};
+    pool.clear();
+    for (int t = 0; t < threads; ++t) {
+        pool.emplace_back([&] {
+            while (!paired_start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int i = 0; i < per_thread; ++i) {
+                const bool after =
+                        paired_retired.load(std::memory_order_acquire);
+                if (ActorShardBudget::try_reserve_pair(
+                        paired_actor, paired_vm, 16)) {
+                    if (after) paired_post_retire_success.fetch_add(1);
+                    ActorShardBudget::release_pair(
+                            paired_actor, paired_vm, 16);
+                }
+            }
+        });
+    }
+    paired_start.store(true, std::memory_order_release);
+    for (int n = 0; n < 3000; ++n) std::this_thread::yield();
+    paired_actor.mark_retired_after_done();
+    paired_retired.store(true, std::memory_order_release);
+    for (auto& t : pool) t.join();
+    assert(paired_actor.retired());
+    assert(paired_actor.used_bytes() == 0);
+    assert(paired_vm.used_bytes() == 0);
+    assert(paired_post_retire_success.load() == 0);
+    assert(!ActorShardBudget::try_reserve_pair(
+            paired_actor, paired_vm, 16));
+    assert(paired_vm.used_bytes() == 0);
+
     // Retire with an outstanding charge; the tombstone must survive refund.
     ActorShardBudget outstanding(4096);
     assert(outstanding.try_reserve(2048));
