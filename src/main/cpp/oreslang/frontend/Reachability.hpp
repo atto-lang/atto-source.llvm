@@ -386,23 +386,29 @@ inline ReachabilityResult analyze_reachability(
     for (const auto& root : explicit_function_roots) {
         const std::string slot = resolve_function_root(root);
         mark_function(slot);
-        root_symbols.insert(reachability_detail::qualify(
-                program, function_semantic_name(slot, *functions.at(slot))));
+        const std::string semantic =
+                function_semantic_name(slot, *functions.at(slot));
+        add_root_reason(
+                semantic,
+                functions.at(slot)->name == "main"
+                        ? ReachabilityReason::RootEntry
+                        : ReachabilityReason::RootExplicit);
     }
     for (const auto& root : explicit_actor_roots) {
         mark_actor(root);
-        root_symbols.insert(reachability_detail::qualify(program, root));
+        add_root_reason(root, ReachabilityReason::RootTargetAbi);
     }
     for (const auto& root : explicit_class_roots) {
         mark_class(root);
-        root_symbols.insert(reachability_detail::qualify(program, root));
+        add_root_reason(root, ReachabilityReason::RootTargetAbi);
     }
     if (preserve_exported_api) {
         for (const auto& [slot, fn] : functions) {
             if (!fn->exported) continue;
             mark_function(slot);
-            root_symbols.insert(reachability_detail::qualify(
-                    program, function_semantic_name(slot, *fn)));
+            add_root_reason(
+                    function_semantic_name(slot, *fn),
+                    ReachabilityReason::RootPublicApi);
         }
     }
 
@@ -413,8 +419,9 @@ inline ReachabilityResult analyze_reachability(
     for (const auto& [slot, fn] : functions) {
         if (!fn->scalar_while) continue;
         mark_function(slot);
-        root_symbols.insert(reachability_detail::qualify(
-                program, function_semantic_name(slot, *fn)));
+        add_root_reason(
+                function_semantic_name(slot, *fn),
+                ReachabilityReason::ContinuationAbi);
     }
 
     // Cooperative scalar loops lower to externally callable init/resume/cancel
@@ -422,7 +429,7 @@ inline ReachabilityResult analyze_reachability(
     // loop is an explicit semantic root.
     for (const auto& [name, loop] : cooperative_loops) {
         (void)loop;
-        root_symbols.insert(reachability_detail::qualify(program, name));
+        add_root_reason(name, ReachabilityReason::ContinuationAbi);
     }
 
     while (!work.empty()) {
