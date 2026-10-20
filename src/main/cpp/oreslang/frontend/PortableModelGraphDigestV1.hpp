@@ -256,7 +256,15 @@ inline std::vector<std::uint8_t> canonical_bytes(const Graph& graph) {
             if (node.const_args[i].kind != sig.const_kinds[i]) fail("MODEL_CONST_TYPE_MISMATCH");
             encode_constant(out, node.const_args[i]);
         }
-        if (node.inputs.size() != sig.inputs.size()) fail("MODEL_PORT_ARITY_MISMATCH");
+        // Ordered v1 permits one unmatched first-node signature input as
+        // the model's external run(input) boundary. Later inputs require
+        // explicit graph parents; multi-input first nodes remain unsupported.
+        const bool external_unary_input =
+            index == 0 && node.inputs.empty() && sig.inputs.size() == 1;
+        if (!external_unary_input && node.inputs.size() != sig.inputs.size())
+            fail("MODEL_PORT_ARITY_MISMATCH");
+        if (index == 0 && node.inputs.empty() && sig.inputs.size() > 1)
+            fail("MODEL_PORT_ARITY_MISMATCH");
         out.u32(static_cast<std::uint32_t>(node.inputs.size()));
         for (std::size_t edge = 0; edge < node.inputs.size(); ++edge) {
             auto it = ordinals.find(node.inputs[edge]);
