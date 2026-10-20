@@ -114,6 +114,14 @@ public:
             pending_->promise.set_exception(std::move(failure));
             return true;
         }
+        /** VM mailbox admission rollback. Only original caller endpoint
+         * can fail its own slot; this cannot fabricate a successful reply. */
+        bool fail_admission(const EndpointRef& caller, std::exception_ptr failure) const {
+            if (!failure) throw std::invalid_argument("empty admission failure");
+            if (!NativeGenerationalReplySlots::claim(*this, caller, false)) return false;
+            pending_->promise.set_exception(std::move(failure));
+            return true;
+        }
         bool cancel(const EndpointRef& caller) const {
             if (!NativeGenerationalReplySlots::claim(*this, caller, false)) return false;
             pending_->promise.set_exception(std::make_exception_ptr(
