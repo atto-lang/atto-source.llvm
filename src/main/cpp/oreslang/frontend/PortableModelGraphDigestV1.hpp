@@ -175,6 +175,20 @@ inline void encode_port(Bytes& out, const Port& port) {
     else { out.u8(1); out.string(*p.unit); }
 }
 
+inline bool same_port(const Port& a, const Port& b) {
+    if (a.index() != b.index()) return false;
+    if (std::holds_alternative<NominalPort>(a)) {
+        const auto& x = std::get<NominalPort>(a);
+        const auto& y = std::get<NominalPort>(b);
+        return x.type_abi == y.type_abi && x.bytes == y.bytes;
+    }
+    const auto& x = std::get<BufferPort>(a);
+    const auto& y = std::get<BufferPort>(b);
+    const auto lx = x.layout.value_or(x.shape.empty() ? "scalar" : "contiguous");
+    const auto ly = y.layout.value_or(y.shape.empty() ? "scalar" : "contiguous");
+    return x.dtype == y.dtype && x.shape == y.shape && lx == ly && x.unit == y.unit;
+}
+
 inline std::vector<std::uint8_t> canonical_bytes(const Graph& graph) {
     if (graph.version != 1 || graph.nodes.empty() || graph.outputs.empty())
         fail("MODEL_INVALID_RESOLVED_GRAPH");
@@ -213,10 +227,13 @@ inline std::vector<std::uint8_t> canonical_bytes(const Graph& graph) {
             if (node.const_args[i].kind != sig.const_kinds[i]) fail("MODEL_CONST_TYPE_MISMATCH");
             encode_constant(out, node.const_args[i]);
         }
+        if (node.inputs.size() != sig.inputs.size()) fail("MODEL_PORT_ARITY_MISMATCH");
         out.u32(static_cast<std::uint32_t>(node.inputs.size()));
-        for (const auto& parent : node.inputs) {
-            auto it = ordinals.find(parent);
+        for (std::size_t edge = 0; edge < node.inputs.size(); ++edge) {
+            auto it = ordinals.find(node.inputs[edge]);
             if (it == ordinals.end() || it->second >= index) fail("MODEL_FORWARD_OR_CYCLIC_EDGE");
+            if (!same_port(graph.nodes[it->second].signature.output, sig.inputs[edge]))
+                fail("MODEL_PORT_TYPE_MISMATCH");
             out.u32(it->second);
         }
         out.u32(static_cast<std::uint32_t>(sig.inputs.size()));
