@@ -54,7 +54,45 @@ static std::size_t retained_suppressed(
     return count;
 }
 
+// Exhaustive native trap/catch ABI truth table over all byte-sized tags.
+// A future enum extension must be intentionally admitted, never implicitly
+// promoted by a loose truthiness / range / diagnostic-origin heuristic.
+static constexpr bool expected_guest_admission(
+        unsigned boundary, unsigned origin) noexcept {
+    return boundary == 0 && origin == 0
+        || boundary == 1 && (origin == 0 || origin == 1 || origin == 2);
+}
+
+static constexpr bool verify_guest_admission_matrix() noexcept {
+    for (unsigned boundary = 0; boundary != 256; ++boundary) {
+        for (unsigned origin = 0; origin != 256; ++origin) {
+            const bool admitted = admits_guest_failure(
+                    static_cast<GuestFailureBoundary>(boundary),
+                    static_cast<GuestFailureOrigin>(origin));
+            if (admitted != expected_guest_admission(boundary, origin)) return false;
+        }
+    }
+    return true;
+}
+static_assert(verify_guest_admission_matrix(),
+              "native trap ABI accidentally admitted an invalid origin/tag");
+
 int main() {
+    // Trap metadata cannot be reconstructed from source-controlled strings.
+    // UTF-8 diagnostics are bounded value-only data, not provenance tags.
+    const std::string exact(max_control_diagnostic_bytes, 'x');
+    if (bounded_control_diagnostic(exact) != exact) return 110;
+    const std::string excess(max_control_diagnostic_bytes + 4096, 'x');
+    if (bounded_control_diagnostic(excess) != exact) return 111;
+    const std::string edge(1023, 'x');
+    if (bounded_control_diagnostic(edge + "\\xE2\\x82\\xAC") != edge) return 112;
+    if (bounded_control_diagnostic("\\xED\\xA0\\x80") != "???") return 113;
+    try {
+        (void)Failure::make(static_cast<FailureKind>(255), "guest-controlled");
+        return 114;
+    } catch (const std::invalid_argument&) {
+        // Invalid effect categories must not enter native priority/CONTROL.
+    }
     // Failures are host metadata and must not accumulate unbounded suppression
     // under thousands of cleanup failures or repeated priority changes.
     auto bounded = Failure::make(FailureKind::Throw, "original guest failure");
