@@ -63,7 +63,7 @@ static constexpr bool expected_guest_admission(
         || boundary == 1 && (origin == 0 || origin == 1 || origin == 2);
 }
 
-static constexpr bool verify_guest_admission_matrix() noexcept {
+static bool verify_guest_admission_matrix() noexcept {
     for (unsigned boundary = 0; boundary != 256; ++boundary) {
         for (unsigned origin = 0; origin != 256; ++origin) {
             const bool admitted = admits_guest_failure(
@@ -74,10 +74,13 @@ static constexpr bool verify_guest_admission_matrix() noexcept {
     }
     return true;
 }
-static_assert(verify_guest_admission_matrix(),
-              "native trap ABI accidentally admitted an invalid origin/tag");
+static_assert(!admits_guest_failure(
+        static_cast<GuestFailureBoundary>(255), GuestFailureOrigin::OrdinaryThrow));
+static_assert(!admits_guest_failure(
+        GuestFailureBoundary::Trap, static_cast<GuestFailureOrigin>(255)));
 
 int main() {
+    if (!verify_guest_admission_matrix()) return 115;
     // Trap metadata cannot be reconstructed from source-controlled strings.
     // UTF-8 diagnostics are bounded value-only data, not provenance tags.
     const std::string exact(max_control_diagnostic_bytes, 'x');
