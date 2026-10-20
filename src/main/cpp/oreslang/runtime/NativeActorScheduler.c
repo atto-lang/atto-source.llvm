@@ -37,6 +37,11 @@ typedef struct {
     uint64_t generation;
     OresNativeExecutionAuthority authority;
 } ActorLane;
+typedef struct {
+    uint64_t* words;
+    uint64_t* summary;
+    size_t word_count, summary_count;
+} ReadyBits;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
     pthread_cond_t ready;
@@ -96,11 +101,7 @@ static void unlock(OresNativeActorScheduler* s) {
 
 /* Scheduler-owned, preallocated two-level index. Only touched under lock.
  * One bit per eligible actor, never one bit per message. */
-typedef struct {
-    uint64_t* words;
-    uint64_t* summary;
-    size_t word_count, summary_count;
-} ReadyBits;
+
 static int ready_bits_init(ReadyBits* b, size_t actors) {
     b->word_count = (actors + 63) / 64;
     b->summary_count = (b->word_count + 63) / 64;
