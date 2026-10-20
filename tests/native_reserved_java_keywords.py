@@ -6,6 +6,19 @@ import sys
 import tempfile
 
 CASES = {
+    # Keep V3 optional type/presence rejection after '?' becomes a token.
+    "v3-optional-parameter-type": (
+        "pub fnc f(int? value): int { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
+    "v3-optional-parameter-presence": (
+        "pub fnc f(int value?): int { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
+    "v3-optional-return-type": (
+        "pub fnc f(): int? { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
     # any/unknown are language type keywords. The native backend reserves the
     # surface now but must reject values of those types until it has a genuine
     # tagged opaque-value ABI and runtime descriptors.
@@ -52,9 +65,11 @@ CASES = {
         "pub fnc normalize(int tag, any value): int { return tag; }",
         "native opaque top type requires tagged value ABI",
     ),
-    "ternary-typed-bool": (
+    # The scalar-only frontend rejects the boolean condition before reaching
+    # '?'. This proves rejection, not typed-bool or ternary lowering.
+    "ternary-unsupported-bool-condition": (
         "pub fnc choose(int ignored): int { return true ? 1 : 0; }",
-        "native ternary expression requires typed bool conditions and branch-merge lowering",
+        "expected int expression",
     ),
     "ternary-nested-parentheses": (
         "pub fnc choose(int value): int { return (value ? 1 : 0); }",
@@ -198,3 +213,4 @@ if __name__ == "__main__":
     except (ValueError, AssertionError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"native keyword parity contract failed: {exc}", file=sys.stderr)
         sys.exit(1)
+

@@ -122,3 +122,53 @@ See [admission limits](docs/CORTEXM_SCALAR_IR.md).
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+## Exact-tree host concurrency analyzer test gate
+
+The race analyzer is host-only and **does not yet instrument LLVM guest loads
+and stores**. Its logical participant IDs must identify distinct concurrent
+task/message lifetimes, not a shared actor reference, and recursive lock
+ownership publishes a happens-before edge only on the final unlock. Invalid
+control-character event identities are rejected. Native `fork/finish/join`
+supports fresh logical task lifetimes, rejects unfinished/repeated joins and
+preserves sibling concurrency. It still depends on complete, trustworthy
+compiler/runtime lifecycle instrumentation and does **not** prove guest
+race-freedom. An authorized private runner can validate the exact source tree
+using:
+
+```sh
+EXPECTED_SOURCE_TREE_SHA=<40-character-source-tree-sha> bash scripts/ci-verify-concurrency-p0.sh
+```
+
+The test compiles the analyzer with ASan/UBSan and strict warnings, runs the
+adversarial C++ host tests and emits an evidence receipt only on success.
+A mirror must contain the exact private source Git tree, with its SHA verified
+before tests; this script neither performs cross-organization checkout nor
+bypasses access controls. Host tests alone cannot certify a complete guest
+memory race checker.
+
+To run the entire repository test suite alongside the targeted exact-tree gate,
+set `RUN_FULL_SUITE=1` when invoking `scripts/ci-verify-concurrency-p0.sh`.
+This requires a working authorized runner; scripts and setup alone do not
+constitute executed test evidence.
+
+
+## Tree shaking
+
+The native compiler now has an opt-in `--tree-shake` direct-call reachability
+slice. It runs after parsing/semantic admission and before LLVM IR emission.
+
+Current roots are `main` and `pub` functions. The pass follows direct
+same-module calls transitively and removes unreachable private functions, which
+also prevents function-local runtime requirements from being discovered by
+later codegen when their owning function is removed.
+
+This is deliberately narrower than the cross-backend target: classes, actor
+types, dynamic dispatch, reflection/FFI, hot-load roots, stdlib/module pruning,
+and the versioned reachability report still need follow-up support. Rootless
+strict tree shaking fails closed rather than silently producing an empty
+artifact.
+
+The executed CTest gate compiles both shaken and unshaken IR through Clang and
+requires identical process behavior while asserting the dead private symbol is
+absent from the shaken IR.
