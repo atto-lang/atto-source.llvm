@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source-free mocks of the bridge's control flow; NOT LLVM/kernel evidence."""
 import hashlib
+import sys
 import json
 from pathlib import Path
 import struct
@@ -10,7 +11,8 @@ from unittest.mock import patch
 
 from bpf_xdp_policy_bridge import (
     Denied, PACKET, build, check_bpf_elf, digest, pinned_bytes,
-    strict_json, validate_closure, verify_object_metadata,
+    strict_json, validate_closure, verify_object_metadata, run_command,
+    policy_bundle_hash, POLICY_MODULES, POLICY_PROFILES,
 )
 
 
@@ -25,6 +27,16 @@ def elf():
     raw[:6] = b"\x7fELF\x02\x01"
     struct.pack_into("<HHI", raw, 16, 1, 247, 1)
     return bytes(raw)
+
+
+def make_policy_bundle(folder):
+    root = folder / 'target-profiles'
+    for name in POLICY_MODULES + tuple('profiles/' + x + '.json'
+                                       for x in POLICY_PROFILES):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(('mock: ' + name).encode())
+    return root / 'bin' / 'oreslang-target.mjs'
 
 
 class AdmissionTests(unittest.TestCase):
@@ -106,12 +118,13 @@ class AdmissionTests(unittest.TestCase):
             folder=Path(tmp)
             source=folder/'xdp.ores'; source.write_bytes(b'pub fnc ores_xdp(): int { return 2; }\n')
             compiler=folder/'compiler'; compiler.write_bytes(b'fake compiler')
-            policy=folder/'policy'; policy.write_bytes(b'fake target checker')
+            policy=make_policy_bundle(folder)
             class Args: pass
             args=Args(); args.source=source; args.compiler=compiler; args.policy_cli=policy
             args.expected_source_sha256=digest(source.read_bytes())
             args.expected_compiler_sha256=digest(compiler.read_bytes())
             args.expected_policy_cli_sha256=digest(policy.read_bytes())
+            args.expected_policy_bundle_sha256=policy_bundle_hash(policy)
             args.node='node'; args.clang='clang'; args.readelf='readelf'
             for effects in ([],[PACKET]):
                 args.grants=PACKET if effects else ''
@@ -154,12 +167,13 @@ class AdmissionTests(unittest.TestCase):
             folder=Path(tmp)
             source=folder/'xdp.ores'; source.write_bytes(b'pub fnc ores_xdp(): int { return 2; }\n')
             compiler=folder/'compiler'; compiler.write_bytes(b'compiler')
-            policy=folder/'policy'; policy.write_bytes(b'policy')
+            policy=make_policy_bundle(folder)
             class Args: pass
             args=Args(); args.source=source; args.compiler=compiler; args.policy_cli=policy
             args.expected_source_sha256=digest(source.read_bytes())
             args.expected_compiler_sha256=digest(compiler.read_bytes())
             args.expected_policy_cli_sha256=digest(policy.read_bytes())
+            args.expected_policy_bundle_sha256=policy_bundle_hash(policy)
             args.grants=''; args.node='node'; args.clang='clang'; args.readelf='readelf'
             calls=[]
             def reject_checker(argv, expected=0, timeout=90):
