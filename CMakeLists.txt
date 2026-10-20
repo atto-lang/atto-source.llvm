@@ -241,6 +241,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_tree_shaking_direct_calls PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-runtime-feature-reachability-test
+        tests/native_runtime_feature_reachability_test.cpp)
+    target_include_directories(oreslang-runtime-feature-reachability-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-runtime-feature-reachability-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_runtime_feature_reachability
+        COMMAND oreslang-runtime-feature-reachability-test)
+    set_tests_properties(native_runtime_feature_reachability PROPERTIES TIMEOUT 30)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
