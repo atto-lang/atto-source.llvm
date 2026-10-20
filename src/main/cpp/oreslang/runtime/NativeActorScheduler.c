@@ -4,6 +4,7 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -44,6 +45,9 @@ struct OresNativeActorScheduler {
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
     int priority_inheritance_enabled;
+    int explicit_carrier_policy;
+    int carrier_policy;
+    int carrier_priority;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
@@ -279,7 +283,23 @@ static int create_carrier(pthread_t* tid, void* context) {
             &fail_next_carrier_create, 0, memory_order_relaxed))
         return EAGAIN;
 #endif
-    return pthread_create(tid, NULL, carrier, context);
+    OresNativeActorScheduler* s = (OresNativeActorScheduler*)context;
+    if (!s->explicit_carrier_policy)
+        return pthread_create(tid, NULL, carrier, context);
+
+    pthread_attr_t attr;
+    int rc = pthread_attr_init(&attr);
+    if (rc != 0) return rc;
+    rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+    if (rc == 0) rc = pthread_attr_setschedpolicy(&attr, s->carrier_policy);
+    if (rc == 0) {
+        struct sched_param param = {0};
+        param.sched_priority = s->carrier_priority;
+        rc = pthread_attr_setschedparam(&attr, &param);
+    }
+    if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
+    if (pthread_attr_destroy(&attr) != 0) abort();
+    return rc;
 }
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
@@ -291,6 +311,36 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     /* An existing busy carrier cannot be counted as additional capacity.
      * Never acknowledge another independent lane on a failed growth step. */
     return s->started_workers >= required;
+}
+int ores_native_actor_scheduler_configure_fifo(
+        OresNativeActorScheduler* s, int priority) {
+    if (!s || executing == s) return 0;
+    int minimum = sched_get_priority_min(SCHED_FIFO);
+    int maximum = sched_get_priority_max(SCHED_FIFO);
+    if (minimum < 0 || maximum < 0 || priority < minimum || priority > maximum)
+        return 0;
+    lock(s);
+    /* Configuration is bootstrap-only. Spawning actor identities is harmless,
+     * but no OS carrier or admitted work may exist yet. */
+    int pristine = !s->retired && s->started_workers == 0
+        && s->accepted == 0 && s->outstanding == 0 && s->runnable_lanes == 0;
+    if (pristine) {
+        s->explicit_carrier_policy = 1;
+        s->carrier_policy = SCHED_FIFO;
+        s->carrier_priority = priority;
+    }
+    unlock(s);
+    return pristine;
+}
+int ores_native_actor_scheduler_fifo_carriers_ready(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ready = s->explicit_carrier_policy
+        && s->carrier_policy == SCHED_FIFO
+        && s->started_workers == s->worker_count;
+    unlock(s);
+    return ready;
 }
 int ores_native_actor_scheduler_prestart_carriers(
         OresNativeActorScheduler* s) {
