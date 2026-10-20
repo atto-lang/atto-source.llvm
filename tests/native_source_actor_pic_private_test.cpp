@@ -79,7 +79,7 @@ void retire_heap(OresActorI64Heap* heap) {
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        std::cerr << "usage: private-source-actor-pic <v1.so> <v2.so>\\n";
+        std::cerr << "usage: private-source-actor-pic <v1.so> <v2.so>\n";
         return 2;
     }
     try {
@@ -135,11 +135,11 @@ int main(int argc, char** argv) {
                 "closing A invalidated still-running private B");
         gate_b.close();
         retire_heap(heap_b);
-        std::cout << "ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS\\n";
+        std::cout << "ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "private source PIC hot reload FAILED: "
-                  << error.what() << '\\n';
+                  << error.what() << '\n';
         return 1;
     }
 }
