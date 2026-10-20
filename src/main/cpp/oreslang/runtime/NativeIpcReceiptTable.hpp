@@ -45,6 +45,55 @@ struct IpcReceiptEnvelope {
     }
 };
 
+inline bool ipc_receipt_token(const std::string& value) {
+    if (value.empty() || value.size() > 96) return false;
+    for (unsigned char ch : value) {
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+              (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-'))
+            return false;
+    }
+    return true;
+}
+
+inline bool ipc_receipt_digest(const std::string& value) {
+    if (value.size() != 64) return false;
+    for (unsigned char ch : value)
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')))
+            return false;
+    return true;
+}
+
+inline bool ipc_positive_java_long(std::uint64_t value) {
+    return value != 0 &&
+        value <= static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max());
+}
+
+inline void validate_ipc_receipt_envelope(const IpcReceiptEnvelope& message) {
+    if (!ipc_receipt_token(message.domain) ||
+        !ipc_receipt_token(message.sender) ||
+        !ipc_receipt_token(message.destination) ||
+        !ipc_receipt_token(message.session) ||
+        !ipc_receipt_digest(message.payload_sha256) ||
+        !ipc_positive_java_long(message.sender_incarnation) ||
+        !ipc_positive_java_long(message.destination_incarnation) ||
+        !ipc_positive_java_long(message.route_epoch) ||
+        !ipc_positive_java_long(message.capability_generation) ||
+        !ipc_positive_java_long(message.message_sequence) ||
+        !ipc_positive_java_long(message.frame_sequence))
+        throw std::invalid_argument("noncanonical IPC receipt identity");
+}
+
+inline bool same_ipc_transport_epoch(
+        const IpcReceiptEnvelope& a, const IpcReceiptEnvelope& b) {
+    return std::tie(a.domain, a.sender, a.destination, a.session,
+                    a.sender_incarnation, a.destination_incarnation,
+                    a.route_epoch, a.capability_generation)
+        == std::tie(b.domain, b.sender, b.destination, b.session,
+                    b.sender_incarnation, b.destination_incarnation,
+                    b.route_epoch, b.capability_generation);
+}
+
 class NativeIpcReceiptTable final {
 public:
     explicit NativeIpcReceiptTable(std::size_t capacity) : capacity_(capacity) {
@@ -56,7 +105,7 @@ public:
     NativeIpcReceiptTable& operator=(const NativeIpcReceiptTable&) = delete;
 
     void admit(const IpcReceiptEnvelope& message) {
-        validate(message);
+        validate_ipc_receipt_envelope(message);
         std::lock_guard<std::mutex> guard(mutex_);
         const auto stream = std::make_tuple(message.domain, message.sender,
             message.sender_incarnation, message.destination,
@@ -93,7 +142,7 @@ public:
      *  definitive never-sent result.
      */
     void commit_dispatch(const IpcReceiptEnvelope& message) {
-        validate(message);
+        validate_ipc_receipt_envelope(message);
         std::lock_guard<std::mutex> guard(mutex_);
         auto iter = pending_.find(message.message_sequence);
         if (iter == pending_.end() || !(iter->second.envelope == message) ||
@@ -104,7 +153,7 @@ public:
 
     /** Trusted LOCAL rejection before dispatch commitment. */
     void reject_before_remote(const IpcReceiptEnvelope& message) {
-        validate(message);
+        validate_ipc_receipt_envelope(message);
         std::lock_guard<std::mutex> guard(mutex_);
         auto iter = pending_.find(message.message_sequence);
         if (iter == pending_.end() || !(iter->second.envelope == message) ||
@@ -118,7 +167,7 @@ public:
     // transport adapter must verify peer, capability and frame integrity first.
     // Host-local verdicts are never accepted from a peer-authenticated frame.
     void accept_verified(const IpcReceiptEnvelope& message, IpcReceiptStage next) {
-        validate(message);
+        validate_ipc_receipt_envelope(message);
         if (next == IpcReceiptStage::outcome_unknown ||
             next == IpcReceiptStage::rejected_before_remote)
             throw std::invalid_argument(
@@ -160,23 +209,23 @@ public:
      */
     std::vector<LostCorrelation> retire_transport_lost(
             const IpcReceiptEnvelope& trusted_epoch) {
-        validate(trusted_epoch);
+        validate_ipc_receipt_envelope(trusted_epoch);
         std::lock_guard<std::mutex> guard(mutex_);
         std::vector<LostCorrelation> retired;
         std::size_t matching = 0;
         for (const auto& [sequence, entry] : pending_) {
             (void)sequence;
-            matching += same_transport_epoch(entry.envelope, trusted_epoch) ? 1u : 0u;
+            matching += same_ipc_transport_epoch(entry.envelope, trusted_epoch) ? 1u : 0u;
         }
         retired.reserve(matching);
         for (const auto& [sequence, entry] : pending_) {
             (void)sequence;
-            if (same_transport_epoch(entry.envelope, trusted_epoch))
+            if (same_ipc_transport_epoch(entry.envelope, trusted_epoch))
                 retired.push_back({entry.envelope, entry.stage});
         }
         // No throwing operations after this point while the mutex is held.
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (!same_transport_epoch(it->second.envelope, trusted_epoch)) {
+            if (!same_ipc_transport_epoch(it->second.envelope, trusted_epoch)) {
                 ++it;
                 continue;
             }
@@ -209,49 +258,6 @@ public:
     }
 
 private:
-    static bool token(const std::string& value) {
-        if (value.empty() || value.size() > 96) return false;
-        for (unsigned char c : value) {
-            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-'))
-                return false;
-        }
-        return true;
-    }
-    static bool same_transport_epoch(
-            const IpcReceiptEnvelope& a, const IpcReceiptEnvelope& b) {
-        return std::tie(a.domain, a.sender, a.destination, a.session,
-                        a.sender_incarnation, a.destination_incarnation,
-                        a.route_epoch, a.capability_generation)
-            == std::tie(b.domain, b.sender, b.destination, b.session,
-                        b.sender_incarnation, b.destination_incarnation,
-                        b.route_epoch, b.capability_generation);
-    }
-    static bool digest(const std::string& value) {
-        if (value.size() != 64) return false;
-        for (unsigned char c : value)
-            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
-                return false;
-        return true;
-    }
-    static void validate(const IpcReceiptEnvelope& message) {
-        constexpr auto java_long_max =
-            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-        const auto invalid_long = [java_long_max](std::uint64_t value) {
-            return value == 0 || value > java_long_max;
-        };
-        if (!token(message.domain) || !token(message.sender) ||
-            !token(message.destination) || !token(message.session) ||
-            !digest(message.payload_sha256) ||
-            invalid_long(message.sender_incarnation) ||
-            invalid_long(message.destination_incarnation) ||
-            invalid_long(message.route_epoch) ||
-            invalid_long(message.capability_generation) ||
-            invalid_long(message.message_sequence) ||
-            invalid_long(message.frame_sequence))
-            throw std::invalid_argument("noncanonical IPC receipt identity");
-    }
-
     struct Entry { IpcReceiptEnvelope envelope; IpcReceiptStage stage; };
     using Stream = std::tuple<std::string, std::string, std::uint64_t,
                               std::string, std::uint64_t>;
