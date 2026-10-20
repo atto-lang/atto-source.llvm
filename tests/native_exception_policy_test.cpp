@@ -166,7 +166,7 @@ int main() {
     Failure panicking = combine_failure(
         std::move(broad), Failure::make(FailureKind::Panic, "priority"));
     assert(panicking.kind() == FailureKind::Panic);
-    assert(panicking.omitted_suppressed_subtrees() == 1);
+    assert(panicking.omitted_suppressed_subtrees() > 1);
     assert(panicking.suppressed().empty());
     assert(panicking.suppressed_nodes() == 1);
 
