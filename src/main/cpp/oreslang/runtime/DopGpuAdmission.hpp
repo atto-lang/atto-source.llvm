@@ -118,16 +118,20 @@ struct ClaimedGpuBinding {
  * caller after fence admission. */
 class QueueClaimedGpuBinding final {
 public:
-    ClaimedGpuBinding claim;
-
     QueueClaimedGpuBinding(ClaimedGpuBinding&& admitted,
                           std::unique_ptr<const GpuQueueLocation> selected) noexcept
-        : claim(std::move(admitted)), queue_(std::move(selected)) {}
+        : claim_(std::move(admitted)), queue_(std::move(selected)) {}
 
     QueueClaimedGpuBinding(const QueueClaimedGpuBinding&) = delete;
     QueueClaimedGpuBinding& operator=(const QueueClaimedGpuBinding&) = delete;
     QueueClaimedGpuBinding(QueueClaimedGpuBinding&&) noexcept = default;
     QueueClaimedGpuBinding& operator=(QueueClaimedGpuBinding&&) = delete;
+
+    const ClaimedGpuBinding& claim() const {
+        if (!queue_)
+            throw std::logic_error("DOP GPU claim receipt has been moved");
+        return claim_;
+    }
 
     const GpuQueueLocation& queue() const {
         if (!queue_)
@@ -136,6 +140,7 @@ public:
     }
 
 private:
+    ClaimedGpuBinding claim_;
     std::unique_ptr<const GpuQueueLocation> queue_;
 };
 static_assert(std::is_nothrow_move_constructible_v<QueueClaimedGpuBinding>,
