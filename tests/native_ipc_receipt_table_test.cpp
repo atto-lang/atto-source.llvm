@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -25,6 +26,23 @@ template<class F> static void rejects(F f) {
 }
 int main() {
     rejects([] { NativeIpcReceiptTable table(0); });
+    // Java protocol-v3 identities are positive signed long values. Native
+    // uint64_t storage must not admit values Java cannot represent.
+    {
+        NativeIpcReceiptTable numeric_domain(1);
+        auto too_large = envelope();
+        too_large.message_sequence =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1u;
+        rejects([&]{ numeric_domain.admit(too_large); });
+        too_large = envelope();
+        too_large.frame_sequence =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1u;
+        rejects([&]{ numeric_domain.admit(too_large); });
+        too_large = envelope();
+        too_large.route_epoch =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1u;
+        rejects([&]{ numeric_domain.admit(too_large); });
+    }
     NativeIpcReceiptTable table(2);
     auto first=envelope(1), second=envelope(2), third=envelope(3);
     table.admit(first);
