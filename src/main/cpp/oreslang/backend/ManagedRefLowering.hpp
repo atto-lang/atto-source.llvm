@@ -33,7 +33,7 @@ struct ActorRef32Access final {
     llvm::Value* actor_arena_base = nullptr;     // admitted actor heap base
     llvm::Value* actor_arena_span = nullptr;     // native i64 byte span
     llvm::Value* original_proof = nullptr;       // trusted opaque metadata pointer
-    llvm::FunctionCallee proof_check;             // i1 (ptr proof, i32 stored)
+    llvm::FunctionCallee proof_check;             // i1 (ptr proof, ptr arena, i64 span, i32 stored)
 };
 
 inline llvm::Value* emit_checked_actor_ref32_address(
@@ -60,11 +60,18 @@ inline llvm::Value* emit_checked_actor_ref32_address(
 
     auto* check_ty = access.proof_check.getFunctionType();
     if (!check_ty || check_ty->isVarArg() ||
-        check_ty->getNumParams() != 2 ||
+        check_ty->getNumParams() != 4 ||
         check_ty->getReturnType() != i1 ||
         !check_ty->getParamType(0)->isPointerTy() ||
-        check_ty->getParamType(1) != i32)
+        !check_ty->getParamType(1)->isPointerTy() ||
+        check_ty->getParamType(2) != i64 ||
+        check_ty->getParamType(3) != i32)
         throw std::invalid_argument("actor reference proof validator ABI mismatch");
+
+    // The initial compressed actor region contract is native-64-only.
+    // Never emit ptrtoint i64 for a wasm32 or unknown target layout.
+    if (module.getDataLayout().getPointerSizeInBits(0) != 64)
+        throw std::invalid_argument("actor-local ref32 requires a proven native64 target ABI");
 
     auto* active = builder.GetInsertBlock();
     if (!active || active->getTerminator() || !active->getParent() ||
@@ -79,14 +86,17 @@ inline llvm::Value* emit_checked_actor_ref32_address(
 
     // Physical guest storage is *always* i32. Do not load a machine pointer
     // or reinterpret the i32 field as a C ABI pointer.
-    auto* encoded = builder.CreateLoad(i32, access.field_address, "ref32.encoded");
+    auto* field_ptr = builder.CreatePointerCast(access.field_address,
+        i32->getPointerTo(), "ref32.field.i32.ptr");
+    auto* encoded = builder.CreateLoad(i32, field_ptr, "ref32.encoded");
     auto* not_null = builder.CreateICmpNE(
         encoded, llvm::ConstantInt::get(i32, 0), "ref32.nonnull");
     builder.CreateCondBr(not_null, proof_block, trap_block);
 
     builder.SetInsertPoint(proof_block);
     auto* authorized = builder.CreateCall(access.proof_check,
-        {access.original_proof, encoded}, "ref32.authenticated");
+        {access.original_proof, access.actor_arena_base,
+         access.actor_arena_span, encoded}, "ref32.authenticated");
     builder.CreateCondBr(authorized, bounds_block, trap_block);
 
     builder.SetInsertPoint(bounds_block);
@@ -112,8 +122,10 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* aligned = builder.CreateICmpEQ(
         builder.CreateAnd(base, llvm::ConstantInt::get(i64, 7)),
         llvm::ConstantInt::get(i64, 0));
+    auto* access_end = builder.CreateAdd(offset,
+        llvm::ConstantInt::get(i64, access_bytes - 1));
     auto* no_wrap = builder.CreateICmpULE(base,
-        builder.CreateSub(llvm::ConstantInt::getAllOnesValue(i64), offset));
+        builder.CreateSub(llvm::ConstantInt::getAllOnesValue(i64), access_end));
     auto* admitted = builder.CreateAnd(
         builder.CreateAnd(span_enough, inside),
         builder.CreateAnd(base_nonzero, builder.CreateAnd(aligned, no_wrap)));
