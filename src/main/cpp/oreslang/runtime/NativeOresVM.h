@@ -111,6 +111,10 @@ int ores_native_vm_stop(
  * Never call wait_done from a VM carrier callback. */
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Retained immutable post-mortem for the exact domain-scoped ActorRef. */
+int ores_native_vm_actor_terminal_state(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, OresNativeActorTerminalState* output);
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_publish_control(
@@ -127,6 +131,33 @@ int ores_native_vm_control_notify(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 unsigned ores_native_vm_control_pending(OresNativeVM* vm);
 unsigned ores_native_vm_control_pump(OresNativeVM* vm);
+
+/* Trusted host-only optional NIO backend ownership. Pure-C scheduler users
+ * do not require C++ linkage; the separately compiled native NIO adapter
+ * supplies a destructor callback. Attach once before guest admission.
+ *
+ * Every caller must externally fence VM producers before final close.
+ * VM retirement blocks further backend access. The destructor may join
+ * reactor threads and is invoked ONLY during external vm_close(), never from
+ * a guest actor callback or on a reactor thread.
+ */
+typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
+/* Bootstrap-only check; final attach repeats this under the CONTROL gate. */
+int ores_native_vm_nio_can_attach(OresNativeVM* vm);
+/* Atomically reserve NIO startup before any selector threads are created.
+ * Actor spawn rejects while the reservation is held; always cancel it on
+ * failed bootstrap, or consume it via attach_nio on success.
+ */
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm);
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
+int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
+                              OresNativeVMNioDestroy destroy);
+/* Nonblocking trusted-host pin. Every successful acquisition requires one
+ * release, including when VM retirement begins during an operation.
+ * External callers must fence new API entry before freeing the VM object.
+ */
+void* ores_native_vm_nio_acquire(OresNativeVM* vm);
+void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
