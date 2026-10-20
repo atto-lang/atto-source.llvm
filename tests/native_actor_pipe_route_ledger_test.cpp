@@ -170,6 +170,16 @@ int main() {
         auto origin = publication.ingress("source");
         {
             auto first = publication.claim_publication(origin);
+            rejected([&] { (void)publication.forward_all(origin); },
+                     "claimed source performed fanout before DATA commit");
+            rejected([&] { (void)publication.round_robin(origin); },
+                     "claimed source advanced RR selector before DATA commit");
+            rejected([&] { (void)publication.forward_to(origin, "worker-a"); },
+                     "claimed source selected a named target before DATA commit");
+            rejected([&] { (void)publication.forward(origin); },
+                     "claimed source executed a forwarded hop before DATA commit");
+            check(publication.outstanding() == 1,
+                  "selector denials corrupted active route credits");
             publication.retire_if_active(origin);
             check(publication.outstanding() == 1,
                   "terminal cleanup erased an in-flight publication");
