@@ -95,7 +95,7 @@ jobs:
                     "test_logs":[str(f) for f in files]}
           out=Path("build/ci-evidence/source-actor-aot-pic.json")
           out.parent.mkdir(parents=True,exist_ok=True)
-          out.write_text(json.dumps(evidence,sort_keys=True)+"\\n",encoding="utf-8")
+          out.write_text(json.dumps(evidence,sort_keys=True)+"\n",encoding="utf-8")
           print(json.dumps(evidence,indent=2,sort_keys=True))
           if not verified:
               raise SystemExit("SOURCE-GENERATED ACTOR AOT/PIC NOT VERIFIED")
