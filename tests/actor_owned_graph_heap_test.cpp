@@ -43,6 +43,8 @@ static HungryCarrier::Options bound_options(ActorHeapIdentity owner) {
 
 static void cycles_reclaim_without_gc() {
     using Heap = ActorOwnedGraphHeap<16, 32, 4>;
+    static_assert(Heap::local_link_storage_bytes() == 4,
+                  "actor-local graph edges must use compact 32-bit storage");
     ActorHeapIdentity owner{9, 7, 1};
     Heap graph(owner);
     HungryCarrier carrier(nullptr, done_handler, nullptr, io_noop, bound_options(owner));
