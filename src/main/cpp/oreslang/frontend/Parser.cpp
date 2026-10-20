@@ -229,7 +229,22 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        // V3 question-mark types/argument presence require a proof-carrying
+        // Option/default/native ABI; never reinterpret them as scalar parameters.
+        if (ch == '?') {
+            throw std::runtime_error("native v3 '?' type/argument syntax requires "
+                                     "versioned Option and default ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
+            throw std::runtime_error("native @DefaultArgVals declaration requires "
+                                     "checked named defaults, ownership and ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        // Admit '@' as a TOKEN only so existing parameter-local @Default guards
+        // can issue their specific fail-closed diagnostic instead of a generic
+        // unsupported-token error. No annotation execution is enabled.
+        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -299,6 +314,13 @@ bool native_constructor_scalar_tree(const Expression& expr) {
     return false;
 }
 
+// A runtime callable's code/signature must never be forged as a nominal
+// object or actor identity in the constrained native frontend.
+bool callable_nominal_name(std::string_view name) {
+    return name == "Callable" || name == "Fnc" || name == "Function"
+            || name == "Routine" || name == "Method";
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -366,6 +388,8 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (callable_nominal_name(actor.name))
+            fail("callable signatures cannot be declared as nominal actor types");
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -414,6 +438,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -445,6 +470,8 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (callable_nominal_name(result.name))
+            fail("callable signatures cannot be declared as nominal class types");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -460,6 +487,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -682,6 +711,8 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
@@ -1958,3 +1989,4 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
 }
 
 } // namespace oreslang
+
