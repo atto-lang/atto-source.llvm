@@ -2,6 +2,7 @@
 #include "oreslang/frontend/ModelGraphAdmission.hpp"
 #include "oreslang/frontend/ModelRunFencing.hpp"
 #include "oreslang/frontend/PortableModelGraphDigestV1.hpp"
+#include "oreslang/frontend/ResolvedModelGraphLoweringV1.hpp"
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <limits>
 namespace pv1 = oreslang::model::portable_v1;
+namespace rv1 = oreslang::model::resolved_v1;
 
 static void check(bool condition, const std::string& label) {
     if (!condition) throw std::runtime_error("native model parser test: " + label);
@@ -92,6 +94,32 @@ int main() {
         renamed.nodes[2].id = "c"; renamed.nodes[2].inputs = {"b"};
         renamed.outputs = {"c"};
         check(pv1::digest(renamed) == graph_id, "temporary node IDs are nonsemantic");
+
+        const rv1::Registry resolved_registry = {
+            {"PriceInput", portable_sig('1', {}, {})},
+            {"ApplyTaxBps", portable_sig('2', {"i64"}, {price})},
+            {"RoundCents", portable_sig('3', {}, {price})}
+        };
+        const auto resolved_literal_source = oreslang::parse_model_declarations(
+            "define model PriceEstimate as PriceInput() ApplyTaxBps(1500) RoundCents() end");
+        const auto resolved_literal = rv1::lower(
+            resolved_literal_source[0], "finance.PriceEstimate@v1", resolved_registry);
+        check(pv1::digest(resolved_literal) == graph_id,
+              "parsed literal source lowers to shared graph digest");
+
+        const auto resolved_default_source = oreslang::parse_model_declarations(
+            "define model PriceEstimate(tax_bps: int = 1500) as "
+            "PriceInput() ApplyTaxBps(tax_bps) RoundCents() end");
+        const auto resolved_default = rv1::lower(
+            resolved_default_source[0], "finance.PriceEstimate@v1", resolved_registry);
+        check(pv1::digest(resolved_default) == graph_id,
+              "model default resolves before graph hashing");
+        const auto resolved_override = rv1::lower(
+            resolved_default_source[0], "finance.PriceEstimate@v1", resolved_registry,
+            {{"tax_bps", "1501"}});
+        check(pv1::digest(resolved_override) ==
+                  "1dcfd1569621a30e53c969b9bf0e2add7fe94a04c2bf4474fae821555996d21b",
+              "model override resolves before graph hashing");
 
         const std::string profile(64, 'b');
         const oreslang::model::ModelOwner owner{
