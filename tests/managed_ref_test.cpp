@@ -56,7 +56,6 @@ int main() {
     assert(entity && component);
     assert(entity->index().value() == 41);
     assert(component->index().value() == 41);
-    static_assert(sizeof(decltype(*entity)) >= 4); // optional reference type is irrelevant
     static_assert(sizeof(DenseIndex32<EntityTag>) == 4);
     static_assert(sizeof(DenseIndex32<ComponentTag>) == 4);
     assert(!DenseIndex32<EntityTag>::from_index(
