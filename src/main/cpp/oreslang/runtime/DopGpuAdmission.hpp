@@ -87,8 +87,9 @@ struct GpuQueueLocation {
     std::uint32_t maximum_in_flight;
 };
 
-/** This check happens BEFORE claiming either buffer fence. A queue on the
- * wrong device or from a stale generation cannot be assigned a typed plan.
+/** This check happens BEFORE claiming either buffer fence. A queue
+ * with mismatched tenant/device or missing generation is rejected; freshness
+ * of a nonzero generation is NOT established without provider attestation.
  * No host pointer, actor-state borrow or CPU fallback is authorized here. */
 inline void validate_gpu_queue(const GpuBinding& plan,
                                const GpuQueueLocation& queue) {
@@ -111,14 +112,31 @@ struct ClaimedGpuBinding {
     gpu::BufferFence::PairTickets tickets;
 };
 
-/* Immutable-by-value selection receipt. Queue IDs and generations are
- * metadata, not device capabilities; provider-side attestation remains
- * mandatory at actual submission. */
-struct QueueClaimedGpuBinding {
+/* Immutable selection receipt. Queue IDs and generations are metadata,
+ * not device capabilities; provider attestation remains mandatory at
+ * actual submission. The selected queue itself cannot be replaced by a
+ * caller after fence admission. */
+class QueueClaimedGpuBinding final {
+public:
     ClaimedGpuBinding claim;
-    /* Immutable after selection; cannot be edited into another queue
-     * between metadata preflight and provider submission. */
-    std::unique_ptr<const GpuQueueLocation> queue;
+
+    QueueClaimedGpuBinding(ClaimedGpuBinding&& admitted,
+                          std::unique_ptr<const GpuQueueLocation> selected) noexcept
+        : claim(std::move(admitted)), queue_(std::move(selected)) {}
+
+    QueueClaimedGpuBinding(const QueueClaimedGpuBinding&) = delete;
+    QueueClaimedGpuBinding& operator=(const QueueClaimedGpuBinding&) = delete;
+    QueueClaimedGpuBinding(QueueClaimedGpuBinding&&) noexcept = default;
+    QueueClaimedGpuBinding& operator=(QueueClaimedGpuBinding&&) = delete;
+
+    const GpuQueueLocation& queue() const {
+        if (!queue_)
+            throw std::logic_error("DOP GPU queue receipt has been moved");
+        return *queue_;
+    }
+
+private:
+    std::unique_ptr<const GpuQueueLocation> queue_;
 };
 static_assert(std::is_nothrow_move_constructible_v<QueueClaimedGpuBinding>,
               "post-fence queue claim return must not throw");
