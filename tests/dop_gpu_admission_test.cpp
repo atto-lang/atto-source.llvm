@@ -311,20 +311,29 @@ int main() {
             check(source.status() == oreslang::gpu::Status::Idle);
             check(result.status() == oreslang::gpu::Status::Idle);
         }
-        auto claimed = claim_gpu_for_queue(operation, profile, input, output, valid);
+        GpuQueueLocation mutableSelected = valid;
+        auto claimed = claim_gpu_for_queue(
+                operation, profile, input, output, mutableSelected);
+        // Mutating the original selection cannot change the admitted receipt.
+        mutableSelected.tenant = "attacker";
+        mutableSelected.device = "gpu-elsewhere";
+        mutableSelected.queue_id = 999;
+        mutableSelected.generation = 999;
         check(claimed.claim.binding.input.tenant == valid.tenant);
         check(claimed.claim.binding.output.device == valid.device);
-        check(claimed.queue->queue_id == valid.queue_id);
-        check(claimed.queue->generation == valid.generation);
-        check(claimed.queue->maximum_in_flight == valid.maximum_in_flight);
+        check(claimed.queue().queue_id == valid.queue_id);
+        check(claimed.queue().generation == valid.generation);
+        check(claimed.queue().maximum_in_flight == valid.maximum_in_flight);
         // Later mutation of the caller-owned descriptor cannot silently
         // retarget an admitted operation.
-        check(claimed.queue->tenant == "tenant-A");
-        check(claimed.queue->device == "gpu-0");
+        check(claimed.queue().tenant == "tenant-A");
+        check(claimed.queue().device == "gpu-0");
         static_assert(!std::is_copy_constructible_v<QueueClaimedGpuBinding>);
-        static_assert(!std::is_assignable_v<
-                decltype(*std::declval<QueueClaimedGpuBinding>().queue), GpuQueueLocation>,
-                "claimed queue selection must not be rewritten");
+        static_assert(!std::is_move_assignable_v<QueueClaimedGpuBinding>,
+                "an admitted queue receipt must not be retargeted by assignment");
+        static_assert(std::is_same_v<
+                decltype(claimed.queue()), const GpuQueueLocation&>,
+                "the selected queue must only be exposed as a const reference");
         check(source.status() == oreslang::gpu::Status::InFlight);
         check(result.status() == oreslang::gpu::Status::InFlight);
         expect<std::logic_error>([&] {
