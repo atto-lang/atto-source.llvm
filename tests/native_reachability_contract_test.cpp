@@ -321,6 +321,25 @@ int main() {
     }
 
     {
+        Program malformed;
+        Function main = fn("main", integer(0));
+        LocalBinding local;
+        local.name = "ghost";
+        local.class_name = "MissingClass";
+        local.new_class = true;
+        main.locals.push_back(std::move(local));
+        malformed.functions.push_back(std::move(main));
+
+        bool rejected = false;
+        try {
+            (void)analyze_runtime_features(malformed, false, false);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "runtime feature analysis must fail closed on unknown class");
+    }
+
+    {
         Program program;
         program.functions.push_back(fn("main", call("missing")));
         bool rejected = false;
