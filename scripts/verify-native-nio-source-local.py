@@ -48,7 +48,13 @@ def verify_raw_tracked_blobs() -> None:
         if mode in (b"100644", b"100755"):
             # O_NOFOLLOW ensures a source-file symlink substitution cannot
             # redirect verification outside this checkout.
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            # O_NONBLOCK also prevents a replaced regular file from becoming
+            # a blocking FIFO admission hazard before fstat can reject it.
+            # Production qualification is Linux-only; missing primitives
+            # must deny rather than silently weaken no-follow/nonparking.
+            if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+                raise ValueError("platform cannot safely inspect tracked source files")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 before = os.fstat(fd)
                 if not stat.S_ISREG(before.st_mode):
