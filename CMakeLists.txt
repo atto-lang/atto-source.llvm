@@ -2083,6 +2083,42 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-indexed-ready-test
+        tests/native_actor_indexed_ready_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-indexed-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-indexed-ready-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-indexed-ready-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_indexed_control_data_1024
+        COMMAND oreslang-native-indexed-ready-test)
+    set_tests_properties(native_actor_indexed_control_data_1024 PROPERTIES TIMEOUT 45)
+
+    add_executable(oreslang-native-dynamic-ready-test
+        tests/native_actor_dynamic_ready_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-dynamic-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-dynamic-ready-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-dynamic-ready-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_dynamic_ready_65536
+        COMMAND oreslang-native-dynamic-ready-test)
+    set_tests_properties(native_actor_dynamic_ready_65536 PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-indexed-gate-test
+        tests/native_actor_indexed_turn_gate_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-indexed-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-indexed-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-indexed-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_indexed_physical_turn_gate
+        COMMAND oreslang-native-indexed-gate-test)
+    set_tests_properties(native_actor_indexed_physical_turn_gate PROPERTIES TIMEOUT 30)
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
     add_executable(oreslang-native-carrier-create-failure-test
