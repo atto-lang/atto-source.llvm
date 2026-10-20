@@ -557,7 +557,10 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_end_delimited_callable_failclosed
         end-delimited-fnc-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
-    oreslang_contract_test(native_end_delimited_fnc_do_failclosed
+    oreslang_contract_test(native_end_delimited_fnc_as_failclosed
+        end-delimited-fnc-as-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+    oreslang_contract_test(native_end_delimited_retired_do_spelling_failclosed
         end-delimited-fnc-do-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
     oreslang_contract_test(native_end_delimited_fnc_higher_order_failclosed
@@ -569,11 +572,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_end_delimited_shared_corpus_failclosed
         end-delimited-roundtrip-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
-    oreslang_contract_test(native_end_delimited_routine_do_failclosed
-        end-delimited-routine-do-reject.ores
+    oreslang_contract_test(native_end_delimited_routine_as_failclosed
+        end-delimited-routine-as-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
-    oreslang_contract_test(native_end_delimited_do_select_failclosed
-        end-delimited-fnc-do-select-reject.ores
+    oreslang_contract_test(native_end_delimited_as_do_select_failclosed
+        end-delimited-fnc-as-do-select-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
 
     oreslang_contract_test(native_tuple_return_type_failclosed
