@@ -132,8 +132,7 @@ void reject_unsupported_type_surfaces(std::string_view source) {
 
         if (source[at] == '@') {
             const auto marker = at++;
-            while (at < source.size() &&
-                   std::isspace(static_cast<unsigned char>(source[at]))) ++at;
+            at = skip_shape_trivia(source, at);
             const auto start = at;
             if (at < source.size() && identifier_start(source[at])) {
                 ++at;
@@ -179,13 +178,10 @@ void reject_unsupported_type_surfaces(std::string_view source) {
                     "lowering required at byte " + std::to_string(start));
             }
             if (in_type && word == "Zorde") {
-                std::size_t probe = at;
-                while (probe < source.size() &&
-                       std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                std::size_t probe = skip_shape_trivia(source, at);
                 if (probe < source.size() && source[probe] == '.') {
                     ++probe;
-                    while (probe < source.size() &&
-                           std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                    probe = skip_shape_trivia(source, probe);
                     const auto id = probe;
                     if (probe < source.size() && identifier_start(source[probe])) {
                         ++probe;
