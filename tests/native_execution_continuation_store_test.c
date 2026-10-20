@@ -198,6 +198,17 @@ int main(void) {
     check(bounded.execution_count == 2 && bounded.execution_truncated);
     check(bounded.continuation_count == 2 && bounded.continuation_truncated);
 
+    /* Rendering zero execution frames must still discover causal continuations. */
+    OresNativeLogicalTraceResult causal_only;
+    check(ores_native_logical_trace_snapshot(
+        executions, continuations, e4,
+        NULL, 0,
+        continuation_frames, 8,
+        &causal_only));
+    check(causal_only.execution_count == 0 && causal_only.execution_truncated);
+    check(causal_only.continuation_count == 3);
+    check(!causal_only.continuation_truncated && !causal_only.corrupt);
+
     /* The currently live execution owns no native stack pointer in either store. */
     check(sizeof(OresNativeExecutionContext) == 64);
     check(sizeof(OresNativeSuspensionLink) == 32);
@@ -220,6 +231,37 @@ int main(void) {
     check(!ores_native_continuation_store_get(
         continuations, actor_link.continuation, &stale_continuation));
 
+    /* A causal child cannot be derived from a continuation that never resumed. */
+    OresNativeExecutionContext pending_origin_context = {
+        .id = {77, 150},
+        .allocation = actor_heap,
+        .parent_execution = {0, 0},
+        .continuation = {0, 0}
+    };
+    OresNativeExecutionContext pending_child_context = pending_origin_context;
+    pending_child_context.id.execution = 151;
+    OresNativeExecutionHandle pending_origin = {0, 0};
+    OresNativeExecutionHandle pending_child = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        executions, &pending_origin_context, &pending_origin));
+    check(ores_native_execution_context_store_insert(
+        executions, &pending_child_context, &pending_child));
+    OresNativeContinuationHandle pending_parent = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, pending_origin, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 1501, &pending_parent));
+    OresNativeContinuationHandle invalid_child = {0, 0};
+    check(!ores_native_continuation_store_publish(
+        continuations, pending_child, pending_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 1502, &invalid_child));
+    check(ores_native_continuation_store_cancel(continuations, pending_parent));
+    check(!ores_native_continuation_store_publish(
+        continuations, pending_child, pending_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 1503, &invalid_child));
+    check(ores_native_continuation_store_release(continuations, pending_parent));
+    check(ores_native_execution_context_store_release(executions, pending_origin));
+    check(ores_native_execution_context_store_release(executions, pending_child));
+
     /* Cross an AoSoA block boundary and prove all nine lanes remain addressable. */
     OresNativeExecutionHandle lanes[9];
     for (uint64_t i = 0; i < 9; ++i) {
@@ -233,6 +275,15 @@ int main(void) {
             executions, &context, &lanes[i]));
     }
     check(ores_native_execution_context_store_live(executions) == 9);
+    OresNativeExecutionContext duplicate = {
+        .id = {77, 204},
+        .allocation = actor_heap,
+        .parent_execution = {0, 0},
+        .continuation = {0, 0}
+    };
+    OresNativeExecutionHandle duplicate_handle = {0, 0};
+    check(!ores_native_execution_context_store_insert(
+        executions, &duplicate, &duplicate_handle));
     for (uint64_t i = 0; i < 9; ++i) {
         OresNativeExecutionContext context;
         check(ores_native_execution_context_store_get(
