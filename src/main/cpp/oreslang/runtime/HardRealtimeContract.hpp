@@ -81,9 +81,15 @@ constexpr AdmissionResult admit_native_hard_rt(
     if (effects.page_fault_risk)
         return {AdmissionFailure::PageFaultRisk};
 
-    const auto response_bound =
-        budget.wcet_ns + budget.max_blocking_ns + budget.max_jitter_ns;
-    if (response_bound > budget.deadline_ns)
+    // Compare by subtraction instead of summing the terms. This is both
+    // the response-time bound check and an overflow-safe implementation.
+    if (budget.wcet_ns > budget.deadline_ns)
+        return {AdmissionFailure::MissingTimingBudget};
+    auto remaining = budget.deadline_ns - budget.wcet_ns;
+    if (budget.max_blocking_ns > remaining)
+        return {AdmissionFailure::MissingTimingBudget};
+    remaining -= budget.max_blocking_ns;
+    if (budget.max_jitter_ns > remaining)
         return {AdmissionFailure::MissingTimingBudget};
 
     return {};
@@ -95,7 +101,7 @@ constexpr std::string_view diagnostic_code(
         case AdmissionFailure::None: return "OK";
         case AdmissionFailure::MissingTimingBudget: return "RT003_WCET_UNPROVEN";
         case AdmissionFailure::ManagedHeap: return "RT004_MANAGED_HEAP_ESCAPE";
-        case AdmissionFailure::TracingGc: return "RT004_MANAGED_HEAP_ESCAPE";
+        case AdmissionFailure::TracingGc: return "RT011_COLLECTOR_INTERFERENCE";
         case AdmissionFailure::RuntimeCodeGeneration: return "RT005_DYNAMIC_CODE";
         case AdmissionFailure::UnknownFfi: return "RT007_UNKNOWN_FFI";
         case AdmissionFailure::UnboundedAllocation: return "RT001_UNBOUNDED_ALLOCATION";
