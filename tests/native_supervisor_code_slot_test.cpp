@@ -181,6 +181,32 @@ static void exercise_callback_copy_failure_cleanup() {
           "exception while constructing initial image leaked loaded resource");
 }
 
+
+static void exercise_failed_image_unload_signal() {
+    using Slot = NativeSupervisorCodeSlot<std::string>;
+    const auto before = Slot::cleanup_failures_observed();
+    std::atomic<int> attempted{0};
+    Slot slot("abi", "live", [] {});
+    bool denied = false;
+    try {
+        (void)slot.activate(0, "abi", "stale", [&] {
+            ++attempted;
+            throw std::runtime_error("injected unload failure");
+        });
+    } catch (const std::logic_error&) {
+        denied = true;
+    }
+    check(denied && attempted == 1,
+          "failing cleanup did not leave stale candidate rejected");
+    check(slot.current().revision == 1,
+          "failing cleanup changed authoritative code revision");
+    check(Slot::cleanup_failures_observed() == before + 1,
+          "failed noexcept image cleanup was swallowed without an audit signal");
+    // Failure observation must not grant guest code, retry the candidate or
+    // imply that its native code-image mapping was actually released.
+    slot.close();
+}
+
 int main(){
     std::atomic<int> reclaimed{0};
     NativeSupervisorRegistry supervisors(42, 8, 8);
@@ -294,4 +320,5 @@ int main(){
     exercise_rejected_hot_reload_reclamation();
     exercise_destructor_before_image_unload();
     exercise_callback_copy_failure_cleanup();
+    exercise_failed_image_unload_signal();
 }
