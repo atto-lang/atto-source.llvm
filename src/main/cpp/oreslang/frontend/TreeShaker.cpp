@@ -227,8 +227,16 @@ NativeReachabilityManifest tree_shake_program(Program& program, TreeShakeMode mo
         roots.insert(main_slot);
         manifest.entry_points = {"main"};
     } else {
+        std::set<std::string> exported_families;
         for (const auto& function : program.functions) {
-            if (function.exported) {
+            if (function.exported) exported_families.insert(function.name);
+        }
+        // Preserve the complete source overload family when any sibling is
+        // exported. LlvmCodegen mangles overloaded ABI symbols by arity but
+        // leaves singleton families unmangled; dropping a private sibling here
+        // would otherwise rename the surviving public symbol.
+        for (const auto& function : program.functions) {
+            if (exported_families.count(function.name)) {
                 roots.insert(native_function_slot(
                     function.name, function.parameters.size()));
             }
