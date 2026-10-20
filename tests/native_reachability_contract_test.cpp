@@ -155,6 +155,39 @@ int main() {
         assert(has(result.retained_symbols, "__root__.ctor_arg"));
     }
 
+
+    {
+        Program program;
+        program.functions.push_back(fn("main", integer(0)));
+        CooperativeScalarLoop loop;
+        loop.name = "ticker";
+        loop.variable = "i";
+        loop.initial = 0;
+        program.cooperative_loops.push_back(std::move(loop));
+
+        const auto result = analyze_reachability(program, {"main"}, false);
+        assert(has(result.roots, "__root__.main"));
+        assert(has(result.roots, "__root__.ticker"));
+        assert(has(result.retained_symbols, "__root__.ticker"));
+        assert(!has(result.removed_symbols, "__root__.ticker"));
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("Same", integer(0)));
+        ClassDecl klass;
+        klass.name = "Same";
+        program.classes.push_back(std::move(klass));
+
+        bool rejected = false;
+        try {
+            (void)analyze_reachability(program, {"Same"}, false);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "semantic symbol collisions must fail closed");
+    }
+
     {
         Program program;
         program.functions.push_back(fn("main", call("missing")));
@@ -179,6 +212,18 @@ int main() {
         expect_rejected(ReachabilityResult{
             {"__root__.main"},
             {"__root__.main", "__root__.main"},
+            {}});
+        expect_rejected(ReachabilityResult{
+            {"__root__.main"},
+            {"__root__.main", std::string("\xc0\xaf", 2)},
+            {}});
+        expect_rejected(ReachabilityResult{
+            {"__root__.main"},
+            {"__root__.main", "__root__.bad\nname"},
+            {}});
+        expect_rejected(ReachabilityResult{
+            {"__root__.main"},
+            {"__root__.main", std::string(1025, 'a')},
             {}});
     }
 
