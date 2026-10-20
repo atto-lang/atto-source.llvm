@@ -8,7 +8,7 @@ int main(void) {
     if (ores_actor_arena_is_prefaulted(arena)) return 2;
     if (!ores_actor_arena_prefault(arena)) return 3;
     if (!ores_actor_arena_is_prefaulted(arena)) return 4;
-    OresArenaTurn turn = ores_actor_arena_enter(arena, 7u, 1u);
+    OresArenaTurn turn = ores_actor_arena_enter_realtime(arena, 7u, 1u);
     OresArenaHandle handle = ores_actor_arena_alloc(arena, turn, sizeof(uint64_t));
     uint64_t value = 42u, observed = 0u;
     ores_actor_arena_write(arena, turn, handle, 0u, &value, sizeof(value));
