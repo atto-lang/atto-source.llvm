@@ -56,6 +56,14 @@ int main() {
             assert(actor.used_bytes() == shardBytes + 1000U * 65U * sizeof(double));
             assert(vm.used_bytes() == actor.used_bytes());
             assert(copies.back()->read(64) == 200.0);
+            std::vector<double> copied(67, -1.0);
+            copies.back()->copy_into(copied.data() + 1, 65);
+            assert(copied.front() == -1.0 && copied.back() == -1.0);
+            assert(copied[65] == 200.0);
+            bool short_copy = false;
+            try { copies.back()->copy_into(copied.data(), 64); }
+            catch (const std::out_of_range&) { short_copy = true; }
+            assert(short_copy);
             shard.write(64, 1, 300.0);
             assert(copies.back()->read(64) == 200.0);
 
@@ -64,6 +72,10 @@ int main() {
             try { (void)copies.back()->read(64); }
             catch (const std::logic_error&) { foreign = true; }
             assert(foreign);
+            bool foreign_copy = false;
+            try { copies.back()->copy_into(copied.data(), 65); }
+            catch (const std::logic_error&) { foreign_copy = true; }
+            assert(foreign_copy);
             bool foreign_close = false;
             try { copies.back()->close(); }
             catch (const std::logic_error&) { foreign_close = true; }
@@ -77,6 +89,10 @@ int main() {
                 try { (void)copies[i]->read(0); }
                 catch (const std::logic_error&) { revoked = true; }
                 assert(revoked);
+                bool revoked_copy = false;
+                try { copies[i]->copy_into(copied.data(), 65); }
+                catch (const std::logic_error&) { revoked_copy = true; }
+                assert(revoked_copy);
             }
             assert(actor.used_bytes() == shardBytes + 500U * 65U * sizeof(double));
             copies.clear();
