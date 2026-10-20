@@ -1084,6 +1084,18 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
 
+    # Host-only physical AoS/SoA/AoSoA storage and checked opaque row identity.
+    # No guest Ref<T> lowering or actor execution authority is implied.
+    add_executable(oreslang-dop-checked-region-test tests/dop_checked_region_test.cpp)
+    target_include_directories(oreslang-dop-checked-region-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-checked-region-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-checked-region-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_dop_checked_region_addressing
+        COMMAND oreslang-dop-checked-region-test)
+    set_tests_properties(native_dop_checked_region_addressing PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
