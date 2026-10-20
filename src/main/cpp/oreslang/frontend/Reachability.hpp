@@ -223,4 +223,56 @@ inline ReachabilityResult analyze_reachability(
         reachability_detail::sorted(removed)};
 }
 
+
+inline void append_reachability_json_string(std::string& out, std::string_view value) {
+    out.push_back('"');
+    static constexpr char hex[] = "0123456789abcdef";
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    out += "\\u00";
+                    out.push_back(hex[(ch >> 4) & 0x0f]);
+                    out.push_back(hex[ch & 0x0f]);
+                } else {
+                    out.push_back(static_cast<char>(ch));
+                }
+        }
+    }
+    out.push_back('"');
+}
+
+inline void append_reachability_json_array(
+        std::string& out, const std::vector<std::string>& values) {
+    out.push_back('[');
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) out.push_back(',');
+        append_reachability_json_string(out, values[i]);
+    }
+    out.push_back(']');
+}
+
+inline std::string canonical_reachability_json(
+        const ReachabilityResult& result, bool library_build) {
+    std::string out;
+    out.reserve(256);
+    out += "{\"format\":\"ores-reachability/1\",\"buildKind\":";
+    append_reachability_json_string(out, library_build ? "library" : "executable");
+    out += ",\"roots\":";
+    append_reachability_json_array(out, result.roots);
+    out += ",\"retainedSymbols\":";
+    append_reachability_json_array(out, result.retained_symbols);
+    out += ",\"removedSymbols\":";
+    append_reachability_json_array(out, result.removed_symbols);
+    out += ",\"compileTimeConstants\":{}}";
+    return out;
+}
+
 } // namespace oreslang
