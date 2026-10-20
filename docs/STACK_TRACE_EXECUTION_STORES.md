@@ -166,3 +166,48 @@ syntax. The failure kind is diagnostic metadata after lexical unwind has chosen
 the effective control-plane effect. The next exception-lowering slice should
 invoke this capture after defer/finally unwind and before actor-local hook /
 supervisor promotion, then prepend any current native symbolized frames.
+
+
+## Post-unwind failure dispatch pipeline
+
+`FailureDispatchPipeline::finish_capture_dispatch` is the first runtime API
+that makes the exceptional-control ordering executable instead of relying on
+call-site convention:
+
+    defer / finally unwind
+        ->
+    effective typed failure selected
+        ->
+    logical failure trace captured
+        ->
+    actor-local on_throw / on_raise
+        ->
+    actor-boundary supervisor CONTROL publication
+
+The trace therefore describes the failure that actually survived lexical
+cleanup. For example, an incoming Throw whose defer panics is captured as
+Panic, with the original Throw retained as a bounded suppressed diagnostic.
+
+Actor-local handling happens only after that capture. If an actor-local hook
+handles Throw/Raise, no supervisor event is published and the child's
+pre-reserved supervisor slot remains available because the actor continues.
+If the hook itself escalates (for example an on_throw callback panics), the
+supervisor receives the hook's terminal effect while the diagnostic still
+contains the original post-unwind trace. This preserves both causal evidence
+and correct terminal control semantics.
+
+A failure to capture diagnostics never hides or downgrades the terminal effect.
+A stale current ExecutionHandle produces a bounded
+`logical failure trace unavailable` diagnostic and the typed failure still
+travels through supervisor CONTROL. Invalid native/FFI effect tags are
+normalized by EffectUnwind before trace capture and therefore appear as Fatal,
+not as Return or catchable Throw.
+
+ProcessExit is also diagnostically distinct from Fatal in NativeFailureTrace,
+even though actor-boundary policy maps it to supervisor HostFailure.
+
+This pipeline remains runtime substrate. General source-level unhandled
+`throw`, `raise`, and `panic` lowering is still fail-closed. The compiler
+step that admits those forms must route its completed lexical unwind into this
+pipeline rather than directly publishing to supervisor CONTROL or rendering a
+trace before cleanup has finished.
