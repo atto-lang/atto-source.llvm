@@ -268,6 +268,28 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
      * Never acknowledge another independent lane on a failed growth step. */
     return s->started_workers >= required;
 }
+int ores_native_actor_scheduler_prestart_carriers(
+        OresNativeActorScheduler* s) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    /* This primitive is intentionally narrower than "prepare realtime".
+     * It proves only that pthread creation has been moved before admission.
+     * OS scheduling, affinity, memory residency and synchronization bounds
+     * remain separate hard-RT qualification requirements. */
+    int pristine = !s->retired && s->accepted == 0
+        && s->outstanding == 0 && s->runnable_lanes == 0;
+    int ok = pristine && ensure_workers_locked(s, s->worker_count);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_all_carriers_started(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ready = s->started_workers == s->worker_count;
+    unlock(s);
+    return ready;
+}
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
