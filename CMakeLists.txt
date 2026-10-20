@@ -417,6 +417,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_compiler_managed_ref_layout_admission
         PROPERTIES TIMEOUT 30)
 
+    # LLVM IR-level implementation: i32 actor-local reference loads and
+    # trusted original-generation validation before checked address decode.
+    add_executable(oreslang-managed-ref-llvm-lowering-test
+        tests/managed_ref_llvm_lowering_test.cpp)
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-managed-ref-llvm-lowering-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compact32_llvm_checked_load_store
+        COMMAND oreslang-managed-ref-llvm-lowering-test)
+    set_tests_properties(native_compact32_llvm_checked_load_store
+        PROPERTIES TIMEOUT 30)
+
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
