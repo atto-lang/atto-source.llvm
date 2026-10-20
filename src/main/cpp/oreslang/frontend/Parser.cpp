@@ -1289,7 +1289,11 @@ private:
             }
         }
         if (token_.text == "Entry") {
-            fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            Lexer lookahead = lexer_;
+            const Token next = lookahead.next();
+            if (next.text == "." || next.text == "<") {
+                fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
         }
 
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
