@@ -174,6 +174,11 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
+    add_test(NAME native_build_profile_cli_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/build_profile_cli.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_build_profile_cli_admission PROPERTIES TIMEOUT 25)
     # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
     # Four portable cases have lossless exit status; DO NOT claim seven.
     find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
