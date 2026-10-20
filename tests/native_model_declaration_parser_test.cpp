@@ -60,6 +60,38 @@ int main() {
               "nominal typed USD ports");
         check(hir.upper_bound_bytes == 32, "conservative buffer budget");
         check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
+        // The parser is not the security boundary. Directly constructed
+        // AST values must meet identical static-value and resource limits.
+        auto deny_forged_ast = [&](oreslang::ModelDecl forged, std::string_view expected) {
+            try {
+                (void)oreslang::model::admit(forged, trusted);
+                throw std::runtime_error("forged native model AST unexpectedly admitted");
+            } catch (const std::exception& e) {
+                check(std::string_view(e.what()) == expected,
+                      "wrong direct-AST admission diagnostic");
+            }
+        };
+        auto malformed_float = non_ml[0];
+        malformed_float.formals[0].default_value = "0.15junk";
+        deny_forged_ast(malformed_float, "MODEL_INVALID_CONST");
+
+        auto integer_overflow = ml[0];
+        integer_overflow.formals[0].default_value = "9223372036854775808";
+        deny_forged_ast(integer_overflow, "MODEL_CONST_OVERFLOW");
+
+        auto too_many_arguments = non_ml[0];
+        too_many_arguments.operations[1].arguments.resize(17);
+        deny_forged_ast(too_many_arguments, "MODEL_ARGUMENT_BUDGET");
+
+        auto unresolved_named = non_ml[0];
+        unresolved_named.operations[1].arguments[0].label = "rate";
+        deny_forged_ast(unresolved_named, "MODEL_NAMED_ARGUMENT_UNRESOLVED");
+
+        auto malformed_argument = non_ml[0];
+        malformed_argument.operations[1].arguments[0].formal_reference = false;
+        malformed_argument.operations[1].arguments[0].value = "3bogus";
+        deny_forged_ast(malformed_argument, "MODEL_INVALID_CONST");
+
         const pv1::NominalPort price{"finance.Price@v1", 16};
         const pv1::Profile pp{true, "none", true};
         auto portable_sig = [&](char digest_char, std::vector<std::string> kinds,
