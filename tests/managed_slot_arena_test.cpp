@@ -6,6 +6,12 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#if defined(__unix__) || defined(__APPLE__)
+#include <csignal>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 using namespace oreslang::runtime;
 
@@ -115,8 +121,34 @@ static void test_domain_id_saturation() {
           "domain counter wrapped instead of saturating");
 }
 
+#if defined(__unix__) || defined(__APPLE__)
+static void destructor_never_frees_a_live_lease() {
+    pid_t child = fork();
+    check(child >= 0, "could not fork destructor lifetime test");
+    if (child == 0) {
+        struct rlimit no_core = {0, 0};
+        (void) setrlimit(RLIMIT_CORE, &no_core);
+        using Arena = ActorManagedSlotArena<2, 8, ManagedRefMode::Compressed32>;
+        const ActorHeapIdentity owner{60, 77, 1};
+        auto* arena = new Arena(owner);
+        auto lease = arena->borrow(owner);
+        if (!lease) _exit(99);
+        // Must terminate BEFORE gate_ memory can be destroyed.
+        delete arena;
+        _exit(98);
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child &&
+          WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "live external lease did not prohibit arena destruction");
+}
+#endif
+
 int main() {
     test_domain_id_saturation();
     test_actor_local_arena<ManagedRefMode::Compressed32>();
     test_actor_local_arena<ManagedRefMode::Native64>();
+#if defined(__unix__) || defined(__APPLE__)
+    destructor_never_frees_a_live_lease();
+#endif
 }
