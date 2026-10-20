@@ -53,6 +53,17 @@ pub fnc main(): int { return Fixed().run(5); }
 """, 3),
 }
 
+COMPILE_ONLY = {
+    "signed-i64-min": """fnc Identity(int input): int { return input; }
+fnc AddDelta(int delta, int input): int { return input + delta; }
+pub define model PriceAdjust(delta: int = -9223372036854775808) as
+    Identity()
+    AddDelta(delta)
+end
+pub fnc main(): int { return PriceAdjust().run(0); }
+""",
+}
+
 REJECT = {
     "dynamic-config": ("""fnc Identity(int input): int { return input; }
 define model Configured(delta: int) as
@@ -111,6 +122,16 @@ def verify(compiler: Path, clang: Path):
             if rc != expected:
                 raise AssertionError(f"{name}: guest exit={rc}, expected={expected}, stderr={err!r}")
             print(f"PASS model guest {name}: {expected}", flush=True)
+
+        for name, source in COMPILE_ONLY.items():
+            src = root / f"{name}.ores"
+            src.write_text(source, encoding="utf-8")
+            rc, out, err = run([str(compiler), str(src)])
+            if rc != 0 or not out.startswith(b"; ModuleID"):
+                raise AssertionError(f"{name}: compiler rc={rc}, stderr={err!r}")
+            if b"-9223372036854775808" not in out:
+                raise AssertionError(f"{name}: signed i64 minimum missing from lowered LLVM IR")
+            print(f"PASS model compile-only {name}", flush=True)
 
         for name, (source, diagnostic) in REJECT.items():
             src = root / f"{name}.ores"
