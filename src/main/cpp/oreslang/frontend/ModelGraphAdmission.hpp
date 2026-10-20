@@ -1,9 +1,6 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/SHA256.h"
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -181,69 +178,6 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     }
     result.output = *prior;
     return result;
-}
-
-inline void descriptor_field(std::string& out, const std::string& value) {
-    out += std::to_string(value.size());
-    out.push_back(':');
-    out += value;
-}
-inline void descriptor_port(std::string& out, const std::optional<Port>& port) {
-    descriptor_field(out, port ? "1" : "0");
-    if (!port) return;
-    descriptor_field(out, port->dtype);
-    descriptor_field(out, std::to_string(port->shape.size()));
-    for (auto d : port->shape) descriptor_field(out, std::to_string(d));
-    descriptor_field(out, port->unit);
-}
-inline void descriptor_port(std::string& out, const Port& port) {
-    descriptor_port(out, std::optional<Port>{port});
-}
-
-/**
- * Portable v1 descriptor. model_type_id must be compiler-owned nominal
- * identity, not merely an unqualified source declaration name.
- */
-inline std::string canonical_descriptor(const ModelGraph& graph,
-                                        const std::string& model_type_id) {
-    require(!model_type_id.empty(), "MODEL_INVALID_TYPE_ID");
-    std::string out;
-    descriptor_field(out, "ores-model-descriptor-v1");
-    descriptor_field(out, model_type_id);
-    descriptor_field(out, graph.name);
-    descriptor_field(out, std::to_string(graph.formal_config.size()));
-    for (const auto& formal : graph.formal_config) descriptor_field(out, formal);
-    descriptor_field(out, std::to_string(graph.nodes.size()));
-    for (const auto& node : graph.nodes) {
-        descriptor_field(out, std::to_string(node.id));
-        descriptor_field(out, node.op);
-        descriptor_field(out, node.abi);
-        descriptor_field(out, node.impl_digest);
-        descriptor_field(out, node.provenance);
-        descriptor_field(out, std::to_string(node.config.size()));
-        for (const auto& config : node.config) descriptor_field(out, config);
-        descriptor_port(out, node.input);
-        descriptor_port(out, node.output);
-        descriptor_field(out, std::to_string(node.scratch_bytes));
-        descriptor_field(out, node.vjp ? "1" : "0");
-    }
-    descriptor_field(out, std::to_string(graph.upper_bound_bytes));
-    return out;
-}
-
-inline std::string graph_digest(const ModelGraph& graph,
-                                const std::string& model_type_id) {
-    const auto descriptor = canonical_descriptor(graph, model_type_id);
-    const auto* bytes = reinterpret_cast<const std::uint8_t*>(descriptor.data());
-    const auto digest = llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(bytes, descriptor.size()));
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(digest.size() * 2);
-    for (auto byte : digest) {
-        out.push_back(hex[(byte >> 4) & 0x0f]);
-        out.push_back(hex[byte & 0x0f]);
-    }
-    return out;
 }
 
 } // namespace oreslang::model
