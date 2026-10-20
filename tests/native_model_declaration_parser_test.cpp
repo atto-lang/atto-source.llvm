@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ModelGraphAdmission.hpp"
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -34,6 +35,47 @@ int main() {
             "Validate() Apply(rate) Round() end end");
         check(non_ml.size() == 1 && non_ml[0].operations.size() == 3, "non-ML module");
         check(non_ml[0].formals[0].default_value == "0.15", "float default");
+        // Compiler-owned signature example: dollar-denominated scalar graph.
+        const oreslang::model::Port usd{"f64", {}, "USD"};
+        const oreslang::model::Port mass{"f64", {}, "kg"};
+        const oreslang::model::Registry trusted = {
+            {"Validate", {"Validate", usd, usd, "pure", "v1", 0, false}},
+            {"Apply", {"Apply", usd, usd, "pure", "v1", 0, false}},
+            {"Round", {"Round", usd, usd, "pure", "v1", 0, false}}
+        };
+        auto hir = oreslang::model::admit(non_ml[0], trusted,
+                                        oreslang::model::Limits{64, 64, 4096});
+        check(hir.name == "Tax" && hir.nodes.size() == 3, "typed HIR");
+        check(hir.input.has_value() && *hir.input == usd && hir.output == usd,
+              "nominal typed USD ports");
+        check(hir.upper_bound_bytes == 32, "conservative buffer budget");
+        check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
+        auto bad = trusted;
+        bad.at("Apply").input = mass;
+        try {
+            (void)oreslang::model::admit(non_ml[0], bad);
+            throw std::runtime_error("unsound implicit unit conversion");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_PORT_TYPE_MISMATCH") != std::string_view::npos,
+                  "wrong unit mismatch diagnostic: " + std::string(e.what()));
+        }
+        bad = trusted;
+        bad.at("Apply").effect = "io";
+        try {
+            (void)oreslang::model::admit(non_ml[0], bad);
+            throw std::runtime_error("unsound effectful op");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_EFFECTFUL_OP") != std::string_view::npos,
+                  "wrong effect diagnostic: " + std::string(e.what()));
+        }
+        try {
+            (void)oreslang::model::admit(non_ml[0], trusted,
+                                        oreslang::model::Limits{64, 64, 31});
+            throw std::runtime_error("unsound allocation bound");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_MEMORY_BUDGET") != std::string_view::npos,
+                  "wrong memory diagnostic: " + std::string(e.what()));
+        }
         check(oreslang::parse_model_declarations("fnc model(): int { return 42; }").empty(),
               "contextual model function name");
         rejected("define model Bad as end", "MODEL_EMPTY_BODY");
