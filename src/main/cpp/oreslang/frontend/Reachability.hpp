@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace oreslang {
@@ -44,19 +45,25 @@ inline void scan_expression(
 inline void scan_statement(
         const Statement& statement,
         const std::map<std::string, const Function*>& functions,
-        std::set<std::string>& function_dependencies) {
+        std::set<std::string>& function_dependencies,
+        std::set<std::string>& class_dependencies) {
     scan_expression(statement.expression.get(), functions, function_dependencies);
     scan_expression(statement.condition_lhs.get(), functions, function_dependencies);
     scan_expression(statement.condition_rhs.get(), functions, function_dependencies);
     scan_expression(statement.array_commit_length.get(), functions, function_dependencies);
     for (const auto& value : statement.array_commit_values)
         scan_expression(value.get(), functions, function_dependencies);
-    if (statement.branch_local)
+    if (statement.branch_local) {
         scan_expression(statement.branch_local->initializer.get(), functions, function_dependencies);
+        for (const auto& arg : statement.branch_local->constructor_arguments)
+            scan_expression(arg.get(), functions, function_dependencies);
+        if (!statement.branch_local->class_name.empty())
+            class_dependencies.insert(statement.branch_local->class_name);
+    }
     for (const auto& nested : statement.then_statements)
-        scan_statement(nested, functions, function_dependencies);
+        scan_statement(nested, functions, function_dependencies, class_dependencies);
     for (const auto& nested : statement.else_statements)
-        scan_statement(nested, functions, function_dependencies);
+        scan_statement(nested, functions, function_dependencies, class_dependencies);
 }
 
 inline void scan_function(
@@ -75,14 +82,14 @@ inline void scan_function(
         if (!local.class_name.empty()) class_dependencies.insert(local.class_name);
     }
     for (const auto& statement : fn.statements)
-        scan_statement(statement, functions, function_dependencies);
+        scan_statement(statement, functions, function_dependencies, class_dependencies);
     for (const auto& early : fn.early_returns) {
         scan_expression(early.lhs.get(), functions, function_dependencies);
         scan_expression(early.rhs.get(), functions, function_dependencies);
         scan_expression(early.result.get(), functions, function_dependencies);
     }
     for (const auto& statement : fn.caught_throw_defers)
-        scan_statement(statement, functions, function_dependencies);
+        scan_statement(statement, functions, function_dependencies, class_dependencies);
     for (const auto& spawn : fn.actor_spawns)
         actor_dependencies.insert(spawn.actor_type);
     for (const auto& send : fn.actor_sends)
@@ -112,7 +119,7 @@ inline ReachabilityResult analyze_reachability(
         bool preserve_exported_api) {
     std::map<std::string, const Function*> functions;
     std::map<std::string, const ActorDecl*> actors;
-    std::set<std::string> classes;
+    std::map<std::string, const ClassDecl*> classes;
 
     for (const auto& fn : program.functions) {
         if (!functions.emplace(fn.name, &fn).second)
@@ -123,7 +130,7 @@ inline ReachabilityResult analyze_reachability(
             throw std::runtime_error("native reachability rejects duplicate actor name: " + actor.name);
     }
     for (const auto& klass : program.classes) {
-        if (!classes.insert(klass.name).second)
+        if (!classes.emplace(klass.name, &klass).second)
             throw std::runtime_error("native reachability rejects duplicate class name: " + klass.name);
     }
 
@@ -146,7 +153,7 @@ inline ReachabilityResult analyze_reachability(
     const auto mark_class = [&](const std::string& name) {
         if (classes.find(name) == classes.end())
             throw std::runtime_error("native reachability class not found: " + name);
-        retained_classes.insert(name);
+        if (retained_classes.insert(name).second) work.emplace_back('c', name);
     };
 
     for (const auto& root : explicit_roots) {
@@ -176,7 +183,7 @@ inline ReachabilityResult analyze_reachability(
                     function_dependencies,
                     actor_dependencies,
                     class_dependencies);
-        } else {
+        } else if (kind == 'a') {
             const auto& actor = *actors.at(name);
             for (const auto& field : actor.fields) {
                 reachability_detail::scan_expression(
@@ -192,6 +199,13 @@ inline ReachabilityResult analyze_reachability(
                     function_dependencies,
                     actor_dependencies,
                     class_dependencies);
+        } else if (kind == 'c') {
+            const auto& klass = *classes.at(name);
+            for (const auto& field : klass.fields)
+                reachability_detail::scan_expression(
+                        field.initializer_expression.get(), functions, function_dependencies);
+        } else {
+            throw std::runtime_error("native reachability internal work-kind corruption");
         }
 
         for (const auto& dep : function_dependencies) mark_function(dep);
@@ -212,7 +226,8 @@ inline ReachabilityResult analyze_reachability(
         (retained_actors.count(name) ? retained : removed)
                 .insert(reachability_detail::qualify(program, name));
     }
-    for (const auto& name : classes) {
+    for (const auto& [name, klass] : classes) {
+        (void)klass;
         (retained_classes.count(name) ? retained : removed)
                 .insert(reachability_detail::qualify(program, name));
     }
