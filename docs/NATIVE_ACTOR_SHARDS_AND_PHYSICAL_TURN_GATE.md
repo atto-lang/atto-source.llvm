@@ -22,12 +22,14 @@ identity is NOT tied to the pthread selected for its next mailbox turn.
 The new trusted host-only `snapshot_column_leased(field)` returns a
 noncopyable RAII `ActorColumnSnapshot`. Its allocation is atomically billed
 to both the exact actor-generation budget and VM budget before allocation.
-Only the creating shard can populate the snapshot. Read, metadata,
-bounds-checked `copy_into`, and explicit `close()` require its live owner
-actor turn; foreign actor turns are rejected. `close()` is idempotent,
-scrubs/frees storage, then refunds both budgets. RAII destruction from a trusted host does not
-require an active actor turn and performs the same cleanup. The shard destructor has the same free-before-refund
-order. A standalone `native_actor_shard_snapshot_quota_and_generation`
+Only the creating shard can populate the snapshot. Read, metadata and
+bounds-checked `copy_into` are authorized either from the live owner actor
+turn or from a trusted host thread outside scheduler callbacks. A foreign
+actor carrier is rejected. Actor retirement revokes reads/copies, while a
+trusted external host may still call idempotent `close()` to scrub/free and
+refund the outstanding charge. RAII destruction provides the same cleanup
+without an active actor turn. The shard destructor has the same
+free-before-refund order. A standalone `native_actor_shard_snapshot_quota_and_generation`
 CTest exercises 1000 snapshots, generation fences, quota exhaustion and
 refunds.
 
