@@ -149,5 +149,43 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(len(calls),1)
 
 
+    def test_policy_checker_denial_prevents_ir_and_object_emission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            source=folder/'xdp.ores'; source.write_bytes(b'pub fnc ores_xdp(): int { return 2; }\n')
+            compiler=folder/'compiler'; compiler.write_bytes(b'compiler')
+            policy=folder/'policy'; policy.write_bytes(b'policy')
+            class Args: pass
+            args=Args(); args.source=source; args.compiler=compiler; args.policy_cli=policy
+            args.expected_source_sha256=digest(source.read_bytes())
+            args.expected_compiler_sha256=digest(compiler.read_bytes())
+            args.expected_policy_cli_sha256=digest(policy.read_bytes())
+            args.grants=''; args.node='node'; args.clang='clang'; args.readelf='readelf'
+            calls=[]
+            def reject_checker(argv, expected=0, timeout=90):
+                calls.append(argv)
+                if '--emit-target-closure' in argv:
+                    return json.dumps(closure()).encode()
+                raise Denied('policy checker rejected')
+            with patch('bpf_xdp_policy_bridge.run_command', side_effect=reject_checker):
+                with self.assertRaisesRegex(Denied, 'policy checker rejected'):
+                    build(args)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1][0], 'node')
+            args.expected_compiler_sha256=digest(b'not compiler')
+            calls.clear()
+            with patch('bpf_xdp_policy_bridge.run_command', side_effect=reject_checker):
+                with self.assertRaisesRegex(Denied, 'compiler executable SHA256'):
+                    build(args)
+            self.assertEqual(calls, [])
+            args.expected_compiler_sha256=digest(compiler.read_bytes())
+            args.expected_policy_cli_sha256=digest(b'not policy')
+            with patch('bpf_xdp_policy_bridge.run_command', side_effect=reject_checker):
+                with self.assertRaisesRegex(Denied, 'target-policy CLI SHA256'):
+                    build(args)
+            self.assertEqual(calls, [])
+
+
+
 if __name__ == '__main__':
     unittest.main()
