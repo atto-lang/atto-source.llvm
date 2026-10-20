@@ -196,6 +196,16 @@ inline ReachabilityResult analyze_reachability(
         }
     }
 
+    // The legacy scalar-while form is also a host-driven continuation: when
+    // admitted, codegen replaces the source function with externally callable
+    // init/resume/cancel entrypoints. It is therefore a semantic host root even
+    // when the source declaration is private and there is no ordinary caller.
+    for (const auto& [name, fn] : functions) {
+        if (!fn->scalar_while) continue;
+        mark_function(name);
+        root_symbols.insert(reachability_detail::qualify(program, name));
+    }
+
     // Cooperative scalar loops lower to externally callable init/resume/cancel
     // symbols. Until a host-import contract can prove otherwise, every such
     // loop is an explicit semantic root.
