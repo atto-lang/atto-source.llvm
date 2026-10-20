@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -52,10 +53,33 @@ void raw_write(const Plan& p, std::vector<std::uint8_t>& b,
     check(off + 4 <= b.size(), "write overrun");
     std::memcpy(b.data() + static_cast<std::size_t>(off), &value, sizeof(value));
 }
-struct Handle { std::uint32_t owner, slot, generation; };
-struct View { std::uint64_t epoch; };
+// These shared ownership tickets are HOST-REFERENCE provenance, not a guest ABI.
+ // Production must use compiler-issued, nonforgeable region/loan capabilities.
+struct Handle {
+    std::uint32_t owner, slot, generation;
+    std::shared_ptr<const std::uint8_t> store_token;
+};
+struct View {
+    std::uint64_t epoch;
+    std::shared_ptr<const std::uint8_t> loan_token;
+};
+class Access {
+public:
+    Access() = default; // inadmissible / unproved request
+private:
+    friend class Store;
+    friend bool can_parallel(const Access&, const Access&);
+    Access(std::shared_ptr<const std::uint8_t> region, std::uint32_t reads, std::uint32_t writes)
+        : region_(std::move(region)), reads_(reads), writes_(writes) {}
+    std::shared_ptr<const std::uint8_t> region_;
+    std::uint32_t reads_ = 0, writes_ = 0;
+};
 class Store {
 public:
+    Store(const Store&) = delete;
+    Store& operator=(const Store&) = delete;
+    Store(Store&&) = delete;
+    Store& operator=(Store&&) = delete;
     explicit Store(Layout layout)
         : layout_(layout), plan_(plan(layout)), bytes_(static_cast<std::size_t>(plan_.byte_length()), 0xA5) {
         for (std::uint32_t r = 0; r < kRows; ++r) set(r, {});
@@ -63,7 +87,7 @@ public:
     }
     Handle handle(std::uint32_t slot) const {
         check(slot < kRows, "invalid ECS entity slot");
-        return {kOwner, slot, generations_[slot]};
+        return {kOwner, slot, generations_[slot], store_token_};
     }
     Row read(Handle h) const {
         verify_handle(h);
@@ -84,20 +108,34 @@ public:
         ++generations_[h.slot];
         set(h.slot, {}); // deterministic slot reuse; production ECS may swap-delete.
     }
-    View begin_view() { check(loans_ == 0, "overlapping mutable view"); ++loans_; return {epoch_}; }
-    Row read_view(View v, std::uint32_t slot) const {
-        check(v.epoch == epoch_, "stale migration view");
+    View begin_view() {
+        check(loans_ == 0, "overlapping mutable view");
+        auto ticket = std::make_shared<const std::uint8_t>(0);
+        active_loan_ = ticket;
+        loans_ = 1; // publish only after successful ticket allocation
+        return {epoch_, std::move(ticket)};
+    }
+    Row read_view(const View& v, std::uint32_t slot) const {
+        check(loans_ == 1 && active_loan_ && v.loan_token == active_loan_ &&
+              v.epoch == epoch_, "foreign, released or stale view");
         check(slot < kRows, "view row out of bounds");
         return get(slot);
     }
-    void end_view(View v) {
-        check(loans_ == 1 && v.epoch == epoch_, "invalid loan release");
-        --loans_;
+    void end_view(const View& v) {
+        check(loans_ == 1 && active_loan_ && v.loan_token == active_loan_ &&
+              v.epoch == epoch_, "foreign, duplicate or stale loan release");
+        loans_ = 0;
+        active_loan_.reset();
+    }
+    Access issue_access(std::uint32_t reads, std::uint32_t writes) const {
+        return Access(store_token_, reads, writes);
     }
     // One physical authority only: all fields copied before atomically replacing store bytes.
     void migrate(Layout target) {
         check(loans_ == 0, "layout migration while borrowed");
         if (layout_ == target) return;
+        check(epoch_ != std::numeric_limits<std::uint64_t>::max(),
+              "migration epoch exhausted");
         Plan new_plan = plan(target);
         std::vector<std::uint8_t> new_bytes(static_cast<std::size_t>(new_plan.byte_length()), 0xA5);
         for (std::uint32_t r = 0; r < kRows; ++r) {
@@ -114,6 +152,7 @@ public:
     }
 private:
     void verify_handle(Handle h) const {
+        check(h.store_token && h.store_token == store_token_, "foreign ECS store");
         check(h.owner == kOwner, "wrong ECS ownership domain");
         check(h.slot < kRows, "out-of-bounds ECS slot");
         check(generations_[h.slot] == h.generation, "stale ECS handle / ABA");
@@ -127,6 +166,9 @@ private:
         raw_write(plan_, bytes_, r, 1, row.version);
         raw_write(plan_, bytes_, r, 2, row.ticks);
     }
+    const std::shared_ptr<const std::uint8_t> store_token_ =
+        std::make_shared<const std::uint8_t>(0);
+    std::shared_ptr<const std::uint8_t> active_loan_;
     Layout layout_;
     Plan plan_;
     std::vector<std::uint8_t> bytes_;
@@ -217,6 +259,18 @@ void check_lifecycle() {
     must_reject([&]{ store.apply(h, 0); }, "mutating during a read loan admitted");
     must_reject([&]{ store.migrate(Layout::AoSoA); }, "relayout during a read loan admitted");
     store.end_view(held);
+    must_reject([&]{ (void)store.read_view(held, 2); },
+                "released view still usable in same epoch");
+    must_reject([&]{ store.end_view(held); }, "duplicate view release admitted");
+    const View fresh = store.begin_view();
+    must_reject([&]{ (void)store.read_view(held, 2); }, "old loan reused by new loan");
+    check(store.read_view(fresh, 2) == Row{}, "fresh loan unusable");
+    store.end_view(fresh);
+    Store independent(Layout::AoS);
+    must_reject([&]{ (void)independent.read(h); }, "cross-store handle accepted");
+    const View other_view = independent.begin_view();
+    must_reject([&]{ (void)store.read_view(other_view, 2); }, "cross-store view accepted");
+    independent.end_view(other_view);
     store.migrate(Layout::AoSoA);
     must_reject([&]{ (void)store.read_view(held, 2); }, "stale view after migration admitted");
     check(store.read(h) == Row{}, "migration changed logical data");
@@ -224,25 +278,31 @@ void check_lifecycle() {
     store.apply(h, 1);
     store.migrate(Layout::SoA);
     check(store.read(h) == Row{1, 2, 1}, "SoA migration lost state or version");
-    must_reject([&]{ (void)store.read({kOwner + 1, 2, h.generation}); }, "wrong owner admitted");
-    must_reject([&]{ (void)store.read({kOwner, kRows, 1}); }, "out-of-bounds id admitted");
+    must_reject([&]{ (void)store.read({kOwner + 1, 2, h.generation, h.store_token}); }, "wrong owner admitted");
+    must_reject([&]{ (void)store.read({kOwner, kRows, 1, h.store_token}); }, "out-of-bounds id admitted");
     store.retire(h);
     must_reject([&]{ (void)store.read(h); }, "retired handle resurrected (ABA)");
     check(store.read(store.handle(2)) == Row{}, "recycled entity leaked old state");
 }
-struct Access { std::uint32_t owner, reads, writes; bool proven_region; };
 bool can_parallel(const Access& a, const Access& b) {
-    if (!a.proven_region || !b.proven_region) return false;
-    if (a.owner != b.owner) return true; // independent, authenticated regions only
-    return ((a.writes & (b.reads | b.writes)) == 0) &&
-           ((b.writes & (a.reads | a.writes)) == 0);
+    if (!a.region_ || !b.region_) return false;
+    // Region tokens are minted by stores; no caller-asserted proven_region bool.
+    if (a.region_ != b.region_) return true;
+    return ((a.writes_ & (b.reads_ | b.writes_)) == 0) &&
+           ((b.writes_ & (a.reads_ | a.writes_)) == 0);
 }
 void check_ecs_admission() {
-    check(!can_parallel({7, 1, 2, true}, {7, 2, 0, true}), "ECS read/write conflict admitted");
-    check(!can_parallel({7, 0, 4, true}, {7, 0, 4, true}), "ECS write/write conflict admitted");
-    check(can_parallel({7, 1, 2, true}, {7, 4, 0, true}), "ECS independent fields rejected");
-    check(can_parallel({7, 1, 2, true}, {8, 2, 1, true}), "ECS distinct proven regions rejected");
-    check(!can_parallel({7, 1, 2, true}, {8, 2, 1, false}), "ECS unproven domain admitted");
+    Store a(Layout::AoS), b(Layout::AoS);
+    check(!can_parallel(a.issue_access(1, 2), a.issue_access(2, 0)),
+          "ECS read/write conflict admitted");
+    check(!can_parallel(a.issue_access(0, 4), a.issue_access(0, 4)),
+          "ECS write/write conflict admitted");
+    check(can_parallel(a.issue_access(1, 2), a.issue_access(4, 0)),
+          "ECS independent fields rejected");
+    check(can_parallel(a.issue_access(1, 2), b.issue_access(2, 1)),
+          "ECS distinct minted regions rejected");
+    check(!can_parallel(a.issue_access(1, 2), Access{}),
+          "ECS unproved region admitted");
 }
 } // namespace
 int main() {
