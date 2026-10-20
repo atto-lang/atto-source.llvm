@@ -1311,6 +1311,38 @@ if(BUILD_TESTING)
                  COMMAND oreslang-pinned-actor-heap-suspend-test)
         set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
     endif()
+    # Tuple / Entry are nominal aggregate values in Java/Graal. Until the
+    # LLVM frontend provides a checked native product ABI, fail closed before
+    # emitting IR for *all* arities, including () and (x,).
+    oreslang_contract_test(native_tuple_explicit_literal_failclosed
+        native-tuple-explicit-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_tuple_compact_literal_failclosed
+        native-tuple-compact-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_tuple_empty_explicit_failclosed
+        native-tuple-empty-explicit-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_tuple_empty_compact_failclosed
+        native-tuple-empty-compact-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_tuple_singleton_explicit_failclosed
+        native-tuple-singleton-explicit-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_tuple_singleton_compact_failclosed
+        native-tuple-singleton-compact-reject.ores --diagnostic "native tuple literal unsupported")
+    oreslang_contract_test(native_entry_value_failclosed
+        native-entry-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_entry_generic_product_failclosed
+        native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_user_tuple_call_is_ordinary
+        native-user-tuple-call.ores --ir "call i64 @tuple")
+    oreslang_contract_test(native_local_entry_identifier_is_ordinary
+        native-local-entry-name.ores --ir "define i64 @main")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_user_tuple_call_executes
+            native-user-tuple-call.ores --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_user_tuple_call_executes PROPERTIES TIMEOUT 60)
+        oreslang_contract_test(native_local_entry_identifier_executes
+            native-local-entry-name.ores --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_local_entry_identifier_executes PROPERTIES TIMEOUT 60)
+    endif()
+
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
         --diagnostic "unknown named argument")
