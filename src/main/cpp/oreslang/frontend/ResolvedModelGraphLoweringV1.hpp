@@ -2,10 +2,13 @@
 
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/PortableModelGraphDigestV1.hpp"
+#include <charconv>
 #include <cstdint>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace oreslang::model::resolved_v1 {
