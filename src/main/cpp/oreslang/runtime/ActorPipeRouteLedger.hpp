@@ -206,6 +206,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         require_active(frame);
         if (frame->at_ == 0) throw std::logic_error("origin has no upstream route");
+        if (frame->publication_state_.load(std::memory_order_acquire) == 1)
+            throw std::logic_error("cannot redirect a claimed mailbox publication");
         reserve_routes(1);
         auto next = Handle(new Frame(this, generation_, frame->flow_, next_route_,
                                      frame->path_, frame->at_ - 1, true));
@@ -224,10 +226,18 @@ public:
         active_.erase(frame.get());
     }
 
-    void retire_if_active(const Handle& frame) noexcept {
+    void retire_if_active(const Handle& frame) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (frame && frame->owner_ == this && frame->generation_ == generation_)
-            active_.erase(frame.get());
+        if (!frame || frame->owner_ != this || frame->generation_ != generation_)
+            return;
+        auto found = active_.find(frame.get());
+        if (found == active_.end()) return;
+        // Terminal cleanup is NOT authorized to overtake the one-shot
+        // mailbox publisher. Leave this frame charged until its owner
+        // commits or aborts and then explicitly retries retirement.
+        if (frame->publication_state_.load(std::memory_order_acquire) == 1)
+            return;
+        active_.erase(found);
     }
 
     std::size_t outstanding() const noexcept {
