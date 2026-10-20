@@ -77,6 +77,27 @@ int main() {
         end
     )", "positional model arguments must precede named arguments");
 
+    expect_error(R"(
+        define model Dynamic as
+            if condition then
+                Dense(12, 12)
+            end
+        end
+    )", "MODEL_DYNAMIC_TOPOLOGY");
+
+    expect_error(R"(
+        define model Spawning as
+            spawn Worker()
+        end
+    )", "MODEL_EFFECTFUL_BODY");
+
+    expect_error(R"(
+        define model Qualified as
+            finance.PriceInput()
+            finance.ApplyTaxBps(1500)
+        end
+    )", "MODEL_LOWERING_NOT_IMPLEMENTED");
+
     // model is contextual, not globally reserved.
     const auto ordinary = oreslang::parse_program(R"(
         fnc model(int x): int {
