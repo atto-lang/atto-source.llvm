@@ -296,3 +296,34 @@ from a commit or source-free model.
 ## NIO host borrow-owner self-close prevention (2026-10-19)
 
 The C VM could deadlock if a trusted host thread called `ores_native_vm_close` while holding its own `ores_native_vm_nio_acquire` lease: the closer waited on `nio_idle` for a borrow only it could release. The source now uses bounded (16 distinct VM identities) thread-local host lease tracking, rejects cross-thread release, and refuses same-thread close **before** destroying schedulers. It retains foreign-thread close waiting, nested borrow counts and external producer fences. Real native VM lifecycle source tests add 32 close/release/retry iterations. A local harness with the exact original close-function body plus acquisition/release transitions reproduced the original self-deadlock (timeout exit 124); the patched fragment passed GCC/Clang ASan+UBSan three runs each and GCC TSan twice (500 self-close and 100 foreign-close cases per run). Full source-local native VM/scheduler and LLVM CI execution remain required; fragment tests do not establish full-VM parity.
+
+## Immutable source-integrity Python bootstrap (2026-10-19)
+
+The previous source-local sanitizer entry point directly executed
+`python3 -I scripts/verify-native-nio-source-local.py` before checking
+the source worktree. A modified staged verifier or worktree pathname swap
+could therefore execute unreviewed Python **before** its own integrity
+gate rejected the checkout.
+
+The sanitizer script now independently compares the verified HEAD Git blob
+of the Python checker to both the staged index and unfiltered raw worktree
+blob, then executes **only that committed blob** through `git cat-file`
+and Python's isolated `-I -B -c` interpreter. It also runs the source-free
+regression suite from its immutable committed Git blob rather than a mutable
+test pathname. The regression fixture copies the checker from `HEAD:`
+instead of from the potentially replaced worktree.
+
+A local independent source-free synthetic loader model exercised clean,
+unstaged, staged, and deterministic post-hash swap cases (4/4 checks passed).
+This is **not** execution of the actual private source helper or real native
+CMake/CTest/ASan/UBSan/TSan suite. The committed regression suite itself
+still requires a functioning source-local runner to qualify.
+
+Residual trust boundary: an independently approved workflow/runner/bootstrap
+must load the entry shell from an authorized immutable source snapshot;
+self-verification after arbitrary untrusted shell execution cannot establish
+that authorization. The shell's own reviewed commit/tree and required
+source-org policy remain release gates, not a substitute for protected
+source/destination/snapshot review. P0 exposure incidents #22/#77 and
+unmerged policy PRs #1123/#1217/#1300/#1317 still forbid cross-org private
+source copying merely to use another organization's Actions minutes.
