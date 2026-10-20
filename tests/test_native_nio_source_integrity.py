@@ -187,6 +187,24 @@ class NativeNioWorktreeTests(unittest.TestCase):
         (self.repo / 'shadow.c').write_text('int x;\n')
         self.reject('dirty')
 
+    def test_fifo_substitution_cannot_park_integrity_gate(self):
+        # A naive O_RDONLY open() blocks forever when a tracked leaf is
+        # swapped to a FIFO. Source integrity must reject immediately rather
+        # than consuming a GitHub Actions runner until its job timeout.
+        tracked = self.repo / 'source.c'
+        tracked.unlink()
+        os.mkfifo(tracked)
+        try:
+            result = subprocess.run(
+                (sys.executable, 'scripts/' + CHECKER.name,
+                 self.head, self.tree),
+                cwd=self.repo, capture_output=True, text=True, timeout=3,
+                check=False)
+        except subprocess.TimeoutExpired:
+            self.fail('source-integrity verifier parked on tracked FIFO')
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn('not a regular file', result.stderr)
+
     def test_hardlinked_tracked_input_is_rejected(self):
         # A tracked file's bytes/index can both match HEAD, while an
         # external hardlink can mutate its inode during the compiler run.
