@@ -148,7 +148,7 @@ static void test_compact_actor_local_refs() {
           "foreign actor proof must not authorize a compact reference");
     check(!alice.compact_matches(*a, Local::CompactRef{}),
           "null compact reference is not an object");
-    const std::array<Local::CompactRef, 2> edges{*ar, *ar};
+    std::array<Local::CompactRef, 2> edges{*ar, *ar};
     check(alice.write(*a, edges), "two compact edges fit in a 16-byte allocation");
     const auto roundtrip = alice.read<decltype(edges)>(*a);
     check(roundtrip && (*roundtrip)[0] == *ar && (*roundtrip)[1] == *ar,
