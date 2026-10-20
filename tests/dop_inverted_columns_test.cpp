@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 #include <type_traits>
+#include <unordered_set>
 
 using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span()), std::span<const float>>);
@@ -112,13 +113,16 @@ int main() {
     oreslang::dop::InvertedColumns<std::int64_t> different_fields;
     const auto foreign = different_fields.push(42);
     check(foreign.owner() != h0.owner());
-    // Saturating exhaustion never wraps the global owner namespace or
-    // produces an owner ID already issued to another store.
-    auto original_next = oreslang::dop::next_inverted_store_owner.load();
-    oreslang::dop::next_inverted_store_owner.store(std::numeric_limits<std::uint64_t>::max());
-    expect<std::overflow_error>([] { Store exhausted; (void)exhausted; });
-    check(oreslang::dop::next_inverted_store_owner.load() == std::numeric_limits<std::uint64_t>::max());
-    oreslang::dop::next_inverted_store_owner.store(original_next);
+    // Owner IDs stay process-wide and unique across independent stores and
+    // distinct field packs without exposing a host-mutable sequence.
+    std::unordered_set<std::uint64_t> owners;
+    owners.insert(h0.owner());
+    owners.insert(foreign.owner());
+    for (int i = 0; i < 4096; ++i) {
+        auto extra = std::make_unique<oreslang::dop::InvertedColumns<std::uint32_t>>();
+        auto handle = extra->push(static_cast<std::uint32_t>(i));
+        check(owners.insert(handle.owner()).second);
+    }
     // Differential/property-style stress: arbitrary swap-delete order must not
     // change surviving logical rows or revive any stale handle.
     Store fuzz;

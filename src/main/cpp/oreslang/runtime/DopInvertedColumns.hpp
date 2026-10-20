@@ -16,9 +16,33 @@
 
 namespace oreslang::dop {
 
-// Shared across all field type packs. Never wrap and reuse a live or stale
-// handle's owner identity, even after a store is destroyed.
-inline std::atomic<std::uint64_t> next_inverted_store_owner{1};
+template<class... Fields>
+class InvertedColumns;
+
+namespace detail {
+
+/**
+ * One process-wide owner sequence shared by every inverted-column field pack.
+ * The counter is not host-mutable: only InvertedColumns can allocate IDs.
+ */
+class InvertedOwnerSequence final {
+    template<class...>
+    friend class InvertedColumns;
+
+    static std::uint64_t allocate() {
+        std::uint64_t id = next_.load(std::memory_order_relaxed);
+        while (true) {
+            if (id == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("inverted store identity exhausted");
+            if (next_.compare_exchange_weak(
+                    id, id + 1, std::memory_order_relaxed)) return id;
+        }
+    }
+
+    inline static std::atomic<std::uint64_t> next_{1};
+};
+
+} // namespace detail
 
 // Native reference storage for the proposed Oreslang `inverted class` ABI.
 // One typed contiguous vector per field, stable generation-checked handles,
@@ -161,16 +185,9 @@ public:
         }
     };
 
-    InvertedColumns() {
-        std::uint64_t id = next_inverted_store_owner.load(std::memory_order_relaxed);
-        while (true) {
-            if (id == std::numeric_limits<std::uint64_t>::max())
-                throw std::overflow_error("inverted store identity exhausted");
-            if (next_inverted_store_owner.compare_exchange_weak(
-                    id, id + 1, std::memory_order_relaxed)) break;
-        }
-        state_ = std::make_shared<State>(id);
-    }
+    InvertedColumns()
+        : state_(std::make_shared<State>(
+                detail::InvertedOwnerSequence::allocate())) { }
     InvertedColumns(const InvertedColumns&) = delete;
     InvertedColumns& operator=(const InvertedColumns&) = delete;
     InvertedColumns(InvertedColumns&&) = delete;
