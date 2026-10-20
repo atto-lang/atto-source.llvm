@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Reject malformed typed edges before emitting any portable model identity.
+    add_executable(oreslang-native-model-edge-contract-test
+        tests/native_model_graph_edge_contract_test.cpp)
+    target_include_directories(oreslang-native-model-edge-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-model-edge-contract-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-model-edge-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_model_resolved_graph_edge_and_type_admission
+        COMMAND oreslang-native-model-edge-contract-test)
+    set_tests_properties(native_model_resolved_graph_edge_and_type_admission
+        PROPERTIES TIMEOUT 20)
     # Model declarations are parsed into nominal source AST, but deliberately
     # not allowed through native guest lowering until trusted op resolution.
     add_executable(oreslang-native-model-parser-test
