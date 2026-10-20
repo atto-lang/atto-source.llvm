@@ -46,6 +46,20 @@ UNSUPPORTED = {
     "invalid-with": "type T = string with length gt 0 or length eq 10;\nfnc main(): int { return 42; }\n",
     "effective-hole": "type T = int with value gte 1 and value ne 2;\nfnc main(): int { return 42; }\n",
     "spaced-annotation": "@ Range(min=1,max=2) type R = int;\nfnc main(): int { return 42; }\n",
+    "notempty-annotation": "@NotEmpty\\ntype DisplayName = string;\\nfnc main(): int { return 42; }\\n",
+    "length-annotation": "@Length(10)\\ntype Username = string;\\nfnc main(): int { return 42; }\\n",
+    "refinement-after-nested-comment": (
+        "/* fake: type Hidden = int with value gt 0; "
+        "/* @Range(min=1,max=5) */ */\\n"
+        "type Port = int with value gte 1;\\n"
+        "fnc main(): int { return 42; }\\n"
+    ),
+    "where-after-annotation-decoy": (
+        "// @Size(min=1,max=32)\\n"
+        "type Safe = string where it.length > 0;\\n"
+        "fnc main(): int { return 42; }\\n"
+    ),
+
 }
 
 def run(compiler: pathlib.Path, source: pathlib.Path) -> subprocess.CompletedProcess[str]:
