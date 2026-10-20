@@ -115,3 +115,42 @@ should hoist redundant base/decode work.
 For ECS/DOP kernels, lowering should prefer index-preserving operations and
 avoid decoding to pointers until a concrete field load/store requires an
 address. This is especially important for vectorized SoA/AoSoA loops.
+
+## Actor-local slot arena proof (runtime, not guest lowering)
+
+`ActorManagedSlotArena<Slots, PayloadBytes, Mode>` now keeps physically
+independent, 8-byte-aligned POD storage for each actor arena. The local managed
+reference field is **4 bytes** in `Compressed32` mode and **8 bytes** in
+`Native64` mode. Offsets refer to real allocated arena storage, not just
+synthetic arithmetic tests. The initial slot prototype uses fixed-size slots,
+with padded storage stride and a separate generation/liveness table.
+
+Trusted host handles carry arena ID and generation *outside* the stored
+compressed field. Admission validates owner runtime/actor/epoch, arena ID,
+a live object **start** (not an interior pointer), and the slot generation.
+The public API copies bytes in/out; it does not expose raw pointers to guest
+code. Freed slots are scrubbed, and stale handles fail closed on reuse.
+Arena IDs and slot generations never wrap. Retirement requires a joined
+carrier proof and draining its lifetime leases; a failed retirement seals
+new admissions until a subsequent retirement attempt succeeds.
+
+**Important limitations:** a bare compressed32 value is not an
+authentication token. It can have identical bit patterns in two different
+actor heaps. That is correct: runtime provenance, region membership and
+actor access must still be checked; guest code may not synthesize, transport
+or reinterpret actor-local references across actors. Slot reuse currently
+protects *trusted host handles*, not arbitrary compact intra-object links:
+those links need verified ownership/borrow lifetimes plus a proven
+incoming-reference invalidation strategy before compiler lowering can store
+them without accompanying generation metadata. The arena is single-owner/
+single-flight; it does not permit unsynchronized access from foreign carrier
+threads. The lifetime lease blocks final reclamation but is not memory
+read/write authorization.
+
+This is **not** general variable-size allocation, compact graph field
+lowering, an actor memory sandbox, or end-to-end source-level compressed
+`Ref<T>`. The general actor-owned heap allocator, compiler HIR/MIR
+representation selection, raw FFI pinning, and benchmark-based mode selection
+remain subsequent integration work. The pure codec permits offsets spanning
+up to 32 GiB minus 8 bytes at 8-byte alignment; this does not mean Oreslang
+reserves that much memory per actor.
