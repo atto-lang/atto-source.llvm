@@ -182,6 +182,11 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(Denied):
                 policy_bundle_hash(cli)
 
+    def test_external_output_is_bounded_before_reading(self):
+        with self.assertRaisesRegex(Denied, 'exceeds bounded diagnostic budget'):
+            run_command([sys.executable, '-c', 'print("x" * 300000)'])
+        self.assertEqual(run_command([sys.executable, '-c', 'print("OK")']), b'OK\n')
+
     def test_policy_checker_denial_prevents_ir_and_object_emission(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp)
