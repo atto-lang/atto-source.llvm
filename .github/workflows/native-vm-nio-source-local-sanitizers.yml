@@ -160,7 +160,20 @@ jobs:
           ORES_NIO_EXPECT_TREE: ${{ steps.identity.outputs.tree }}
         run: |
           set -euo pipefail
-          bash scripts/test-native-vm-nio-host-sanitizers.sh
+          # Never execute a mutable test driver after its preflight. Pin the
+          # full Bash program to HEAD and compare HEAD/index/raw bytes first.
+          sanitizer=scripts/test-native-vm-nio-host-sanitizers.sh
+          approved="$(git rev-parse --verify "HEAD:$sanitizer")"
+          staged="$(git rev-parse --verify ":$sanitizer")"
+          raw="$(git hash-object --no-filters -- "$sanitizer")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO sanitizer driver differs from committed Git blob" >&2
+            exit 2
+          fi
+          # Export into the consumer shell, not only the left-hand
+          # git subprocess: each pipeline side has a separate environment.
+          export ORES_NIO_REPO_ROOT="$GITHUB_WORKSPACE"
+          git cat-file blob "$approved" | bash -s
           # Authenticate the checker by staged/raw blob hash, then execute
           # only its immutable HEAD Git object (not its mutable pathname).
           checker=scripts/verify-native-nio-source-local.py

@@ -65,7 +65,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
         root = CHECKER.parents[1]
         workflows = {
             '.github/workflows/native-nio-ownership-no-llvm.yml': (2, False),
-            '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (5, True),
+            '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (6, True),
         }
         for path, (expected_loaders, checks_test_blob) in workflows.items():
             with self.subTest(workflow=path):
@@ -76,7 +76,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
                     expected_loaders)
                 self.assertGreaterEqual(
                     source.count('git hash-object --no-filters -- "$checker"'),
-                    expected_loaders - int(checks_test_blob))
+                    expected_loaders - 2 * int(checks_test_blob))
                 self.assertNotIn(
                     'python3 -I scripts/verify-native-nio-source-local.py',
                     source)
@@ -101,6 +101,13 @@ class NativeNioWorktreeTests(unittest.TestCase):
                         'NIO postflight verifier differs from committed Git blob',
                         source)
                 if checks_test_blob:
+                    self.assertIn(
+                        'git hash-object --no-filters -- "$sanitizer"', source)
+                    self.assertIn(
+                        'git cat-file blob "$approved" | bash -s', source)
+                    self.assertNotIn(
+                        'bash scripts/test-native-vm-nio-host-sanitizers.sh',
+                        source)
                     self.assertIn(
                         'git hash-object --no-filters -- "$test_path"', source)
                     self.assertNotIn(

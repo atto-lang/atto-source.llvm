@@ -27,3 +27,14 @@
 3. Run full CMake/CTest, LLVM compiler/guest runtime, native GCC/Clang ASan+UBSan and supported TSan; run actor/NIO boundary, parser, option/defaults and new CPU budget tests.
 4. Only promote from DRAFT after passing complete source tests and independent approval. Do not interpret source-free synthetic tests as production certification.
 5. Private cross-org mirroring is still prohibited while policy PRs #1123/#1217/#1300/#1317 lack independent approval and platform-conformance P0 #22/#77 remain open. Funded GitHub Actions minutes and a destination `GITHUB_TOKEN` alone are insufficient authorization.
+
+## Post-merge source-local security gate synchronization
+The source integration #638 subsequently advanced from the original merge parent
+`879341a70c79d4ef333327a72046e53e1d400ebd` to
+`fe753f7fa2ef53feb9868036eb20681a354810ab` (tree `46ec2c45b0e9bc9eac9885fda0ee996201eb4d03`). Three **feature-only** CI-related files were
+refreshed to their exact newer blobs: `.github/workflows/native-vm-nio-source-local-sanitizers.yml`, `scripts/test-native-vm-nio-host-sanitizers.sh`, `tests/test_native_nio_source_integrity.py`.
+These changes pin the sanitizer Bash driver to an immutable Git blob, propagate
+the verified checkout directory to the *consumer* of the shell pipeline, and
+extend the source-free negative test of the immutable loader. The six merged
+C/VM/compiler sources and the physical-turn/NIO cross-contract test remain
+unchanged; this synchronization is still NOT full native test evidence.

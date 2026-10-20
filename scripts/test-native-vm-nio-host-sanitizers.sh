@@ -4,7 +4,15 @@
 # to another organization or claim .ores source-level await parity.
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# When the trusted source-local workflow streams this script from its
+# immutable HEAD Git object, BASH_SOURCE[0] is stdin rather than a path.
+# The workflow supplies its verified checkout root explicitly; interactive
+# direct invocation retains the historical script-relative behavior.
+if [[ -n "${ORES_NIO_REPO_ROOT:-}" ]]; then
+  repo_root="$(cd "$ORES_NIO_REPO_ROOT" && pwd -P)"
+else
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+fi
 cd "$repo_root"
 head_sha="$(git rev-parse --verify HEAD)"
 tree_sha="$(git rev-parse --verify "HEAD^{tree}")"
