@@ -82,6 +82,7 @@ namespace realtime_detail {
 
 inline constexpr std::size_t kMaxRealtimeCallDepth = 64;
 inline constexpr std::size_t kMaxRealtimeFunctions = 4096;
+inline constexpr std::size_t kMaxRealtimeCallEdges = 16384;
 
 inline std::string function_key(std::string_view name, std::size_t arity) {
     return std::string(name) + "/" + std::to_string(arity);
@@ -299,8 +300,17 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     }
 
     std::unordered_map<std::string, realtime_detail::DirectFacts> direct;
-    for (const auto& [key, function] : functions)
-        direct.emplace(key, realtime_detail::direct_facts(*function));
+    std::size_t call_edges = 0;
+    for (const auto& [key, function] : functions) {
+        auto facts = realtime_detail::direct_facts(*function);
+        if (facts.calls.size() > realtime_detail::kMaxRealtimeCallEdges - call_edges) {
+            report.diagnostic = "RT003_WCET_UNPROVEN";
+            report.reason = "hard-RT call-edge count exceeds compiler qualification ceiling";
+            return report;
+        }
+        call_edges += facts.calls.size();
+        direct.emplace(key, std::move(facts));
+    }
 
     std::unordered_map<std::string, FunctionEffects> closed_effects;
     std::unordered_map<std::string, std::size_t> closed_depth;
