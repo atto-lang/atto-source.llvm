@@ -4,7 +4,7 @@ Never transfer private oreslang-source.llvm source into a public or internal Git
 
 ## Destination approval
 
-The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through a reviewed protected-branch change owned by `@ORESoftware`.
+The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through an independently reviewed governance change owned by `@ORESoftware`.
 
 Destination privacy, repository identity, workflow permissions, retention, and personnel access must be revalidated immediately before every transfer. A writable repository or successful source-free runner canary is not authorization.
 
@@ -12,9 +12,9 @@ Java repository approvals do not authorize LLVM source exports.
 
 ## Transfer requirements
 
-Any future publisher must run from trusted protected-source code, never from the PR under test, and must:
+Any publisher must run from source governance accepted by the v3 authority check, never from the PR under test, and must:
 
-- accept only an exact destination listed by protected-main policy;
+- accept only an exact destination listed by independently reviewed source policy;
 - require live `private=true` visibility and bind the destination repository ID;
 - create a fresh isolated `ci/oreslang-*` branch and never update destination `main`;
 - export the complete intended source snapshot without stale destination files;
@@ -33,7 +33,7 @@ A source-free workflow may be used to verify that a candidate private destinatio
 
 ## Current state
 
-No private CI destination is approved by default. Until a destination is independently reviewed and merged into protected `main`, private LLVM source must remain in the source repository.
+No private CI destination is approved by default. Until a destination is independently reviewed and merged through the exact v3 authority PR, private LLVM source must remain in the source repository.
 
 ## Trusted admission preflight
 
@@ -83,11 +83,26 @@ blob by SHA, and verifies the blob bytes against the Git object ID before any
 destination write.
 
 Before reading or exporting source, the publisher self-attests its own script
-bytes plus the allowlist and carrier-contract bytes against the exact protected
-source `main` commit. Source `main` must enforce CODEOWNER review,
-stale-review dismissal, at least one approval, administrator enforcement, no
-force pushes/deletions, and no PR-review bypass actors. Missing API permission
-or `protected=false` fails closed.
+bytes plus the reviewed governance set against an authorized source `main`
+commit. V3 has two fail-closed authority modes:
+
+1. **Protected-main mode.** When GitHub exposes branch protection, source
+   `main` must enforce CODEOWNER review, stale-review dismissal, at least one
+   approval, administrator enforcement, no force pushes/deletions, and no
+   PR-review bypass actors.
+2. **Exact review-attested mode.** When the private-repository plan does not
+   expose those controls, authority PR #728 must be merged to source `main`
+   only after the latest review from immutable reviewer ID `11139560`
+   (`ORESoftware`) is `APPROVED` on that exact PR head and predates merge.
+   The PR author must be a different account. V3 then requires every
+   export-critical governance path on current `main` to match the reviewed
+   head by path, Git mode, object type, and blob SHA. Truncated trees,
+   malformed/ambiguous review history, stale/revoked reviews, repo-ID drift, or
+   any governance drift fail closed.
+
+The fallback is not general trust in an unprotected branch. It is authority
+only for the exact reviewed governance objects and is rechecked immediately
+before executable carrier refs are created.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
@@ -134,9 +149,7 @@ scripts/run-in-private-ci-destination.sh opto-sync-test/go-java-validation \
   --test-plan ci/test-plans/llvm-pr669.json
 ```
 
-The current protected carrier contract includes reviewed source-free plans for
-LLVM PRs #669 and #674. The allowlist remains separately reviewed; the carrier
-contract by itself authorizes no export.
+The current carrier contract is review-gated in authority PR #728 and pins only explicitly reviewed source-free plans. The carrier contract by itself authorizes no export.
 
 Source-free regression tests:
 
