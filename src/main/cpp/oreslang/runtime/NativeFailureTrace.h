@@ -13,7 +13,8 @@ typedef enum {
     ORES_FAILURE_TRACE_RAISE = 2,
     ORES_FAILURE_TRACE_PANIC = 3,
     ORES_FAILURE_TRACE_CANCEL = 4,
-    ORES_FAILURE_TRACE_FATAL = 5
+    ORES_FAILURE_TRACE_FATAL = 5,
+    ORES_FAILURE_TRACE_PROCESS_EXIT = 6
 } OresNativeFailureTraceKind;
 
 typedef struct {
