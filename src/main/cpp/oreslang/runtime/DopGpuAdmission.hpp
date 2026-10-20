@@ -118,10 +118,6 @@ struct ClaimedGpuBinding {
  * caller after fence admission. */
 class QueueClaimedGpuBinding final {
 public:
-    QueueClaimedGpuBinding(ClaimedGpuBinding&& admitted,
-                          std::unique_ptr<const GpuQueueLocation> selected) noexcept
-        : claim_(std::move(admitted)), queue_(std::move(selected)) {}
-
     QueueClaimedGpuBinding(const QueueClaimedGpuBinding&) = delete;
     QueueClaimedGpuBinding& operator=(const QueueClaimedGpuBinding&) = delete;
     QueueClaimedGpuBinding(QueueClaimedGpuBinding&&) noexcept = default;
@@ -140,6 +136,18 @@ public:
     }
 
 private:
+    // Do not allow hosts to fabricate a queue-scoped receipt from arbitrary
+    // fence tickets and a chosen descriptor. Only the preflight+claim path
+    // below can establish that the two identities matched this queue.
+    friend QueueClaimedGpuBinding claim_gpu_for_queue(
+            const Kernel&, GpuTarget,
+            const DeviceBuffer&, const DeviceBuffer&,
+            const GpuQueueLocation&);
+
+    QueueClaimedGpuBinding(ClaimedGpuBinding&& admitted,
+                          std::unique_ptr<const GpuQueueLocation> selected) noexcept
+        : claim_(std::move(admitted)), queue_(std::move(selected)) {}
+
     ClaimedGpuBinding claim_;
     std::unique_ptr<const GpuQueueLocation> queue_;
 };
