@@ -3,6 +3,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/SHA256.h"
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
