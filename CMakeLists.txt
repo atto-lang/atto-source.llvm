@@ -1945,4 +1945,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/bpf_xdp_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(bpf_xdp_source_object PROPERTIES TIMEOUT 120)
+    # Pure Python source-free bridge invariants run even if no BPF kernel
+    # verifier or external target-profile checkout is available.
+    add_test(NAME bpf_xdp_policy_bridge_failclosed_offline
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_bpf_xdp_policy_bridge.py" -v)
+    set_tests_properties(bpf_xdp_policy_bridge_failclosed_offline
+        PROPERTIES TIMEOUT 20)
 endif()
