@@ -41,16 +41,16 @@ class NativeNioWorktreeTests(unittest.TestCase):
                    commit or self.head, tree or self.tree, cwd=self.repo, env=env)
 
     def gate_from_committed_shell(self, *, env=None):
-        # Reuse the ACTUAL shell admission function in a synthetic Git repo,
-        # without invoking the full private VM/compiler sanitizer workflow.
+        # Exercise the ACTUAL admission function against a source-free Git
+        # fixture, without building the private C VM or LLVM runtime.
         shell = SANITIZER.read_text()
-        marker = 'verify_exact_worktree() {\\n'
+        marker = 'verify_exact_worktree() {\n'
         self.assertEqual(1, shell.count(marker))
-        function = shell.split(marker, 1)[1].split('\\n}\\n', 1)[0]
-        script = ('set -euo pipefail\\n'
-                  + 'head_sha=' + shlex.quote(self.head) + '\\n'
-                  + 'tree_sha=' + shlex.quote(self.tree) + '\\n'
-                  + marker + function + '\\n}\\nverify_exact_worktree\\n')
+        function = shell.split(marker, 1)[1].split('\n}\n', 1)[0]
+        script = ('set -euo pipefail\n'
+                  + 'head_sha=' + shlex.quote(self.head) + '\n'
+                  + 'tree_sha=' + shlex.quote(self.tree) + '\n'
+                  + marker + function + '\n}\nverify_exact_worktree\n')
         return run('bash', '-c', script, cwd=self.repo, env=env)
 
     def test_clean_approved_blob_loader(self):
@@ -60,7 +60,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
     def test_mutated_verifier_is_not_executed(self):
         helper = self.repo / 'scripts' / CHECKER.name
         with helper.open('a') as out:
-            out.write('\\nopen(".git/should-not-execute", "w").write("pwned")\\n')
+            out.write('\nopen(".git/should-not-execute", "w").write("pwned")\n')
         result = self.gate_from_committed_shell()
         self.assertNotEqual(0, result.returncode)
         self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
@@ -68,7 +68,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
     def test_staged_verifier_is_not_executed(self):
         helper = self.repo / 'scripts' / CHECKER.name
         with helper.open('a') as out:
-            out.write('\\nopen(".git/should-not-execute", "w").write("pwned")\\n')
+            out.write('\nopen(".git/should-not-execute", "w").write("pwned")\n')
         add = run('git', 'add', 'scripts/' + CHECKER.name, cwd=self.repo)
         self.assertEqual(0, add.returncode, add.stderr)
         result = self.gate_from_committed_shell()
@@ -76,23 +76,22 @@ class NativeNioWorktreeTests(unittest.TestCase):
         self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
 
     def test_post_hash_verifier_swap_cannot_execute_changed_python(self):
-        # A deterministic Git shim swaps the worktree verifier *after* the
-        # raw-hash command but just before Git provides the immutable blob.
-        # The old path-based invocation could run attacker-controlled Python.
+        # Swap the worktree verifier deterministically *after* raw hashing,
+        # but just before Git provides the committed immutable blob.
         shim_dir = Path(self.tmp.name) / 'shim'
         shim_dir.mkdir()
         real_git = shutil.which('git')
         self.assertIsNotNone(real_git)
         shim = shim_dir / 'git'
         shim.write_text(
-            '#!/usr/bin/env python3\\n'
-            'import os, subprocess, sys\\n'
-            'if sys.argv[1:3] == ["cat-file", "blob"]:\\n'
-            '    with open(os.environ["NIO_TEST_HELPER_PATH"], "a") as out:\\n'
-            '        out.write("\\\\nopen(\\\\".git/should-not-execute\\\\", '
-            '\\\\"w\\\\").write(\\\\"pwned\\\\")\\\\n")\\n'
+            '#!/usr/bin/env python3\n'
+            'import os, subprocess, sys\n'
+            'if sys.argv[1:3] == ["cat-file", "blob"]:\n'
+            '    with open(os.environ["NIO_TEST_HELPER_PATH"], "a") as out:\n'
+            '        out.write(chr(10) + "open(" + repr(".git/should-not-execute") '
+            '+ ", " + repr("w") + ").write(" + repr("pwned") + ")" + chr(10))\n'
             'raise SystemExit(subprocess.call([os.environ["NIO_TEST_REAL_GIT"], '
-            '*sys.argv[1:]]))\\n'
+            '*sys.argv[1:]]))\n'
         )
         shim.chmod(0o755)
         env = os.environ.copy()
