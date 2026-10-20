@@ -7,7 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void check(int ok) { if (!ok) abort(); }
+static void check_impl(int ok, const char* expression, int line) {
+    if (!ok) {
+        fprintf(stderr, "CHECK_FAIL line=%d expr=%s\n", line, expression);
+        abort();
+    }
+}
+#define check(expression) check_impl((expression), #expression, __LINE__)
 
 typedef struct {
     OresNativeExecutionContextStore* executions;
