@@ -24,6 +24,12 @@ fnc dead_wasm_invalid(): int {
   }
 }
 
+fnc dead_array_runtime(): int {
+  let mut Array<int> items = new Array<int>();
+  items.add(1);
+  return items.size;
+}
+
 fnc live_helper(): int {
   return 42;
 }
