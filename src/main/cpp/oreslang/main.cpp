@@ -355,10 +355,12 @@ int main(int argc, char** argv) {
                     std::move(ast),
                     function_roots,
                     preserve_exported_api,
-                    actor_roots);
+                    actor_roots,
+                    {},
+                    wasm32_target,
+                    cortex_m_target);
+            retained_runtime_features = std::move(shaken.runtime_features);
             ast = std::move(shaken.program);
-            retained_runtime_features = oreslang::analyze_runtime_features(
-                    ast, wasm32_target, cortex_m_target);
             expected_runtime_features = &retained_runtime_features;
         }
 
