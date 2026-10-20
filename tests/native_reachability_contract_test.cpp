@@ -536,6 +536,41 @@ int main() {
     }
 
     {
+        ReachabilityResult incomplete{
+            {"__root__.main"},
+            {"__root__.live", "__root__.main"},
+            {},
+            {ReachabilityRootReason{
+                "__root__.main", ReachabilityReason::RootEntry}},
+            {}};
+        bool rejected = false;
+        try {
+            validate_reachability_provenance_complete(incomplete);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "retained non-root must have inbound provenance");
+
+        ReachabilityResult escaping{
+            {"__root__.main"},
+            {"__root__.main"},
+            {"__root__.dead"},
+            {ReachabilityRootReason{
+                "__root__.main", ReachabilityReason::RootEntry}},
+            {ReachabilityEdge{
+                "__root__.main",
+                "__root__.dead",
+                ReachabilityReason::DirectCall}}};
+        rejected = false;
+        try {
+            validate_reachability_result(escaping);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "provenance edge must remain in retained closure");
+    }
+
+    {
         expect_rejected(ReachabilityResult{
             {"__root__.main"},
             {"__root__.main", "__root__.live"},
