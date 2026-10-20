@@ -14,6 +14,13 @@ typedef struct { uint64_t domain, nonce, index, generation; } OresArenaLoan;
 typedef struct { uint64_t domain, epoch, offset, length; } OresArenaScratch;
 OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
                                        size_t slots, size_t slot_bytes, size_t scratch_bytes);
+/* Startup-only page residency preparation for hard-RT actors. This performs
+ * volatile touches across every arena allocation before a turn is admitted.
+ * It does not lock pages in RAM; the deployment adapter must additionally
+ * provide the OS/RTOS memory-locking guarantee required by its RT profile. */
+int ores_actor_arena_prefault(OresActorArena*);
+/* True only after successful startup prefault and before destruction. */
+int ores_actor_arena_is_prefaulted(OresActorArena*);
 OresArenaTurn ores_actor_arena_enter(OresActorArena*, uint64_t owner, uint64_t incarnation);
 void ores_actor_arena_leave(OresActorArena*, OresArenaTurn);
 OresArenaHandle ores_actor_arena_alloc(OresActorArena*, OresArenaTurn, size_t bytes);
