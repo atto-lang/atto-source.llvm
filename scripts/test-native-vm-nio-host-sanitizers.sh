@@ -23,7 +23,7 @@ verify_exact_worktree() {
   staged="$(git rev-parse --verify ":$helper")" || return 2
   raw="$(git hash-object --no-filters -- "$helper")" || return 2
   if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
-    printf 'NIO verifier bytes/index differ from approved HEAD blob\\n' >&2
+    printf 'NIO verifier bytes/index differ from approved HEAD blob\n' >&2
     return 2
   fi
   # -I removes Python environment/site injection and -B blocks pycache writes.
@@ -40,7 +40,23 @@ exec(compile(source, "<approved-native-nio-verifier>", "exec"),
 verify_exact_worktree
 # Source-free adversarial worktree/loader fixtures: no private source leaves
 # this origin repository. This suite is not runtime/compiler certification.
-python3 -I -B tests/test_native_nio_source_integrity.py
+# Do NOT execute the tests through a mutable worktree pathname after the gate;
+# use the committed blob, too, to close the gate-to-test Python TOCTOU window.
+test_path='tests/test_native_nio_source_integrity.py'
+approved_test="$(git rev-parse --verify "HEAD:$test_path")" || exit 2
+staged_test="$(git rev-parse --verify ":$test_path")" || exit 2
+raw_test="$(git hash-object --no-filters -- "$test_path")" || exit 2
+if [[ "$approved_test" != "$staged_test" || "$approved_test" != "$raw_test" ]]; then
+  printf 'NIO source-free test bytes/index differ from approved HEAD blob\n' >&2
+  exit 2
+fi
+git cat-file blob "$approved_test" |
+  python3 -I -B -c '
+import sys
+source = sys.stdin.buffer.read()
+exec(compile(source, "<approved-native-nio-test>", "exec"),
+     {"__name__": "__main__", "__file__": "tests/test_native_nio_source_integrity.py"})
+'
 verify_exact_worktree
 if [[ -n "${ORES_NIO_EXPECT_HEAD:-}" && "$head_sha" != "$ORES_NIO_EXPECT_HEAD" ]]; then
   printf 'Exact-head mismatch: expected %s, checked out %s\n' "$ORES_NIO_EXPECT_HEAD" "$head_sha" >&2
