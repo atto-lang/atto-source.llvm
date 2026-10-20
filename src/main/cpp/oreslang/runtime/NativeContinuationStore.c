@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeContinuationStore.h"
+#include "oreslang/runtime/NativeTraceSlotNamespace.h"
 
 #include <limits.h>
 #include <pthread.h>
@@ -34,6 +35,7 @@ struct OresNativeContinuationStore {
     ContinuationBlock* blocks;
     OresNativeExecutionContextStore* executions;
     uint32_t capacity;
+    uint32_t first_slot;
     uint32_t block_count;
     uint32_t live_count;
     uint32_t cursor;
@@ -64,9 +66,10 @@ static int resolve_locked(
         uint32_t* lane,
         uint32_t* index) {
     if (!ores_native_store_handle_valid(handle)
-            || handle.slot > store->capacity)
+            || handle.slot < store->first_slot
+            || (uint64_t)(handle.slot - store->first_slot) >= store->capacity)
         return 0;
-    *index = handle.slot - 1;
+    *index = handle.slot - store->first_slot;
     *block = block_for(store, *index, lane);
     return (*block)->live[*lane]
         && (*block)->generation[*lane] == handle.generation;
@@ -114,6 +117,12 @@ OresNativeContinuationStore* ores_native_continuation_store_open(
         return NULL;
     }
     if (pthread_mutex_init(&store->lock, NULL) != 0) {
+        free(store->blocks);
+        free(store);
+        return NULL;
+    }
+    if (!ores_native_trace_reserve_slot_namespace(capacity, &store->first_slot)) {
+        pthread_mutex_destroy(&store->lock);
         free(store->blocks);
         free(store);
         return NULL;
@@ -224,7 +233,7 @@ int ores_native_continuation_store_publish(
     ++store->live_count;
     store->cursor = free_index + 1u == store->capacity ? 0 : free_index + 1u;
 
-    out->slot = free_index + 1u;
+    out->slot = store->first_slot + free_index;
     out->generation = block->generation[lane];
     unlock_store(store);
     return 1;
