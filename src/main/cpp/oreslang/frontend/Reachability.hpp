@@ -3,6 +3,7 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <set>
@@ -117,8 +118,10 @@ inline std::vector<std::string> sorted(const std::set<std::string>& values) {
  */
 inline ReachabilityResult analyze_reachability(
         const Program& program,
-        const std::vector<std::string>& explicit_roots,
-        bool preserve_exported_api) {
+        const std::vector<std::string>& explicit_function_roots,
+        bool preserve_exported_api,
+        const std::vector<std::string>& explicit_actor_roots = {},
+        const std::vector<std::string>& explicit_class_roots = {}) {
     std::map<std::string, const Function*> functions;
     std::map<std::string, const ActorDecl*> actors;
     std::map<std::string, const ClassDecl*> classes;
@@ -172,8 +175,16 @@ inline ReachabilityResult analyze_reachability(
         if (retained_classes.insert(name).second) work.emplace_back('c', name);
     };
 
-    for (const auto& root : explicit_roots) {
+    for (const auto& root : explicit_function_roots) {
         mark_function(root);
+        root_symbols.insert(reachability_detail::qualify(program, root));
+    }
+    for (const auto& root : explicit_actor_roots) {
+        mark_actor(root);
+        root_symbols.insert(reachability_detail::qualify(program, root));
+    }
+    for (const auto& root : explicit_class_roots) {
+        mark_class(root);
         root_symbols.insert(reachability_detail::qualify(program, root));
     }
     if (preserve_exported_api) {
