@@ -175,6 +175,18 @@ public:
 private:
     using Digest = std::array<Byte, 32>;
 
+    template<std::size_t Size>
+    class SensitiveArray final {
+    public:
+        std::array<Byte, Size> bytes{};
+        SensitiveArray() = default;
+        SensitiveArray(const SensitiveArray&) = delete;
+        SensitiveArray& operator=(const SensitiveArray&) = delete;
+        ~SensitiveArray() {
+            OPENSSL_cleanse(bytes.data(), bytes.size());
+        }
+    };
+
     class Writer final {
     public:
         Bytes bytes;
@@ -326,27 +338,30 @@ private:
     static Digest hmac_sha256(
             const Byte* body, std::size_t body_size, const Bytes& key) {
         validate_key(key);
-        std::array<Byte, 64> key_block{};
-        if (key.size() > key_block.size()) {
-            const auto reduced = sha256(key.data(), key.size());
-            std::copy(reduced.begin(), reduced.end(), key_block.begin());
+        SensitiveArray<64> key_block;
+        if (key.size() > key_block.bytes.size()) {
+            SensitiveArray<32> reduced;
+            reduced.bytes = sha256(key.data(), key.size());
+            std::copy(
+                reduced.bytes.begin(), reduced.bytes.end(),
+                key_block.bytes.begin());
         } else {
-            std::copy(key.begin(), key.end(), key_block.begin());
+            std::copy(key.begin(), key.end(), key_block.bytes.begin());
         }
-        std::array<Byte, 64> inner_pad{};
-        std::array<Byte, 64> outer_pad{};
-        for (std::size_t i = 0; i < key_block.size(); ++i) {
-            inner_pad[i] = static_cast<Byte>(key_block[i] ^ 0x36u);
-            outer_pad[i] = static_cast<Byte>(key_block[i] ^ 0x5cu);
+        SensitiveArray<64> inner_pad;
+        SensitiveArray<64> outer_pad;
+        for (std::size_t i = 0; i < key_block.bytes.size(); ++i) {
+            inner_pad.bytes[i] =
+                static_cast<Byte>(key_block.bytes[i] ^ 0x36u);
+            outer_pad.bytes[i] =
+                static_cast<Byte>(key_block.bytes[i] ^ 0x5cu);
         }
-        const auto inner =
-            sha256_two(inner_pad.data(), inner_pad.size(), body, body_size);
-        const auto result = sha256_two(
-            outer_pad.data(), outer_pad.size(), inner.data(), inner.size());
-        OPENSSL_cleanse(key_block.data(), key_block.size());
-        OPENSSL_cleanse(inner_pad.data(), inner_pad.size());
-        OPENSSL_cleanse(outer_pad.data(), outer_pad.size());
-        return result;
+        SensitiveArray<32> inner;
+        inner.bytes = sha256_two(
+            inner_pad.bytes.data(), inner_pad.bytes.size(), body, body_size);
+        return sha256_two(
+            outer_pad.bytes.data(), outer_pad.bytes.size(),
+            inner.bytes.data(), inner.bytes.size());
     }
 
     static void validate_key(const Bytes& key) {
