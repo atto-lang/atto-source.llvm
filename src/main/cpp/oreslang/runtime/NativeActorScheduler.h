@@ -121,7 +121,16 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* schedul
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
-/* Carriers created on demand, initially zero; includes workers until retirement. */
+/* Move every pthread_create out of the future admission path. This is a
+ * necessary but deliberately insufficient hard-RT primitive: it does not
+ * qualify scheduler policy, priority inheritance, CPU/IRQ isolation, memory
+ * residency, or WCET. Must run before any message/control admission. */
+int ores_native_actor_scheduler_prestart_carriers(
+    OresNativeActorScheduler* scheduler);
+int ores_native_actor_scheduler_all_carriers_started(
+    OresNativeActorScheduler* scheduler);
+/* Carriers created on demand unless explicitly prestarted; includes workers
+ * until retirement. */
 size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
