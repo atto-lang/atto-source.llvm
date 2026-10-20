@@ -393,6 +393,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_owned_heap_contract
         COMMAND oreslang-actor-owned-heap-test)
 
+    # Compiler-ready compact object field substrate: physical i32 edges
+    # with original full-domain/generation proofs kept outside guest objects.
+    add_executable(oreslang-actor-compact-field-store-test
+        tests/actor_compact_field_store_test.cpp)
+    target_include_directories(oreslang-actor-compact-field-store-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-compact-field-store-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_compressed32_object_fields
+        COMMAND oreslang-actor-compact-field-store-test)
+    set_tests_properties(native_actor_compressed32_object_fields
+        PROPERTIES TIMEOUT 30)
+
+
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
     # Exact queue snapshots are pinned to the merged upstream Git objects.
