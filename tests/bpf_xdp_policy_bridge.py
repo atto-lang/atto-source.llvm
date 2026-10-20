@@ -19,6 +19,18 @@ import tempfile
 
 PACKET = "bpf.packet.read"
 MAX_SOURCE = 4096
+MAX_COMMAND_STDOUT = 256 * 1024
+MAX_COMMAND_STDERR = 256 * 1024
+# The CLI imports JavaScript modules and authority-bearing JSON profiles.
+# Hash all runtime policy inputs, not only the entrypoint.
+POLICY_MODULES = (
+    'package.json', 'bin/oreslang-target.mjs', 'src/artifact.mjs', 'src/contract.mjs',
+    'src/load-registry.mjs', 'src/strict-json-keys.mjs',
+)
+POLICY_PROFILES = (
+    'android', 'asic', 'browser', 'carrier-linux', 'desktop', 'ebpf',
+    'edge-js', 'edge-wasi', 'embedded', 'fpga', 'ios', 'litegraph', 'server',
+)
 HEX256 = re.compile(r"[0-9a-f]{64}\Z")
 
 class Denied(Exception):
@@ -40,6 +52,46 @@ def hash_file(path):
         for part in iter(lambda: handle.read(128 * 1024), b""):
             hasher.update(part)
     return hasher.hexdigest()
+
+
+def policy_bundle_hash(cli):
+    """Versioned digest of every policy input consumed by the JS CLI.
+
+    A separately approved value must be supplied by a trusted controller;
+    calculating it from an unchecked checkout is not an authorization.
+    """
+    cli = Path(cli)
+    root = cli.parent.parent
+    require(cli == root / 'bin' / 'oreslang-target.mjs',
+            'target policy CLI must use the canonical bin path')
+    for directory in (root, root / 'bin', root / 'src', root / 'profiles'):
+        require(directory.is_dir() and not directory.is_symlink(),
+                'symlink or missing target policy directory')
+    all_profiles = sorted(item.name for item in (root / 'profiles').iterdir())
+    require(all_profiles == sorted(name + '.json' for name in POLICY_PROFILES),
+            'target policy registry is not the reviewed exact 13 profiles')
+    modules = sorted(str(path.relative_to(root))
+                     for folder in ('bin', 'src')
+                     for path in (root / folder).iterdir()
+                     if path.suffix == '.mjs')
+    require(modules == sorted(x for x in POLICY_MODULES if x.endswith('.mjs')),
+            'unexpected JavaScript module in policy bundle')
+    file_names = sorted(POLICY_MODULES + tuple('profiles/' + x + '.json'
+                                               for x in POLICY_PROFILES))
+    acc = hashlib.sha256(b'oreslang-target-policy-bundle-v1\x00')
+    for name in file_names:
+        path = root / name
+        require(path.is_file() and not path.is_symlink(),
+                'missing or symlink target policy file: ' + name)
+        data = path.read_bytes()
+        require(len(data) <= 128 * 1024,
+                'oversized target policy file: ' + name)
+        relative = name.encode('utf-8')
+        acc.update(len(relative).to_bytes(4, 'big'))
+        acc.update(relative)
+        acc.update(len(data).to_bytes(8, 'big'))
+        acc.update(data)
+    return acc.hexdigest()
 
 
 def pinned_bytes(path, expected):
@@ -120,15 +172,27 @@ def check_bpf_elf(blob):
 
 
 def run_command(args, expected=0, timeout=90):
+    # Avoid unbounded Python heap allocation if a compiler or readelf goes
+    # pathological. Disk-backed spool files are inspected before reading.
     try:
-        result = subprocess.run(args, capture_output=True, timeout=timeout)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            result = subprocess.run(args, stdout=output, stderr=errors, timeout=timeout)
+            output.seek(0, os.SEEK_END)
+            out_size = output.tell()
+            errors.seek(0, os.SEEK_END)
+            err_size = errors.tell()
+            require(out_size <= MAX_COMMAND_STDOUT and err_size <= MAX_COMMAND_STDERR,
+                    'external tool output exceeds bounded diagnostic budget')
+            output.seek(0)
+            errors.seek(0)
+            stdout, stderr = output.read(), errors.read()
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Denied("tool unavailable or timeout: " + str(args[0])) from exc
     require(result.returncode == expected,
             "tool failed policy/integrity gate: " + str(args[0]) +
             " status=" + str(result.returncode) +
-            " diagnostic=" + result.stderr[:250].decode("utf-8", "replace"))
-    return result.stdout
+            " diagnostic=" + stderr[:250].decode("utf-8", "replace"))
+    return stdout
 
 
 def verify_object_metadata(path, readelf):
@@ -163,6 +227,11 @@ def build(args):
             hash_file(args.policy_cli) == args.expected_policy_cli_sha256,
             "target-policy CLI SHA256 does not match pinned input")
     require(args.grants in ("", PACKET), "unsupported external XDP grants")
+    require(bool(HEX256.fullmatch(args.expected_policy_bundle_sha256)),
+            'invalid expected policy bundle SHA256')
+    policy_bundle = policy_bundle_hash(args.policy_cli)
+    require(policy_bundle == args.expected_policy_bundle_sha256,
+            'complete target-policy bundle SHA256 mismatch')
     for sha in (args.expected_compiler_sha256, args.expected_policy_cli_sha256):
         require(bool(HEX256.fullmatch(sha)), "invalid executable SHA256 pin")
     with tempfile.TemporaryDirectory(prefix="ores-bpf-policy-local-") as temp:
@@ -198,12 +267,16 @@ def build(args):
         require(len(blob) <= 2 * 1024 * 1024, "BPF object exceeds build test limit")
         check_bpf_elf(blob)
         verify_object_metadata(obj, args.readelf)
+        # Detect policy rewrites during this build, not just before it.
+        require(policy_bundle_hash(args.policy_cli) == policy_bundle,
+                'target-policy bundle changed during build')
         return {
             "schemaVersion": 1,
             "status": "UNSIGNED_TEST_EVIDENCE_NOT_DEPLOYMENT_AUTHORIZATION",
             "sourceSha256": digest(source_bytes),
             "compilerSha256": args.expected_compiler_sha256,
             "policyCliSha256": args.expected_policy_cli_sha256,
+            "policyBundleSha256": policy_bundle,
             "closureSha256": digest(raw), "llvmIrSha256": digest(ir),
             "bpfElfSha256": digest(blob),
             "inferredEffects": [PACKET] if packet else [],
@@ -215,7 +288,8 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "compiler", "policy-cli", "expected-source-sha256",
-                 "expected-compiler-sha256", "expected-policy-cli-sha256"):
+                 "expected-compiler-sha256", "expected-policy-cli-sha256",
+                 "expected-policy-bundle-sha256"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--grants", default="")
     parser.add_argument("--clang", default="clang")
