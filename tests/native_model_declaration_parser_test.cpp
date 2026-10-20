@@ -198,6 +198,39 @@ int main() {
         check(oreslang::model::plan_cache_key(graph_id, profile) !=
                   oreslang::model::plan_cache_key(graph_id, std::string(64, 'c')),
               "execution profile participates in compiled plan cache identity");
+
+        const oreslang::model::ModelOwner stateless_owner{
+            "finance.PriceEstimate@v1", graph_id, 1, "instance-1", std::nullopt, profile
+        };
+        const oreslang::model::RunStamp stateless_run{
+            "run-stateless", "finance.PriceEstimate@v1", graph_id, 1,
+            "instance-1", std::nullopt, profile
+        };
+        auto stateless_ledger = oreslang::model::validate_and_commit(
+            stateless_owner, stateless_run, {});
+        check(stateless_ledger.committed_run_ids.count("run-stateless") == 1,
+              "stateless run stamp commit");
+        auto wrongly_stateful = stateless_run;
+        wrongly_stateful.run_id = "run-stateful";
+        wrongly_stateful.parameter_version = 0;
+        try {
+            (void)oreslang::model::validate_and_commit(
+                stateless_owner, wrongly_stateful, {});
+            throw std::runtime_error("stateless parameter mismatch unexpectedly committed");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_PARAMETER_VERSION_MISMATCH") != std::string_view::npos,
+                  "wrong stateless parameter mismatch diagnostic");
+        }
+        try {
+            oreslang::model::ModelOwner bad_id{
+                " bad id ", graph_id, 0, "instance-1", std::nullopt, profile
+            };
+            oreslang::model::validate_owner(bad_id);
+            throw std::runtime_error("invalid model type id unexpectedly accepted");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_INVALID_MODEL_TYPE_ID") != std::string_view::npos,
+                  "wrong model type id diagnostic");
+        }
         auto expect_fence = [&](oreslang::model::RunStamp candidate, std::string_view code) {
             try {
                 (void)oreslang::model::validate_and_commit(owner, candidate, {});
