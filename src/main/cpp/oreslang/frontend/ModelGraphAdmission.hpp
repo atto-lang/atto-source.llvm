@@ -142,11 +142,26 @@ inline void validate_scalar(const std::string& value, bool formal_allowed,
         return;
     }
     if (expected_type == "float" || expected_type == "f32" || expected_type == "f64") {
-        require(value.find('.') != std::string::npos, "MODEL_INVALID_CONST");
-        for (char c : value) {
-            require((c >= '0' && c <= '9') || c == '.' || c == 'e' ||
-                    c == 'E' || c == '+' || c == '-', "MODEL_INVALID_CONST");
+        // Exact source grammar: nonnegative decimal with digits on both
+        // sides of '.', optionally followed by a signed exponent.
+        // from_chars() alone accepts more spellings than the Oreslang parser.
+        std::size_t cursor = 0;
+        auto digits = [&]() {
+            const auto begin = cursor;
+            while (cursor < value.size() &&
+                   value[cursor] >= '0' && value[cursor] <= '9') ++cursor;
+            return cursor != begin;
+        };
+        require(digits(), "MODEL_INVALID_CONST");
+        require(cursor < value.size() && value[cursor++] == '.', "MODEL_INVALID_CONST");
+        require(digits(), "MODEL_INVALID_CONST");
+        if (cursor < value.size() && (value[cursor] == 'e' || value[cursor] == 'E')) {
+            ++cursor;
+            if (cursor < value.size() && (value[cursor] == '+' || value[cursor] == '-'))
+                ++cursor;
+            require(digits(), "MODEL_INVALID_CONST");
         }
+        require(cursor == value.size(), "MODEL_INVALID_CONST");
         // Locale-independent, nonallocating C++17 numeric parsing.
         // strtod() may interpret decimal points differently under LC_NUMERIC.
         double parsed = 0.0;
