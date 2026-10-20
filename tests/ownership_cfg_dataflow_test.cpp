@@ -363,5 +363,42 @@ int main() {
         invalid.blocks = {{{}, {2}}};
         verify(invalid);
     }));
+    // Prevent a forged or generated CFG from consuming unbounded memory/time
+    // before ownership analysis, even when most blocks are unreachable.
+    Graph over_budget;
+    over_budget.entry = {{"x", cell(kOwned)}};
+    over_budget.blocks.resize(16385);
+    assert(rejected([&] { verify(over_budget); }));
+    over_budget.blocks.resize(1);
+    over_budget.blocks[0].operations.resize(65537, op(Kind::Read, "x"));
+    assert(rejected([&] { verify(over_budget); }));
+    over_budget.blocks[0].operations.clear();
+    over_budget.blocks[0].successors.resize(65537, 0);
+    assert(rejected([&] { verify(over_budget); }));
+
+    // Concrete CFG refinement of the abstract NativeOwnershipLoans Suspend
+    // transition: every live loan, including a projected field, is forbidden.
+    Graph suspend;
+    suspend.entry = {{"x", cell(kOwned)}};
+    suspend.blocks = {{{op(Kind::BorrowShared, "x"),
+                        op(Kind::Suspend, ""),
+                        op(Kind::ReleaseShared, "x")}, {}}};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowShared, "x"),
+        op(Kind::ReleaseShared, "x"),
+        op(Kind::Suspend, "")};
+    verify(suspend);
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowExclusive, "x"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.entry = {{"x.field", cell(kOwned)}, {"x.other", cell(kOwned)}};
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowShared, "x.field"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.blocks[0].operations = {op(Kind::Suspend, ""),
+                                   op(Kind::Read, "x.other")};
+    verify(suspend);
+
     return 0;
 }
