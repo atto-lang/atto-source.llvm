@@ -27,6 +27,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Verify FSM native harness contracts even under Python optimization
+        run: python3 -O tests/test_fsm_native_harness_contract.py
       - name: Validate 169 real scalar FSM guest outcomes and compiler rejection
         run: |
           python3 tests/native_fsm_scalar_guest.py \
