@@ -5,6 +5,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
+#include "oreslang/types/ScalarEffectIr.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -223,6 +224,7 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool emit_scalar_effect_ir = false;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -265,6 +267,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--emit-scalar-effect-ir") {
+            if (emit_scalar_effect_ir) { std::cerr << "duplicate effect-IR option\n"; return 2; }
+            emit_scalar_effect_ir = true;
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -297,6 +302,13 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (emit_scalar_effect_ir &&
+            (tree_shake || !tree_shake_roots.empty() || experimental_owned_int ||
+             experimental_rt_scalar_loop || native_hard_rt_profile || rt_check_only ||
+             rt_report_seen || wasm32_target || cortex_m_target || target_seen)) {
+        std::cerr << "scalar effect-IR export requires default host target and no other profile\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -316,7 +328,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--emit-scalar-effect-ir] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -345,6 +357,14 @@ int main(int argc, char** argv) {
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
 
+        if (emit_scalar_effect_ir) {
+            // Validate the same AST with the ordinary backend before exposing
+            // the conservative scalar effect model.
+            (void)oreslang::emit_verified_llvm_ir(ast, false, false);
+            std::cout << oreslang::emit_native_scalar_effect_ir_v1(ast);
+            std::cout.flush();
+            return 0;
+        }
         if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");
 
