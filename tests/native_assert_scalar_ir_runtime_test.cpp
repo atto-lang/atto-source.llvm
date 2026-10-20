@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeAssertScalarAbi.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 
@@ -50,6 +51,28 @@ static void trap_compare(BoolResult status) {
 }
 
 int main() {
+    // Externally supplied pointer ABI must not dereference null. When an
+    // output exists it receives a canonical Fatal, never success/None.
+    {
+        Scalar input = i64(7);
+        BoolResult output = some(true);
+        oreslang_assert_equal_scalar_v0(nullptr, &input, 0, &output);
+        match(output, malformed());
+        output = some(true);
+        oreslang_assert_equal_scalar_v0(&input, nullptr, 1, &output);
+        match(output, malformed());
+        output = some(true);
+        oreslang_assert_equal_scalar_v0(nullptr, nullptr, 1, &output);
+        match(output, malformed());
+        oreslang_assert_equal_scalar_v0(&input, &input, 0, nullptr);
+        oreslang_assert_equal_scalar_v0(nullptr, nullptr, 0, nullptr);
+        output = some(true);
+        oreslang_assert_trap_bool_v0(nullptr, &output);
+        match(output, malformed());
+        oreslang_assert_trap_bool_v0(&output, nullptr);
+        oreslang_assert_trap_bool_v0(nullptr, nullptr);
+    }
+
     compare(i64(10), i64(10), 0);
     compare(i64(10), i64(10), 1);
     compare(i64(10), i64(20), 0);
@@ -105,6 +128,40 @@ int main() {
     corrupt = effect(EffectKind::Throw, 4);
     corrupt.present = 1;
     trap_compare(corrupt);
+
+    // Each native effect kind must survive one or more trap boundaries
+    // unchanged except the explicitly recoverable ordinary Throw. Exhaust
+    // the public 8-bit discriminant and 8-bit presence/value corruption
+    // fields, checking both standalone and in-place LLVM result writes.
+    for (unsigned raw = 0; raw < 256; ++raw) {
+        for (unsigned present = 0; present <= 2; ++present) {
+            BoolResult input = {
+                12u, static_cast<std::uint8_t>(raw),
+                static_cast<std::uint8_t>(present), 0, 0
+            };
+            trap_compare(input);
+            auto first = trap(input);
+            auto second = trap(first);
+            match(second, first);
+        }
+    }
+    // Offsets around the 8-byte BoolResult must not be scribbled by the
+    // generated IR, including in terminal and invalid-effect paths.
+    struct GuardedTrap {
+        std::uint64_t guard_a = 0xC001D00DABCD1234ull;
+        BoolResult output = {0xFFFFFFFFu, 255, 255, 255, 255};
+        std::uint64_t guard_b = 0x1234DCBA0DD100CCull;
+    };
+    for (auto kind : {EffectKind::Throw, EffectKind::Raise,
+                      EffectKind::Panic, EffectKind::Cancel,
+                      EffectKind::Fatal, EffectKind::ProcessExit}) {
+        BoolResult input = effect(kind, 101);
+        GuardedTrap destination;
+        oreslang_assert_trap_bool_v0(&input, &destination.output);
+        CHECK(destination.guard_a == 0xC001D00DABCD1234ull);
+        CHECK(destination.guard_b == 0x1234DCBA0DD100CCull);
+        match(destination.output, trap(input));
+    }
 
     // Deterministic, reproducible differential fuzz across valid and
     // hostile scalar tags, reserved bytes, payloads, throw flags and

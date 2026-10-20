@@ -1,6 +1,7 @@
 #include "oreslang/backend/NativeAssertScalarIR.hpp"
 #include "oreslang/runtime/NativeAssertScalarAbi.hpp"
 
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
 
@@ -66,6 +67,26 @@ void generate_equal(llvm::Module& module, llvm::StructType* scalar,
     llvm::Value* throws_flag = &*iter++;
     llvm::Value* output = &*iter++;
     llvm::IRBuilder<> b(llvm::BasicBlock::Create(c, "entry", fn));
+    // The exported primitive ABI can be reached from host/FFI callers.
+    // Validate the only representable pointer failures before any input
+    // load or output store. A null output is an invalid no-op; null inputs
+    // with an existing output produce the explicit Fatal status.
+    auto* absent_output = llvm::BasicBlock::Create(c, "null.output", fn);
+    auto* has_output = llvm::BasicBlock::Create(c, "has.output", fn);
+    b.CreateCondBr(b.CreateIsNull(output), absent_output, has_output);
+    b.SetInsertPoint(absent_output);
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_output);
+    auto* absent_input = llvm::BasicBlock::Create(c, "null.input", fn);
+    auto* has_input = llvm::BasicBlock::Create(c, "has.input", fn);
+    b.CreateCondBr(b.CreateOr(b.CreateIsNull(left), b.CreateIsNull(right)),
+                   absent_input, has_input);
+    b.SetInsertPoint(absent_input);
+    auto* fatalOnNull = status(result, 0xFFFFFFFDu, EffectKind::Fatal, 0, 0);
+    auto* nullStore = b.CreateStore(fatalOnNull, output);
+    nullStore->setAlignment(llvm::Align(8));
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_input);
     auto* a = b.CreateLoad(scalar, left, "lhs");
     auto* z = b.CreateLoad(scalar, right, "rhs");
     a->setAlignment(llvm::Align(8));
@@ -125,6 +146,21 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
     llvm::Value* input = &*iter++;
     llvm::Value* output = &*iter++;
     llvm::IRBuilder<> b(llvm::BasicBlock::Create(c, "entry", fn));
+    auto* absent_output = llvm::BasicBlock::Create(c, "null.output", fn);
+    auto* has_output = llvm::BasicBlock::Create(c, "has.output", fn);
+    b.CreateCondBr(b.CreateIsNull(output), absent_output, has_output);
+    b.SetInsertPoint(absent_output);
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_output);
+    auto* absent_input = llvm::BasicBlock::Create(c, "null.input", fn);
+    auto* has_input = llvm::BasicBlock::Create(c, "has.input", fn);
+    b.CreateCondBr(b.CreateIsNull(input), absent_input, has_input);
+    b.SetInsertPoint(absent_input);
+    auto* fatalOnNull = status(result, 0xFFFFFFFDu, EffectKind::Fatal, 0, 0);
+    auto* nullStore = b.CreateStore(fatalOnNull, output);
+    nullStore->setAlignment(llvm::Align(8));
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_input);
     auto* loaded = b.CreateLoad(result, input, "pending");
     loaded->setAlignment(llvm::Align(8));
     auto* code = b.CreateExtractValue(loaded, {0});
@@ -135,7 +171,16 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
     auto* e0 = llvm::ConstantInt::get(i8, 0);
     auto* e1 = llvm::ConstantInt::get(i8, 1);
     auto* is_return = b.CreateICmpEQ(effect, e0);
-    auto* valid = b.CreateICmpULE(effect, llvm::ConstantInt::get(i8, 6));
+    // Generate an explicit allowlist from the native effect ABI, not a
+    // presumed contiguous ordinal interval. If a new effect is inserted or
+    // values become sparse, its admission must be deliberately reviewed.
+    llvm::Value* valid = b.CreateICmpEQ(effect, e0);
+    for (auto kind : {EffectKind::Throw, EffectKind::Raise,
+                      EffectKind::Panic, EffectKind::Cancel,
+                      EffectKind::Fatal, EffectKind::ProcessExit}) {
+        valid = b.CreateOr(valid, b.CreateICmpEQ(effect,
+            llvm::ConstantInt::get(i8, static_cast<unsigned>(kind))));
+    }
     valid = b.CreateAnd(valid, b.CreateICmpEQ(reserved, e0));
     valid = b.CreateAnd(valid, b.CreateICmpULE(present, e1));
     valid = b.CreateAnd(valid, b.CreateICmpULE(value, e1));
