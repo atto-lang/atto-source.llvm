@@ -274,6 +274,53 @@ static void test_uncertain_kernel_close_quarantines_manager_slot() {
     require(manager.test_quarantined_owned_slots() == 1);
 }
 
+static void test_real_broker_uncertain_close_never_mints_cleanup_receipt() {
+    // The real broker transitions logical reclamation with a manager-owned
+    // Linux eventfd. An ambiguous physical close must NOT mark the ledger
+    // reclaimed or revalidate the old authenticated owner/token.
+    NativeFdAuthorityBroker broker;
+    auto original = broker.mint_eventfd(76);
+    require(original.has_value());
+    require(broker.revoke(*original, 76));
+    broker.test_uncertain_next_physical_close();
+    require(!broker.confirm_reclaimed(*original, 76));
+    require(broker.test_quarantined_manager_slots() == 1);
+    require(!broker.confirm_reclaimed(*original, 76));
+    require(!broker.try_watch(*original, 76));
+    require(!broker.signal(*original, 76));
+    require(!broker.drain_eventfd(*original, 76));
+    require(!broker.mint_eventfd(0));
+    // Only the ambiguous operation is quarantined. A distinct independent
+    // owner must retain forward progress and exactly-once reclamation.
+    auto independent = broker.mint_eventfd(77);
+    require(independent.has_value());
+    require(broker.revoke(*independent, 77));
+    require(broker.confirm_reclaimed(*independent, 77));
+    require(!broker.confirm_reclaimed(*independent, 77));
+    require(broker.test_quarantined_manager_slots() == 1);
+}
+
+static void test_uncertain_close_exhaustion_is_fail_closed() {
+    // Every unknown close result burns one manager-owned registration slot.
+    // This test does 256 real eventfd open/close operations, never retaining
+    // a live kernel descriptor or retrying a potentially reused fd number.
+    using Manager = oreslang::runtime::NativeEpollReactorManager;
+    Manager manager(1);
+    constexpr unsigned slots = 256;
+    for (unsigned i = 0; i < slots; ++i) {
+        auto token = manager.open_owned_eventfd();
+        require(token.has_value());
+        manager.test_uncertain_next_owned_close();
+        require(!manager.close_owned_eventfd(*token));
+        require(!manager.close_owned_eventfd(*token));
+        require(!manager.signal_owned_eventfd(*token));
+        require(manager.test_quarantined_owned_slots() == i + 1);
+    }
+    require(!manager.open_owned_eventfd()); // no identity-slot recycling
+    manager.stop();
+    require(manager.test_quarantined_owned_slots() == slots);
+}
+
 static void test_all_orderings_of_signal_cancel_revoke_stop() {
     // All 24 serial orderings at the trusted-host API boundary. Kernel
     // readiness versus cancellation may resolve differently; all outcomes
@@ -335,6 +382,8 @@ int main() {
     test_real_manager_bootstrap_open_denial_is_retry_safe();
     test_real_gate_contention_during_cleanup();
     test_uncertain_kernel_close_quarantines_manager_slot();
+    test_real_broker_uncertain_close_never_mints_cleanup_receipt();
+    test_uncertain_close_exhaustion_is_fail_closed();
     test_all_orderings_of_signal_cancel_revoke_stop();
     return 0;
 }
