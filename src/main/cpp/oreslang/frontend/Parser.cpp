@@ -116,8 +116,10 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        // Contiguous declaration/control operators must remain atomic so
+        // unsupported newer Java syntax receives a targeted fail-closed
+        // diagnostic instead of being misread as scalar arithmetic.
+        if (source_.substr(at_, 2) == "==" || source_.substr(at_, 2) == "->") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -623,7 +625,13 @@ private:
             } while (accept(","));
             require(")");
         }
+        if (accept("->")) {
+            fail("native slim-arrow/end-delimited callable syntax requires typed return/body parity; use the Java/Graal frontend until native lowering is implemented");
+        }
         require(":");
+        if (token_.text == "tuple") {
+            fail("native tuple return types require typed tuple ABI and lowering; the current native frontend is scalar-only");
+        }
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
             const std::string type = identifier();
