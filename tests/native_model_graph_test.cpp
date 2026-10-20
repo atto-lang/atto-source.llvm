@@ -67,6 +67,49 @@ int main() {
     assert(main_fn.result->arguments[1]->kind == oreslang::Expression::Kind::Call);
     assert(main_fn.result->arguments[1]->name == "Identity");
 
+    const std::string negative_source = R"ores(
+        fnc Identity(int input): int {
+            return input;
+        }
+
+        fnc AddDelta(int delta, int input): int {
+            return input + delta;
+        }
+
+        pub define model PriceAdjust(delta: int = -2) as
+            Identity()
+            AddDelta(delta)
+        end
+
+        pub fnc main(): int {
+            return PriceAdjust().run(40);
+        }
+    )ores";
+
+    auto negative = oreslang::parse_program(negative_source);
+    assert(negative.models.size() == 1);
+    assert(negative.models.front().graph_digest ==
+           "dec8b5f587a47648fa8973f5901e9c25e049b08179a44dc682439ee0dab8f53e");
+    assert(negative.model_runs.size() == 1);
+    assert(negative.model_runs.front().configured_graph_digest ==
+           "e52dd64a55cdf48bbe33c2d50a7c3beb9685c6ad0aeb030a44dbac4796bb7f56");
+    assert(negative.model_runs.front().configuration.size() == 1);
+    assert(negative.model_runs.front().configuration.front() == -2);
+
+    const std::string negative_literal_source = R"ores(
+        fnc AddDelta(int delta, int input): int {
+            return input + delta;
+        }
+        define model Fixed as
+            AddDelta(-2)
+        end
+        pub fnc main(): int {
+            return Fixed().run(5);
+        }
+    )ores";
+    auto negative_literal = oreslang::parse_program(negative_literal_source);
+    assert(negative_literal.model_runs.size() == 1);
+
     expect_error("MODEL_NONCONSTANT_CONFIG", R"ores(
         fnc Identity(int input): int { return input; }
         define model Configured(delta: int) as
