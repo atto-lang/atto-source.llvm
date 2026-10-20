@@ -151,12 +151,47 @@ static bool must_abort(Violation bad) {
 }
 #endif
 
+#ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
+static int domain_counter_never_wraps() {
+    ores_actor_arena_test_set_next_domain(UINT64_MAX - 2);
+    OresActorArena* a = ores_actor_arena_open(121, 1, 1, 64, 64);
+    OresActorArena* b = ores_actor_arena_open(122, 1, 1, 64, 64);
+    OresArenaTurn ta = ores_actor_arena_enter(a, 121, 1);
+    CHECK(ta.domain == UINT64_MAX - 2);
+    ores_actor_arena_leave(a, ta);
+    OresArenaTurn tb = ores_actor_arena_enter(b, 122, 1);
+    CHECK(tb.domain == UINT64_MAX - 1);
+    ores_actor_arena_leave(b, tb);
+    ores_actor_arena_retire(a);
+    ores_actor_arena_retire(b);
+    CHECK(ores_actor_arena_try_destroy(a) == 1);
+    CHECK(ores_actor_arena_try_destroy(b) == 1);
+#if defined(__unix__) || defined(__APPLE__)
+    const pid_t pid = fork();
+    CHECK(pid >= 0);
+    if (pid == 0) {
+        struct rlimit no_core = {0,0};
+        (void) setrlimit(RLIMIT_CORE, &no_core);
+        (void) ores_actor_arena_open(123, 1, 1, 64, 64);
+        _exit(99); // Saturated domain allocator MUST abort, never reissue 0/1.
+    }
+    int status = 0;
+    CHECK(waitpid(pid, &status, 0) == pid);
+    CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+#endif
+    return 0;
+}
+#endif
+
 int main() {
     CHECK(happy_path() == 0);
 #if defined(__unix__) || defined(__APPLE__)
     for (int n = static_cast<int>(Violation::StaleAfterDrop);
          n <= static_cast<int>(Violation::StaleTurn); ++n)
         CHECK(must_abort(static_cast<Violation>(n)));
+#endif
+#ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
+    CHECK(domain_counter_never_wraps() == 0);
 #endif
     return 0;
 }
