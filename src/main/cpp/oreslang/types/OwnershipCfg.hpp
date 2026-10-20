@@ -51,7 +51,7 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive, Suspend
     };
     Kind kind;
     std::string place;
@@ -147,6 +147,17 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                     item.second.possible = kMoved;
         return;
     }
+    // Source-to-CFG lowering must emit this barrier at EVERY suspension
+    // point. A suspending continuation cannot carry an unpinned active loan.
+    // The no-place event checks the entire abstract domain, including fields.
+    if (op.kind == Operation::Kind::Suspend) {
+        for (const auto& entry : state) {
+            const auto& loan = entry.second;
+            if (loan.shared_loans || loan.exclusive_loan)
+                violation(entry.first, "borrow crosses suspension");
+        }
+        return;
+    }
     PlaceState& value = place(state, op.place);
     switch (op.kind) {
         case Operation::Kind::Initialize:
@@ -215,6 +226,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
@@ -247,6 +259,23 @@ inline bool join_into(State& target, const State& incoming) {
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    // Bounds apply to the *entire* CFG, including unreachable blocks. Use
+    // subtraction instead of unchecked addition to avoid size_t overflow.
+    constexpr std::size_t kMaxBlocks = 16384;
+    constexpr std::size_t kMaxOperations = 65536;
+    constexpr std::size_t kMaxEdges = 65536;
+    constexpr std::size_t kMaxEntryPlaces = 16384;
+    if (graph.blocks.size() > kMaxBlocks || graph.entry.size() > kMaxEntryPlaces)
+        throw std::runtime_error("ownership violation: CFG exceeds place/block budget");
+    std::size_t op_count = 0;
+    std::size_t edge_count = 0;
+    for (const auto& block : graph.blocks) {
+        if (block.operations.size() > kMaxOperations - op_count ||
+                block.successors.size() > kMaxEdges - edge_count)
+            throw std::runtime_error("ownership violation: CFG exceeds operation/edge budget");
+        op_count += block.operations.size();
+        edge_count += block.successors.size();
+    }
     // Each lexical borrow must own a globally unique provenance token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
