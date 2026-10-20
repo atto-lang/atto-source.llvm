@@ -197,9 +197,32 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Parser-only nominal model graph syntax. No model code is executable until
+// trusted operator signatures, type/effect checks and native lowering exist.
+struct ModelFormal {
+    std::string name;
+    std::string type;
+    std::string default_value; // empty when not supplied
+};
+struct ModelArgument {
+    std::string label; // empty for positional
+    std::string value; // numeric or declared formal symbol
+    bool formal_reference = false;
+};
+struct ModelOperation {
+    std::string name;
+    std::vector<ModelArgument> arguments;
+};
+struct ModelDecl {
+    std::string name;
+    std::vector<ModelFormal> formals;
+    std::vector<ModelOperation> operations;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
+    std::vector<ModelDecl> models;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
@@ -208,6 +231,9 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32 and source-level await/suspension.
+// Syntax/AST inspection only: model declarations are not native-executable.
+std::vector<ModelDecl> parse_model_declarations(std::string_view source);
+
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
