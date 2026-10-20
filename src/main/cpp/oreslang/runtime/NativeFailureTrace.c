@@ -69,19 +69,32 @@ int ores_native_failure_trace_capture(
             || !ores_native_store_handle_valid(current_execution))
         return 0;
 
+    /*
+     * The current execution is authoritative, unlike a missing older ancestry
+     * node which the snapshot reports as logical.corrupt. Pin it across the
+     * multi-lock snapshot so a concurrent owner release cannot turn a valid
+     * failure site into a stale-root success.
+     */
+    if (!ores_native_execution_context_store_retain(
+            executions, current_execution))
+        return 0;
+
     OresNativeFailureTraceReport result = {0};
     result.kind = kind;
     result.code = code;
     result.current_execution = current_execution;
-    if (!ores_native_logical_trace_snapshot(
-            executions,
-            continuations,
-            current_execution,
-            execution_frames,
-            execution_capacity,
-            continuation_frames,
-            continuation_capacity,
-            &result.logical))
+    const int captured = ores_native_logical_trace_snapshot(
+        executions,
+        continuations,
+        current_execution,
+        execution_frames,
+        execution_capacity,
+        continuation_frames,
+        continuation_capacity,
+        &result.logical);
+    const int released = ores_native_execution_context_store_release(
+        executions, current_execution);
+    if (!captured || !released)
         return 0;
     *out = result;
     return 1;
