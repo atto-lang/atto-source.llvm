@@ -120,18 +120,32 @@ inline ReachabilityResult analyze_reachability(
     std::map<std::string, const Function*> functions;
     std::map<std::string, const ActorDecl*> actors;
     std::map<std::string, const ClassDecl*> classes;
+    std::map<std::string, const CooperativeScalarLoop*> cooperative_loops;
+    std::set<std::string> semantic_names;
 
     for (const auto& fn : program.functions) {
         if (!functions.emplace(fn.name, &fn).second)
             throw std::runtime_error("native reachability rejects overloaded function name: " + fn.name);
+        if (!semantic_names.insert(fn.name).second)
+            throw std::runtime_error("native reachability semantic symbol collision: " + fn.name);
     }
     for (const auto& actor : program.actors) {
         if (!actors.emplace(actor.name, &actor).second)
             throw std::runtime_error("native reachability rejects duplicate actor name: " + actor.name);
+        if (!semantic_names.insert(actor.name).second)
+            throw std::runtime_error("native reachability semantic symbol collision: " + actor.name);
     }
     for (const auto& klass : program.classes) {
         if (!classes.emplace(klass.name, &klass).second)
             throw std::runtime_error("native reachability rejects duplicate class name: " + klass.name);
+        if (!semantic_names.insert(klass.name).second)
+            throw std::runtime_error("native reachability semantic symbol collision: " + klass.name);
+    }
+    for (const auto& loop : program.cooperative_loops) {
+        if (!cooperative_loops.emplace(loop.name, &loop).second ||
+                !semantic_names.insert(loop.name).second)
+            throw std::runtime_error(
+                    "native reachability cooperative-loop symbol collision: " + loop.name);
     }
 
     std::deque<std::pair<char, std::string>> work;
@@ -166,6 +180,14 @@ inline ReachabilityResult analyze_reachability(
             mark_function(name);
             root_symbols.insert(reachability_detail::qualify(program, name));
         }
+    }
+
+    // Cooperative scalar loops lower to externally callable init/resume/cancel
+    // symbols. Until a host-import contract can prove otherwise, every such
+    // loop is an explicit semantic root.
+    for (const auto& [name, loop] : cooperative_loops) {
+        (void)loop;
+        root_symbols.insert(reachability_detail::qualify(program, name));
     }
 
     while (!work.empty()) {
@@ -230,6 +252,10 @@ inline ReachabilityResult analyze_reachability(
         (void)klass;
         (retained_classes.count(name) ? retained : removed)
                 .insert(reachability_detail::qualify(program, name));
+    }
+    for (const auto& [name, loop] : cooperative_loops) {
+        (void)loop;
+        retained.insert(reachability_detail::qualify(program, name));
     }
 
     return ReachabilityResult{
