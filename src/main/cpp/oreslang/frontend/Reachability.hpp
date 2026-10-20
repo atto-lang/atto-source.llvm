@@ -299,8 +299,10 @@ inline ReachabilityResult analyze_reachability(
     };
 
     for (const auto& root : explicit_function_roots) {
-        mark_function(root);
-        root_symbols.insert(reachability_detail::qualify(program, root));
+        const std::string slot = resolve_function_root(root);
+        mark_function(slot);
+        root_symbols.insert(reachability_detail::qualify(
+                program, function_semantic_name(slot, *functions.at(slot))));
     }
     for (const auto& root : explicit_actor_roots) {
         mark_actor(root);
@@ -311,10 +313,11 @@ inline ReachabilityResult analyze_reachability(
         root_symbols.insert(reachability_detail::qualify(program, root));
     }
     if (preserve_exported_api) {
-        for (const auto& [name, fn] : functions) {
+        for (const auto& [slot, fn] : functions) {
             if (!fn->exported) continue;
-            mark_function(name);
-            root_symbols.insert(reachability_detail::qualify(program, name));
+            mark_function(slot);
+            root_symbols.insert(reachability_detail::qualify(
+                    program, function_semantic_name(slot, *fn)));
         }
     }
 
@@ -322,10 +325,11 @@ inline ReachabilityResult analyze_reachability(
     // admitted, codegen replaces the source function with externally callable
     // init/resume/cancel entrypoints. It is therefore a semantic host root even
     // when the source declaration is private and there is no ordinary caller.
-    for (const auto& [name, fn] : functions) {
+    for (const auto& [slot, fn] : functions) {
         if (!fn->scalar_while) continue;
-        mark_function(name);
-        root_symbols.insert(reachability_detail::qualify(program, name));
+        mark_function(slot);
+        root_symbols.insert(reachability_detail::qualify(
+                program, function_semantic_name(slot, *fn)));
     }
 
     // Cooperative scalar loops lower to externally callable init/resume/cancel
@@ -384,10 +388,11 @@ inline ReachabilityResult analyze_reachability(
     std::set<std::string> retained;
     std::set<std::string> removed;
 
-    for (const auto& [name, fn] : functions) {
-        (void)fn;
-        (retained_functions.count(name) ? retained : removed)
-                .insert(reachability_detail::qualify(program, name));
+    for (const auto& [slot, fn] : functions) {
+        const std::string semantic =
+                function_semantic_name(slot, *fn);
+        (retained_functions.count(slot) ? retained : removed)
+                .insert(reachability_detail::qualify(program, semantic));
     }
     for (const auto& [name, actor] : actors) {
         (void)actor;
