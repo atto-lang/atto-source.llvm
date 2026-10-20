@@ -9,7 +9,6 @@
 #include "llvm/IR/Type.h"
 
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 
 namespace oreslang::backend {
@@ -40,10 +39,12 @@ inline llvm::Value* emit_checked_actor_ref32_address(
         llvm::Module& module, llvm::IRBuilder<>& builder,
         const ActorRef32Access& access, llvm::Type* object_type,
         std::uint64_t access_bytes) {
+    // Initial compiler slice only handles i64 object payloads. Never let a
+    // caller understate the actual load/store width when validating bounds.
+    // Other types need an independently verified DataLayout-sized lowering.
     if (!access.field_address || !access.actor_arena_base ||
         !access.actor_arena_span || !access.original_proof ||
-        !object_type || !access_bytes ||
-        access_bytes > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        !object_type || !object_type->isIntegerTy(64) || access_bytes != 8)
         throw std::invalid_argument("missing original actor reference proof or invalid access");
 
     llvm::LLVMContext& context = module.getContext();
