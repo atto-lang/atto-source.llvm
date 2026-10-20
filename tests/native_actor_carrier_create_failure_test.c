@@ -25,6 +25,13 @@ static void deliver(void* opaque, size_t actor, uint64_t message) {
         atomic_fetch_add(&s->other_executed, 1);
     }
 }
+static void unexpected_panic(
+        void* opaque, size_t actor, OresNativeActorTerminalFailure failure) {
+    (void)opaque;
+    (void)actor;
+    (void)failure;
+    abort();
+}
 static void until(atomic_int* flag) {
     for (int spins = 0; spins < 2000000 && !atomic_load(flag); ++spins)
         sched_yield();
@@ -67,7 +74,7 @@ int main(void) {
      * idle until teardown, while every later admission surface stays closed. */
     OresNativeActorScheduler* partial =
         ores_native_actor_scheduler_open_typed_control(
-            2, 1, 2, deliver, deliver, NULL, &state);
+            2, 1, 2, deliver, deliver, unexpected_panic, &state);
     require(partial != NULL);
     ores_native_actor_scheduler_test_fail_create_after(1);
     require(!ores_native_actor_scheduler_prestart_realtime(partial));
@@ -84,8 +91,14 @@ int main(void) {
     require(!ores_native_actor_scheduler_submit(partial, 0, 77));
     require(!ores_native_actor_scheduler_publish_control(
         partial, partial_parent, 88));
+    OresNativeActorTerminalFailure partial_failure = {
+        ORES_NATIVE_CONTROL_PANIC, partial_child, 123, 456
+    };
+    require(!ores_native_actor_scheduler_publish_failure(
+        partial, partial_parent, partial_failure));
     require(ores_native_actor_scheduler_accepted(partial) == 0);
     require(ores_native_actor_scheduler_control_completed(partial) == 0);
+    require(ores_native_actor_scheduler_rejected(partial) == 4);
     require(ores_native_actor_scheduler_started_carriers(partial) == 1);
 
     ores_native_actor_scheduler_retire(partial);
