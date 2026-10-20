@@ -7,6 +7,7 @@
 #include <string_view>
 #include <functional>
 #include <iostream>
+#include <limits>
 
 static void check(bool condition, const std::string& label) {
     if (!condition) throw std::runtime_error("native model parser test: " + label);
@@ -118,6 +119,37 @@ int main() {
         }
         check(oreslang::model::next_graph_generation(7) == 8, "graph generation increment");
         check(oreslang::model::next_parameter_version(11) == 12, "parameter version increment");
+        auto expect_fence = [&](oreslang::model::RunStamp candidate, std::string_view code) {
+            try {
+                (void)oreslang::model::validate_and_commit(owner, candidate, {});
+                throw std::runtime_error("model fence unexpectedly accepted");
+            } catch (const std::exception& e) {
+                check(std::string_view(e.what()).find(code) != std::string_view::npos,
+                      "wrong model fence diagnostic");
+            }
+        };
+        auto wrong_graph = run; wrong_graph.graph_digest = std::string(64, 'c');
+        expect_fence(wrong_graph, "MODEL_INSTANCE_GRAPH_MISMATCH");
+        auto wrong_generation = run; wrong_generation.graph_generation = 8;
+        expect_fence(wrong_generation, "MODEL_GRAPH_GENERATION_MISMATCH");
+        auto wrong_instance = run; wrong_instance.instance_id = "instance-2";
+        expect_fence(wrong_instance, "MODEL_INSTANCE_ID_MISMATCH");
+        auto wrong_profile = run; wrong_profile.execution_profile_digest = std::string(64, 'd');
+        expect_fence(wrong_profile, "MODEL_EXECUTION_PROFILE_MISMATCH");
+        try {
+            (void)oreslang::model::next_graph_generation(std::numeric_limits<std::int64_t>::max());
+            throw std::runtime_error("graph generation wrapped");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_GRAPH_GENERATION_OVERFLOW") != std::string_view::npos,
+                  "wrong graph generation overflow diagnostic");
+        }
+        try {
+            (void)oreslang::model::next_parameter_version(std::numeric_limits<std::int64_t>::max());
+            throw std::runtime_error("parameter version wrapped");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_PARAMETER_VERSION_OVERFLOW") != std::string_view::npos,
+                  "wrong parameter version overflow diagnostic");
+        }
 
         const auto cfg_a = oreslang::parse_model_declarations(
             "define model X as Apply(1) end");
