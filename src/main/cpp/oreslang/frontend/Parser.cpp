@@ -1770,6 +1770,15 @@ private:
                 if (!live_actors.count(fn.ready_await_actor))
                     throw std::runtime_error(
                         "await get_ready requires a live direct ActorRef receiver");
+                /*
+                 * The first vertical slice evaluates the final scalar result on
+                 * the root continuation before trusted-main stop. Keep that
+                 * movement observationally inert until stop itself can be
+                 * lowered into nonblocking continuation cleanup.
+                 */
+                if (contains_callable_invocation(fn.result.get()))
+                    throw std::runtime_error(
+                        "await get_ready requires side-effect-free scalar return");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
