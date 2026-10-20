@@ -990,7 +990,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
-        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
     target_include_directories(oreslang-source-actor-await-trace-runtime-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-source-actor-await-trace-runtime-test PRIVATE
