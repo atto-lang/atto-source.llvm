@@ -132,6 +132,14 @@ pub fnc main(): int {
 }
 """
 
+RT_PRIVATE_ENTRY = """fnc control(int value): int {
+  return value + 1;
+}
+pub fnc main(): int {
+  return 42;
+}
+"""
+
 
 def compile_ir(compiler, source, shaken, roots=(), extra=()):
     with tempfile.TemporaryDirectory(prefix="oreslang-tree-shake-source-") as td:
@@ -281,6 +289,22 @@ def main():
     require(b"oreslang_int_array_try_new" in live_array.stdout,
             "live Array allocation feature was removed")
     link_and_run(args.clang, live_array.stdout, 42, "NativeIntArrayRegion.c")
+
+    rt_rooted = compile_ir(
+        args.compiler,
+        RT_PRIVATE_ENTRY,
+        True,
+        ("main",),
+        ("--profile=native-hard-rt", "--rt-entry=control/1"),
+    )
+    require(
+        rt_rooted.returncode == 0,
+        "hard-RT + tree-shake compile failed: " + repr(rt_rooted.stderr[:1024])
+    )
+    require(
+        b"@control(" in rt_rooted.stdout,
+        "admitted private hard-RT entry was removed by tree shaking"
+    )
 
     wasm_hidden = compile_ir(
         args.compiler,
