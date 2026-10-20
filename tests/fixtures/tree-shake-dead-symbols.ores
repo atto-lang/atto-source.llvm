@@ -1,0 +1,24 @@
+// Tree-shaking fixture: every dead declaration is semantically valid but unreachable.
+define class DeadBox as
+  pub let int value = 99;
+end
+
+define actor DeadWorker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+
+fnc dead_helper(): int {
+  return 99;
+}
+
+fnc live_helper(): int {
+  return 42;
+}
+
+pub fnc main(): int {
+  return live_helper();
+}
