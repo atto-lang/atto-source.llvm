@@ -70,9 +70,10 @@ typedef struct {
     OresNativeAllocationDomainRef allocation;
     /*
      * Logical ancestry is store-backed and generation checked. These are never
-     * raw native stack or actor-heap pointers. The continuation link is weak:
-     * the ContinuationStore owns its own lifetime and pins the originating
-     * execution while the continuation is live.
+     * raw native stack or actor-heap pointers. continuation is the weak OUTGOING
+     * suspension created by this execution; an incoming continuation belongs to
+     * parent_execution and is also carried explicitly by OresNativeSuspensionLink.
+     * The ContinuationStore pins its originating execution while live.
      */
     OresNativeExecutionHandle parent_execution;
     OresNativeContinuationHandle continuation;
