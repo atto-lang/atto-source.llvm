@@ -83,6 +83,23 @@ class NativeNioWorktreeTests(unittest.TestCase):
                 self.assertNotIn(
                     'python3 -I -B scripts/verify-native-nio-source-local.py',
                     source)
+                # The descriptor ownership workflow must perform its
+                # immutable, raw-blob-verified postflight check AFTER all
+                # executed test suites, not merely repeat two preflight
+                # loaders that could leave compilation unchecked.
+                if path.endswith('native-nio-ownership-no-llvm.yml'):
+                    last_test = source.rfind(
+                        'timeout 90s /tmp/oreslang-nio-fd-close-eintr-exact-head')
+                    last_verifier = source.rfind(
+                        'git cat-file blob "$approved"')
+                    success_receipt = source.rfind(
+                        'NATIVE_NIO_EXACT_SOURCE_PASS attempts=3')
+                    self.assertGreaterEqual(last_test, 0)
+                    self.assertGreater(last_verifier, last_test)
+                    self.assertGreater(success_receipt, last_verifier)
+                    self.assertIn(
+                        'NIO postflight verifier differs from committed Git blob',
+                        source)
                 if checks_test_blob:
                     self.assertIn(
                         'git hash-object --no-filters -- "$test_path"', source)
