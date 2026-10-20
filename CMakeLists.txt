@@ -668,7 +668,24 @@ if(BUILD_TESTING)
         --ir-absent "oreslang_owned_i64_region_open"
         --ir-absent "oreslang_owned_i64_region_new"
         --ir-absent "oreslang_owned_i64_region_close")
+    oreslang_contract_test(native_tree_shake_keeps_live_owned_region
+        owned-native-region-main.ores
+        --experimental-owned-int
+        --tree-shake
+        --ir "@oreslang_owned_i64_region_open"
+        --ir "@oreslang_owned_i64_region_new")
+    oreslang_contract_test(native_tree_shake_keeps_live_array_runtime
+        tree-shake-live-array.ores
+        --tree-shake
+        --ir "@oreslang_int_array_try_region_open"
+        --ir "@oreslang_int_array_try_new")
     if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_live_array_executes
+            tree-shake-live-array.ores
+            --tree-shake
+            --ir "@oreslang_int_array_try_region_open"
+            --run 42 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
         oreslang_contract_test(native_tree_shake_preserves_executable_behavior
             tree-shake-dead-symbols.ores
             --tree-shake
