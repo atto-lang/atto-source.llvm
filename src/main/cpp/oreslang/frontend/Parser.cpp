@@ -71,7 +71,7 @@ std::size_t skip_shape_trivia(std::string_view source, std::size_t at) {
         while (at < source.size() &&
                std::isspace(static_cast<unsigned char>(source[at]))) ++at;
         if (source.substr(at, 2) == "//") {
-            const auto end = source.find('\\n', at + 2);
+            const auto end = source.find('\n', at + 2);
             at = end == std::string_view::npos ? source.size() : end;
             continue;
         }
