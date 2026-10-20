@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -158,10 +159,36 @@ inline void encode_constant(Bytes& out, const Constant& c) {
 inline void encode_port(Bytes& out, const Port& port) {
     if (std::holds_alternative<NominalPort>(port)) {
         const auto& p = std::get<NominalPort>(port);
+        if (p.bytes > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+            fail("MODEL_SIZE_OVERFLOW");
         out.u8(1); out.string(p.type_abi); out.u64(p.bytes); return;
     }
     const auto& p = std::get<BufferPort>(port);
     if (p.shape.size() > 8) fail("MODEL_INVALID_PORT");
+    std::uint64_t element_bytes = 0;
+    if (p.dtype == "bool") element_bytes = 1;
+    else if (p.dtype == "i32" || p.dtype == "f32") element_bytes = 4;
+    else if (p.dtype == "i64" || p.dtype == "f64") element_bytes = 8;
+    else fail("MODEL_INVALID_PORT");
+    const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    bool zero_extent = false;
+    for (auto extent : p.shape) {
+        if (extent > maximum) fail("MODEL_SIZE_OVERFLOW");
+        if (extent == 0) zero_extent = true;
+    }
+    if (!zero_extent) {
+        for (auto extent : p.shape) {
+            if (extent > maximum / element_bytes) fail("MODEL_SIZE_OVERFLOW");
+            element_bytes *= extent;
+        }
+    }
+    if (p.unit) {
+        if (p.unit->size() > 40) fail("MODEL_INVALID_PORT");
+        for (char c : *p.unit)
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '_' || c == '/'
+                    || c == '-' || c == '^')) fail("MODEL_INVALID_PORT");
+    }
     out.u8(0);
     out.u8(static_cast<std::uint8_t>(ordinal(p.dtype,
         {"bool","i32","i64","f32","f64"}, "MODEL_INVALID_PORT")));
@@ -192,6 +219,8 @@ inline bool same_port(const Port& a, const Port& b) {
 inline std::vector<std::uint8_t> canonical_bytes(const Graph& graph) {
     if (graph.version != 1 || graph.nodes.empty() || graph.outputs.empty())
         fail("MODEL_INVALID_RESOLVED_GRAPH");
+    if (graph.nodes.size() > 65536 || graph.outputs.size() > 65536)
+        fail("MODEL_GRAPH_BUDGET");
     Bytes out;
     const std::string prefix("ORESLANG-MODEL-GRAPH-V1\0", 24);
     out.data.insert(out.data.end(), prefix.begin(), prefix.end());
