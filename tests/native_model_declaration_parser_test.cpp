@@ -136,6 +136,19 @@ int main() {
         check(pv1::digest(resolved_literal) == graph_id,
               "parsed literal source lowers to shared graph digest");
 
+        auto wrong_typed_registry = resolved_registry;
+        wrong_typed_registry.at("ApplyTaxBps").inputs = {
+            pv1::NominalPort{"finance.Weight@v1", 16}
+        };
+        try {
+            (void)rv1::lower(resolved_literal_source[0],
+                             "finance.PriceEstimate@v1", wrong_typed_registry);
+            throw std::runtime_error("resolved lowering released ill-typed model graph");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()) == "MODEL_PORT_TYPE_MISMATCH",
+                  "typed predecessor mismatch must fail inside lowering");
+        }
+
         const auto resolved_default_source = oreslang::parse_model_declarations(
             "define model PriceEstimate(tax_bps: int = 1500) as "
             "PriceInput() ApplyTaxBps(tax_bps) RoundCents() end");
