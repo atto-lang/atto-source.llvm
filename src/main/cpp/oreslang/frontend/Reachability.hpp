@@ -11,15 +11,60 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace oreslang {
 
+enum class ReachabilityReason {
+    RootEntry,
+    RootExplicit,
+    RootPublicApi,
+    RootTargetAbi,
+    ContinuationAbi,
+    DirectCall,
+    ActorSpawn,
+    ClassReference,
+    ActorBody,
+    ClassInitializer,
+    ExportedOverloadAbi
+};
+
+struct ReachabilityRootReason {
+    std::string symbol;
+    ReachabilityReason reason;
+};
+
+struct ReachabilityEdge {
+    std::string from;
+    std::string to;
+    ReachabilityReason reason;
+};
+
+inline const char* reachability_reason_name(ReachabilityReason reason) {
+    switch (reason) {
+        case ReachabilityReason::RootEntry: return "ROOT_ENTRY";
+        case ReachabilityReason::RootExplicit: return "ROOT_EXPLICIT";
+        case ReachabilityReason::RootPublicApi: return "ROOT_PUBLIC_API";
+        case ReachabilityReason::RootTargetAbi: return "ROOT_TARGET_ABI";
+        case ReachabilityReason::ContinuationAbi: return "CONTINUATION_ABI";
+        case ReachabilityReason::DirectCall: return "DIRECT_CALL";
+        case ReachabilityReason::ActorSpawn: return "ACTOR_SPAWN";
+        case ReachabilityReason::ClassReference: return "CLASS_REFERENCE";
+        case ReachabilityReason::ActorBody: return "ACTOR_BODY";
+        case ReachabilityReason::ClassInitializer: return "CLASS_INITIALIZER";
+        case ReachabilityReason::ExportedOverloadAbi: return "EXPORTED_OVERLOAD_ABI";
+    }
+    throw std::runtime_error("unknown native reachability reason");
+}
+
 struct ReachabilityResult {
     std::vector<std::string> roots;
     std::vector<std::string> retained_symbols;
     std::vector<std::string> removed_symbols;
+    std::vector<ReachabilityRootReason> root_reasons{};
+    std::vector<ReachabilityEdge> edges{};
 };
 
 enum class RuntimeFeature {
