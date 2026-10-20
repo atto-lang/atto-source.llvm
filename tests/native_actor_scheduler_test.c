@@ -9,6 +9,13 @@
 #define ACTORS 5
 #define EACH 200
 static void check(int ok) { if (!ok) abort(); }
+static void check_empty_terminal(const OresNativeActorTerminalState* t) {
+    check(t->actor.scheduler_domain == 0 && t->actor.actor_slot == 0
+        && t->actor.generation == 0 && t->kind == 0
+        && t->accepted_user_messages == 0 && t->processed_user_messages == 0
+        && t->abandoned_user_messages == 0
+        && t->abandoned_control_messages == 0);
+}
 typedef struct {
     atomic_int active[ACTORS], peak[ACTORS], next[ACTORS], total, errors;
     atomic_int hold;
@@ -37,9 +44,14 @@ int main(void) {
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
         check(refs[a].scheduler_domain && ores_native_actor_scheduler_poll_ready(scheduler, refs[a]));
-        OresNativeActorTerminalState premature = {0};
+        OresNativeActorTerminalState premature = {
+            .actor = refs[a],
+            .kind = ORES_NATIVE_TERMINATION_STOPPED,
+            .accepted_user_messages = UINT64_MAX
+        };
         check(!ores_native_actor_scheduler_terminal_state(
             scheduler, refs[a], &premature));
+        check_empty_terminal(&premature);
         check(!ores_native_actor_scheduler_spawn(scheduler, (size_t)a).scheduler_domain);
     }
     for (int n = 0; n < EACH; ++n)
@@ -80,6 +92,19 @@ int main(void) {
         ++stale_terminal.generation;
         check(!ores_native_actor_scheduler_terminal_state(
             scheduler, stale_terminal, &repeated));
+        check_empty_terminal(&repeated);
+        repeated = terminal;
+        check(!ores_native_actor_scheduler_terminal_state(
+            NULL, refs[a], &repeated));
+        check_empty_terminal(&repeated);
+        OresNativeActorRef foreign = refs[a];
+        foreign.scheduler_domain++;
+        repeated = terminal;
+        check(!ores_native_actor_scheduler_terminal_state(
+            scheduler, foreign, &repeated));
+        check_empty_terminal(&repeated);
+        check(!ores_native_actor_scheduler_terminal_state(
+            scheduler, refs[a], NULL));
     }
     ores_native_actor_scheduler_retire(scheduler);
     check(!ores_native_actor_scheduler_submit(scheduler, 0, 999));
