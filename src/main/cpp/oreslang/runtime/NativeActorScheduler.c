@@ -369,6 +369,9 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
     if (!s) return 0;
     lock(s);
     int enabled = s->priority_inheritance_enabled;
+    for (size_t i = 0; enabled && i < s->actor_count; ++i)
+        enabled = ores_execution_priority_inheritance_enabled(
+            &s->actors[i].authority);
     unlock(s);
     return enabled;
 }
