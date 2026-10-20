@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <stdexcept>
 #include <type_traits>
@@ -115,7 +116,9 @@ struct ClaimedGpuBinding {
  * mandatory at actual submission. */
 struct QueueClaimedGpuBinding {
     ClaimedGpuBinding claim;
-    GpuQueueLocation queue;
+    /* Immutable after selection; cannot be edited into another queue
+     * between metadata preflight and provider submission. */
+    std::unique_ptr<const GpuQueueLocation> queue;
 };
 static_assert(std::is_nothrow_move_constructible_v<QueueClaimedGpuBinding>,
               "post-fence queue claim return must not throw");
@@ -152,7 +155,7 @@ inline QueueClaimedGpuBinding claim_gpu_for_queue(
     validate_gpu_queue(binding, queue);
     // Copying strings may throw: snapshot the selected queue BEFORE
     // committing either buffer to IN_FLIGHT; no post-fence allocations.
-    GpuQueueLocation selected = queue;
+    auto selected = std::make_unique<const GpuQueueLocation>(queue);
     auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
             binding.bytes_per_buffer, &binding.input, &binding.output);
     return QueueClaimedGpuBinding{
