@@ -145,6 +145,24 @@ int main() {
                   "1dcfd1569621a30e53c969b9bf0e2add7fe94a04c2bf4474fae821555996d21b",
               "model override resolves before graph hashing");
 
+        const rv1::Registry external_registry = {
+            {"ValidatePrice", portable_sig('1', {}, {price})},
+            {"ApplyTaxBps", portable_sig('2', {"i64"}, {price})},
+            {"RoundCents", portable_sig('3', {}, {price})}
+        };
+        const auto external_source = oreslang::parse_model_declarations(
+            "define model PriceTransform as ValidatePrice() ApplyTaxBps(1500) RoundCents() end");
+        const auto external_graph = rv1::lower(
+            external_source[0], "finance.PriceTransform@v1", external_registry);
+        check(pv1::canonical_bytes(external_graph).size() == 577,
+              "external input graph byte length");
+        check(pv1::digest(external_graph) ==
+                  "069288245a672efe264581df42bfec4686192fdb210dca8ce7da7dda563ecac3",
+              "external run input graph digest");
+        check(external_graph.nodes[0].signature.inputs.size() == 1 &&
+                  external_graph.nodes[0].inputs.empty(),
+              "first signature input is external run boundary");
+
         const std::string profile = derived_profile;
         const oreslang::model::ModelOwner owner{
             "finance.PriceEstimate@v1", graph_id, 7, "instance-1", 11, profile
