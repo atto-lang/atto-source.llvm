@@ -62,7 +62,7 @@ inline void validate_stamp(const RunStamp& stamp) {
     require_fence_digest(stamp.execution_profile_digest, "MODEL_INVALID_PROFILE_DIGEST");
 }
 
-inline std::int64_t next_graph_generation(std::int64_t current) {
+inline std::string plan_cache_key(const std::string& graph_digest, const std::string& profile_digest) {\n    require_fence_digest(graph_digest, "MODEL_INVALID_GRAPH_DIGEST");\n    require_fence_digest(profile_digest, "MODEL_INVALID_EXECUTION_PROFILE");\n    return "ores-model-plan-v1:" + graph_digest + ":" + profile_digest;\n}\n\ninline std::int64_t next_graph_generation(std::int64_t current) {
     if (current < 0) throw std::runtime_error("MODEL_INVALID_GRAPH_GENERATION");
     if (current == std::numeric_limits<std::int64_t>::max())
         throw std::runtime_error("MODEL_GRAPH_GENERATION_OVERFLOW");
