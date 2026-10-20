@@ -94,10 +94,14 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         caps = {nested.send, false, false};
         break;
     }
-    case AutoTypeKind::Mutex:
-    case AutoTypeKind::RwLock: {
+    case AutoTypeKind::Mutex: {
         const auto nested = infer_auto_traits(exactly_one(type));
         caps = {nested.send, nested.send, false};
+        break;
+    }
+    case AutoTypeKind::RwLock: {
+        const auto nested = infer_auto_traits(exactly_one(type));
+        caps = {nested.send, nested.send && nested.sync, false};
         break;
     }
     case AutoTypeKind::Dyn:

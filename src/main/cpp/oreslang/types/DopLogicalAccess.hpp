@@ -2,7 +2,8 @@
 
 #include "oreslang/runtime/DopLayout.hpp"
 
-#include <cstddef>\n#include <cstdint>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>

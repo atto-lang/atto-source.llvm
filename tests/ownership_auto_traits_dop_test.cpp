@@ -59,6 +59,12 @@ int main() {
         wrap(AutoTypeKind::RefCell, scalar()));
     REQUIRE(refcell.send && !refcell.sync && !refcell.share);
 
+    const auto cell_type = wrap(AutoTypeKind::RefCell, scalar());
+    const auto mutex_cell = oreslang::types::infer_auto_traits(wrap(AutoTypeKind::Mutex, cell_type));
+    const auto rwlock_cell = oreslang::types::infer_auto_traits(wrap(AutoTypeKind::RwLock, cell_type));
+    REQUIRE(mutex_cell.send && mutex_cell.sync && !mutex_cell.share);
+    REQUIRE(rwlock_cell.send && !rwlock_cell.sync && !rwlock_cell.share);
+
     AutoType dyn;
     dyn.kind = AutoTypeKind::Dyn;
     dyn.shareable_domain = true;
