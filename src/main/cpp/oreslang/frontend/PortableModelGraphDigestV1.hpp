@@ -146,6 +146,8 @@ inline void encode_constant(Bytes& out, const Constant& c) {
     } else if (c.kind == "f64bits") {
         if (c.value.size() != 18 || c.value[0] != '0' || c.value[1] != 'x')
             fail("MODEL_INVALID_CONST");
+        for (std::size_t i = 2; i < c.value.size(); ++i)
+            if (hex_nibble(c.value[i]) < 0) fail("MODEL_INVALID_CONST");
         std::uint64_t bits = 0;
         auto result = std::from_chars(c.value.data() + 2, c.value.data() + 18, bits, 16);
         if (result.ec != std::errc{} || result.ptr != c.value.data() + 18)
