@@ -17,7 +17,7 @@ struct OresActorArena {
     uint64_t domain, owner, incarnation, epoch, next_loan_nonce;
     size_t slots, slot_bytes, scratch_bytes, scratch_top;
     uint32_t loans;
-    int active, retiring;
+    int active, retiring, prefaulted;
     Slot* meta;
     /* All metadata is preallocated, so slot admission is O(1) and makes
      * no malloc/free calls during an actor turn. */
@@ -60,6 +60,21 @@ static size_t checked_mul(size_t a, size_t b) {
     if (a && b > SIZE_MAX / a) deny();
     return a * b;
 }
+/* A volatile touch prevents the compiler from removing startup residency
+ * preparation merely because calloc returned zero-filled storage. A 64-byte
+ * stride is intentionally much smaller than supported OS page sizes. */
+static void prefault_region(void* memory, size_t bytes) {
+    if (!memory || !bytes) return;
+    volatile unsigned char* p = (volatile unsigned char*) memory;
+    for (size_t i = 0; i < bytes; i += 64u) {
+        const unsigned char value = p[i];
+        p[i] = value;
+    }
+    {
+        const unsigned char value = p[bytes - 1u];
+        p[bytes - 1u] = value;
+    }
+}
 OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
                                        size_t slots, size_t slot_bytes, size_t scratch_bytes) {
     if (!owner || !incarnation || !slots || slots > ORES_MAX_SLOTS
@@ -92,6 +107,28 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
         a->free_slots[i] = slots - 1 - i;
     }
     return a;
+}
+int ores_actor_arena_prefault(OresActorArena* a) {
+    enter_lock(a);
+    if (a->active || a->retiring) {
+        leave_lock(a);
+        return 0;
+    }
+    prefault_region(a->meta, checked_mul(a->slots, sizeof(Slot)));
+    prefault_region(a->free_slots, checked_mul(a->slots, sizeof(size_t)));
+    prefault_region(a->slab, checked_mul(a->slots, a->slot_bytes));
+    prefault_region(a->scratch, a->scratch_bytes);
+    prefault_region(a->entries, sizeof(a->entries));
+    a->prefaulted = 1;
+    leave_lock(a);
+    return 1;
+}
+int ores_actor_arena_is_prefaulted(OresActorArena* a) {
+    int prefaulted;
+    enter_lock(a);
+    prefaulted = a->prefaulted;
+    leave_lock(a);
+    return prefaulted;
 }
 OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
                                      uint64_t incarnation) {
