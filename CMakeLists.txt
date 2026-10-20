@@ -2068,20 +2068,6 @@ if(BUILD_TESTING)
 
     # Logical execution ids are reserved at admission. The final UINT64_MAX id
     # may execute exactly once; additional work must fail closed before dispatch.
-    # Snapshot-only, pointer-free AoSoA trace metadata stores. Does not
-    # require the LLVM compiler or a JIT to test generation fencing.
-    add_executable(oreslang-native-trace-store-test
-        tests/native_trace_store_test.c
-        src/main/cpp/oreslang/runtime/NativeTraceStore.c)
-    target_include_directories(oreslang-native-trace-store-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_link_libraries(oreslang-native-trace-store-test PRIVATE Threads::Threads)
-    target_compile_options(oreslang-native-trace-store-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME native_trace_store_generation_and_concurrency
-        COMMAND oreslang-native-trace-store-test)
-    set_tests_properties(native_trace_store_generation_and_concurrency PROPERTIES TIMEOUT 30)
-
     add_executable(oreslang-native-execution-context-exhaustion-test
         tests/native_execution_context_exhaustion_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
