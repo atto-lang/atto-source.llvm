@@ -1,0 +1,10 @@
+// Tree shaking should remove the owned-region runtime when its only user is unreachable.
+fnc dead_owned_region(): int {
+  const a: owned int = 7;
+  const value: int = a;
+  return value;
+}
+
+pub fnc main(): int {
+  return 42;
+}
