@@ -150,6 +150,26 @@ int main() {
                   "1dcfd1569621a30e53c969b9bf0e2add7fe94a04c2bf4474fae821555996d21b",
               "model override resolves before graph hashing");
 
+        const auto labelled_source = oreslang::parse_model_declarations(
+            "define model PriceEstimate as PriceInput() ApplyTaxBps(tax_bps: 1500) RoundCents() end");
+        try {
+            (void)rv1::lower(labelled_source[0], "finance.PriceEstimate@v1", resolved_registry);
+            throw std::runtime_error("named configuration was silently erased");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_NAMED_ARGUMENT_UNRESOLVED")
+                      != std::string_view::npos, "wrong unresolved named config diagnostic");
+        }
+
+        auto duplicate_formal = resolved_default_source[0];
+        duplicate_formal.formals.push_back(duplicate_formal.formals.front());
+        try {
+            (void)rv1::lower(duplicate_formal, "finance.PriceEstimate@v1", resolved_registry);
+            throw std::runtime_error("forged duplicate formal admitted");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_DUPLICATE_FORMAL")
+                      != std::string_view::npos, "wrong duplicate formal diagnostic");
+        }
+
         const rv1::Registry external_registry = {
             {"ValidatePrice", portable_sig('1', {}, {price})},
             {"ApplyTaxBps", portable_sig('2', {"i64"}, {price})},
