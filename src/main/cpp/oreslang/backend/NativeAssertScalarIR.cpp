@@ -135,7 +135,16 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
     auto* e0 = llvm::ConstantInt::get(i8, 0);
     auto* e1 = llvm::ConstantInt::get(i8, 1);
     auto* is_return = b.CreateICmpEQ(effect, e0);
-    auto* valid = b.CreateICmpULE(effect, llvm::ConstantInt::get(i8, 6));
+    // Generate an explicit allowlist from the native effect ABI, not a
+    // presumed contiguous ordinal interval. If a new effect is inserted or
+    // values become sparse, its admission must be deliberately reviewed.
+    llvm::Value* valid = b.CreateICmpEQ(effect, e0);
+    for (auto kind : {EffectKind::Throw, EffectKind::Raise,
+                      EffectKind::Panic, EffectKind::Cancel,
+                      EffectKind::Fatal, EffectKind::ProcessExit}) {
+        valid = b.CreateOr(valid, b.CreateICmpEQ(effect,
+            llvm::ConstantInt::get(i8, static_cast<unsigned>(kind))));
+    }
     valid = b.CreateAnd(valid, b.CreateICmpEQ(reserved, e0));
     valid = b.CreateAnd(valid, b.CreateICmpULE(present, e1));
     valid = b.CreateAnd(valid, b.CreateICmpULE(value, e1));
