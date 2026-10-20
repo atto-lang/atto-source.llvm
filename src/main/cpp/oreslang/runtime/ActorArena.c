@@ -10,7 +10,7 @@
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
 #define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
-typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; } Slot;
+typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; unsigned char compact_published; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
 struct OresActorArena {
     atomic_flag lock;
@@ -166,8 +166,68 @@ void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandl
     s->length = 0;
     s->live = 0;
     ++s->generation;
-    if (a->free_count >= a->slots) deny();
-    a->free_slots[a->free_count++] = (size_t) h.index;
+    /* A bare 32-bit offset has no generation bits. Once one was published,
+     * NEVER reuse its physical slot during this actor incarnation: a retained
+     * stale field would otherwise silently alias a new object (ABA). */
+    if (!s->compact_published) {
+        if (a->free_count >= a->slots) deny();
+        a->free_slots[a->free_count++] = (size_t) h.index;
+    }
+    leave_lock(a);
+}
+/* An actor's native slab never moves while live. This bridge is an opt-in
+ * *storage representation*, not a new authority that can leave the actor. */
+OresArenaCompactHandle ores_actor_arena_compact_encode(
+        OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
+    enter_lock(a);
+    require_turn(a, turn);
+    Slot* s = require_slot(a, h);
+    if ((a->slot_bytes & 7u) != 0 || a->slot_bytes == 0) deny();
+    const size_t offset = checked_mul((size_t) h.index, a->slot_bytes);
+    if ((offset & 7u) != 0 || (uint64_t)(offset / 8u) >= UINT32_MAX) deny();
+    OresArenaCompactHandle compact = {a->domain, (uint32_t) (offset / 8u + 1u)};
+    s->compact_published = 1;
+    leave_lock(a);
+    return compact;
+}
+static Slot* require_compact(OresActorArena* a, OresArenaCompactHandle r,
+                             size_t* slot_index) {
+    /* Host descriptor's domain and the current actor turn are independent
+     * checks. Ref bits alone are not a cross-actor capability. */
+    if (r.domain != a->domain || !r.bits || (a->slot_bytes & 7u)) deny();
+    const uint64_t units = (uint64_t) r.bits - 1u;
+    if (units > SIZE_MAX / 8u) deny();
+    const size_t offset = (size_t) units * 8u;
+    if (offset % a->slot_bytes) deny(); /* Reject aligned interiors too. */
+    const size_t i = offset / a->slot_bytes;
+    if (i >= a->slots) deny();
+    Slot* s = &a->meta[i];
+    if (!s->live || !s->compact_published) deny();
+    *slot_index = i;
+    return s;
+}
+void ores_actor_arena_compact_read(
+        OresActorArena* a, OresArenaTurn turn, OresArenaCompactHandle r,
+        size_t off, void* out, size_t bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    size_t index = 0;
+    Slot* s = require_compact(a, r, &index);
+    require_span(s->length, off, bytes);
+    if (bytes && !out) deny();
+    if (bytes) memcpy(out, a->slab + index * a->slot_bytes + off, bytes);
+    leave_lock(a);
+}
+void ores_actor_arena_compact_write(
+        OresActorArena* a, OresArenaTurn turn, OresArenaCompactHandle r,
+        size_t off, const void* src, size_t bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    size_t index = 0;
+    Slot* s = require_compact(a, r, &index);
+    require_span(s->length, off, bytes);
+    if (s->loans || (bytes && !src)) deny();
+    if (bytes) memcpy(a->slab + index * a->slot_bytes + off, src, bytes);
     leave_lock(a);
 }
 OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
