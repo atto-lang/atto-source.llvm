@@ -1,7 +1,9 @@
 #include "oreslang/runtime/NativeExecutionContextStore.h"
+#include "oreslang/runtime/NativeTraceSlotNamespace.h"
 
 #include <limits.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,10 +31,35 @@ struct OresNativeExecutionContextStore {
     pthread_mutex_t lock;
     ExecutionBlock* blocks;
     uint32_t capacity;
+    uint32_t first_slot;
     uint32_t block_count;
     uint32_t live_count;
     uint32_t cursor;
 };
+
+/*
+ * All execution and continuation stores share this monotonic range allocator.
+ * A public handle's slot identifies one store instance for the lifetime of
+ * the process; slot ranges are not recycled after close. Keep all 32 bits of
+ * the generation for per-slot ABA protection.
+ */
+static _Atomic(uint64_t) next_trace_slot = 1;
+
+int ores_native_trace_reserve_slot_namespace(
+        uint32_t capacity, uint32_t* first_slot) {
+    if (capacity == 0 || !first_slot) return 0;
+    uint64_t current = atomic_load(&next_trace_slot);
+    for (;;) {
+        if (current == 0 ||
+                current > UINT64_C(4294967296) - capacity)
+            return 0;
+        if (atomic_compare_exchange_weak(
+                &next_trace_slot, &current, current + capacity)) {
+            *first_slot = (uint32_t)current;
+            return 1;
+        }
+    }
+}
 
 static int lock_store(OresNativeExecutionContextStore* store) {
     return pthread_mutex_lock(&store->lock) == 0;
@@ -75,9 +102,10 @@ static int resolve_locked(
         uint32_t* lane,
         uint32_t* index) {
     if (!ores_native_store_handle_valid(handle)
-            || handle.slot > store->capacity)
+            || handle.slot < store->first_slot
+            || (uint64_t)(handle.slot - store->first_slot) >= store->capacity)
         return 0;
-    *index = handle.slot - 1;
+    *index = handle.slot - store->first_slot;
     *block = block_for(store, *index, lane);
     return (*block)->live[*lane]
         && (*block)->generation[*lane] == handle.generation;
@@ -119,6 +147,12 @@ OresNativeExecutionContextStore* ores_native_execution_context_store_open(
         return NULL;
     }
     if (pthread_mutex_init(&store->lock, NULL) != 0) {
+        free(store->blocks);
+        free(store);
+        return NULL;
+    }
+    if (!ores_native_trace_reserve_slot_namespace(capacity, &store->first_slot)) {
+        pthread_mutex_destroy(&store->lock);
         free(store->blocks);
         free(store);
         return NULL;
@@ -213,7 +247,7 @@ int ores_native_execution_context_store_insert(
     ++store->live_count;
     store->cursor = free_index + 1u == store->capacity ? 0 : free_index + 1u;
 
-    out->slot = free_index + 1u;
+    out->slot = store->first_slot + free_index;
     out->generation = block->generation[lane];
     unlock_store(store);
     return 1;
