@@ -19,6 +19,8 @@ struct ReachabilityResult {
     std::vector<std::string> removed_symbols;
 };
 
+inline void validate_reachability_result(const ReachabilityResult& result);
+
 namespace reachability_detail {
 
 inline std::string qualify(const Program& program, const std::string& name) {
@@ -258,10 +260,12 @@ inline ReachabilityResult analyze_reachability(
         retained.insert(reachability_detail::qualify(program, name));
     }
 
-    return ReachabilityResult{
+    ReachabilityResult result{
         reachability_detail::sorted(root_symbols),
         reachability_detail::sorted(retained),
         reachability_detail::sorted(removed)};
+    validate_reachability_result(result);
+    return result;
 }
 
 
@@ -300,6 +304,58 @@ inline void append_reachability_json_array(
     out.push_back(']');
 }
 
+inline void validate_reachability_symbol(std::string_view value) {
+    if (value.empty())
+        throw std::runtime_error("native reachability symbol cannot be empty");
+
+    std::size_t scalar_count = 0;
+    for (std::size_t i = 0; i < value.size();) {
+        const auto lead = static_cast<unsigned char>(value[i]);
+        std::uint32_t code_point = 0;
+        std::size_t width = 0;
+
+        if (lead <= 0x7f) {
+            code_point = lead;
+            width = 1;
+        } else if (lead >= 0xc2 && lead <= 0xdf) {
+            code_point = lead & 0x1fu;
+            width = 2;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            code_point = lead & 0x0fu;
+            width = 3;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            code_point = lead & 0x07u;
+            width = 4;
+        } else {
+            throw std::runtime_error("native reachability symbol is not valid UTF-8");
+        }
+
+        if (i + width > value.size())
+            throw std::runtime_error("native reachability symbol is truncated UTF-8");
+
+        for (std::size_t j = 1; j < width; ++j) {
+            const auto continuation = static_cast<unsigned char>(value[i + j]);
+            if ((continuation & 0xc0u) != 0x80u)
+                throw std::runtime_error("native reachability symbol has invalid UTF-8 continuation");
+            code_point = (code_point << 6) | (continuation & 0x3fu);
+        }
+
+        if ((width == 2 && code_point < 0x80u) ||
+            (width == 3 && code_point < 0x800u) ||
+            (width == 4 && code_point < 0x10000u) ||
+            (code_point >= 0xd800u && code_point <= 0xdfffu) ||
+            code_point > 0x10ffffu)
+            throw std::runtime_error("native reachability symbol has non-scalar UTF-8");
+
+        if (code_point <= 0x1fu || code_point == 0x7fu)
+            throw std::runtime_error("native reachability symbol contains a control character");
+        if (++scalar_count > 1024)
+            throw std::runtime_error("native reachability symbol exceeds 1024 Unicode scalars");
+
+        i += width;
+    }
+}
+
 inline bool reachability_strictly_sorted_unique(
         const std::vector<std::string>& values) {
     for (std::size_t i = 1; i < values.size(); ++i)
@@ -308,6 +364,10 @@ inline bool reachability_strictly_sorted_unique(
 }
 
 inline void validate_reachability_result(const ReachabilityResult& result) {
+    for (const auto& symbol : result.roots) validate_reachability_symbol(symbol);
+    for (const auto& symbol : result.retained_symbols) validate_reachability_symbol(symbol);
+    for (const auto& symbol : result.removed_symbols) validate_reachability_symbol(symbol);
+
     if (!reachability_strictly_sorted_unique(result.roots) ||
         !reachability_strictly_sorted_unique(result.retained_symbols) ||
         !reachability_strictly_sorted_unique(result.removed_symbols))
