@@ -30,16 +30,17 @@ int main() {
     NativeIpcReceiptTable table(4);
     table.admit(msg(1));table.admit(msg(2));
     auto second=msg(2);
+    table.commit_dispatch(second);
     table.accept_verified(second,IpcReceiptStage::remote_accepted);
     bool threw=false;
     fails_after.store(fail_at);
-    try {(void)table.retire_transport_lost("session");}
+    try {(void)table.retire_transport_lost(msg(1));}
     catch (const std::bad_alloc&) {threw=true;}
     fails_after.store(-1);
     assert(table.invariant());
     if (threw) {
         assert(table.counters()==(std::pair<std::size_t,std::size_t>{2,1}));
-        auto losses=table.retire_transport_lost("session");
+        auto losses=table.retire_transport_lost(msg(1));
         assert(losses.size()==2 && losses[0].envelope.message_sequence==1);
         assert(losses[1].last_observed==IpcReceiptStage::remote_accepted);
     } else {
