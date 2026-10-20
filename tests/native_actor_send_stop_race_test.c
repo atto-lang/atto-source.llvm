@@ -137,6 +137,24 @@ int main(void) {
         }
         check(distinct_admitted == atomic_load(&race.accepted));
         check(distinct_admitted >= PREFILL + 1);
+
+        OresNativeActorTerminalState terminal = {0};
+        check(ores_native_actor_scheduler_terminal_state(
+            race.scheduler, race.actor, &terminal));
+        check(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+        check(terminal.actor.scheduler_domain == race.actor.scheduler_domain);
+        check(terminal.actor.actor_slot == race.actor.actor_slot);
+        check(terminal.actor.generation == race.actor.generation);
+        check(terminal.accepted_user_messages == atomic_load(&race.accepted));
+        check(terminal.processed_user_messages == atomic_load(&race.completed));
+        check(terminal.accepted_user_messages == terminal.processed_user_messages);
+        check(terminal.abandoned_user_messages == 0);
+        check(terminal.abandoned_control_messages == 0);
+
+        OresNativeActorRef stale = race.actor;
+        ++stale.generation;
+        check(!ores_native_actor_scheduler_terminal_state(
+            race.scheduler, stale, &terminal));
         check(ores_native_actor_scheduler_try_destroy(race.scheduler));
     }
     puts("NATIVE_SEND_STOP_RACE_PASS");

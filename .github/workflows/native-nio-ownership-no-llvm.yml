@@ -1,0 +1,169 @@
+name: Native NIO descriptor ownership (no LLVM dependency)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorManager.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.*'
+      - 'tests/native_epoll_reactor_*.cpp'
+      - 'tests/native_epoll_reactor_abi_test.c'
+      - 'tests/native_vm_nio_bridge_denial_test.cpp'
+      - 'tests/native_fd_authority_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeFdAuthority.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeFdAuthorityBroker.hpp'
+      - 'tests/native_fd_authority_broker_test.cpp'
+      - 'tests/native_fd_authority_broker_state_machine_test.cpp'
+      - 'tests/native_abi_parity_adversarial_test.c'
+      - 'tests/native_epoll_manager_adversarial_test.cpp'
+      - 'tests/native_fd_close_eintr_regression.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.*'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVM.h'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - '.github/workflows/native-nio-ownership-no-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-nio:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: gcc
+            cc: gcc
+            cxx: g++
+            flags: '-O2 -UNDEBUG'
+          - flavor: clang-asan-ubsan
+            cc: clang
+            cxx: clang++
+            flags: '-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer'
+          - flavor: gcc-tsan
+            cc: gcc
+            cxx: g++
+            flags: '-O1 -g -UNDEBUG -fsanitize=thread -fno-omit-frame-pointer'
+    steps:
+      - name: Checkout exact PR source head with no retained credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source bytes without executing local Git filters
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          EXPECTED_TREE="$(git rev-parse --verify HEAD^{tree})"
+          # Execute the exact verifier Git blob, never the mutable worktree
+          # pathname. A maliciously swapped or staged checker must be denied.
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier is not the committed source blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$EXPECTED_HEAD" "$EXPECTED_TREE"
+          echo "NATIVE_NIO_EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "NATIVE_NIO_EXACT_SOURCE_TREE=$EXPECTED_TREE"
+      - name: Compile manager and C ABI against actual private source files
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          set -euo pipefail
+          read -r -a options <<< "$FLAGS"
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_reactor_manager_test.cpp \
+            -o /tmp/oreslang-nio-manager-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_manager_adversarial_test.cpp \
+            -o /tmp/oreslang-nio-manager-adversarial-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_reactor_test.cpp \
+            -o /tmp/oreslang-nio-reactor-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_epoll_reactor_bootstrap_failure_test.cpp \
+            -o /tmp/oreslang-nio-bootstrap-exact-head
+          "$CC" -std=c11 -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp -c tests/native_epoll_reactor_abi_test.c \
+            -o /tmp/oreslang-nio-abi-test.o
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            /tmp/oreslang-nio-abi-test.o -o /tmp/oreslang-nio-abi-exact-head
+          "$CC" -std=c11 -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp -c tests/native_abi_parity_adversarial_test.c \
+            -o /tmp/oreslang-nio-abi-adversarial.o
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            /tmp/oreslang-nio-abi-adversarial.o -o /tmp/oreslang-nio-abi-adversarial-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_vm_nio_bridge_denial_test.cpp \
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp \
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp \
+            -o /tmp/oreslang-nio-bridge-denial-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_fd_authority_test.cpp \
+            -o /tmp/oreslang-nio-fd-authority-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_fd_authority_broker_test.cpp \
+            -o /tmp/oreslang-nio-fd-broker-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_fd_authority_broker_state_machine_test.cpp \
+            -o /tmp/oreslang-nio-fd-state-machine-exact-head
+          "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
+            -I src/main/cpp tests/native_fd_close_eintr_regression.cpp \
+            -Wl,--wrap=close -o /tmp/oreslang-nio-fd-close-eintr-exact-head
+      - name: Execute native, bridge-denial and host-capability-model tests three times
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            echo "NATIVE_NIO_ATTEMPT=$n"
+            timeout 45s /tmp/oreslang-nio-manager-exact-head
+            timeout 45s /tmp/oreslang-nio-manager-adversarial-exact-head
+            timeout 45s /tmp/oreslang-nio-abi-exact-head
+            timeout 45s /tmp/oreslang-nio-abi-adversarial-exact-head
+            timeout 45s /tmp/oreslang-nio-reactor-exact-head
+            timeout 45s /tmp/oreslang-nio-bootstrap-exact-head
+            timeout 45s /tmp/oreslang-nio-bridge-denial-exact-head
+            timeout 45s /tmp/oreslang-nio-fd-authority-exact-head
+            timeout 45s /tmp/oreslang-nio-fd-broker-exact-head
+            timeout 90s /tmp/oreslang-nio-fd-state-machine-exact-head
+            timeout 90s /tmp/oreslang-nio-fd-close-eintr-exact-head
+          done
+          # Authenticate the postflight checker again: compiling the native
+          # fixture is not permission to execute worktree Python that could
+          # have been swapped after the preflight.
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO postflight verifier differs from committed Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-postflight>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+          echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=11 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"
