@@ -57,6 +57,33 @@ static bool has(const std::vector<std::string>& values, const std::string& value
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+static bool has_root_reason(
+        const ReachabilityResult& result,
+        const std::string& symbol,
+        ReachabilityReason reason) {
+    return std::any_of(
+            result.root_reasons.begin(),
+            result.root_reasons.end(),
+            [&](const ReachabilityRootReason& item) {
+                return item.symbol == symbol && item.reason == reason;
+            });
+}
+
+static bool has_edge(
+        const ReachabilityResult& result,
+        const std::string& from,
+        const std::string& to,
+        ReachabilityReason reason) {
+    return std::any_of(
+            result.edges.begin(),
+            result.edges.end(),
+            [&](const ReachabilityEdge& edge) {
+                return edge.from == from &&
+                       edge.to == to &&
+                       edge.reason == reason;
+            });
+}
+
 static void expect_rejected(const ReachabilityResult& result) {
     bool rejected = false;
     try {
@@ -82,6 +109,20 @@ int main() {
         assert(has(result.retained_symbols, "__root__.live"));
         assert(has(result.retained_symbols, "__root__.leaf"));
         assert(has(result.removed_symbols, "__root__.dead"));
+        assert(has_root_reason(
+                result,
+                "__root__.main",
+                ReachabilityReason::RootEntry));
+        assert(has_edge(
+                result,
+                "__root__.main",
+                "__root__.live",
+                ReachabilityReason::DirectCall));
+        assert(has_edge(
+                result,
+                "__root__.live",
+                "__root__.leaf",
+                ReachabilityReason::DirectCall));
 
         assert(shaken.program.functions.size() == 3);
         assert(std::none_of(shaken.program.functions.begin(),
@@ -128,6 +169,16 @@ int main() {
         const auto result = analyze_reachability(program, {"main"}, false);
         assert(has(result.retained_symbols, "__root__.Worker"));
         assert(has(result.retained_symbols, "__root__.helper"));
+        assert(has_edge(
+                result,
+                "__root__.main",
+                "__root__.Worker",
+                ReachabilityReason::ActorSpawn));
+        assert(has_edge(
+                result,
+                "__root__.Worker",
+                "__root__.helper",
+                ReachabilityReason::ActorBody));
     }
 
     {
@@ -153,6 +204,16 @@ int main() {
         const auto result = analyze_reachability(program, {"main"}, false);
         assert(has(result.retained_symbols, "__root__.Box"));
         assert(has(result.retained_symbols, "__root__.class_init"));
+        assert(has_edge(
+                result,
+                "__root__.main",
+                "__root__.Box",
+                ReachabilityReason::ClassReference));
+        assert(has_edge(
+                result,
+                "__root__.Box",
+                "__root__.class_init",
+                ReachabilityReason::ClassInitializer));
     }
 
     {
@@ -434,6 +495,11 @@ int main() {
                    "__root__.api$arity1"));
         assert(has(shaken.reachability.retained_symbols,
                    "__root__.api$arity2"));
+        assert(has_edge(
+                shaken.reachability,
+                "__root__.api$arity1",
+                "__root__.api$arity2",
+                ReachabilityReason::ExportedOverloadAbi));
         assert(shaken.program.functions.size() == 3);
     }
 
