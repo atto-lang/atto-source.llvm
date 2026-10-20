@@ -57,4 +57,22 @@ int main() {
     throws<std::invalid_argument>([] { (void)Key::process_symbol(""); });
     throws<std::invalid_argument>([] { (void)Key::process_symbol(std::string(257, 'x')); });
     check(Key::string("\xf0\x9f\x8c\x8d").name().size() == 4);
+    check(Key::string(std::string(16384, 'x')).name().size() == 16384);
+    throws<std::invalid_argument>([] { (void)Key::string(std::string(16385, 'x')); });
+    std::vector<Key> fields;
+    for (unsigned i = 0; i < MAX_STATIC_FIELDS; ++i)
+        fields.push_back(Key::string("field_" + std::to_string(i)));
+    check(Layout::declared(fields).size() == MAX_STATIC_FIELDS);
+    fields.push_back(Key::string("overflow"));
+    throws<std::invalid_argument>([&] { (void)Layout::canonical(fields); });
+
+    std::vector<Key> long_fields;
+    for (unsigned i = 0; i < 63; ++i) {
+        auto suffix = std::to_string(i);
+        long_fields.push_back(Key::string(std::string(16384 - suffix.size(), 'x') + suffix));
+    }
+    check(Layout::declared(long_fields).size() == 63);
+    long_fields.push_back(Key::string(std::string(16384, 'z')));
+    throws<std::invalid_argument>([&] { (void)Layout::declared(long_fields); });
+
 }
