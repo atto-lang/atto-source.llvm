@@ -1,4 +1,5 @@
 #include "oreslang/frontend/TreeShaker.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 
 #include <algorithm>
 #include <set>
@@ -52,7 +53,8 @@ void scan_expression(const Expression* expression,
             scan_expression(expression->left.get(), calls, features, operations);
             return;
         case Kind::Call:
-            calls.insert(expression->name);
+            calls.insert(native_function_slot(
+                expression->name, expression->arguments.size()));
             for (const auto& argument : expression->arguments)
                 scan_expression(argument.get(), calls, features, operations);
             return;
@@ -205,10 +207,11 @@ std::string NativeReachabilityManifest::to_canonical_json() const {
 NativeReachabilityManifest tree_shake_program(Program& program, TreeShakeMode mode) {
     std::unordered_map<std::string, Function*> functions;
     for (auto& function : program.functions) {
-        if (!functions.emplace(function.name, &function).second) {
+        const std::string slot =
+            native_function_slot(function.name, function.parameters.size());
+        if (!functions.emplace(slot, &function).second) {
             throw std::runtime_error(
-                "native tree shaking requires unique top-level function names; duplicate '" +
-                function.name + "'");
+                "native tree shaking found duplicate callable slot '" + slot + "'");
         }
     }
 
@@ -217,16 +220,19 @@ NativeReachabilityManifest tree_shake_program(Program& program, TreeShakeMode mo
     manifest.preserve_public_api = mode == TreeShakeMode::Library;
 
     if (mode == TreeShakeMode::Executable) {
-        const auto main = functions.find("main");
+        const std::string main_slot = native_function_slot("main", 0);
+        const auto main = functions.find(main_slot);
         if (main == functions.end())
-            throw std::runtime_error("native executable tree shaking requires main");
-        if (!main->second->parameters.empty())
-            throw std::runtime_error("native executable tree-shake root main must have zero arguments");
-        roots.insert("main");
+            throw std::runtime_error("native executable tree shaking requires zero-arity main");
+        roots.insert(main_slot);
         manifest.entry_points = {"main"};
     } else {
-        for (const auto& function : program.functions)
-            if (function.exported) roots.insert(function.name);
+        for (const auto& function : program.functions) {
+            if (function.exported) {
+                roots.insert(native_function_slot(
+                    function.name, function.parameters.size()));
+            }
+        }
     }
 
     std::set<std::string> retained;
@@ -264,36 +270,38 @@ NativeReachabilityManifest tree_shake_program(Program& program, TreeShakeMode mo
 
     std::vector<std::string> work(roots.begin(), roots.end());
     for (std::size_t index = 0; index < work.size(); ++index) {
-        const std::string& name = work[index];
-        if (!retained.insert(name).second) continue;
-        const auto found = functions.find(name);
+        const std::string& slot = work[index];
+        if (!retained.insert(slot).second) continue;
+        const auto found = functions.find(slot);
         if (found == functions.end())
-            throw std::runtime_error("native tree-shake call/root does not resolve: " + name);
+            throw std::runtime_error("native tree-shake call/root does not resolve: " + slot);
 
         std::set<std::string> calls;
         scan_function(*found->second, calls, features, operations);
-        for (const auto& callee : calls) {
-            const auto target = functions.find(callee);
+        for (const auto& callee_slot : calls) {
+            const auto target = functions.find(callee_slot);
             if (target == functions.end())
-                throw std::runtime_error("native tree-shake call does not resolve: " + callee);
-            if (target->second->parameters.size() == 0) {
-                // Arity is checked by the normal compiler before this pass.
-                // Keep the source-name graph conservative here.
-            }
-            if (!retained.count(callee)) work.push_back(callee);
+                throw std::runtime_error(
+                    "native tree-shake call does not resolve: " + callee_slot);
+            if (!retained.count(callee_slot)) work.push_back(callee_slot);
         }
     }
 
     std::set<std::string> removed;
     for (const auto& function : program.functions) {
-        const std::string symbol = qualify(program, function.name);
-        if (retained.count(function.name)) manifest.retained_symbols.push_back(symbol);
+        const std::string slot =
+            native_function_slot(function.name, function.parameters.size());
+        const std::string symbol = qualify(program, slot);
+        if (retained.count(slot)) manifest.retained_symbols.push_back(symbol);
         else removed.insert(symbol);
     }
 
     program.functions.erase(
         std::remove_if(program.functions.begin(), program.functions.end(),
-            [&](const Function& function) { return !retained.count(function.name); }),
+            [&](const Function& function) {
+                return !retained.count(native_function_slot(
+                    function.name, function.parameters.size()));
+            }),
         program.functions.end());
 
     std::sort(manifest.retained_symbols.begin(), manifest.retained_symbols.end());
