@@ -76,10 +76,13 @@ inline void scan_expression(
         std::set<std::string>& function_dependencies) {
     if (!expr) return;
     if (expr->kind == Expression::Kind::Call) {
-        if (functions.find(expr->name) == functions.end()) {
-            throw std::runtime_error("native reachability unresolved function call: " + expr->name);
+        const std::string slot =
+                native_function_slot(expr->name, expr->arguments.size());
+        if (functions.find(slot) == functions.end()) {
+            throw std::runtime_error(
+                    "native reachability unresolved function call: " + slot);
         }
-        function_dependencies.insert(expr->name);
+        function_dependencies.insert(slot);
     }
     scan_expression(expr->left.get(), functions, function_dependencies);
     scan_expression(expr->right.get(), functions, function_dependencies);
