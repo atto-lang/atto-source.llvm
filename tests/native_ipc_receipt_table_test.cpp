@@ -32,13 +32,23 @@ int main() {
     rejects([&]{ table.admit(first); });
     auto forgery=first; forgery.session="other";
     rejects([&]{ table.accept_verified(forgery,IpcReceiptStage::remote_accepted); });
+    // Peer-authenticated frames never carry host-local verdict authority.
+    rejects([&]{ table.accept_verified(first,IpcReceiptStage::outcome_unknown); });
+    rejects([&]{ table.accept_verified(first,IpcReceiptStage::rejected_before_remote); });
+    // Remote acceptance is impossible until the local transport commits
+    // dispatch before the first possible physical write.
+    rejects([&]{ table.accept_verified(first,IpcReceiptStage::remote_accepted); });
+    table.commit_dispatch(first);
+    rejects([&]{ table.commit_dispatch(first); });
+    rejects([&]{ table.reject_before_remote(first); });
     table.accept_verified(first,IpcReceiptStage::remote_accepted);
+    rejects([&]{ table.accept_verified(first,IpcReceiptStage::outcome_unknown); });
     rejects([&]{ table.accept_verified(first,IpcReceiptStage::rejected_before_remote); });
     table.admit(second);
     rejects([&]{ table.admit(third); });
     table.accept_verified(first,IpcReceiptStage::handler_failed);
     rejects([&]{ table.accept_verified(first,IpcReceiptStage::handler_committed); });
-    table.accept_verified(second,IpcReceiptStage::outcome_unknown);
+    table.reject_before_remote(second);
     assert(table.counters() == (std::pair<std::size_t,std::size_t>{0,0}));
     auto rolled=envelope(3); rolled.route_epoch=3;
     rejects([&]{ table.admit(rolled); });
@@ -47,13 +57,17 @@ int main() {
     table.admit(third);
     auto oldinc=envelope(4); ++oldinc.destination_incarnation;
     rejects([&]{ table.admit(oldinc); });
-    table.accept_verified(third,IpcReceiptStage::outcome_unknown);
+    auto frame_rollback=envelope(4); frame_rollback.frame_sequence=3;
+    rejects([&]{ table.admit(frame_rollback); });
+    table.commit_dispatch(third);
+    assert(table.mark_transport_lost(third) == 1);
     assert(table.invariant());
     // Competing authenticated receipts may race on distinct transport carriers;
     // exactly one terminal transition must win without double-credit release.
     NativeIpcReceiptTable racing(1);
     auto race_message = envelope();
     racing.admit(race_message);
+    racing.commit_dispatch(race_message);
     std::atomic<int> accepted{0};
     std::vector<std::thread> workers;
     for (int i=0; i<16; ++i) workers.emplace_back([&] {
@@ -82,6 +96,7 @@ int main() {
     NativeIpcReceiptTable disconnect_race(1);
     auto in_flight = envelope();
     disconnect_race.admit(in_flight);
+    disconnect_race.commit_dispatch(in_flight);
     workers.clear();
     std::atomic<int> ack_winners{0}, loss_winners{0};
     for (int i=0; i<16; ++i) {
@@ -94,7 +109,7 @@ int main() {
                 } catch(const std::invalid_argument&) { }
             } else {
                 loss_winners += static_cast<int>(
-                    disconnect_race.mark_transport_lost("session"));
+                    disconnect_race.mark_transport_lost(in_flight));
             }
         });
     }
@@ -113,8 +128,9 @@ int main() {
     notices.admit(m1);
     notices.admit(m2);
     notices.admit(m3);
+    notices.commit_dispatch(m3);
     notices.accept_verified(m3, IpcReceiptStage::remote_accepted);
-    auto retired = notices.retire_transport_lost("session");
+    auto retired = notices.retire_transport_lost(m1);
     assert(retired.size() == 2);
     assert(retired[0].envelope.message_sequence == 1);
     assert(retired[0].last_observed == IpcReceiptStage::local_admitted);
@@ -122,8 +138,10 @@ int main() {
     assert(retired[1].last_observed == IpcReceiptStage::remote_accepted);
     assert(notices.counters() ==
         (std::pair<std::size_t,std::size_t>{1,1}));
-    assert(notices.retire_transport_lost("session").empty());
-    rejects([&]{ notices.retire_transport_lost("bad session"); });
+    assert(notices.retire_transport_lost(m1).empty());
+    auto bad_epoch=m1; bad_epoch.session="bad session";
+    rejects([&]{ notices.retire_transport_lost(bad_epoch); });
+    notices.commit_dispatch(m2);
     notices.accept_verified(m2,IpcReceiptStage::remote_accepted);
     notices.accept_verified(m2,IpcReceiptStage::handler_committed);
     assert(notices.invariant());
@@ -136,9 +154,15 @@ int main() {
             try {
                 book.admit(msg);
                 switch(rng()%4) {
-                  case 0: book.accept_verified(msg,IpcReceiptStage::rejected_before_remote); break;
-                  case 1: book.accept_verified(msg,IpcReceiptStage::outcome_unknown); break;
+                  case 0:
+                    book.reject_before_remote(msg);
+                    break;
+                  case 1:
+                    book.commit_dispatch(msg);
+                    assert(book.mark_transport_lost(msg) == 1);
+                    break;
                   default:
+                    book.commit_dispatch(msg);
                     book.accept_verified(msg,IpcReceiptStage::remote_accepted);
                     book.accept_verified(msg,(rng()%2) ? IpcReceiptStage::handler_committed : IpcReceiptStage::handler_failed);
                     break;
