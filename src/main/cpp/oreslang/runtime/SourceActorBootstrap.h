@@ -1,6 +1,7 @@
 #pragma once
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/NativeLogicalTrace.h"
+#include "oreslang/runtime/NativeFailureTrace.h"
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -56,6 +57,20 @@ int oreslang_source_actor_snapshot_current_trace(
     OresNativeContinuationTraceFrame* continuation_frames,
     size_t continuation_capacity,
     OresNativeLogicalTraceResult* out);
+
+/*
+ * Failure recording hook used by future source throw/raise/panic lowering.
+ * It is valid only while compiler-generated resumed source code owns the
+ * current logical execution handle.
+ */
+int oreslang_source_actor_capture_failure_trace(
+    OresNativeFailureKind kind,
+    uint64_t source_token,
+    OresNativeExecutionTraceFrame* execution_frames,
+    size_t execution_capacity,
+    OresNativeContinuationTraceFrame* continuation_frames,
+    size_t continuation_capacity,
+    OresNativeFailureTraceHeader* out);
 
 #ifdef __cplusplus
 }
