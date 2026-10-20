@@ -34,6 +34,22 @@ namespace oreslang::runtime {
  * bounded independently by the private correlation table.
  */
 class NativeIpcAuthenticatedStreamSession final {
+    class SensitiveKey final {
+    public:
+        explicit SensitiveKey(const NativeIpcWireV3::Bytes& source)
+            : bytes(source) { }
+        SensitiveKey(const SensitiveKey&) = delete;
+        SensitiveKey& operator=(const SensitiveKey&) = delete;
+        ~SensitiveKey() noexcept { cleanse(); }
+
+        void cleanse() noexcept {
+            if (!bytes.empty())
+                OPENSSL_cleanse(bytes.data(), bytes.size());
+        }
+
+        NativeIpcWireV3::Bytes bytes;
+    };
+
 public:
     enum class Phase : std::uint8_t { open, retired, quarantined };
 
@@ -49,13 +65,13 @@ public:
             IpcReceiptEnvelope trusted_epoch,
             std::uint64_t physical_generation,
             std::size_t receipt_capacity,
-            NativeIpcWireV3::Bytes mac_key,
+            const NativeIpcWireV3::Bytes& mac_key,
             NativeIpcWireV3::ConnectionBinding connection_binding)
         : socket_(std::move(socket)),
           trusted_epoch_(std::move(trusted_epoch)),
           physical_generation_(physical_generation),
           receipts_(receipt_capacity),
-          mac_key_(std::move(mac_key)),
+          mac_key_(mac_key),
           connection_binding_(connection_binding) {
         if (!socket_.valid())
             throw std::invalid_argument("IPC session requires an owned socket");
@@ -67,7 +83,7 @@ public:
         (void)NativeIpcWireV3::encode_receipt_frame(
             trusted_epoch_, physical_generation_,
             IpcReceiptStage::remote_accepted,
-            connection_binding_, mac_key_);
+            connection_binding_, mac_key_.bytes);
     }
 
     ~NativeIpcAuthenticatedStreamSession() noexcept {
@@ -88,11 +104,6 @@ public:
     SendStatus send_nonblocking(
             const IpcReceiptEnvelope& message,
             const NativeIpcWireV3::Bytes& payload) {
-        const auto authenticated = NativeIpcWireV3::encode_data_frame(
-            message, payload, physical_generation_,
-            connection_binding_, mac_key_);
-        auto wire = prefix(authenticated);
-
         std::lock_guard<std::mutex> guard(mutex_);
         if (phase_ != Phase::open)
             return SendStatus::retired;
@@ -101,6 +112,13 @@ public:
                 "message does not match authenticated transport epoch");
         if (!outbound_.empty())
             return SendStatus::busy;
+
+        // Encode and allocate every byte before receipt-table mutation while
+        // the same gate prevents concurrent key destruction.
+        const auto authenticated = NativeIpcWireV3::encode_data_frame(
+            message, payload, physical_generation_,
+            connection_binding_, mac_key_.bytes);
+        auto wire = prefix(authenticated);
 
         receipts_.admit(message);
         try {
@@ -151,7 +169,7 @@ public:
                 throw std::logic_error("IPC receipt framing size mismatch");
 
             const auto decoded = NativeIpcWireV3::decode_receipt_frame(
-                frame, connection_binding_, mac_key_);
+                frame, connection_binding_, mac_key_.bytes);
             if (decoded.physical_generation != physical_generation_)
                 throw std::invalid_argument(
                     "stale IPC physical transport generation");
@@ -225,7 +243,7 @@ public:
 
     bool key_zeroized() const {
         std::lock_guard<std::mutex> guard(mutex_);
-        for (auto byte : mac_key_)
+        for (auto byte : mac_key_.bytes)
             if (byte != 0u) return false;
         return true;
     }
@@ -355,8 +373,7 @@ private:
     }
 
     void cleanse_key() noexcept {
-        if (!mac_key_.empty())
-            OPENSSL_cleanse(mac_key_.data(), mac_key_.size());
+        mac_key_.cleanse();
     }
 
     mutable std::mutex mutex_;
@@ -364,7 +381,7 @@ private:
     const IpcReceiptEnvelope trusted_epoch_;
     const std::uint64_t physical_generation_;
     NativeIpcReceiptTable receipts_;
-    NativeIpcWireV3::Bytes mac_key_;
+    SensitiveKey mac_key_;
     const NativeIpcWireV3::ConnectionBinding connection_binding_;
     Phase phase_ = Phase::open;
 
