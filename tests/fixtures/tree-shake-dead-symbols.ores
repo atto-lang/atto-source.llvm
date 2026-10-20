@@ -15,6 +15,15 @@ fnc dead_helper(): int {
   return 99;
 }
 
+fnc dead_wasm_invalid(): int {
+  try {
+    throw 7;
+  } catch (err) {
+    return err;
+  } finally {
+  }
+}
+
 fnc live_helper(): int {
   return 42;
 }
