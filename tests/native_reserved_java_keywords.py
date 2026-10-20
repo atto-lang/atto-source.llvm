@@ -6,6 +6,19 @@ import sys
 import tempfile
 
 CASES = {
+    # Keep V3 optional type/presence rejection after '?' becomes a token.
+    "v3-optional-parameter-type": (
+        "pub fnc f(int? value): int { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
+    "v3-optional-parameter-presence": (
+        "pub fnc f(int value?): int { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
+    "v3-optional-return-type": (
+        "pub fnc f(): int? { return 0; }",
+        "native v3 '?' type/argument syntax requires",
+    ),
     # any/unknown are language type keywords. The native backend reserves the
     # surface now but must reject values of those types until it has a genuine
     # tagged opaque-value ABI and runtime descriptors.
@@ -159,3 +172,4 @@ if __name__ == "__main__":
     except (ValueError, AssertionError, OSError, subprocess.TimeoutExpired) as exc:
         print(f"native keyword parity contract failed: {exc}", file=sys.stderr)
         sys.exit(1)
+

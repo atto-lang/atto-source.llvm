@@ -121,7 +121,15 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;?+-*/%=.<>").find(ch) != std::string_view::npos) {
+        // Tokenize both guarded surfaces; parser context distinguishes ternary
+        // expressions from unsupported V3 optional types/presence syntax.
+        if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
+            throw std::runtime_error("native @DefaultArgVals declaration requires "
+                                     "checked named defaults, ownership and ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        // Token admission does not enable annotations, optional ABI or ternary lowering.
+        if (std::string_view("(){},:;?+-*/%=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -142,6 +150,16 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     return result;
 }
 
+inline constexpr std::size_t kMaxNativeExpressionDepth = 64;
+
+inline void require_expression_depth(std::size_t depth, std::size_t offset) {
+    if (depth > kMaxNativeExpressionDepth) {
+        throw std::runtime_error(
+            "native expression nesting limit exceeded (64) at byte " +
+            std::to_string(offset));
+    }
+}
+
 // The first native terminal-try slice has no exceptional CFG. Restrict
 // protected return/guard expressions to primitive values or an addressable,
 // ownership-checked class field read: no nested calls or ownership transfers.
@@ -154,16 +172,17 @@ bool nonthrowing_protected_read(const Expression& expr) {
 
 // Arithmetic over checked scalar reads is nonthrowing. Never admit
 // general calls, array mutations, ownership transfers, or suspension.
-bool native_pure_scalar_tree(const Expression& expr) {
+bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
     if (expr.kind == Expression::Kind::Negate)
-        return expr.left && native_pure_scalar_tree(*expr.left);
+        return expr.left && native_pure_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply)
         return expr.left && expr.right &&
-            native_pure_scalar_tree(*expr.left) &&
-            native_pure_scalar_tree(*expr.right);
+            native_pure_scalar_tree(*expr.left, depth + 1) &&
+            native_pure_scalar_tree(*expr.right, depth + 1);
     return false;
 }
 
@@ -178,17 +197,26 @@ using NativeSignatures = std::unordered_map<
 // This proof is deliberately narrower than the general native scalar guard:
 // an unpublished constructor can read only integer literals and its own
 // explicitly typed scalar parameters, never arbitrary fields or operations.
-bool native_constructor_scalar_tree(const Expression& expr) {
+bool native_constructor_scalar_tree(const Expression& expr,
+                                    std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
     if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
     if (expr.kind == Kind::Negate)
-        return expr.left && native_constructor_scalar_tree(*expr.left);
+        return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
             expr.kind == Kind::Multiply)
         return expr.left && expr.right &&
-            native_constructor_scalar_tree(*expr.left) &&
-            native_constructor_scalar_tree(*expr.right);
+            native_constructor_scalar_tree(*expr.left, depth + 1) &&
+            native_constructor_scalar_tree(*expr.right, depth + 1);
     return false;
+}
+
+// A runtime callable's code/signature must never be forged as a nominal
+// object or actor identity in the constrained native frontend.
+bool callable_nominal_name(std::string_view name) {
+    return name == "Callable" || name == "Fnc" || name == "Function"
+            || name == "Routine" || name == "Method";
 }
 
 class Parser {
@@ -258,6 +286,8 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (callable_nominal_name(actor.name))
+            fail("callable signatures cannot be declared as nominal actor types");
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -306,6 +336,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -337,6 +368,8 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (callable_nominal_name(result.name))
+            fail("callable signatures cannot be declared as nominal class types");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -352,6 +385,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -574,6 +609,8 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
@@ -1157,7 +1194,7 @@ private:
     std::unique_ptr<Expression> expression() {
         auto value = additive();
         if (token_.text == "?") {
-            fail("native ternary expression requires typed bool conditions and branch-merge lowering before LLVM IR");
+            throw std::runtime_error("native ternary expression requires typed bool conditions and branch-merge lowering before LLVM IR at byte " + std::to_string(token_.offset));
         }
         return value;
     }
@@ -1200,6 +1237,15 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+            --expression_depth_;
+            fail("native expression nesting limit exceeded (64)");
+        }
+        struct DepthGuard {
+            std::size_t& depth;
+            ~DepthGuard() { --depth; }
+        } depth_guard{expression_depth_};
+
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
@@ -1409,7 +1455,9 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const NativeSignatures& functions) {
+                                    const NativeSignatures& functions,
+                                    std::size_t depth = 1) {
+        require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
             case Expression::Kind::Integer: return;
             case Expression::Kind::Variable:
@@ -1419,12 +1467,12 @@ private:
                 }
                 return;
             case Expression::Kind::Field:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
-                    validate_expression(*arg, parameters, functions);
+                    validate_expression(*arg, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
@@ -1510,7 +1558,7 @@ private:
                                                  + formals[slot] + "'");
                     bound[slot] = true;
                     // Check nested calls in lexical order, not formal-slot order.
-                    validate_expression(*expr.arguments[i], parameters, functions);
+                    validate_expression(*expr.arguments[i], parameters, functions, depth + 1);
                 }
                 return;
             }
@@ -1520,26 +1568,28 @@ private:
             case Expression::Kind::Share:
             case Expression::Kind::Borrow:
             case Expression::Kind::BorrowMut:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-                validate_expression(*expr.left, parameters, functions);
-                validate_expression(*expr.right, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
+                validate_expression(*expr.right, parameters, functions, depth + 1);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
 
-    static bool contains_callable_invocation(const Expression* expr) {
+    static bool contains_callable_invocation(
+            const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
+        require_expression_depth(depth, expr->offset);
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
-        if (contains_callable_invocation(expr->left.get()) ||
-            contains_callable_invocation(expr->right.get())) return true;
+        if (contains_callable_invocation(expr->left.get(), depth + 1) ||
+            contains_callable_invocation(expr->right.get(), depth + 1)) return true;
         for (const auto& item : expr->arguments)
-            if (contains_callable_invocation(item.get())) return true;
+            if (contains_callable_invocation(item.get(), depth + 1)) return true;
         return false;
     }
 
@@ -1808,6 +1858,11 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        if (token_.text == "?") {
+            throw std::runtime_error("native v3 '?' type/argument syntax requires "
+                                     "versioned Option and default ABI lowering at byte "
+                                     + std::to_string(token_.offset));
+        }
         if (token_.text == "gpu" || token_.text == "quantum") {
             throw std::runtime_error("native gpu/quantum boundary unsupported: "
                     "validated effects, ownership, device lowering and explicit "
@@ -1842,6 +1897,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::size_t expression_depth_ = 0;
 };
 
 } // namespace
@@ -1862,3 +1918,4 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
 }
 
 } // namespace oreslang
+
