@@ -14,6 +14,7 @@ message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/frontend/ModelGraph.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
@@ -29,6 +30,22 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # General-purpose define model frontend/lowering contract. This executes
+    # real parser/admission/ownership sources; compiler->IR execution is a
+    # separate CTest added below once the source fixture is wired.
+    add_executable(oreslang-native-model-graph-test
+        tests/native_model_graph_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/ModelGraph.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-model-graph-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-model-graph-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_general_modelgraph_contract
+        COMMAND oreslang-native-model-graph-test)
+    set_tests_properties(native_general_modelgraph_contract PROPERTIES TIMEOUT 30)
+
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
