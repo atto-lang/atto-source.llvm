@@ -91,6 +91,21 @@ for toolchain in gcc clang; do
     "$cxx" -std=c++17 "${shared[@]}" -c "$runtime/$name.cpp" -o "$dest/$name.o"
   done
   "$cxx" "${shared[@]}" "$dest"/*.o -o "$dest/lifecycle"
+  # Exercise the actual native scheduler/VM terminal-state APIs, not a shim.
+  # A rejected lookup must clear any prior terminal receipt from output.
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" \
+    tests/native_actor_scheduler_test.c "$runtime/NativeActorScheduler.c" \
+    -o "$dest/actor-terminal-state"
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" \
+    tests/native_ores_vm_test.c "$runtime/NativeOresVM.c" \
+    "$runtime/NativeActorScheduler.c" -o "$dest/vm-terminal-state"
+  for attempt in {1..3}; do
+    printf 'NATIVE_TERMINAL_FAIL_CLOSED_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/actor-terminal-state"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/vm-terminal-state"
+  done
   for attempt in {1..30}; do
     printf "NIO_LIFECYCLE_ATTEMPT=%s toolchain=%s\n" "$attempt" "$toolchain"
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
