@@ -840,6 +840,8 @@ if(BUILD_TESTING)
         --diagnostic "native specialized actor serial unary http requires typed adapter")
     oreslang_contract_test(native_reject_http_actor native-transport-http.ores
         --diagnostic "native specialized actor http requires typed adapter")
+    oreslang_contract_test(native_reject_protocol_modifier_amplification native-transport-modifier-amplification.ores
+        --diagnostic "native actor protocol modifier list exceeds bounded admission")
     oreslang_contract_test(native_reject_unary_http_actor native-transport-unary-http.ores
         --diagnostic "native specialized actor unary http requires typed adapter")
     oreslang_contract_test(native_reject_unary_mail_actor native-transport-unary-mail.ores
