@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import tempfile
 import unittest
 
 CHECKER = Path(__file__).resolve().parents[1] / 'scripts' / 'verify-native-nio-source-local.py'
+SANITIZER = Path(__file__).resolve().parents[1] / 'scripts' / 'test-native-vm-nio-host-sanitizers.sh'
 
 
 def run(*args, cwd, env=None):
@@ -37,6 +39,69 @@ class NativeNioWorktreeTests(unittest.TestCase):
     def gate(self, *, commit=None, tree=None, env=None):
         return run(sys.executable, 'scripts/' + CHECKER.name,
                    commit or self.head, tree or self.tree, cwd=self.repo, env=env)
+
+    def gate_from_committed_shell(self, *, env=None):
+        # Reuse the ACTUAL shell admission function in a synthetic Git repo,
+        # without invoking the full private VM/compiler sanitizer workflow.
+        shell = SANITIZER.read_text()
+        marker = 'verify_exact_worktree() {\\n'
+        self.assertEqual(1, shell.count(marker))
+        function = shell.split(marker, 1)[1].split('\\n}\\n', 1)[0]
+        script = ('set -euo pipefail\\n'
+                  + 'head_sha=' + shlex.quote(self.head) + '\\n'
+                  + 'tree_sha=' + shlex.quote(self.tree) + '\\n'
+                  + marker + function + '\\n}\\nverify_exact_worktree\\n')
+        return run('bash', '-c', script, cwd=self.repo, env=env)
+
+    def test_clean_approved_blob_loader(self):
+        result = self.gate_from_committed_shell()
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_mutated_verifier_is_not_executed(self):
+        helper = self.repo / 'scripts' / CHECKER.name
+        with helper.open('a') as out:
+            out.write('\\nopen(".git/should-not-execute", "w").write("pwned")\\n')
+        result = self.gate_from_committed_shell()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
+
+    def test_staged_verifier_is_not_executed(self):
+        helper = self.repo / 'scripts' / CHECKER.name
+        with helper.open('a') as out:
+            out.write('\\nopen(".git/should-not-execute", "w").write("pwned")\\n')
+        add = run('git', 'add', 'scripts/' + CHECKER.name, cwd=self.repo)
+        self.assertEqual(0, add.returncode, add.stderr)
+        result = self.gate_from_committed_shell()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
+
+    def test_post_hash_verifier_swap_cannot_execute_changed_python(self):
+        # A deterministic Git shim swaps the worktree verifier *after* the
+        # raw-hash command but just before Git provides the immutable blob.
+        # The old path-based invocation could run attacker-controlled Python.
+        shim_dir = Path(self.tmp.name) / 'shim'
+        shim_dir.mkdir()
+        real_git = shutil.which('git')
+        self.assertIsNotNone(real_git)
+        shim = shim_dir / 'git'
+        shim.write_text(
+            '#!/usr/bin/env python3\\n'
+            'import os, subprocess, sys\\n'
+            'if sys.argv[1:3] == ["cat-file", "blob"]:\\n'
+            '    with open(os.environ["NIO_TEST_HELPER_PATH"], "a") as out:\\n'
+            '        out.write("\\\\nopen(\\\\".git/should-not-execute\\\\", '
+            '\\\\"w\\\\").write(\\\\"pwned\\\\")\\\\n")\\n'
+            'raise SystemExit(subprocess.call([os.environ["NIO_TEST_REAL_GIT"], '
+            '*sys.argv[1:]]))\\n'
+        )
+        shim.chmod(0o755)
+        env = os.environ.copy()
+        env['NIO_TEST_HELPER_PATH'] = str(self.repo / 'scripts' / CHECKER.name)
+        env['NIO_TEST_REAL_GIT'] = real_git
+        env['PATH'] = str(shim_dir) + os.pathsep + env.get('PATH', '')
+        result = self.gate_from_committed_shell(env=env)
+        self.assertNotEqual(0, result.returncode, result.stderr)
+        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
 
     def reject(self, snippet):
         out = self.gate()
