@@ -1,5 +1,6 @@
 #include "oreslang/frontend/TreeShaker.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <string>
