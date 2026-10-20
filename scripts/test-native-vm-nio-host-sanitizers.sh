@@ -14,8 +14,33 @@ tree_sha="$(git rev-parse --verify "HEAD^{tree}")"
 # and admits only ignored build/cache output directories at the repository root.
 command -v python3 >/dev/null || { printf 'Python 3 required for NIO source-integrity gate\n' >&2; exit 2; }
 verify_exact_worktree() {
-  python3 -I scripts/verify-native-nio-source-local.py "$head_sha" "$tree_sha"
+  # The worktree's Python verifier is untrusted until source integrity passes.
+  # Never execute its pathname (even after hash checking): it can be swapped
+  # between the check and Python's open(). Execute the immutable HEAD blob.
+  local helper='scripts/verify-native-nio-source-local.py'
+  local approved staged raw
+  approved="$(git rev-parse --verify "HEAD:$helper")" || return 2
+  staged="$(git rev-parse --verify ":$helper")" || return 2
+  raw="$(git hash-object --no-filters -- "$helper")" || return 2
+  if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+    printf 'NIO verifier bytes/index differ from approved HEAD blob\\n' >&2
+    return 2
+  fi
+  # -I removes Python environment/site injection and -B blocks pycache writes.
+  # A post-hash path swap can only make the integrity check reject; the code
+  # executed here always comes from the immutable Git object database.
+  git cat-file blob "$approved" |
+    python3 -I -B -c '
+import sys
+source = sys.stdin.buffer.read()
+exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+     {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+' "$head_sha" "$tree_sha"
 }
+verify_exact_worktree
+# Source-free adversarial worktree/loader fixtures: no private source leaves
+# this origin repository. This suite is not runtime/compiler certification.
+python3 -I -B tests/test_native_nio_source_integrity.py
 verify_exact_worktree
 if [[ -n "${ORES_NIO_EXPECT_HEAD:-}" && "$head_sha" != "$ORES_NIO_EXPECT_HEAD" ]]; then
   printf 'Exact-head mismatch: expected %s, checked out %s\n' "$ORES_NIO_EXPECT_HEAD" "$head_sha" >&2
