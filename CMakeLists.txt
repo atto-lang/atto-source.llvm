@@ -1584,6 +1584,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-native-actor-compact-arena-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-actor-compact-arena-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-compact-arena-test PRIVATE
+        ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION=1)
     target_compile_options(oreslang-native-actor-compact-arena-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_compact32_slab_domain_epoch_and_aba
