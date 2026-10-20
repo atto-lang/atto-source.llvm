@@ -506,10 +506,18 @@ inline TreeShakenProgram tree_shake_program(
         Program program,
         const std::vector<std::string>& requested_function_root_names,
         const std::vector<std::string>& explicit_actor_roots = {},
-        const std::vector<std::string>& explicit_class_roots = {}) {
-    const std::vector<std::string> function_root_slots =
-            resolve_tree_shake_function_roots(
-                    program, requested_function_root_names);
+        const std::vector<std::string>& explicit_class_roots = {},
+        const std::vector<std::string>& additional_function_root_slots = {}) {
+    std::set<std::string> function_root_set;
+    const auto resolved_roots = resolve_tree_shake_function_roots(
+            program, requested_function_root_names);
+    function_root_set.insert(resolved_roots.begin(), resolved_roots.end());
+    function_root_set.insert(
+            additional_function_root_slots.begin(),
+            additional_function_root_slots.end());
+    const std::vector<std::string> function_root_slots(
+            function_root_set.begin(), function_root_set.end());
+
     ReachabilityResult reachability = analyze_reachability(
             program,
             function_root_slots,
