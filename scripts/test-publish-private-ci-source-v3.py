@@ -98,6 +98,263 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_review_attested_unprotected_main_accepts_exact_independent_review(self):
+        main_sha = "2" * 40
+        authority_head = "3" * 40
+
+        def raw_for(path):
+            if path == v3.POLICY_PATH:
+                return b"trusted/ci\n"
+            return (path + "\n").encode()
+
+        def tree_entries():
+            result = {}
+            for path in v3.REVIEWED_GOVERNANCE_PATHS:
+                raw = raw_for(path)
+                result[path] = (
+                    "100644",
+                    "blob",
+                    hashlib.sha1(
+                        b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+                    ).hexdigest(),
+                )
+            return result
+
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}":
+                return {
+                    "id": v3.SOURCE_REPO_ID,
+                    "full_name": v3.SOURCE_REPO,
+                    "private": True,
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": False,
+                    "commit": {"sha": main_sha},
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/pulls/{v3.REVIEW_AUTHORITY_PR}":
+                return {
+                    "number": v3.REVIEW_AUTHORITY_PR,
+                    "state": "closed",
+                    "merged_at": "2026-10-20T01:00:00Z",
+                    "user": {"id": 424242, "login": "independent-author"},
+                    "head": {
+                        "sha": authority_head,
+                        "repo": {
+                            "full_name": v3.SOURCE_REPO,
+                            "id": v3.SOURCE_REPO_ID,
+                        },
+                    },
+                    "base": {
+                        "ref": v3.SOURCE_BRANCH,
+                        "repo": {
+                            "full_name": v3.SOURCE_REPO,
+                            "id": v3.SOURCE_REPO_ID,
+                        },
+                    },
+                }
+            raise AssertionError(route)
+
+        def remote(path, _ref, _limit):
+            raw = raw_for(path)
+            sha = hashlib.sha1(
+                b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+            ).hexdigest()
+            return raw, sha
+
+        reviews = [{
+            "id": 7,
+            "state": "APPROVED",
+            "commit_id": authority_head,
+            "submitted_at": "2026-10-20T00:59:00Z",
+            "user": {
+                "id": v3.REVIEW_AUTHORITY_USER_ID,
+                "login": v3.REVIEW_AUTHORITY_LOGIN,
+            },
+        }]
+        entries = tree_entries()
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "gh_api_list", return_value=reviews),
+            patch.object(v3, "governance_tree_entries", return_value=entries),
+            patch.object(v3, "remote_source_file", side_effect=remote),
+        ):
+            self.assertEqual(
+                v3.authorized_source_main("trusted/ci"),
+                main_sha,
+            )
+
+    def test_review_attested_authority_denies_revocation_author_collision_and_mode_drift(self):
+        main_sha = "2" * 40
+        authority_head = "3" * 40
+
+        def raw_for(path):
+            if path == v3.POLICY_PATH:
+                return b"trusted/ci\n"
+            return (path + "\n").encode()
+
+        def entries():
+            out = {}
+            for path in v3.REVIEWED_GOVERNANCE_PATHS:
+                raw = raw_for(path)
+                out[path] = (
+                    "100644",
+                    "blob",
+                    hashlib.sha1(
+                        b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+                    ).hexdigest(),
+                )
+            return out
+
+        def authority(author_id=424242):
+            return {
+                "number": v3.REVIEW_AUTHORITY_PR,
+                "state": "closed",
+                "merged_at": "2026-10-20T01:00:00Z",
+                "user": {"id": author_id, "login": "author"},
+                "head": {
+                    "sha": authority_head,
+                    "repo": {
+                        "full_name": v3.SOURCE_REPO,
+                        "id": v3.SOURCE_REPO_ID,
+                    },
+                },
+                "base": {
+                    "ref": v3.SOURCE_BRANCH,
+                    "repo": {
+                        "full_name": v3.SOURCE_REPO,
+                        "id": v3.SOURCE_REPO_ID,
+                    },
+                },
+            }
+
+        def base_api(author_id=424242):
+            def api(route, method="GET", payload=None):
+                if route == f"repos/{v3.SOURCE_REPO}":
+                    return {
+                        "id": v3.SOURCE_REPO_ID,
+                        "full_name": v3.SOURCE_REPO,
+                        "private": True,
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                    return {
+                        "name": v3.SOURCE_BRANCH,
+                        "protected": False,
+                        "commit": {"sha": main_sha},
+                    }
+                if route == f"repos/{v3.SOURCE_REPO}/pulls/{v3.REVIEW_AUTHORITY_PR}":
+                    return authority(author_id)
+                raise AssertionError(route)
+            return api
+
+        approved = {
+            "id": 7,
+            "state": "APPROVED",
+            "commit_id": authority_head,
+            "submitted_at": "2026-10-20T00:58:00Z",
+            "user": {
+                "id": v3.REVIEW_AUTHORITY_USER_ID,
+                "login": v3.REVIEW_AUTHORITY_LOGIN,
+            },
+        }
+        revoked = dict(approved)
+        revoked.update({
+            "id": 8,
+            "state": "CHANGES_REQUESTED",
+            "submitted_at": "2026-10-20T00:59:00Z",
+        })
+        with (
+            patch.object(v3, "gh_api", side_effect=base_api()),
+            patch.object(v3, "gh_api_list", return_value=[approved, revoked]),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "stale, late, or not approved"):
+                v3.authorized_source_main("trusted/ci")
+
+        with patch.object(
+                v3, "gh_api",
+                side_effect=base_api(v3.REVIEW_AUTHORITY_USER_ID)):
+            with self.assertRaisesRegex(v3.Denied, "independent merged"):
+                v3.authorized_source_main("trusted/ci")
+
+        stable = entries()
+        changed = dict(stable)
+        target = "scripts/run-in-private-ci-destination.sh"
+        changed[target] = ("100755", "blob", changed[target][2])
+
+        def remote(path, _ref, _limit):
+            raw = raw_for(path)
+            sha = hashlib.sha1(
+                b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+            ).hexdigest()
+            return raw, sha
+
+        with (
+            patch.object(v3, "gh_api", side_effect=base_api()),
+            patch.object(v3, "gh_api_list", return_value=[approved]),
+            patch.object(v3, "governance_tree_entries", side_effect=[stable, changed]),
+            patch.object(v3, "remote_source_file", side_effect=remote),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "Git entry drifted"):
+                v3.authorized_source_main("trusted/ci")
+
+    def test_review_history_and_governance_tree_fail_closed(self):
+        review = {
+            "id": 7,
+            "state": "APPROVED",
+            "commit_id": "3" * 40,
+            "submitted_at": "2026-10-20T00:00:00Z",
+            "user": {
+                "id": v3.REVIEW_AUTHORITY_USER_ID,
+                "login": v3.REVIEW_AUTHORITY_LOGIN,
+            },
+        }
+        with patch.object(v3, "gh_api_list", return_value=[review, dict(review)]):
+            with self.assertRaisesRegex(v3.Denied, "invalid IDs"):
+                v3.latest_authority_review()
+
+        malformed = dict(review)
+        malformed["submitted_at"] = "not-time"
+        with patch.object(v3, "gh_api_list", return_value=[malformed]):
+            with self.assertRaisesRegex(v3.Denied, "timestamp invalid"):
+                v3.latest_authority_review()
+
+        commit_sha = "4" * 40
+        tree_sha = "5" * 40
+        listing = [{
+            "path": path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": "6" * 40,
+        } for path in v3.REVIEWED_GOVERNANCE_PATHS]
+
+        def api(route, method="GET", payload=None):
+            if route.endswith("/git/commits/" + commit_sha):
+                return {"sha": commit_sha, "tree": {"sha": tree_sha}}
+            if route.endswith("/git/trees/" + tree_sha + "?recursive=1"):
+                return {"sha": tree_sha, "truncated": False, "tree": listing}
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            self.assertEqual(
+                set(v3.governance_tree_entries(commit_sha)),
+                set(v3.REVIEWED_GOVERNANCE_PATHS),
+            )
+
+        unsafe = [dict(item) for item in listing]
+        unsafe[0]["mode"] = "120000"
+
+        def unsafe_api(route, method="GET", payload=None):
+            if route.endswith("/git/commits/" + commit_sha):
+                return {"sha": commit_sha, "tree": {"sha": tree_sha}}
+            if route.endswith("/git/trees/" + tree_sha + "?recursive=1"):
+                return {"sha": tree_sha, "truncated": False, "tree": unsafe}
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=unsafe_api):
+            with self.assertRaisesRegex(v3.Denied, "unsafe Git type/mode"):
+                v3.governance_tree_entries(commit_sha)
+
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
