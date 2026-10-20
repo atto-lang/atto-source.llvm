@@ -1,6 +1,7 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
@@ -61,6 +62,142 @@ static void require_valid_source_utf8(std::string_view source) {
 
 
 
+static void collect_tree_shake_expression_calls(
+        const oreslang::Expression& expression,
+        std::unordered_set<std::string>& calls) {
+    using Kind = oreslang::Expression::Kind;
+    if (expression.kind == Kind::Call)
+        calls.insert(oreslang::native_function_slot(
+            expression.name, expression.arguments.size()));
+    if (expression.left)
+        collect_tree_shake_expression_calls(*expression.left, calls);
+    if (expression.right)
+        collect_tree_shake_expression_calls(*expression.right, calls);
+    for (const auto& argument : expression.arguments)
+        if (argument) collect_tree_shake_expression_calls(*argument, calls);
+}
+
+static void collect_tree_shake_statement_calls(
+        const oreslang::Statement& statement,
+        std::unordered_set<std::string>& calls) {
+    if (statement.expression)
+        collect_tree_shake_expression_calls(*statement.expression, calls);
+    if (statement.branch_local) {
+        if (statement.branch_local->initializer)
+            collect_tree_shake_expression_calls(
+                *statement.branch_local->initializer, calls);
+        for (const auto& argument : statement.branch_local->constructor_arguments)
+            if (argument) collect_tree_shake_expression_calls(*argument, calls);
+    }
+    if (statement.array_commit_length)
+        collect_tree_shake_expression_calls(*statement.array_commit_length, calls);
+    for (const auto& value : statement.array_commit_values)
+        if (value) collect_tree_shake_expression_calls(*value, calls);
+    if (statement.condition_lhs)
+        collect_tree_shake_expression_calls(*statement.condition_lhs, calls);
+    if (statement.condition_rhs)
+        collect_tree_shake_expression_calls(*statement.condition_rhs, calls);
+    for (const auto& nested : statement.then_statements)
+        collect_tree_shake_statement_calls(nested, calls);
+    for (const auto& nested : statement.else_statements)
+        collect_tree_shake_statement_calls(nested, calls);
+}
+
+static std::unordered_set<std::string> tree_shake_function_calls(
+        const oreslang::Function& function) {
+    std::unordered_set<std::string> calls;
+    for (const auto& local : function.locals) {
+        if (local.initializer)
+            collect_tree_shake_expression_calls(*local.initializer, calls);
+        for (const auto& argument : local.constructor_arguments)
+            if (argument) collect_tree_shake_expression_calls(*argument, calls);
+    }
+    for (const auto& statement : function.statements)
+        collect_tree_shake_statement_calls(statement, calls);
+    for (const auto& guarded : function.early_returns) {
+        if (guarded.lhs) collect_tree_shake_expression_calls(*guarded.lhs, calls);
+        if (guarded.rhs) collect_tree_shake_expression_calls(*guarded.rhs, calls);
+        if (guarded.result) collect_tree_shake_expression_calls(*guarded.result, calls);
+    }
+    for (const auto& send : function.actor_sends)
+        if (send.payload) collect_tree_shake_expression_calls(*send.payload, calls);
+    for (const auto& write : function.actor_field_writes)
+        if (write.expression)
+            collect_tree_shake_expression_calls(*write.expression, calls);
+    if (function.caught_throw_value)
+        collect_tree_shake_expression_calls(*function.caught_throw_value, calls);
+    for (const auto& statement : function.caught_throw_defers)
+        collect_tree_shake_statement_calls(statement, calls);
+    if (function.result)
+        collect_tree_shake_expression_calls(*function.result, calls);
+    return calls;
+}
+
+static void tree_shake_functions(oreslang::Program& program, const std::vector<std::string>& requested_roots) {
+    std::unordered_map<std::string, std::size_t> definitions;
+    for (std::size_t i = 0; i < program.functions.size(); ++i) {
+        const auto& function = program.functions[i];
+        const std::string key =
+            oreslang::native_function_slot(function.name, function.parameters.size());
+        if (!definitions.emplace(key, i).second)
+            throw std::runtime_error(
+                "tree shaking requires unique native function name/arity identities");
+    }
+
+    std::vector<std::string> pending;
+    std::unordered_set<std::string> reachable;
+    if (!requested_roots.empty()) {
+        for (const auto& requested : requested_roots) {
+            std::vector<std::string> matches;
+            for (const auto& function : program.functions) {
+                if (function.name == requested)
+                    matches.push_back(oreslang::native_function_slot(
+                        function.name, function.parameters.size()));
+            }
+            if (matches.empty())
+                throw std::runtime_error("unknown tree-shake root: " + requested);
+            if (matches.size() != 1)
+                throw std::runtime_error("ambiguous tree-shake root: " + requested);
+            if (reachable.insert(matches.front()).second) pending.push_back(matches.front());
+        }
+    } else {
+        for (const auto& function : program.functions) {
+            if (function.exported || function.name == "main") {
+                const std::string key =
+                    oreslang::native_function_slot(function.name, function.parameters.size());
+                if (reachable.insert(key).second) pending.push_back(key);
+            }
+        }
+    }
+    if (pending.empty())
+        throw std::runtime_error(
+            "tree shaking requires an explicit root, main, or at least one pub function");
+
+    for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
+        const auto definition = definitions.find(pending[cursor]);
+        if (definition == definitions.end())
+            throw std::runtime_error("tree shaking found an unresolved function root");
+        const auto calls =
+            tree_shake_function_calls(program.functions[definition->second]);
+        for (const auto& call : calls) {
+            if (!definitions.count(call))
+                throw std::runtime_error(
+                    "tree shaking found an unresolved direct call: " + call);
+            if (reachable.insert(call).second) pending.push_back(call);
+        }
+    }
+
+    program.functions.erase(
+        std::remove_if(program.functions.begin(), program.functions.end(),
+            [&](const oreslang::Function& function) {
+                return !reachable.count(oreslang::native_function_slot(
+                    function.name, function.parameters.size()));
+            }),
+        program.functions.end());
+}
+
+
+
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
@@ -74,6 +211,8 @@ int main(int argc, char** argv) {
     bool rt_report_seen = false;
     std::string rt_entry = "main/0";
     std::string rt_report_path;
+    bool tree_shake = false;
+    std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
@@ -115,6 +254,13 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--tree-shake") {
+            if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
+            tree_shake = true;
+        } else if (arg.rfind("--tree-shake-root=", 0) == 0) {
+            const std::string root = arg.substr(18);
+            if (root.empty()) { std::cerr << "empty tree-shake root\n"; return 2; }
+            tree_shake_roots.push_back(root);
         } else if (arg.rfind("--target=", 0) == 0) {
             if (target_seen) { std::cerr << "duplicate target option\n"; return 2; }
             target_seen = true;
@@ -140,6 +286,10 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (!tree_shake && !tree_shake_roots.empty()) {
+        std::cerr << "tree-shake-root requires --tree-shake\n";
+        return 2;
+    }
     oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
     if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
@@ -151,7 +301,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -374,6 +524,13 @@ int main(int argc, char** argv) {
                 return depth;
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
+        }
+        if (tree_shake) {
+            // Tree shaking is an optimization, not conditional compilation.
+            // Validate/codegen the complete admitted source once before pruning
+            // so unsupported target features cannot hide in unreachable code.
+            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            tree_shake_functions(ast, tree_shake_roots);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         std::cout.flush();
