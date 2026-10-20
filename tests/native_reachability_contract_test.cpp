@@ -425,6 +425,20 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn_arity("api", 1, integer(1), true));
+        program.functions.push_back(fn_arity("api", 2, integer(2), false));
+        program.functions.push_back(fn("main", call_arity("api", 1)));
+
+        auto shaken = tree_shake_program(std::move(program), {"main"}, false);
+        assert(has(shaken.reachability.retained_symbols,
+                   "__root__.api$arity1"));
+        assert(has(shaken.reachability.retained_symbols,
+                   "__root__.api$arity2"));
+        assert(shaken.program.functions.size() == 3);
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("main", call("missing")));
         bool rejected = false;
         try {
