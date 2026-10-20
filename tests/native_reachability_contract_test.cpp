@@ -123,6 +123,13 @@ int main() {
                 "__root__.live",
                 "__root__.leaf",
                 ReachabilityReason::DirectCall));
+        const auto leaf_explanation =
+                explain_reachability(result, "__root__.leaf");
+        assert(!leaf_explanation.is_root);
+        assert(leaf_explanation.root_reasons.empty());
+        assert(leaf_explanation.incoming_edges.size() == 1);
+        assert(leaf_explanation.incoming_edges.front().reason ==
+               ReachabilityReason::DirectCall);
 
         assert(shaken.program.functions.size() == 3);
         assert(std::none_of(shaken.program.functions.begin(),
@@ -500,6 +507,16 @@ int main() {
                 "__root__.api$arity1",
                 "__root__.api$arity2",
                 ReachabilityReason::ExportedOverloadAbi));
+        const auto api2 = explain_reachability(
+                shaken.reachability, "__root__.api$arity2");
+        assert(!api2.is_root);
+        assert(std::any_of(
+                api2.incoming_edges.begin(),
+                api2.incoming_edges.end(),
+                [](const ReachabilityEdge& edge) {
+                    return edge.reason ==
+                           ReachabilityReason::ExportedOverloadAbi;
+                }));
         assert(shaken.program.functions.size() == 3);
     }
 
