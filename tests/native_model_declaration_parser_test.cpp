@@ -3,6 +3,7 @@
 #include "oreslang/frontend/ModelRunFencing.hpp"
 #include "oreslang/frontend/PortableModelGraphDigestV1.hpp"
 #include "oreslang/frontend/ResolvedModelGraphLoweringV1.hpp"
+#include "oreslang/frontend/ExecutionProfileDigestV1.hpp"
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include <limits>
 namespace pv1 = oreslang::model::portable_v1;
 namespace rv1 = oreslang::model::resolved_v1;
+namespace epv1 = oreslang::model::profile_v1;
 
 static void check(bool condition, const std::string& label) {
     if (!condition) throw std::runtime_error("native model parser test: " + label);
@@ -94,6 +96,28 @@ int main() {
         renamed.nodes[2].id = "c"; renamed.nodes[2].inputs = {"b"};
         renamed.outputs = {"c"};
         check(pv1::digest(renamed) == graph_id, "temporary node IDs are nonsemantic");
+
+        epv1::Profile reference_profile{
+            1, "reference", "model-ref-1", "ores-semantic-1",
+            "portable", "portable", "core-model-v1", "strict", true,
+            "preallocated", true, std::nullopt, {}
+        };
+        check(epv1::canonical_bytes(reference_profile).size() == 127,
+              "execution profile canonical byte length");
+        const auto derived_profile = epv1::digest(reference_profile);
+        check(derived_profile ==
+                  "8440c7b53174d2d0dc6a6ff6e1fda662e409f4e21f6ce647eea38b87b3ff9695",
+              "shared execution profile digest");
+        auto ieee_profile = reference_profile;
+        ieee_profile.numeric_mode = "ieee";
+        check(epv1::digest(ieee_profile) ==
+                  "f157ad0ec51a93c6f89e12512af934acea2d179f07c577aa0399a51dffc4275e",
+              "execution numeric mode mutation");
+        auto feature_profile = reference_profile;
+        feature_profile.numeric_features = {"fma"};
+        check(epv1::digest(feature_profile) ==
+                  "dad02ababd944847f5fac379b1c9e8f924233df789a46f436b70e48f3881d55b",
+              "execution feature mutation");
 
         const rv1::Registry resolved_registry = {
             {"PriceInput", portable_sig('1', {}, {})},
