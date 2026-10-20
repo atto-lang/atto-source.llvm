@@ -148,9 +148,11 @@ public:
                             static_cast<std::uint16_t>(index)};
     }
     // Trusted host signal, never invoked on guest/control execution lanes.
+    // Shutdown prohibits new counter writes even for direct manager callers;
+    // outstanding pre-stop counters remain drainable for trusted cleanup.
     bool signal_owned_eventfd(OwnedEventFd key) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
-        if (!guard.owns_lock()) return false;
+        if (!guard.owns_lock() || stopped_) return false;
         const auto* entry = lookup_owned(key);
         if (!entry) return false;
         const std::uint64_t one = 1;

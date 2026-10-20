@@ -72,6 +72,10 @@ static void test_managed_eventfd_and_stop(){
     NativeEpollReactorManager manager(1);
     auto key=manager.open_owned_eventfd();
     require(key.has_value(),"mint managed kernel eventfd");
+    auto teardown_key=manager.open_owned_eventfd();
+    require(teardown_key.has_value(),"mint teardown eventfd before stop");
+    require(manager.signal_owned_eventfd(*teardown_key),
+            "pre-stop signal accepted for eventual cleanup");
     auto watch=manager.try_watch(*key,EPOLLIN);
     require(watch.has_value(),"admit authenticated managed eventfd");
     require(!manager.close_owned_eventfd(*key),"no close while claimed");
@@ -82,6 +86,16 @@ static void test_managed_eventfd_and_stop(){
     auto pending=manager.try_watch(*key,EPOLLIN);
     require(pending.has_value(),"managed rearm");
     manager.stop();
+    require(!manager.signal_owned_eventfd(*key),
+            "post-stop managed eventfd write must fail");
+    require(!manager.signal_owned_eventfd(*teardown_key),
+            "post-stop unclaimed eventfd write must fail");
+    require(manager.drain_owned_eventfd(*teardown_key),
+            "pre-stop counter may still drain after shutdown");
+    require(!manager.drain_owned_eventfd(*teardown_key),
+            "no phantom counter after one drain");
+    require(manager.close_owned_eventfd(*teardown_key),
+            "post-stop trusted cleanup of unclaimed eventfd");
     require(!manager.try_cancel(*pending),"cancel cannot steal shutdown");
     auto stopped=wait_terminal(manager);
     require(stopped.event.ticket.value==pending->ticket.value && stopped.event.outcome==NativeEpollReactor::Outcome::stopped,"stop exactly once");
