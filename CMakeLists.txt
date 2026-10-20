@@ -631,6 +631,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_function
+        tree-shake-dead-symbols.ores --ir "@dead_helper")
+    oreslang_contract_test(native_tree_shake_prunes_dead_semantic_ir
+        tree-shake-dead-symbols.ores
+        --tree-shake
+        --ir "call i64 @live_helper"
+        --ir-absent "@dead_helper"
+        --ir-absent "DeadWorker"
+        --ir-absent "DeadBox"
+        --ir-absent "oreslang_source_actor_spawn")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_preserves_executable_behavior
+            tree-shake-dead-symbols.ores
+            --tree-shake
+            --ir-absent "@dead_helper"
+            --ir-absent "oreslang_source_actor_spawn"
+            --run 42 --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
