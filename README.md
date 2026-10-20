@@ -122,3 +122,24 @@ See [admission limits](docs/CORTEXM_SCALAR_IR.md).
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+
+## Tree shaking
+
+The native compiler now has an opt-in `--tree-shake` direct-call reachability
+slice. It runs after parsing/semantic admission and before LLVM IR emission.
+
+Current roots are `main` and `pub` functions. The pass follows direct
+same-module calls transitively and removes unreachable private functions, which
+also prevents function-local runtime requirements from being discovered by
+later codegen when their owning function is removed.
+
+This is deliberately narrower than the cross-backend target: classes, actor
+types, dynamic dispatch, reflection/FFI, hot-load roots, stdlib/module pruning,
+and the versioned reachability report still need follow-up support. Rootless
+strict tree shaking fails closed rather than silently producing an empty
+artifact.
+
+The executed CTest gate compiles both shaken and unshaken IR through Clang and
+requires identical process behavior while asserting the dead private symbol is
+absent from the shaken IR.
