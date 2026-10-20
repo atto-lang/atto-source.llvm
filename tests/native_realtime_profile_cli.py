@@ -85,6 +85,19 @@ def main():
         require(pure.read_text() == original,
                 "source must not be overwritten through report symlink")
 
+        hard_alias = root / "pure-report-hardlink.ores"
+        hard_alias.hardlink_to(pure)
+        result = run([
+            compiler,
+            "--rt-check",
+            f"--rt-report={hard_alias}",
+            str(pure),
+        ])
+        require(result.returncode == 1,
+                "report hardlink aliasing source must reject")
+        require(pure.read_text() == original,
+                "source must not be overwritten through report hardlink")
+
     return 0
 
 if __name__ == "__main__":
