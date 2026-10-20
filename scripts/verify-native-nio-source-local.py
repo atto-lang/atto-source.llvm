@@ -53,6 +53,11 @@ def verify_raw_tracked_blobs() -> None:
                 before = os.fstat(fd)
                 if not stat.S_ISREG(before.st_mode):
                     raise ValueError("tracked source is not a regular file: " + repr(path[:120]))
+                # A verified inode with another hardlink can be modified
+                # through a path outside the checkout after verification.
+                # Source-local compilation must not trust such an alias.
+                if before.st_nlink != 1:
+                    raise ValueError("multiply-linked tracked source: " + repr(path[:120]))
                 if bool(before.st_mode & 0o111) != (mode == b"100755"):
                     raise ValueError("tracked source executable mode mismatch: " + repr(path[:120]))
                 digest = hashlib.sha1()
@@ -63,8 +68,10 @@ def verify_raw_tracked_blobs() -> None:
                         break
                     digest.update(chunk)
                 after = os.fstat(fd)
-                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+                        before.st_ino, before.st_dev, before.st_nlink) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                        after.st_ino, after.st_dev, after.st_nlink):
                     raise ValueError("tracked source changed during verification: " + repr(path[:120]))
                 if digest.hexdigest().encode("ascii") != object_id:
                     raise ValueError("raw tracked blob mismatch: " + repr(path[:120]))
