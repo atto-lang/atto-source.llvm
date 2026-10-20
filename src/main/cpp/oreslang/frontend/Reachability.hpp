@@ -108,6 +108,8 @@ struct RuntimeFeatureSet {
 };
 
 inline void validate_reachability_result(const ReachabilityResult& result);
+inline void validate_reachability_provenance_complete(
+        const ReachabilityResult& result);
 
 namespace reachability_detail {
 
@@ -546,6 +548,7 @@ inline ReachabilityResult analyze_reachability(
         std::move(root_reasons),
         std::move(edges)};
     validate_reachability_result(result);
+    validate_reachability_provenance_complete(result);
     return result;
 }
 
