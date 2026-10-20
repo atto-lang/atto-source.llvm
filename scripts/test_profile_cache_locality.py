@@ -47,6 +47,13 @@ class PerfParserTests(unittest.TestCase):
         self.assertRaisesRegex(ValueError, "invalid counter", parse_perf_stat,
                                self.fixture({"LLC-load-misses": -1}))
 
+    def test_reject_multiplexing_and_unproven_running_percentage(self):
+        raw = self.fixture()
+        self.assertRaisesRegex(ValueError, "multiplexed", parse_perf_stat,
+                               raw.replace("123456789;100.00", "123456789;80.00", 1))
+        self.assertRaisesRegex(ValueError, "percentage", parse_perf_stat,
+                               raw.replace("123456789;100.00", "123456789;", 1))
+
     def test_l2_explicit_not_inferred_from_llc(self):
         requests, misses = "l2_rqsts.all_demand_data_rd", "l2_rqsts.demand_data_rd_miss"
         events = EVENTS + (requests, misses)
