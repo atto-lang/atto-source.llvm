@@ -48,7 +48,8 @@ inline Graph lower(const ModelDecl& source,
     std::unordered_map<std::string,std::string> config;
     std::unordered_set<std::string> declared;
     for (const auto& formal : source.formals) {
-        declared.insert(formal.name);
+        if (!declared.insert(formal.name).second)
+            throw std::runtime_error("MODEL_DUPLICATE_FORMAL");
         auto override = overrides.find(formal.name);
         if (override != overrides.end()) config.emplace(formal.name, override->second);
         else if (!formal.default_value.empty()) config.emplace(formal.name, formal.default_value);
@@ -76,6 +77,10 @@ inline Graph lower(const ModelDecl& source,
 
         std::vector<Constant> constants;
         for (std::size_t i = 0; i < op.arguments.size(); ++i) {
+            // V1 has no linker-verified config names. Erasing a named label
+            // would alias semantically distinct source calls under one digest.
+            if (!op.arguments[i].label.empty())
+                throw std::runtime_error("MODEL_NAMED_ARGUMENT_UNRESOLVED");
             std::string value = op.arguments[i].value;
             if (op.arguments[i].formal_reference) {
                 auto it = config.find(value);
