@@ -703,6 +703,13 @@ if(BUILD_TESTING)
         native-rt-aot-counter.ores
         --tree-shake
         --ir "oreslang_rt_spin_resume")
+    oreslang_contract_test(native_tree_shake_wasm_actor_avoids_native_actor_runtime
+        wasm32-source-actor-counter.ores
+        --target wasm32
+        --tree-shake
+        --ir "oreslang_wasm_actor_on_message"
+        --ir-absent "oreslang_source_actor_spawn"
+        --ir-absent "ores_actor_i64_heap_field_init")
     oreslang_contract_test(native_tree_shake_library_keeps_public_api
         tree-shake-library.ores
         --tree-shake
