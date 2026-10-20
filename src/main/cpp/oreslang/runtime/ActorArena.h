@@ -53,6 +53,10 @@ void ores_actor_arena_retire(OresActorArena*);
 /* Returns 0 while a turn or persistent loan exists; otherwise zeroizes and
  * frees storage and returns 1. Host must fence external callbacks first. */
 int ores_actor_arena_try_destroy(OresActorArena*);
+#ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
+/* Test-only process-global counter override. Never compile into production. */
+void ores_actor_arena_test_set_next_domain(uint64_t next);
+#endif
 #ifdef __cplusplus
 }
 #endif
