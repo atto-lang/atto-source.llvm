@@ -31,6 +31,7 @@ def main():
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
+        ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-interleaved-stop.ores", 2, None, None),
@@ -47,7 +48,7 @@ def main():
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
-        "source-actor-spawn-unavailable-await.ores": "native async/channel/select boundary unsupported",
+        "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -82,6 +83,9 @@ def main():
                 "source-actor-spawn-stop.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-await-ready.ores":
+                assert "oreslang_source_actor_await_ready" in guest.stdout, name
+                assert "ready_continuation" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -98,7 +102,12 @@ def main():
                 "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
                 str(runtime / "NativeActorScheduler.c"),
                 str(runtime / "NativeOresVM.c"),
+                str(runtime / "NativeActorFuture.c"),
                 str(runtime / "SourceActorBootstrap.c"),
+                str(runtime / "NativeExecutionContextStore.c"),
+                str(runtime / "NativeContinuationStore.c"),
+                str(runtime / "NativeAwaitTraceBridge.c"),
+                str(runtime / "NativeLogicalTrace.c"),
                 "-std=c11", "-pthread", "-I", str(source_dirs),
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
             ]
@@ -111,6 +120,11 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
+            if name == "source-actor-await-ready.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
