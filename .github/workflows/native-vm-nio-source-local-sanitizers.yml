@@ -53,7 +53,23 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
           actual_tree="$(git rev-parse --verify HEAD^{tree})"
-          python3 -I scripts/verify-native-nio-source-local.py "$EXPECTED_HEAD" "$actual_tree"
+          # Authenticate the checker by staged/raw blob hash, then execute
+          # only its immutable HEAD Git object (not its mutable pathname).
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier differs from approved Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$EXPECTED_HEAD" "$actual_tree"
           echo "NIO_EXACT_SOURCE_COMMIT=$EXPECTED_HEAD"
           echo "NIO_EXACT_SOURCE_TREE=$actual_tree"
       - name: Exercise fail-closed worktree security fixtures
@@ -62,9 +78,40 @@ jobs:
           set -euo pipefail
           # Isolated mode does not suppress bytecode; -B prevents ignored
           # tests/__pycache__ from tainting the subsequent exact-tree gate.
-          python3 -I -B -m unittest discover -s tests -p test_native_nio_source_integrity.py -v
-          python3 -I scripts/verify-native-nio-source-local.py \
-            "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+          # Treat the test suite as executable too: admit its exact blob
+          # before execution rather than importing a mutable tests/ pathname.
+          test_path=tests/test_native_nio_source_integrity.py
+          approved="$(git rev-parse --verify "HEAD:$test_path")"
+          staged="$(git rev-parse --verify ":$test_path")"
+          raw="$(git hash-object --no-filters -- "$test_path")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO security suite differs from committed Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-test>", "exec"),
+               {"__name__": "__main__", "__file__": "tests/test_native_nio_source_integrity.py"})
+          '
+          # Authenticate the checker by staged/raw blob hash, then execute
+          # only its immutable HEAD Git object (not its mutable pathname).
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier differs from approved Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
 
   native-vm-nio:
     needs: source-integrity
@@ -86,7 +133,23 @@ jobs:
           actual_head="$(git rev-parse --verify HEAD)"
           actual_tree="$(git rev-parse --verify HEAD^{tree})"
           test "$actual_head" = "$EXPECTED_HEAD"
-          python3 -I scripts/verify-native-nio-source-local.py "$actual_head" "$actual_tree"
+          # Authenticate the checker by staged/raw blob hash, then execute
+          # only its immutable HEAD Git object (not its mutable pathname).
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier differs from approved Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$actual_head" "$actual_tree"
           echo "tree=$actual_tree" >> "$GITHUB_OUTPUT"
           echo "NIO_VM_COMPILED_SOURCE_HEAD=$actual_head"
           echo "NIO_VM_COMPILED_SOURCE_TREE=$actual_tree"
@@ -98,6 +161,21 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-native-vm-nio-host-sanitizers.sh
-          python3 -I scripts/verify-native-nio-source-local.py \
-            "$ORES_NIO_EXPECT_HEAD" "$ORES_NIO_EXPECT_TREE"
+          # Authenticate the checker by staged/raw blob hash, then execute
+          # only its immutable HEAD Git object (not its mutable pathname).
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier differs from approved Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$ORES_NIO_EXPECT_HEAD" "$ORES_NIO_EXPECT_TREE"
           echo "NIO_VM_NATIVE_EXACT_TREE_SANITIZERS_PASS"
