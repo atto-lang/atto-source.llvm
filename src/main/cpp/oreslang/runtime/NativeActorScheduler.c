@@ -1,3 +1,6 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include <pthread.h>
@@ -5,6 +8,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <unistd.h>
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
@@ -39,6 +43,7 @@ struct OresNativeActorScheduler {
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
+    int priority_inheritance_enabled;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
@@ -72,6 +77,25 @@ void ores_native_actor_scheduler_test_set_next_domain(uint64_t value) {
 }
 #endif
 
+static int init_scheduler_mutex(OresNativeActorScheduler* s) {
+    pthread_mutexattr_t attr;
+    int attr_ready = pthread_mutexattr_init(&attr) == 0;
+    if (attr_ready) {
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
+        if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
+                && pthread_mutex_init(&s->lock, &attr) == 0) {
+            s->priority_inheritance_enabled = 1;
+            if (pthread_mutexattr_destroy(&attr) != 0) abort();
+            return 1;
+        }
+#endif
+        if (pthread_mutexattr_destroy(&attr) != 0) abort();
+    }
+    /* General-purpose execution remains portable when PI is unavailable.
+     * Hard-RT admission must separately require the query below to be true. */
+    s->priority_inheritance_enabled = 0;
+    return pthread_mutex_init(&s->lock, NULL) == 0;
+}
 static void lock(OresNativeActorScheduler* s) {
     if (pthread_mutex_lock(&s->lock) != 0) abort();
 }
@@ -199,7 +223,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
-    if (pthread_mutex_init(&s->lock, NULL) != 0) goto allocation_failed;
+    if (!init_scheduler_mutex(s)) goto allocation_failed;
     if (pthread_cond_init(&s->ready, NULL) != 0) {
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
@@ -289,6 +313,14 @@ int ores_native_actor_scheduler_all_carriers_started(
     int ready = s->started_workers == s->worker_count;
     unlock(s);
     return ready;
+}
+int ores_native_actor_scheduler_priority_inheritance_enabled(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int enabled = s->priority_inheritance_enabled;
+    unlock(s);
+    return enabled;
 }
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
