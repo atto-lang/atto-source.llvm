@@ -270,8 +270,26 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
-    if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+std::string emit_verified_llvm_ir(
+        const Program& source,
+        bool wasm32_target,
+        bool cortex_m_target,
+        const RuntimeFeatureSet* expected_runtime_features) {
+    if (wasm32_target && cortex_m_target)
+        throw std::runtime_error("conflicting LLVM target selectors");
+
+    const RuntimeFeatureSet derived_runtime_features =
+            analyze_runtime_features(source, wasm32_target, cortex_m_target);
+    if (expected_runtime_features != nullptr)
+        validate_runtime_features(
+                source,
+                wasm32_target,
+                cortex_m_target,
+                *expected_runtime_features);
+    const RuntimeFeatureSet& runtime_features =
+            expected_runtime_features != nullptr
+                    ? *expected_runtime_features
+                    : derived_runtime_features;
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
@@ -375,11 +393,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
-    const bool has_region_bindings = std::any_of(source.functions.begin(), source.functions.end(),
-        [](const Function& fn) {
-            return std::any_of(fn.locals.begin(), fn.locals.end(),
-                [](const LocalBinding& binding) { return binding.heap_owned; });
-        });
+    const bool has_region_bindings =
+        runtime_features.contains(RuntimeFeature::OwnedI64Region);
     llvm::FunctionCallee regionOpen, regionNew, regionRead, regionDrop, regionClose;
     if (has_region_bindings) {
         regionOpen = module.getOrInsertFunction("oreslang_owned_i64_region_open",
@@ -396,19 +411,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
     // Emit declarations only for functions that actually own Array<int>
     // locals. Opaque, unique handles are never exposed as guest values.
-    const bool has_array_bindings = std::any_of(source.functions.begin(), source.functions.end(),
-        [&](const Function& fn) {
-            return std::any_of(fn.locals.begin(), fn.locals.end(),
-                [&](const LocalBinding& b) {
-                    if (b.int_array) return true;
-                    if (!b.new_class) return false;
-                    const auto cls = std::find_if(source.classes.begin(), source.classes.end(),
-                        [&](const ClassDecl& candidate) { return candidate.name == b.class_name; });
-                    return cls != source.classes.end() &&
-                        std::any_of(cls->fields.begin(), cls->fields.end(),
-                            [](const ClassField& fld) { return fld.int_array; });
-                });
-        });
+    const bool has_array_bindings =
+        runtime_features.contains(RuntimeFeature::IntArrayRuntime);
     llvm::FunctionCallee arrayOpen, arrayNew, arrayAdd, arrayGet, arraySet,
                          arrayLength, arrayDrop, arrayClose, arrayAbort,
                          arrayPrepareFilledMany, arrayCommitMany, arrayUnhandled;
@@ -454,7 +458,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
-    if (!source.actors.empty() && !wasm32_target) {
+    if (runtime_features.contains(RuntimeFeature::ActorNativeRuntime)) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
