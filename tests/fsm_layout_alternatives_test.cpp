@@ -38,6 +38,49 @@ Step reduce(Row old, std::uint32_t event) {
     ++next.version;
     return {true, next, effect};
 }
+
+struct TableRule {
+    std::uint32_t from, event, to, effect;
+    std::uint32_t guard; // 0=always, 1=ticks<3, 2=ticks>=2
+    std::uint32_t update; // 0=retain, 1=reset, 2=increment
+};
+constexpr std::array<TableRule, 4> kTable{{
+    {0, 0, 1, 1, 0, 1},
+    {1, 1, 1, 2, 1, 2},
+    {1, 2, 2, 3, 2, 0},
+    {2, 3, 0, 4, 0, 1}
+}};
+bool table_well_formed(const TableRule* rules, std::size_t count) {
+    if (count > 16) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& a = rules[i];
+        if (a.from > 2 || a.to > 2 || a.event > 3 ||
+                a.effect == 0 || a.effect > 4 || a.guard > 2 || a.update > 2)
+            return false;
+        for (std::size_t j = 0; j < i; ++j)
+            if (rules[j].from == a.from && rules[j].event == a.event) return false;
+    }
+    return true;
+}
+// Independently encoded, statically closed A2 table; must refine A1 reducer.
+Step reduce_table(Row old, std::uint32_t event) {
+    if (old.version == std::numeric_limits<std::uint32_t>::max())
+        return {false, old, 0};
+    for (const auto& r : kTable) {
+        if (r.from != old.state || r.event != event) continue;
+        if ((r.guard == 1 && old.ticks >= 3) ||
+                (r.guard == 2 && old.ticks < 2))
+            return {false, old, 0};
+        Row next = old;
+        next.state = r.to;
+        if (r.update == 1) next.ticks = 0;
+        if (r.update == 2) ++next.ticks;
+        ++next.version;
+        return {true, next, r.effect};
+    }
+    return {false, old, 0};
+}
+
 Plan plan(Layout l) { return Plan(l, kRows, kFields, 4, 16, l == Layout::AoSoA ? 4 : 1); }
 std::uint32_t raw_read(const Plan& p, const std::vector<std::uint8_t>& b,
                        std::uint32_t r, std::uint32_t f) {
@@ -130,6 +173,32 @@ public:
     Access issue_access(std::uint32_t reads, std::uint32_t writes) const {
         return Access(store_token_, reads, writes);
     }
+    // A bounded, transactionally committed host-only effect outbox.
+    // Effects are not externally executed; callers may drain after commit.
+    bool apply_batch(const std::array<std::uint32_t, kRows>& events,
+                     std::size_t capacity, bool inject_precommit_fault = false) {
+        check(loans_ == 0, "batch mutation while borrowed");
+        check(outbox_.size() <= capacity, "outbox exceeds quota");
+        auto staged_bytes = bytes_;
+        auto staged_outbox = outbox_;
+        for (std::uint32_t slot = 0; slot < kRows; ++slot) {
+            const Step step = reduce_table(get(slot), events[slot]);
+            if (!step.accepted) continue;
+            if (staged_outbox.size() == capacity) return false;
+            raw_write(plan_, staged_bytes, slot, 0, step.next.state);
+            raw_write(plan_, staged_bytes, slot, 1, step.next.version);
+            raw_write(plan_, staged_bytes, slot, 2, step.next.ticks);
+            staged_outbox.push_back(step.effect);
+        }
+        if (inject_precommit_fault)
+            throw std::runtime_error("injected FSM precommit fault");
+        // No external effects and no mutation of the live store before here.
+        bytes_.swap(staged_bytes);
+        outbox_.swap(staged_outbox);
+        return true;
+    }
+    const std::vector<std::uint32_t>& outbox() const { return outbox_; }
+    void drain_effects() { outbox_.clear(); }
     // One physical authority only: all fields copied before atomically replacing store bytes.
     void migrate(Layout target) {
         check(loans_ == 0, "layout migration while borrowed");
@@ -172,6 +241,7 @@ private:
     Layout layout_;
     Plan plan_;
     std::vector<std::uint8_t> bytes_;
+    std::vector<std::uint32_t> outbox_;
     std::array<std::uint32_t, kRows> generations_{};
     std::uint64_t epoch_ = 1;
     std::uint32_t loans_ = 0;
@@ -297,6 +367,90 @@ bool can_parallel(const Access& a, const Access& b) {
     return ((a.writes_ & (b.reads_ | b.writes_)) == 0) &&
            ((b.writes_ & (a.reads_ | a.writes_)) == 0);
 }
+void check_table_and_effect_outbox() {
+    check(table_well_formed(kTable.data(), kTable.size()), "closed FSM table invalid");
+    auto duplicate = kTable;
+    duplicate[1] = duplicate[0];
+    check(!table_well_formed(duplicate.data(), duplicate.size()),
+          "ambiguous static transition table accepted");
+    auto bad_target = kTable;
+    bad_target[0].to = 99;
+    check(!table_well_formed(bad_target.data(), bad_target.size()),
+          "unknown target state accepted");
+    std::uint32_t probes = 0;
+    for (std::uint32_t state : {0u, 1u, 2u, 99u})
+        for (std::uint32_t event = 0; event <= 4; ++event)
+            for (std::uint32_t ticks = 0; ticks <= 4; ++ticks)
+                for (std::uint32_t version :
+                        {0u, 7u, std::numeric_limits<std::uint32_t>::max()}) {
+                    const Row input{state, version, ticks};
+                    const Step a = reduce(input, event), b = reduce_table(input, event);
+                    check(a.accepted == b.accepted && a.next == b.next &&
+                          a.effect == b.effect, "A1 reducer and A2 table diverged");
+                    ++probes;
+                }
+    check(probes == 300, "incomplete reducer/table truth table");
+    for (Layout layout : kLayouts) {
+        Store store(layout);
+        std::array<std::uint32_t, kRows> start{};
+        check(!store.apply_batch(start, kRows - 1), "outbox overflow admitted");
+        check(store.outbox().empty(), "rejected batch leaked effects");
+        for (std::uint32_t i = 0; i < kRows; ++i)
+            check(store.read(store.handle(i)) == Row{}, "rejected batch changed state");
+        must_reject([&] { (void)store.apply_batch(start, kRows, true); },
+                    "injected precommit fault not raised");
+        check(store.outbox().empty(), "precommit fault leaked effects");
+        for (std::uint32_t i = 0; i < kRows; ++i)
+            check(store.read(store.handle(i)) == Row{}, "precommit fault changed state");
+        check(store.apply_batch(start, kRows), "valid start cohort rejected");
+        check(store.outbox().size() == kRows, "missing committed effects");
+        for (std::uint32_t i = 0; i < kRows; ++i) {
+            check(store.outbox()[i] == 1, "unstable outbox slot order");
+            check(store.read(store.handle(i)) == Row{1, 1, 0}, "incomplete batch commit");
+        }
+        store.drain_effects();
+        std::array<std::uint32_t, kRows> finish{};
+        finish.fill(2);
+        check(store.apply_batch(finish, 0), "failed guard must be a no-op, not a fault");
+        check(store.outbox().empty(), "guard rejection emitted effect");
+        for (std::uint32_t i = 0; i < kRows; ++i)
+            check(store.read(store.handle(i)) == Row{1, 1, 0},
+                  "failed guard advanced version");
+    }
+    std::uint32_t sequences = 0, choices = 1;
+    for (std::uint32_t depth = 0; depth <= 5; ++depth) {
+        for (std::uint32_t path = 0; path < choices; ++path) {
+            for (Layout layout : kLayouts) {
+                Store store(layout);
+                std::array<Row, kRows> oracle{};
+                std::uint32_t code = path;
+                for (std::uint32_t turn = 0; turn < depth; ++turn) {
+                    const std::uint32_t base = code % 4;
+                    code /= 4;
+                    std::array<std::uint32_t, kRows> events{};
+                    std::vector<std::uint32_t> effects;
+                    for (std::uint32_t i = 0; i < kRows; ++i) {
+                        events[i] = (base + turn + i) % 4;
+                        const Step next = reduce(oracle[i], events[i]);
+                        oracle[i] = next.next;
+                        if (next.accepted) effects.push_back(next.effect);
+                    }
+                    check(store.apply_batch(events, kRows),
+                          "bounded independent-entity event batch denied");
+                    check(store.outbox() == effects, "outbox order differs from A1 oracle");
+                    for (std::uint32_t i = 0; i < kRows; ++i)
+                        check(store.read(store.handle(i)) == oracle[i],
+                              "A2 physical batch != A1 logical oracle");
+                    store.drain_effects();
+                }
+                ++sequences;
+            }
+        }
+        choices *= 4;
+    }
+    check(sequences == 4095, "incomplete independent-entity ECS batch enumeration");
+}
+
 void check_ecs_admission() {
     Store a(Layout::AoS), b(Layout::AoS);
     check(!can_parallel(a.issue_access(1, 2), a.issue_access(2, 0)),
@@ -317,6 +471,7 @@ int main() {
     check_trace_refinement();
     check_lifecycle();
     check_ecs_admission();
+    check_table_and_effect_outbox();
     std::cout << "FSM_LAYOUT_HOST_PASS traces=1023 layouts=3 rows=5 depth=4"
                  " negative=guard,overflow,loans,stale-view,owner,generation,ecs\n";
 }
