@@ -24,6 +24,7 @@ struct SharedCase {
     std::string graph_digest;
     std::string configured_digest;
     std::string semantic_result;
+    std::string configuration_i64;
     std::string source;
 };
 
@@ -101,12 +102,13 @@ SharedCorpus load_shared_corpus() {
             assert(fields.size() == 2);
             corpus.profile = fields[1];
         } else if (fields[0] == "case") {
-            assert(fields.size() == 11);
+            assert(fields.size() == 12);
             corpus.cases.push_back(SharedCase{
                 fields[1], fields[2], fields[3], fields[4],
                 dash_empty(fields[5]), dash_empty(fields[6]),
                 dash_empty(fields[7]), dash_empty(fields[8]),
-                dash_empty(fields[9]), decode_hex_ascii(fields[10])
+                dash_empty(fields[9]), dash_empty(fields[10]),
+                decode_hex_ascii(fields[11])
             });
         } else if (fields[0] == "identity") {
             assert(fields.size() == 8);
@@ -124,7 +126,7 @@ SharedCorpus load_shared_corpus() {
 }
 
 constexpr const char* kSharedExecutableCorpusRevision =
-    "model-core-i64-v1.2026-10-20.8";
+    "model-core-i64-v1.2026-10-20.9";
 
 void expect_error(const std::string& code, const std::string& source) {
     try {
@@ -139,7 +141,7 @@ void expect_error(const std::string& code, const std::string& source) {
 
 int main() {
     assert(std::string(kSharedExecutableCorpusRevision) ==
-           "model-core-i64-v1.2026-10-20.8");
+           "model-core-i64-v1.2026-10-20.9");
     assert(oreslang::model_sha256("abc") ==
            "ba7816bf8f01cfea414140de5dae2223"
            "b00361a396177a9cb410ff61f20015ad");
@@ -152,6 +154,7 @@ int main() {
         if (item.llvm_mode == "reject") {
             const std::string expected =
                 item.llvm_diagnostic.empty() ? item.diagnostic : item.llvm_diagnostic;
+            assert(!expected.empty());
             expect_error(expected, item.source);
             continue;
         }
@@ -162,9 +165,13 @@ int main() {
         if (!item.graph_digest.empty())
             assert(accepted.models.front().graph_digest == item.graph_digest);
         if (!item.configured_digest.empty()) {
+            assert(!item.configuration_i64.empty());
             assert(!accepted.model_runs.empty());
             assert(accepted.model_runs.front().configured_graph_digest ==
                    item.configured_digest);
+            assert(accepted.model_runs.front().configuration.size() == 1);
+            assert(std::to_string(accepted.model_runs.front().configuration.front()) ==
+                   item.configuration_i64);
         }
     }
     for (const auto& item : shared_corpus.identities) {
