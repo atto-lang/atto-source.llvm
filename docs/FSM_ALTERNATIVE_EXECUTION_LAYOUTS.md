@@ -214,3 +214,18 @@ in addition to the A1/A2 host-test and production-layout-header Git blobs.
 This is a private **exact-blob** regression capsule, not an exact full-tree
 guest backend test. Benchmark output must not be used to certify SIMD,
 compiled guest parity, or unconditional performance rankings.
+
+
+## Shared trace contract companion (cross-backend review)
+
+Opened [oreslang-common-source draft #108](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/108)
+as the proposed *single* shared, bounded flat-FSM trace envelope and
+stdlib-only semantic oracle. It rejects inconsistent state/version/effect
+observations, tests 5,461 bounded event words and keeps AoS/SoA/AoSoA/ECS
+out of the semantic JSON. The numeric state/event/effect tags are strictly
+fixture-local: it does not silently grant process `Symbol` IDs stable
+cross-domain serialization or permissions.
+
+**Status:** candidate draft only. Compiler-emitted Java and LLVM traces
+must still be recorded and checked against the exact same shared contract
+source hash before **any** source-level backend parity claim.
