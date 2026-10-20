@@ -220,7 +220,7 @@ def verify_object_metadata(path, readelf):
 
 def build(args):
     source_bytes = pinned_bytes(args.source, args.expected_source_sha256)
-    require(Path(args.compiler).is_file() and
+    require(Path(args.compiler).is_file() and not Path(args.compiler).is_symlink() and
             hash_file(args.compiler) == args.expected_compiler_sha256,
             "compiler executable SHA256 does not match pinned input")
     require(Path(args.policy_cli).is_file() and
@@ -270,6 +270,8 @@ def build(args):
         # Detect policy rewrites during this build, not just before it.
         require(policy_bundle_hash(args.policy_cli) == policy_bundle,
                 'target-policy bundle changed during build')
+        require(hash_file(args.compiler) == args.expected_compiler_sha256,
+                'compiler executable changed during build')
         return {
             "schemaVersion": 1,
             "status": "UNSIGNED_TEST_EVIDENCE_NOT_DEPLOYMENT_AUTHORIZATION",
