@@ -248,6 +248,8 @@ int main() {
         const auto after = analyze_runtime_features(shaken.program, false, false);
         assert(!after.contains(RuntimeFeature::IntArrayRuntime));
         assert(after.names().empty());
+        assert(shaken.runtime_features == after);
+        assert(shaken.runtime_features.names().empty());
     }
 
     {
@@ -262,6 +264,7 @@ int main() {
         auto shaken = tree_shake_program(std::move(program), {"main"}, false);
         const auto features = analyze_runtime_features(shaken.program, false, false);
         assert(features.names() == std::vector<std::string>{"int-array-runtime"});
+        assert(shaken.runtime_features == features);
     }
 
     {
