@@ -51,11 +51,26 @@ ExecutionId. It inherits the allocation-domain capability from the continuation,
 creates a new execution record whose parent is the suspended execution, and
 allows exactly one claimant to resume the continuation.
 
-This is the native lowering ABI for await-like suspension. The general
-source-language await Future<T> grammar remains fail-closed until typed MIR,
-borrow-across-suspend checking, cleanup/unwind state, and the scheduler's real
-source continuation frame all call this ABI. This change must not be presented
-as full source-level await support.
+The first compiler integration now uses this ABI for exactly one constrained
+source form in trusted zero-argument main:
+
+    await actor_ref.get_ready();
+
+The compiler splits post-await sends plus a side-effect-free scalar result into
+a root-actor CONTROL continuation. A first root CONTROL turn persists the
+scheduler-minted ExecutionId and OresNativeSuspensionLink, then returns so its
+native worker stack is destroyed. Actor readiness completes a one-shot native
+Future which admits a second root CONTROL turn. That turn has a fresh
+ExecutionId, calls resume_begin, verifies it inherited the same root actor
+allocation-domain capability, exposes the current ExecutionHandle to diagnostics,
+executes the generated continuation, and calls resume_finish.
+
+The trusted outer main waits outside all VM carriers and performs source stop
+only after the continuation returns. This first profile rejects multiple awaits,
+multiple actor refs, suspended scalar/class/array locals, callable final results,
+actor-context await, generic Future<T>, select, cancellation and borrow-across-
+suspend. Those remain fail-closed until typed MIR, cleanup/unwind state and
+general continuation frames exist.
 
 ## Trace reconstruction
 
@@ -96,3 +111,14 @@ The host regression crosses an AoSoA block boundary and suspends through
 actor-message, await, and supervisor-CONTROL boundaries. Each resumption runs
 on a fresh pthread after the suspending C stack has returned, then reconstructs
 the full logical ancestry without any saved stack address.
+
+## Failure rendering hand-off
+
+While a compiler-generated root continuation is executing,
+`oreslang_source_actor_current_execution_handle` returns the live
+generation-checked ExecutionHandle and
+`oreslang_source_actor_snapshot_current_trace` snapshots its logical ancestry.
+These hooks are intended for throw/raise/panic rendering after those exceptional
+effects have native source lowering. They do not by themselves admit unsupported
+exception syntax and they never expose the underlying store or a native stack
+pointer.
