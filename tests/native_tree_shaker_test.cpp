@@ -55,7 +55,7 @@ int main() {
         assert(program.functions.size() == 2);
         assert(manifest.entry_points.size() == 1 && manifest.entry_points.front() == "main");
         assert(manifest.removed_symbols.size() == 1);
-        assert(manifest.removed_symbols.front() == "__root__.dead");
+        assert(manifest.removed_symbols.front() == "__root__.dead$arity0");
         assert(std::find(manifest.runtime_operations.begin(),
                          manifest.runtime_operations.end(),
                          "native-owned-i64-region") == manifest.runtime_operations.end());
@@ -75,7 +75,52 @@ int main() {
         assert(program.functions.front().name == "public_api");
         assert(manifest.preserve_public_api);
         assert(manifest.entry_points.empty());
-        assert(manifest.removed_symbols.front() == "__root__.private_dead");
+        assert(manifest.removed_symbols.front() == "__root__.private_dead$arity0");
+    }
+
+    {
+        oreslang::Program program;
+
+        auto main = function("main");
+        main.result = call("pick");
+        main.result->arguments.push_back(integer(9));
+
+        auto pick_one = function("pick");
+        pick_one.parameters.push_back(oreslang::Parameter{"value"});
+        pick_one.result = call("live_dep");
+
+        auto pick_two = function("pick");
+        pick_two.parameters.push_back(oreslang::Parameter{"a"});
+        pick_two.parameters.push_back(oreslang::Parameter{"b"});
+        pick_two.result = call("dead_dep");
+
+        auto live_dep = function("live_dep");
+        auto dead_dep = function("dead_dep");
+
+        program.functions.push_back(std::move(main));
+        program.functions.push_back(std::move(pick_one));
+        program.functions.push_back(std::move(pick_two));
+        program.functions.push_back(std::move(live_dep));
+        program.functions.push_back(std::move(dead_dep));
+
+        auto manifest = oreslang::tree_shake_program(
+            program, oreslang::TreeShakeMode::Executable);
+
+        assert(program.functions.size() == 3);
+        assert(std::any_of(program.functions.begin(), program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return fn.name == "pick" && fn.parameters.size() == 1;
+            }));
+        assert(std::none_of(program.functions.begin(), program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return fn.name == "pick" && fn.parameters.size() == 2;
+            }));
+        assert(std::find(manifest.removed_symbols.begin(),
+                         manifest.removed_symbols.end(),
+                         "__root__.pick$arity2") != manifest.removed_symbols.end());
+        assert(std::find(manifest.removed_symbols.begin(),
+                         manifest.removed_symbols.end(),
+                         "__root__.dead_dep$arity0") != manifest.removed_symbols.end());
     }
 
     return 0;
