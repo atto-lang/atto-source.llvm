@@ -329,6 +329,10 @@ int main() {
         check(claimed.queue().tenant == "tenant-A");
         check(claimed.queue().device == "gpu-0");
         static_assert(!std::is_copy_constructible_v<QueueClaimedGpuBinding>);
+        static_assert(!std::is_constructible_v<
+                QueueClaimedGpuBinding, ClaimedGpuBinding&&,
+                std::unique_ptr<const GpuQueueLocation>>,
+                "host code must not fabricate a queue claim without validation");
         static_assert(!std::is_move_assignable_v<QueueClaimedGpuBinding>,
                 "an admitted queue receipt must not be retargeted by assignment");
         static_assert(std::is_same_v<
