@@ -55,6 +55,15 @@ struct Place {
           rows(std::move(row_range)),
           epoch(storage_epoch) {
         if (store.empty()) throw std::invalid_argument("DOP place requires store identity");
+        auto require_nonblank = [](const std::optional<std::string>& value,
+                                   const char* label) {
+            if (value && value->find_first_not_of(" \t\r\n") == std::string::npos)
+                throw std::invalid_argument(
+                    std::string("DOP ") + label + " identity cannot be blank");
+        };
+        require_nonblank(archetype, "archetype");
+        require_nonblank(component, "component");
+        require_nonblank(field, "field");
         if (!component && field)
             throw std::invalid_argument("DOP field requires component identity");
     }
@@ -75,24 +84,24 @@ inline void require_current_epoch(const Place& place, std::uint64_t current_epoc
         throw std::invalid_argument("stale DOP logical borrow epoch");
 }
 
-inline bool overlaps(const Place& left, const Place& right) noexcept {
+inline bool overlaps(const Place& left, const Place& right) {
     if (left.store != right.store) return false;
-    // Epoch mismatch must never be interpreted as safe disjointness. One side
-    // is stale and admission must reject it with require_current_epoch().
-    if (left.epoch != right.epoch) return true;
+    if (left.epoch != right.epoch)
+        throw std::invalid_argument(
+            "cannot compare DOP places from different storage epochs");
     if (!same_or_whole(left.archetype, right.archetype)) return false;
     if (!same_or_whole(left.component, right.component)) return false;
     if (!same_or_whole(left.field, right.field)) return false;
     return !left.rows || !right.rows || left.rows->overlaps(*right.rows);
 }
 
-inline bool conflicts(const Loan& left, const Loan& right) noexcept {
+inline bool conflicts(const Loan& left, const Loan& right) {
     return overlaps(left.place, right.place)
         && (left.access == Access::Write || right.access == Access::Write);
 }
 
 inline bool can_run_concurrently(const std::vector<Loan>& left,
-                                 const std::vector<Loan>& right) noexcept {
+                                 const std::vector<Loan>& right) {
     for (const auto& a : left)
         for (const auto& b : right)
             if (conflicts(a, b)) return false;
