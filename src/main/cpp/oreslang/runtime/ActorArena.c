@@ -130,12 +130,14 @@ int ores_actor_arena_is_prefaulted(OresActorArena* a) {
     leave_lock(a);
     return prefaulted;
 }
-OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
-                                     uint64_t incarnation) {
+static OresArenaTurn enter_impl(
+        OresActorArena* a, uint64_t owner, uint64_t incarnation,
+        int require_prefault) {
     if (carrier_arena != NULL) deny();
     enter_lock(a);
     if (a->retiring || a->active || a->owner != owner
-        || a->incarnation != incarnation || a->epoch == UINT64_MAX) deny();
+        || a->incarnation != incarnation || a->epoch == UINT64_MAX
+        || (require_prefault && !a->prefaulted)) deny();
     a->active = 1;
     ++a->epoch;
     OresArenaTurn turn = {a->domain, a->epoch};
@@ -143,6 +145,14 @@ OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
     carrier_epoch = turn.epoch;
     leave_lock(a);
     return turn;
+}
+OresArenaTurn ores_actor_arena_enter(OresActorArena* a, uint64_t owner,
+                                     uint64_t incarnation) {
+    return enter_impl(a, owner, incarnation, 0);
+}
+OresArenaTurn ores_actor_arena_enter_realtime(
+        OresActorArena* a, uint64_t owner, uint64_t incarnation) {
+    return enter_impl(a, owner, incarnation, 1);
 }
 void ores_actor_arena_leave(OresActorArena* a, OresArenaTurn turn) {
     enter_lock(a);
