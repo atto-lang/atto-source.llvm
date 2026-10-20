@@ -360,6 +360,10 @@ static int create_carrier(pthread_t* tid, void* context) {
 }
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
+    /* A failed real-time prestart is a one-way poison state. Ordinary DATA or
+     * CONTROL admission must not "heal" the scheduler by creating carriers
+     * later; callers must retire and replace the scheduler instance. */
+    if (s->realtime_prestart_failed) return 0;
     /* Real-time service must not allocate stacks or pthread metadata when
      * processing live messages. Profile preparation happens before admission. */
     if (s->realtime_preallocated) return s->started_workers >= required;

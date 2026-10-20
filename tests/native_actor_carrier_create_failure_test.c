@@ -45,6 +45,19 @@ int main(void) {
     require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
     require(!ores_native_actor_scheduler_prestart_realtime(poisoned));
     require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+
+    /* Poison applies to every later admission path, not only another RT
+     * prestart call. Before this regression, a normal send could retry
+     * pthread_create(), silently recover, and make the failed RT bootstrap
+     * resource-timing dependent. */
+    OresNativeActorRef poisoned_actor =
+        ores_native_actor_scheduler_spawn(poisoned, 0);
+    require(poisoned_actor.generation != 0);
+    require(ores_native_actor_scheduler_try_send(
+        poisoned, poisoned_actor, 99) == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    require(ores_native_actor_scheduler_accepted(poisoned) == 0);
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+
     ores_native_actor_scheduler_retire(poisoned);
     require(ores_native_actor_scheduler_drain(poisoned));
     require(ores_native_actor_scheduler_try_destroy(poisoned));
