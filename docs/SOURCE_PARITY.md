@@ -34,6 +34,23 @@ fnc classify(int x) -> int
 end
 ```
 
+An optional same-line `as` separator may make the body boundary explicit and
+permit compact source:
+
+```ores
+fnc classify(int x) -> int as
+    if x > 0 then
+        return 1
+    else
+        return 0
+    fi
+end
+```
+
+The earlier callable-header `do` separator is retired. `do` remains body
+syntax (for example `do select { ... }` / `do match ...`), which avoids a
+header/body ambiguity.
+
 and contextual finite tuple return types such as
 `tuple (int, int, string)`. The native frontend is still a scalar i64
 compiler whose executable CFG/body grammar is braced. It must therefore
