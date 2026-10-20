@@ -150,6 +150,17 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(calls[1][0],'node')
                 self.assertEqual(calls[2][0],str(compiler))
                 self.assertEqual(calls[3][0],'clang')
+                if not effects:
+                    def tamper(argv, expected=0, timeout=90):
+                        result=fake(argv,expected,timeout)
+                        if argv[0] == 'clang':
+                            compiler.write_bytes(b'changed after ELF generation')
+                        return result
+                    with patch('bpf_xdp_policy_bridge.run_command',side_effect=tamper), \
+                         patch('bpf_xdp_policy_bridge.verify_object_metadata'):
+                        with self.assertRaisesRegex(Denied,'compiler executable changed'):
+                            build(args)
+                    compiler.write_bytes(b'fake compiler')
             # A policy-grant mismatch denies without compiling any LLVM IR.
             args.grants=''
             calls=[]
