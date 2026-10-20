@@ -1563,6 +1563,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
 
+    # Real C actor slab: compact32 encode/decode uses authenticated turn and
+    # quarantines ever-published slots to prevent stale-offset ABA reuse.
+    add_executable(oreslang-native-actor-compact-arena-test
+        tests/native_actor_compact_arena_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-compact-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-compact-arena-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-compact-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_compact32_slab_domain_epoch_and_aba
+        COMMAND oreslang-native-actor-compact-arena-test)
+    set_tests_properties(native_actor_compact32_slab_domain_epoch_and_aba
+        PROPERTIES TIMEOUT 25)
+
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
