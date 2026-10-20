@@ -11,6 +11,7 @@
 #include <memory>
 #include <new>
 #include <fstream>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <unordered_map>
@@ -60,7 +61,17 @@ static void require_valid_source_utf8(std::string_view source) {
     }
 }
 
-
+static bool paths_alias(const char* source_path, const std::string& report_path) {
+    std::error_code source_error;
+    std::error_code report_error;
+    const auto source = std::filesystem::weakly_canonical(
+        std::filesystem::path(source_path), source_error);
+    const auto report = std::filesystem::weakly_canonical(
+        std::filesystem::path(report_path), report_error);
+    if (source_error || report_error)
+        throw std::runtime_error("cannot safely resolve rt-report/source paths");
+    return source == report;
+}
 
 static void collect_tree_shake_expression_calls(
         const oreslang::Expression& expression,
@@ -290,6 +301,10 @@ int main(int argc, char** argv) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
     }
+    if (rt_entry_seen && !native_hard_rt_profile && !rt_report_seen) {
+        std::cerr << "rt-entry requires --rt-check, --profile=native-hard-rt, or --rt-report\n";
+        return 2;
+    }
     oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
     if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
@@ -330,7 +345,7 @@ int main(int argc, char** argv) {
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
 
-        if (rt_report_seen && path != nullptr && rt_report_path == path)
+        if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");
 
         if (native_hard_rt_profile || rt_report_seen) {
