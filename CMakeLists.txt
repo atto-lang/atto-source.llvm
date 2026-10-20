@@ -406,6 +406,17 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_compressed32_object_fields
         PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-managed-ref-layout-plan-test
+        tests/managed_ref_layout_plan_test.cpp)
+    target_include_directories(oreslang-managed-ref-layout-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-layout-plan-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compiler_managed_ref_layout_admission
+        COMMAND oreslang-managed-ref-layout-plan-test)
+    set_tests_properties(native_compiler_managed_ref_layout_admission
+        PROPERTIES TIMEOUT 30)
+
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
