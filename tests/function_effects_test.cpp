@@ -95,6 +95,39 @@ int main() {
             }
         }
 
+        // Unproven callback/FFI/dynamic dispatch is never a pure call.
+        // The sentinel is intentionally invalid and cannot be authorized
+        // even by a forged declaration containing that same bit.
+        constexpr auto unresolved = FunctionEffects::unresolved_call();
+        static_assert(!unresolved.valid());
+        static_assert(!FunctionEffects{}.permits(unresolved));
+        static_assert(!unresolved.permits(unresolved));
+        require(unresolved.bits == FunctionEffects::UnresolvedCallBit,
+                "unresolved effect identity must be stable");
+        require(!unresolved.united({}).valid(),
+                "union with pure must not erase unresolved call");
+        require(!FunctionEffects{all_effects}.permits(unresolved),
+                "all known permissions must still reject unresolved calls");
+        require(!unresolved.permits({}),
+                "a forged unresolved declaration must not admit even pure calls");
+        for (std::uint32_t declaration = 0; declaration <= all_effects; ++declaration) {
+            const FunctionEffects declared_row{declaration};
+            require(!declared_row.permits(unresolved),
+                    "no known declaration can approve unresolved dispatch");
+            require(!declared_row.united(unresolved).valid(),
+                    "union must conserve the unresolved marker");
+        }
+        require(!FunctionEffects{unresolved.bits | all_effects}.permits(unresolved),
+                "matching forged unresolved bits cannot self-authorize");
+        bool unknown_spelling_rejected = false;
+        try {
+            (void)FunctionEffects::parse("unresolved_call");
+        } catch (const std::invalid_argument&) {
+            unknown_spelling_rejected = true;
+        }
+        require(unknown_spelling_rejected,
+                "internal unresolved marker must not be expressible in with");
+
         // Deliberately forged bitsets must never be approved. With the old
         // subset-only permits() check, equal unknown-bit masks were accepted,
         // including as the declared actor-state "using" effects.
