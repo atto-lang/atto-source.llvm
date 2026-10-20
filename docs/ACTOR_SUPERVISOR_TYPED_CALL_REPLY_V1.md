@@ -147,3 +147,7 @@ Java host: `src/main/java/dev/oreslang/runtime/GenerationalReplyRegistry.java`, 
 3. Add typed application-service declaration/checking for supervisors, preserving strict CONTROL separation and compile-time request-to-response mapping.
 4. Lower `Future<R>` continuation delivery to native+JVM scheduling, never inline on respondent worker; add cycle detection and deadlines.
 5. Execute JUnit/CTest, sanitizer/loom stress, Java 25/GraalVM native-image and end-to-end source conformance on exact merged tree; benchmark allocations/call and p99 versus UUID backed host bridge.
+
+### Independent host proof (2026-10-20, after implementation)
+
+The **four host source/test files** above were mirrored verbatim into a private, different-organization test repository; their Git blob SHAs match the corresponding branch files byte-for-byte. [Run 39505307759](https://github.com/fiducia-cloud-test/go-client-consumer/actions/runs/39505307759) on commit `28b2a18f111357edc0eb04db6dc614fef1dba288` **passed** standalone Java and strict C++17 GCC/Clang host tests. The mirror used only first-party repository checkout with no cross-organization token. Source-organization Actions runs failed before steps started; the successful independent run verifies **only** the mirrored host reply primitives, not repository-wide compilation, source-level `request()`, GraalVM native-image, LLVM guest lowering or supervisor CONTROL integration.
