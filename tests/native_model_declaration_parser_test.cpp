@@ -113,7 +113,7 @@ int main() {
             (void)oreslang::model::validate_and_commit(owner, stale, {});
             throw std::runtime_error("stale parameter version unexpectedly committed");
         } catch (const std::exception& e) {
-            check(std::string_view(e.what()).find("MODEL_STALE_PARAMETER_VERSION") != std::string_view::npos,
+            check(std::string_view(e.what()).find("MODEL_PARAMETER_VERSION_MISMATCH") != std::string_view::npos,
                   "wrong stale parameter diagnostic");
         }
         check(oreslang::model::next_graph_generation(7) == 8, "graph generation increment");
