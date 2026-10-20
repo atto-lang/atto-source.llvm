@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -28,6 +30,20 @@ class NativeSupervisorRegistry;
  */
 template <class Policy>
 class NativeSupervisorCodeSlot final {
+    // Process-lifetime monotonic failure observation for noexcept image
+    // release callbacks. The count does not prove reclamation succeeded and
+    // does not replace supervisor/domain-specific durable quarantine records.
+    inline static std::atomic<std::uint64_t> cleanup_failures_{0};
+
+    static void record_cleanup_failure() noexcept {
+        auto observed = cleanup_failures_.load(std::memory_order_relaxed);
+        while (observed != std::numeric_limits<std::uint64_t>::max()
+                && !cleanup_failures_.compare_exchange_weak(
+                    observed, observed + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+        }
+    }
+
     // Native images must not throw while moving their ownership wrappers:
     // otherwise the callback may unload an image before a failed move
     // finishes destroying the wrapper still referencing that image.
@@ -42,7 +58,12 @@ class NativeSupervisorCodeSlot final {
         explicit ReclaimOwner(std::function<void()> cb) : callback(std::move(cb)) {}
         ~ReclaimOwner() noexcept {
             try { if (callback) callback(); }
-            catch (...) { /* cleanup must not throw from a final code pin */ }
+            catch (...) {
+                // A noexcept destructor cannot propagate the unload error,
+                // but swallowing it with no observable signal falsely
+                // suggests that final code-image retirement succeeded.
+                NativeSupervisorCodeSlot::record_cleanup_failure();
+            }
         }
     };
     struct Generation {
@@ -56,6 +77,10 @@ class NativeSupervisorCodeSlot final {
               abi(std::move(signature)), code(std::move(image)) {}
     };
 public:
+    static std::uint64_t cleanup_failures_observed() noexcept {
+        return cleanup_failures_.load(std::memory_order_relaxed);
+    }
+
     struct Descriptor {
         std::uint64_t revision;
         std::string abi;
