@@ -122,6 +122,15 @@ int main(void) {
     verify_kind(
         executions, continuations, resumed,
         ORES_FAILURE_TRACE_PANIC, "panic");
+    verify_kind(
+        executions, continuations, resumed,
+        ORES_FAILURE_TRACE_CANCEL, "cancel");
+    verify_kind(
+        executions, continuations, resumed,
+        ORES_FAILURE_TRACE_FATAL, "fatal");
+    verify_kind(
+        executions, continuations, resumed,
+        ORES_FAILURE_TRACE_PROCESS_EXIT, "process-exit");
 
     OresNativeExecutionTraceFrame execution_frames[2] = {0};
     OresNativeContinuationTraceFrame continuation_frames[2] = {0};
@@ -131,6 +140,18 @@ int main(void) {
         continuations,
         resumed,
         (OresNativeFailureTraceKind)0,
+        1,
+        execution_frames,
+        2,
+        continuation_frames,
+        2,
+        &invalid));
+
+    check(!ores_native_failure_trace_capture(
+        executions,
+        continuations,
+        resumed,
+        (OresNativeFailureTraceKind)7,
         1,
         execution_frames,
         2,
