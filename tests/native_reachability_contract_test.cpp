@@ -58,6 +58,12 @@ int main() {
         assert(has(result.retained_symbols, "__root__.live"));
         assert(has(result.retained_symbols, "__root__.leaf"));
         assert(has(result.removed_symbols, "__root__.dead"));
+
+        auto pruned = prune_program(std::move(program), result);
+        assert(pruned.functions.size() == 3);
+        assert(std::none_of(pruned.functions.begin(), pruned.functions.end(),
+                [](const Function& item) { return item.name == "dead"; }));
+
         assert(canonical_reachability_json(result, false) ==
                "{\"format\":\"ores-reachability/1\",\"buildKind\":\"executable\","
                "\"roots\":[\"__root__.main\"],"
@@ -233,6 +239,26 @@ int main() {
             rejected = true;
         }
         assert(rejected && "unknown native direct calls must fail closed");
+    }
+
+
+    {
+        Program program;
+        program.functions.push_back(fn("main", integer(0)));
+        program.functions.push_back(fn("dead", integer(1)));
+
+        const auto result = analyze_reachability(program, {"main"}, false);
+        ReachabilityResult forged = result;
+        forged.retained_symbols.push_back("__root__.ghost");
+        std::sort(forged.retained_symbols.begin(), forged.retained_symbols.end());
+
+        bool rejected = false;
+        try {
+            (void)prune_program(std::move(program), forged);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "pruning must reject manifest/source classification drift");
     }
 
     {
