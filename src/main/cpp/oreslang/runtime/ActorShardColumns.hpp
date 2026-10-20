@@ -146,7 +146,7 @@ private:
     mutable std::mutex state_lock_;
     // High bit: permanent retirement tombstone. Low 63 bits: charged bytes.
     std::uint64_t state_ = 0;
-}
+};
 
 /**
  * Trusted host retirement barrier. The scheduler MUST remain alive throughout
