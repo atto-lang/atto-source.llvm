@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -118,9 +119,20 @@ static NativeIpcWireV3::Bytes read_frame(int fd) {
 
 static void wait_child(pid_t child) {
     int status = 0;
-    assert(::waitpid(child, &status, 0) == child);
-    assert(WIFEXITED(status));
-    assert(WEXITSTATUS(status) == 0);
+    for (int i = 0; i < 500; ++i) {
+        const pid_t result = ::waitpid(child, &status, WNOHANG);
+        if (result == child) {
+            assert(WIFEXITED(status));
+            assert(WEXITSTATUS(status) == 0);
+            return;
+        }
+        if (result < 0 && errno != EINTR)
+            break;
+        ::usleep(10000);
+    }
+    (void)::kill(child, SIGKILL);
+    while (::waitpid(child, &status, 0) < 0 && errno == EINTR) { }
+    assert(false && "forked authenticated IPC peer exceeded deadline");
 }
 
 static void flush_until_complete(
@@ -171,7 +183,7 @@ static void success_case() {
         const auto decoded = NativeIpcWireV3::decode_data_frame(
             frame, envelope, generation, replay,
             connection_binding, mac_key);
-        if (decoded.envelope != envelope || decoded.payload != payload)
+        if (!(decoded.envelope == envelope) || decoded.payload != payload)
             _exit(93);
 
         write_frame(fds[1], NativeIpcWireV3::encode_receipt_frame(
