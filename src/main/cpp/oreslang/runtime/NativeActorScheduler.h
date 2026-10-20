@@ -94,6 +94,9 @@ int ores_native_actor_scheduler_poll_done(
  * Nonblocking immutable terminal-state lookup. Returns 1 only after the exact
  * generation-bound ActorRef is fully retired and its retained record has been
  * published. Repeated reads return the same value. Stale/foreign refs fail.
+ * On denial, all fields of a non-null output are cleared, including when
+ * the scheduler is null or the actor is not yet terminal. Only return 1
+ * establishes an authenticated generation-bound terminal receipt.
  */
 int ores_native_actor_scheduler_terminal_state(
     OresNativeActorScheduler* scheduler,
