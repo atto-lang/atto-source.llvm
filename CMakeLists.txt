@@ -1095,8 +1095,11 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-managed-ref-mir-llvm-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-managed-ref-mir-llvm-test PRIVATE ${ORE_LLVM_LIBS})
+    # Ubuntu LLVM headers define several intentionally unused callback
+    # parameters. Suppress only that vendor-header diagnostic while keeping
+    # the remaining project source warnings as errors.
     target_compile_options(oreslang-managed-ref-mir-llvm-test PRIVATE
-        -Wall -Wextra -Wpedantic -Werror)
+        -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter)
     add_test(NAME native_llvm_actor_compact32_mir_scalar_c_abi
         COMMAND oreslang-managed-ref-mir-llvm-test)
 
