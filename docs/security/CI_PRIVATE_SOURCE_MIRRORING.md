@@ -34,3 +34,38 @@ A source-free workflow may be used to verify that a candidate private destinatio
 ## Current state
 
 No private CI destination is approved by default. Until a destination is independently reviewed and merged into protected `main`, private LLVM source must remain in the source repository.
+
+## Trusted admission preflight
+
+Run the offline, source-free policy shape tests without exporting compiler code:
+
+```sh
+python3 scripts/test-audit-private-ci-governance.py
+python3 scripts/audit-private-ci-governance.py
+```
+
+The opt-in `--live` preflight reads source GitHub repository metadata,
+`branches/main`, and `branches/main/protection` using a read-capable
+`GITHUB_TOKEN`, failing closed for missing permissions, missing CODEOWNER
+approval enforcement, stale-review acceptance, or missing administrator
+enforcement. It is a *necessary condition*, never a source-export grant;
+the checked destination, independent approval, policy provenance, and
+publisher still require separate verification.
+
+**Observed governance blocker (2026-10-19):** GitHub returned
+`protected=false` for source `main`. Ruleset reads also returned a
+plan-related 403. No source transfer should occur while actual protected-main
+enforcement cannot be independently verified. Adding CODEOWNERS text alone
+does not turn on branch protection.
+
+## Provenance and cleanup
+
+An authorized future publisher must bind its immutable receipt to the
+source repository ID, source PR head and full root Git tree SHA, the exported
+subtree SHA (which must match the complete authorized tree), destination
+repository ID and visibility, exact test ref, workflow and toolchain versions,
+test outcomes, and expiration time. It must use an approved cleanup plan for
+refs, Git objects, caches, Actions artifacts, and logs; deletion of branch refs
+alone does not erase retained private Git objects. Neither source-free
+synthetic canary tests nor success against another branch can substitute for
+this exact-head evidence.
