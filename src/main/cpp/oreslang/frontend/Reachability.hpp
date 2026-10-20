@@ -444,6 +444,7 @@ inline Program prune_program(Program program, const ReachabilityResult& result) 
 struct TreeShakenProgram {
     Program program;
     ReachabilityResult reachability;
+    RuntimeFeatureSet runtime_features;
 };
 
 /**
@@ -456,7 +457,9 @@ inline TreeShakenProgram tree_shake_program(
         const std::vector<std::string>& explicit_function_roots,
         bool preserve_exported_api,
         const std::vector<std::string>& explicit_actor_roots = {},
-        const std::vector<std::string>& explicit_class_roots = {}) {
+        const std::vector<std::string>& explicit_class_roots = {},
+        bool wasm32_target = false,
+        bool cortex_m_target = false) {
     ReachabilityResult reachability = analyze_reachability(
             program,
             explicit_function_roots,
@@ -464,7 +467,12 @@ inline TreeShakenProgram tree_shake_program(
             explicit_actor_roots,
             explicit_class_roots);
     program = prune_program(std::move(program), reachability);
-    return TreeShakenProgram{std::move(program), std::move(reachability)};
+    RuntimeFeatureSet runtime_features =
+            analyze_runtime_features(program, wasm32_target, cortex_m_target);
+    return TreeShakenProgram{
+            std::move(program),
+            std::move(reachability),
+            std::move(runtime_features)};
 }
 
 inline void append_reachability_json_string(std::string& out, std::string_view value) {
