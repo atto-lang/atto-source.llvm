@@ -42,6 +42,19 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+
+# Opt-in instrumentation: compile the same graph traversal twice to compare
+# resident edge-column bytes and CPU time, without imposing benchmark timing
+# thresholds on correctness CI.
+option(ORES_ENABLE_MANAGED_REF_BENCHMARKS "Build native actor-local ref microbenchmark" OFF)
+if(ORES_ENABLE_MANAGED_REF_BENCHMARKS)
+    add_executable(oreslang-managed-ref-microbench tests/managed_ref_microbench.cpp)
+    target_include_directories(oreslang-managed-ref-microbench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-microbench PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 if(BUILD_TESTING)
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
