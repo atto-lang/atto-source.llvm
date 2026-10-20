@@ -79,9 +79,17 @@ int main(void) {
     assert(atomic_load(&state.errors) == 0);
     assert(atomic_load(&state.count) == 4);
     assert(state.observed[0] == 1002); /* CONTROL before DATA globally */
-    assert(state.observed[1] == 100);
-    assert(state.observed[2] == 101);
-    assert(state.observed[3] == 102);
+    /* DATA locality may reorder different actors, but cannot duplicate,
+     * drop or bypass per-actor FIFO. */
+    unsigned seen_data = 0;
+    for (int j = 1; j < 4; ++j) {
+        const int value = state.observed[j];
+        assert(value >= 0 && value < 3);
+        const unsigned bit = 1u << (unsigned)value;
+        assert((seen_data & bit) == 0);
+        seen_data |= bit;
+    }
+    assert(seen_data == 7);
     assert(ores_native_turn_gate_active(&gate) == 0);
     for (size_t i = 0; i < 3; ++i) {
         assert(ores_native_actor_scheduler_stop(state.scheduler, state.actors[i]));
