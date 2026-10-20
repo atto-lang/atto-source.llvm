@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
 #include <cstdint>
@@ -233,9 +234,8 @@ inline std::string canonical_descriptor(const ModelGraph& graph,
 inline std::string graph_digest(const ModelGraph& graph,
                                 const std::string& model_type_id) {
     const auto descriptor = canonical_descriptor(graph, model_type_id);
-    llvm::SHA256 sha;
-    sha.update(llvm::StringRef(descriptor));
-    const auto digest = sha.final();
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(descriptor.data());
+    const auto digest = llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(bytes, descriptor.size()));
     static constexpr char hex[] = "0123456789abcdef";
     std::string out;
     out.reserve(digest.size() * 2);
