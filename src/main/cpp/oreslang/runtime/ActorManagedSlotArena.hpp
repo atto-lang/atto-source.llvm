@@ -81,6 +81,7 @@ private:
         std::uint64_t generation = 1;
         std::size_t length = 0;
         bool live = false;
+        bool compact_published = false;
     };
 
     ActorHeapIdentity owner_;
@@ -159,7 +160,10 @@ public:
             throw std::invalid_argument("invalid managed object byte payload");
         for (std::size_t i = 0; i < SlotCount; ++i) {
             auto& slot = slots_[i];
-            if (slot.live || slot.generation == std::numeric_limits<std::uint64_t>::max())
+            // Once a bare i32 was exposed to actor-object storage, never
+            // recycle that offset before actor retirement (stale-ref ABA).
+            if (slot.live || slot.compact_published ||
+                    slot.generation == std::numeric_limits<std::uint64_t>::max())
                 continue;
             const auto location = base() + i * kStride;
             const auto encoded = Ref::encode(base(), kTotalBytes, location);
@@ -192,6 +196,15 @@ public:
         std::fill(payload(i), payload(i) + kStride, std::byte{0});
         std::memcpy(payload(i), source, length);
         slots_[i].length = length;
+    }
+
+    void mark_guest_compact_published(ActorHeapIdentity who, Handle handle) {
+        require_open(who);
+        const auto i = checked_slot(handle);
+        // A compiler must register publication *before* a bare i32 can enter
+        // an actor object graph. Native64 needs no compact publication fence.
+        if constexpr (Mode == ManagedRefMode::Compressed32)
+            slots_[i].compact_published = true;
     }
 
     void release(ActorHeapIdentity who, Handle handle) {
