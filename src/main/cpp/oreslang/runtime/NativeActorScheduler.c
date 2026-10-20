@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
+#include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -51,6 +52,7 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
     void* context;
+    OresNativePhysicalTurnGate* physical_turn_gate;
 };
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
@@ -112,36 +114,86 @@ static void publish_terminal_locked(
     };
     lane->terminal_valid = 1;
 }
-static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control) {
-    /* CONTROL must be admitted ahead of normal mail, across all actors.
+static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
+        size_t recent_actor, unsigned consecutive) {
+    /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
      * The parent still owns its exclusive logical lane. */
-    for (int pass = 1; pass >= 0; --pass) {
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
-            if (!s->actors[i].active
-                && (pass ? s->actors[i].has_control : s->actors[i].queued != 0)) {
-                *actor = i;
-                *control = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
-            }
+    for (size_t offset = 0; offset < s->actor_count; ++offset) {
+        size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!s->actors[i].active && s->actors[i].has_control) {
+            *actor = i;
+            *control = 1;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
+        }
+    }
+    /* Same-pthread actor reuse improves cache locality with no pthread
+     * binding or borrowed-region transfer. Cap the streak at two DATA turns;
+     * after that the round-robin cursor gets priority. */
+    if (recent_actor < s->actor_count && consecutive < 2
+        && !s->actors[recent_actor].active
+        && s->actors[recent_actor].queued != 0) {
+        *actor = recent_actor;
+        *control = 0;
+        s->next_actor = (recent_actor + 1) % s->actor_count;
+        return 1;
+    }
+    for (size_t offset = 0; offset < s->actor_count; ++offset) {
+        size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!s->actors[i].active && s->actors[i].queued != 0) {
+            *actor = i;
+            *control = 0;
+            s->next_actor = (i + 1) % s->actor_count;
+            return 1;
         }
     }
     return 0;
 }
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
+    size_t recent_actor = SIZE_MAX;
+    unsigned consecutive = 0;
     for (;;) {
         lock(s);
         size_t i = 0;
         int control = 0;
-        while (!find_ready(s, &i, &control)) {
+        int gate_held = 0;
+        for (;;) {
+            int found = find_ready(s, &i, &control, recent_actor, consecutive);
+            if (found && (!s->physical_turn_gate
+                    || ores_native_turn_gate_try_acquire(s->physical_turn_gate))) {
+                gate_held = s->physical_turn_gate != NULL;
+                break;
+            }
+            /* No actor turn begins when the process-wide permit is full.
+             * Remain idle on the scheduler condition, not in a guest await
+             * or blocking lock. The releasing domain broadcasts wakeups. */
             if (s->retired && !s->outstanding) {
                 unlock(s);
                 return NULL;
             }
+            /* Register before the final permit recheck. A release which saw
+             * zero waiters cannot race us into sleeping with a free token;
+             * a later release will acquire this scheduler mutex only after
+             * cond_wait has atomically released it. */
+            OresNativePhysicalTurnGate* gate = s->physical_turn_gate;
+            const int waiting_on_gate = found && gate != NULL;
+            if (waiting_on_gate) {
+                atomic_fetch_add_explicit(&gate->waiting, 1, memory_order_acq_rel);
+                if (ores_native_turn_gate_try_acquire(gate)) {
+                    atomic_fetch_sub_explicit(&gate->waiting, 1, memory_order_acq_rel);
+                    gate_held = 1;
+                    break;
+                }
+            }
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
+            if (waiting_on_gate) {
+                atomic_fetch_sub_explicit(&gate->waiting, 1, memory_order_acq_rel);
+            }
         }
+        consecutive = (i == recent_actor && !control)
+                ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
+        recent_actor = i;
         ActorLane* lane = &s->actors[i];
         uint64_t payload;
         OresNativeActorTerminalFailure failure = {0};
@@ -178,9 +230,16 @@ static void* carrier(void* raw) {
 
         lock(s);
         if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
-        /* Leave is called after the guest callback returned. Duplicate/stale
-         * completion cannot release the actor's next carrier owner. */
+        /* Leave the generation-checked guest execution claim first, but
+         * keep lane.active/outstanding until the gate has completed its
+         * cross-domain wakeup. Otherwise drain() may report quiescence and
+         * the VM may destroy a scheduler while a gate-release callback is
+         * still trying to signal that scheduler. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
+        unlock(s);
+        if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
+        lock(s);
+        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
         s->outstanding--;
         s->completed++;
@@ -348,6 +407,26 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     pthread_cond_signal(&s->ready);
     return 1;
 }
+int ores_native_actor_scheduler_configure_turn_gate(
+        OresNativeActorScheduler* s, OresNativePhysicalTurnGate* gate) {
+    if (!s || (gate && gate->maximum == 0)) return 0;
+    lock(s);
+    const int ok = !s->retired && s->started_workers == 0
+        && s->outstanding == 0 && s->accepted == 0;
+    if (ok) s->physical_turn_gate = gate;
+    unlock(s);
+    return ok;
+}
+
+void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
+    if (!s) return;
+    lock(s);
+    /* Retirement still drains already admitted mail and must receive the
+     * last permit-release wake rather than parking its final worker. */
+    pthread_cond_broadcast(&s->ready);
+    unlock(s);
+}
+
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};

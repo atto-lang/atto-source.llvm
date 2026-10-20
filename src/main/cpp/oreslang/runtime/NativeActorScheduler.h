@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -50,6 +51,15 @@ typedef void (*OresNativeActorPanicFn)(
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
  */
+/* Trusted host-only pre-admission wiring. Must be called before the first
+ * actor message/carrier starts. Gate outlives this scheduler and is released
+ * after its last callback finishes. A NULL gate leaves legacy dispatch intact. */
+int ores_native_actor_scheduler_configure_turn_gate(
+    OresNativeActorScheduler* scheduler, OresNativePhysicalTurnGate* gate);
+/* Wake idle carriers that lost a cross-domain permit race, including while
+ * the scheduler is retiring and still has admitted work to drain. Trusted
+ * VM-only call; not a guest CONTROL message. */
+void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* scheduler);
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
 /* Send succeeds only after atomic admission to a live, generation-matched

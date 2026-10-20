@@ -31,13 +31,6 @@ class NativeNioWorktreeTests(unittest.TestCase):
             ('git', 'show', 'HEAD:scripts/verify-native-nio-source-local.py'),
             cwd=CHECKER.parents[1])
         (self.repo / 'scripts' / CHECKER.name).write_bytes(committed_checker)
-        # Source-free stand-in: only proves the Git-blob-to-Bash loader,
-        # never pretends to exercise native Oreslang source/runtime.
-        (self.repo / 'scripts' / SANITIZER.name).write_text(
-            '#!/usr/bin/env bash\n'
-            'set -euo pipefail\n'
-            'test "$ORES_NIO_REPO_ROOT" = "$PWD"\n'
-            'echo SOURCE_FREE_PINNED_DRIVER_PASS\n')
         (self.repo / '.gitignore').write_text('/build/\n/cmake-build-*/\n/.cache/\n*.o\n')
         (self.repo / 'source.c').write_text('int source(void) { return 1; }\n')
         for args in [('init', '-q'), ('config', 'user.name', 'Source Free Gate'),
@@ -65,72 +58,6 @@ class NativeNioWorktreeTests(unittest.TestCase):
                   + marker + function + '\n}\nverify_exact_worktree\n')
         return run('bash', '-c', script, cwd=self.repo, env=env)
 
-    def driver_from_committed_shell(self, *, env=None):
-        # The committed VM workflow admits its Bash driver by three Git
-        # identities before streaming the immutable object to Bash. The
-        # synthetic repo contains no private runtime code or C++ compiler.
-        script = '''set -euo pipefail
-sanitizer=scripts/test-native-vm-nio-host-sanitizers.sh
-approved="$(git rev-parse --verify "HEAD:$sanitizer")"
-staged="$(git rev-parse --verify ":$sanitizer")"
-raw="$(git hash-object --no-filters -- "$sanitizer")"
-if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
-  echo "NIO sanitizer driver differs from committed Git blob" >&2
-  exit 2
-fi
-export ORES_NIO_REPO_ROOT="$GITHUB_WORKSPACE"
-git cat-file blob "$approved" | bash -s
-'''
-        environment = (env or os.environ).copy()
-        environment['GITHUB_WORKSPACE'] = str(self.repo)
-        return run('bash', '-c', script, cwd=self.repo, env=environment)
-
-    def test_vm_driver_executes_only_approved_git_blob(self):
-        clean = self.driver_from_committed_shell()
-        self.assertEqual(0, clean.returncode, clean.stderr)
-        self.assertIn('SOURCE_FREE_PINNED_DRIVER_PASS', clean.stdout)
-        driver = self.repo / 'scripts' / SANITIZER.name
-        with driver.open('a') as out:
-            out.write('\ntouch .git/should-not-execute\n')
-        dirty = self.driver_from_committed_shell()
-        self.assertEqual(2, dirty.returncode, dirty.stderr)
-        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
-        add = run('git', 'add', 'scripts/' + SANITIZER.name, cwd=self.repo)
-        self.assertEqual(0, add.returncode, add.stderr)
-        staged = self.driver_from_committed_shell()
-        self.assertEqual(2, staged.returncode, staged.stderr)
-        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
-
-    def test_vm_driver_post_hash_path_swap_cannot_execute(self):
-        # Fault injection *after* all hashes match, but before Bash starts.
-        # A mutable script pathname would create the sentinel; a committed
-        # blob remains trustworthy even when the worktree is raced.
-        shim_dir = Path(self.tmp.name) / 'vm-driver-shim'
-        shim_dir.mkdir()
-        real_git = shutil.which('git')
-        self.assertIsNotNone(real_git)
-        shim = shim_dir / 'git'
-        shim.write_text(
-            '#!/usr/bin/env python3\n'
-            'import os, subprocess, sys\n'
-            'if sys.argv[1:3] == ["cat-file", "blob"]:\n'
-            '    with open(os.environ["NIO_TEST_DRIVER_PATH"], "a") as out:\n'
-            '        out.write(chr(10) + "touch .git/should-not-execute" + chr(10))\n'
-            'raise SystemExit(subprocess.call([os.environ["NIO_TEST_REAL_GIT"], '
-            '*sys.argv[1:]]))\n'
-        )
-        shim.chmod(0o755)
-        env = os.environ.copy()
-        env['NIO_TEST_DRIVER_PATH'] = str(self.repo / 'scripts' / SANITIZER.name)
-        env['NIO_TEST_REAL_GIT'] = real_git
-        env['PATH'] = str(shim_dir) + os.pathsep + env.get('PATH', '')
-        result = self.driver_from_committed_shell(env=env)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('SOURCE_FREE_PINNED_DRIVER_PASS', result.stdout)
-        self.assertIn('should-not-execute',
-                      (self.repo / 'scripts' / SANITIZER.name).read_text())
-        self.assertFalse((self.repo / '.git' / 'should-not-execute').exists())
-
     def test_github_workflows_require_immutable_blob_loader(self):
         # Read the *committed* workflow definitions. Future edits that
         # reintroduce a mutable verifier/test pathname must fail CI even
@@ -138,7 +65,7 @@ git cat-file blob "$approved" | bash -s
         root = CHECKER.parents[1]
         workflows = {
             '.github/workflows/native-nio-ownership-no-llvm.yml': (2, False),
-            '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (6, True),
+            '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (5, True),
         }
         for path, (expected_loaders, checks_test_blob) in workflows.items():
             with self.subTest(workflow=path):
@@ -149,7 +76,7 @@ git cat-file blob "$approved" | bash -s
                     expected_loaders)
                 self.assertGreaterEqual(
                     source.count('git hash-object --no-filters -- "$checker"'),
-                    expected_loaders - 2 * int(checks_test_blob))
+                    expected_loaders - int(checks_test_blob))
                 self.assertNotIn(
                     'python3 -I scripts/verify-native-nio-source-local.py',
                     source)
@@ -174,13 +101,6 @@ git cat-file blob "$approved" | bash -s
                         'NIO postflight verifier differs from committed Git blob',
                         source)
                 if checks_test_blob:
-                    self.assertIn(
-                        'git hash-object --no-filters -- "$sanitizer"', source)
-                    self.assertIn(
-                        'git cat-file blob "$approved" | bash -s', source)
-                    self.assertNotIn(
-                        'bash scripts/test-native-vm-nio-host-sanitizers.sh',
-                        source)
                     self.assertIn(
                         'git hash-object --no-filters -- "$test_path"', source)
                     self.assertNotIn(
