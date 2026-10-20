@@ -1,6 +1,8 @@
 #include "oreslang/runtime/DopInvertedColumns.hpp"
 #include <atomic>
 #include <cstdint>
+#include <bit>
+#include <cmath>
 #include <memory>
 #include <limits>
 #include <optional>
@@ -82,6 +84,28 @@ int main() {
     });
     t1.join(); t2.join();
     check(a.get<0>(h0) == 2.5f && a.get<1>(h0) == 101);
+
+    // Fixed-width SoA scalar columns must preserve IEEE signed zero and
+    // non-finite classification. No unchecked fast-math or implicit
+    // numeric narrowing is authorized by the borrow/layout reference.
+    {
+        Store ieee;
+        auto zero = ieee.push(-0.0f, -7, false);
+        check(std::bit_cast<std::uint32_t>(ieee.get<0>(zero)) ==
+              std::bit_cast<std::uint32_t>(-0.0f));
+        {
+            auto writable = ieee.borrow_write<0>();
+            writable.span()[0] = std::numeric_limits<float>::quiet_NaN();
+            check(std::isnan(writable.span()[0]));
+            expect<std::logic_error>([&] { ieee.erase_swap(zero); });
+        }
+        check(std::isnan(ieee.get<0>(zero)));
+        ieee.set<0>(zero, -0.0f);
+        check(std::bit_cast<std::uint32_t>(ieee.get<0>(zero)) ==
+              std::bit_cast<std::uint32_t>(-0.0f));
+        ieee.erase_swap(zero);
+        expect<std::out_of_range>([&] { (void)ieee.get<0>(zero); });
+    }
     // Coherent whole-row snapshots and updates under concurrent access.
     Store row_coherent;
     auto coherent = row_coherent.push(0.0f, 0, true);
