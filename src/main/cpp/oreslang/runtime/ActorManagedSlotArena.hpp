@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -136,9 +137,12 @@ public:
     ActorManagedSlotArena(ActorManagedSlotArena&&) = delete;
     ActorManagedSlotArena& operator=(ActorManagedSlotArena&&) = delete;
 
-    ~ActorManagedSlotArena() {
-        // Trusted host must quiesce actors/FFI before destruction. The storage
-        // itself contains only bytes and no guest destructor callbacks.
+    ~ActorManagedSlotArena() noexcept {
+        // External Lease stores a pointer to gate_ itself. Destruction with
+        // an outstanding lease would let an off-carrier release touch freed
+        // memory. Seal first; fail closed rather than causing a silent UAF.
+        // The owner must separately prove all actor turns have quiesced.
+        if (!gate_.seal_and_quiesced(owner_)) std::terminate();
         std::fill(storage_.begin(), storage_.end(), std::byte{0});
     }
 
