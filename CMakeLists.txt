@@ -396,6 +396,19 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        add_executable(oreslang-native-ipc-authenticated-session-test
+            tests/native_ipc_authenticated_stream_session_test.cpp)
+        target_include_directories(oreslang-native-ipc-authenticated-session-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-ipc-authenticated-session-test PRIVATE
+            OpenSSL::Crypto Threads::Threads)
+        target_compile_options(oreslang-native-ipc-authenticated-session-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_ipc_authenticated_stream_session
+            COMMAND oreslang-native-ipc-authenticated-session-test)
+        set_tests_properties(native_ipc_authenticated_stream_session
+            PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-native-ipc-wire-v3-test
             tests/native_ipc_wire_v3_test.cpp)
         target_include_directories(oreslang-native-ipc-wire-v3-test PRIVATE
