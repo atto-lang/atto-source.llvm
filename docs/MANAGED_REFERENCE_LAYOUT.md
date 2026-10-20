@@ -145,6 +145,66 @@ reservation and stricter placement. Benchmark both before declaring either
 faster; don't allocate a 32-GiB virtual cage for every tiny actor.
 
 
+
+## Compiler-facing actor object fields (next native slice)
+
+The native `ActorCompactFieldStore<Bytes, Nodes, LinksPerNode>` now
+demonstrates real, 4-byte object-field storage with an actor-owned region.
+Each object contains a conventional i64 payload and a contiguous array of
+`CompressedActorRef` fields; a **separate trusted ledger** records the
+*original* generational `ActorOwnedHeap::Handle` and node identity of each
+linked target. Linking, unlinking, following, cycle creation, byte-offset
+reuse and actor retirement have independent CTest/ASan/UBSan regressions.
+
+This is an intentionally bounded **compiler-target/runtime proof**, not a
+claim that arbitrary Oreslang classes or `Ref<T>` currently use compact
+fields. The current LLVM source frontend only supports scalar i64 class
+fields and opaque `Array<int>` handles. Those must remain their existing
+widths. Never reinterpret an i64 value, `ActorRef<T>`, external handle,
+`Future<T>`, native pointer, shared-region address or Java JVM object
+as a compressed actor-local reference.
+
+### Required compiler lowering to follow
+
+1. Add a distinct logical managed-reference kind to typed HIR, and prove
+   owner actor, lifetime, borrow/exclusive access, and locality before
+   choosing a physical representation. Do not expose storage width in
+   source syntax. The native host ABI and message wire layout stay unchanged.
+2. Emit LLVM **i32** fields/loads/stores for admitted actor-local references.
+   Keep full heap/generation proofs out of the object in a trusted ledger
+   until compile-time ownership establishes the proof statically.
+3. At dereference, validate the original target proof or its statically
+   established lifetime; only then decode using the authenticated current
+   actor heap base: `base + ((i32_ref - 1) << 3)`. Guard null, arithmetic
+   overflow, bounds, lifetime, and base-domain consistency before GEP/load.
+   Do not introduce unchecked `inbounds` pointer arithmetic for a forged ref.
+4. Pass a stable actor-heap domain/base descriptor with the admitted actor
+   turn; never infer it from a worker thread ID. Resume on a new carrier
+   must reload the **same actor heap** descriptor after scheduler admission.
+5. If lifetime/region proof is unavailable, fail closed or use a separately
+   validated opaque handle/native64 layout. Never pair an old compressed
+   offset with a newly minted generation proof: that permits ABA.
+6. Include ref mode, alignment shift, and arena ABI generation in closed-world
+   layout fingerprints and hot-reload migration checks. A code generation
+   switch is not permission to reinterpret already-populated objects.
+
+Because the current reference ledger stores full handles out-of-line, it
+**does not establish lower total memory use or faster execution yet**; it
+proves narrow physical object-field layout and safety behavior. A later
+compiler pass may remove redundant ledger entries where deterministic
+ownership proves all aliases remain valid. Measure total private RSS and
+p99 latency against native64 at equivalent application throughput.
+
+### Validation
+
+`native_actor_compressed32_object_fields` is a CTest target.
+`scripts/verify-target-abi-dop.sh` also compiles and runs that fixture
+with ASan/UBSan using g++ and clang++ on the x86-64/ARM64 runner matrix.
+Passing source repository CI, including the real compiler path, is still
+required for production claims.
+
+## Next lowering work
+
 The header-level representation is the substrate. Compiler lowering should
 next introduce a logical managed-reference type in HIR, select physical
 storage after ownership/layout analysis, and emit decode operations only at
