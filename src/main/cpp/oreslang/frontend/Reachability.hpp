@@ -358,8 +358,15 @@ inline ReachabilityResult analyze_reachability(
         // family so tree shaking cannot silently rename that exported symbol.
         if (found->second->exported &&
                 function_family_sizes.at(found->second->name) > 1) {
+            const std::string from_semantic =
+                    function_semantic_name(name, *found->second);
             for (const auto& [slot, candidate] : functions) {
-                if (candidate->name != found->second->name) continue;
+                if (candidate->name != found->second->name || slot == name)
+                    continue;
+                add_edge(
+                        from_semantic,
+                        function_semantic_name(slot, *candidate),
+                        ReachabilityReason::ExportedOverloadAbi);
                 if (retained_functions.insert(slot).second)
                     work.emplace_back('f', slot);
             }
