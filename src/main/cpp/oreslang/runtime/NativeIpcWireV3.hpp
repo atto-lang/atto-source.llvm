@@ -5,6 +5,7 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -298,7 +299,7 @@ private:
             (size != 0u &&
              EVP_DigestUpdate(context.get(), data, size) != 1) ||
             EVP_DigestFinal_ex(context.get(), out.data(), &length) != 1 ||
-            length != out.size())
+            length != static_cast<unsigned int>(out.size()))
             throw std::runtime_error("SHA-256 unavailable");
         return out;
     }
@@ -317,7 +318,7 @@ private:
             (second_size != 0u &&
              EVP_DigestUpdate(context.get(), second, second_size) != 1) ||
             EVP_DigestFinal_ex(context.get(), out.data(), &length) != 1 ||
-            length != out.size())
+            length != static_cast<unsigned int>(out.size()))
             throw std::runtime_error("SHA-256 unavailable");
         return out;
     }
