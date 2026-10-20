@@ -80,6 +80,9 @@ struct RealtimeAnalysisReport {
 
 namespace realtime_detail {
 
+inline constexpr std::size_t kMaxRealtimeCallDepth = 64;
+inline constexpr std::size_t kMaxRealtimeFunctions = 4096;
+
 inline std::string function_key(std::string_view name, std::size_t arity) {
     return std::string(name) + "/" + std::to_string(arity);
 }
@@ -272,6 +275,11 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         report.reason = "source actors await fixed-capacity mailbox/scheduler proof";
         return report;
     }
+    if (program.functions.size() > realtime_detail::kMaxRealtimeFunctions) {
+        report.diagnostic = "RT003_WCET_UNPROVEN";
+        report.reason = "hard-RT function count exceeds compiler qualification ceiling";
+        return report;
+    }
 
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& function : program.functions) {
@@ -309,6 +317,11 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         [&](const std::string& key) -> FunctionEffects {
         const auto cached = closed_effects.find(key);
         if (cached != closed_effects.end()) return cached->second;
+        if (active.size() >= realtime_detail::kMaxRealtimeCallDepth) {
+            failure = "call depth exceeds hard-RT compiler qualification ceiling";
+            failure_diagnostic = "RT003_WCET_UNPROVEN";
+            return {};
+        }
         if (!active.insert(key).second) {
             failure = "recursive call graph is not admitted";
             failure_diagnostic = "RT008_UNBOUNDED_LOOP";
