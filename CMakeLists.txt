@@ -1279,6 +1279,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_entry_value_failclosed
         native-entry-reject.ores
         --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_entry_generic_product_failclosed
+        native-entry-generic-reject.ores
+        --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_user_tuple_call_is_ordinary
         native-user-tuple-call.ores
         --ir "call i64 @tuple")
