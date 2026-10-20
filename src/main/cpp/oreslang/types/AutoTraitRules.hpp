@@ -81,8 +81,9 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
     case AutoTypeKind::Arc:
     case AutoTypeKind::Weak: {
         const auto nested = infer_auto_traits(exactly_one(type));
-        const bool admitted = type.shareable_domain && nested.send && nested.sync;
-        caps = {admitted, admitted, admitted};
+        const bool concurrent =
+            type.shareable_domain && nested.send && nested.sync;
+        caps = {concurrent, concurrent, concurrent && nested.share};
         break;
     }
     case AutoTypeKind::Rc:
