@@ -27,6 +27,12 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Validate 100 real scalar FSM guest outcomes and compiler rejection
+        run: |
+          python3 tests/native_fsm_scalar_guest.py \
+            --compiler "$(realpath build/oreslang-llvmc)" \
+            --clang "$(command -v clang)" \
+            --source-root .
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
