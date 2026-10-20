@@ -956,6 +956,13 @@ if(BUILD_TESTING)
         --diagnostic "ActorRef<T> type mismatch")
     oreslang_contract_test(source_actor_typed_ref_nonspawn source-actor-typed-ref-nonspawn.ores
         --diagnostic "ActorRef<T> requires spawn initializer")
+    oreslang_contract_test(source_actor_await_ready_continuation_ir source-actor-await-ready.ores
+        --ir "ready_continuation")
+    oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
+        --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_await_suspended_local
+        source-actor-spawn-unavailable-await.ores
+        --diagnostic "await get_ready requires one source actor without suspended locals")
     oreslang_contract_test(source_future_typed_await_boundary source-future-typed-unimplemented.ores
         --diagnostic "Future<T> requires native continuation lowering")
     # These tests reject nested type declarations BEFORE member-call lowering.
