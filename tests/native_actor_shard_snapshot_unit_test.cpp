@@ -12,6 +12,7 @@
 struct OresNativeActorScheduler { int marker; };
 static thread_local OresNativeActorScheduler* current_scheduler = nullptr;
 static thread_local OresNativeActorRef current_actor = {};
+static thread_local bool current_carrier = false;
 static bool mock_actor_done = false;
 
 extern "C" int ores_native_actor_scheduler_wait_done(
@@ -24,10 +25,16 @@ extern "C" int ores_native_actor_scheduler_wait_done(
 
 extern "C" int ores_native_actor_scheduler_is_current_actor(
         OresNativeActorScheduler* scheduler, OresNativeActorRef actor) {
-    return scheduler == current_scheduler
+    return current_carrier
+        && scheduler == current_scheduler
         && actor.scheduler_domain == current_actor.scheduler_domain
         && actor.actor_slot == current_actor.actor_slot
         && actor.generation == current_actor.generation;
+}
+
+extern "C" int ores_native_actor_scheduler_is_current_carrier(
+        OresNativeActorScheduler* scheduler) {
+    return current_carrier && scheduler == current_scheduler;
 }
 
 using oreslang::runtime::ActorShardBudget;
@@ -39,9 +46,10 @@ int main() {
     OresNativeActorScheduler scheduler{1};
     OresNativeActorRef owner{1, 0, 8};
     current_scheduler = &scheduler;
-    current_actor = owner;
 
     for (auto layout : {Layout::AoS, Layout::SoA, Layout::AoSoA}) {
+        current_carrier = true;
+        current_actor = owner;
         ActorShardBudget actor(1048576, &scheduler, owner);
         ActorShardBudget vm(2097152);
         {
@@ -67,6 +75,19 @@ int main() {
             shard.write(64, 1, 300.0);
             assert(copies.back()->read(64) == 200.0);
 
+            // Detached leases are also readable/copyable by the trusted host
+            // outside any scheduler callback, matching the Java host contract.
+            current_carrier = false;
+            current_actor = {};
+            assert(copies.back()->read(64) == 200.0);
+            std::fill(copied.begin(), copied.end(), -1.0);
+            copies.back()->copy_into(copied.data() + 1, 65);
+            assert(copied[65] == 200.0);
+
+            // A different actor callback on the same scheduler is not trusted
+            // host access and must be rejected.
+            current_carrier = true;
+            current_actor = owner;
             current_actor.generation++;
             bool foreign = false;
             try { (void)copies.back()->read(64); }
@@ -119,6 +140,8 @@ int main() {
                     &scheduler, owner, actor));
             assert(actor.retired());
             assert(!actor.try_reserve(8));
+            current_carrier = false;
+            current_actor = {};
             bool retired_read = false;
             try { (void)outstanding->read(0); }
             catch (const std::logic_error&) { retired_read = true; }
@@ -127,7 +150,11 @@ int main() {
             try { (void)shard.read(64, 1); }
             catch (const std::logic_error&) { retired_shard = true; }
             assert(retired_shard);
-            outstanding.reset(); // refunds even after actor stop
+            const auto before_close = actor.used_bytes();
+            outstanding->close();
+            outstanding->close(); // trusted host cleanup remains idempotent after stop
+            assert(actor.used_bytes() == before_close - 65U * sizeof(double));
+            outstanding.reset();
             mock_actor_done = false;
         }
         assert(actor.used_bytes() == 0 && vm.used_bytes() == 0);
