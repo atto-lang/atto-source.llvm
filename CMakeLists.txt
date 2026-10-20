@@ -1721,6 +1721,87 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-cpu-budget-test)
     set_tests_properties(native_vm_cgroup_cpu_budgeted_carrier_admission
         PROPERTIES TIMEOUT 30)
+    # One physical turn permit for all native scheduler domains; idle
+    # carriers do not execute guest callbacks while another owns the permit.
+    add_executable(oreslang-native-vm-turn-gate-test
+        tests/native_vm_physical_turn_gate_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-turn-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-turn-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-turn-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_cross_domain_physical_turn_limit
+        COMMAND oreslang-native-vm-turn-gate-test)
+    set_tests_properties(native_vm_cross_domain_physical_turn_limit
+        PROPERTIES TIMEOUT 30)
+
+    # Deterministic, isolated C11 physical permit contention test;
+    # no guest compiler lowering or NUMA policy implied.
+    add_executable(oreslang-native-physical-turn-gate-stress-test
+        tests/native_physical_turn_gate_stress_test.c)
+    target_include_directories(oreslang-native-physical-turn-gate-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-physical-turn-gate-stress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-physical-turn-gate-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_actor_turn_gate_pthread_contention
+        COMMAND oreslang-native-physical-turn-gate-stress-test)
+    set_tests_properties(native_shared_actor_turn_gate_pthread_contention
+        PROPERTIES TIMEOUT 30)
+
+    # Local atomics/quotas stress does not require the guest compiler or VM.
+    add_executable(oreslang-native-shard-budget-stress-test
+        tests/native_actor_shard_budget_stress_test.cpp)
+    target_include_directories(oreslang-native-shard-budget-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-shard-budget-stress-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shard-budget-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_and_vm_shard_budget_contention
+        COMMAND oreslang-native-shard-budget-stress-test)
+    set_tests_properties(native_actor_and_vm_shard_budget_contention
+        PROPERTIES TIMEOUT 30)
+
+    # Standalone exact header CTest; its mock scheduler certifies one
+    # physical actor turn, while reservations use the real shard code.
+    add_executable(oreslang-native-actor-shard-snapshot-test
+        tests/native_actor_shard_snapshot_unit_test.cpp)
+    target_include_directories(oreslang-native-actor-shard-snapshot-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-snapshot-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-snapshot-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_shard_snapshot_quota_and_generation
+        COMMAND oreslang-native-actor-shard-snapshot-test)
+    set_tests_properties(native_actor_shard_snapshot_quota_and_generation
+        PROPERTIES TIMEOUT 30)
+
+    # Host-only trusted actor-owned AoS/SoA/AoSoA scalar region.
+    # The actor scheduler certifies owner identity; no source-level lowering.
+    add_executable(oreslang-native-actor-shard-layout-test
+        tests/native_actor_shard_layout_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shard-layout-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-layout-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-layout-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_owned_aos_soa_aosoa_dense_kernel
+        COMMAND oreslang-native-actor-shard-layout-test)
+    set_tests_properties(native_actor_owned_aos_soa_aosoa_dense_kernel
+        PROPERTIES TIMEOUT 30)
+    # Manual performance benchmark; do not gate correctness on wall times.
+    add_executable(oreslang-native-actor-shard-bench
+        tests/native_actor_shard_layout_bench.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-shard-bench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-shard-bench PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-shard-bench PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+
     # VM-owned exact parent binding -> quiescent typed CONTROL publication.
     # No guest supervisor compiler lowering is claimed by this host C test.
     add_executable(oreslang-native-vm-supervisor-test
