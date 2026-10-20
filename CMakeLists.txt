@@ -1042,6 +1042,13 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-managed-ref-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_managed_reference_width_and_dod_layout
         COMMAND oreslang-managed-ref-test)
+
+    add_executable(oreslang-managed-slot-arena-test tests/managed_slot_arena_test.cpp)
+    target_include_directories(oreslang-managed-slot-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-slot-arena-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME actor_managed_slot_arena_compressed32_and_native64
+        COMMAND oreslang-managed-slot-arena-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
