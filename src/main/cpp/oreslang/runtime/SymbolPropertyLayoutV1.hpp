@@ -4,12 +4,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace oreslang::symbol_property_v1 {
+
+inline constexpr std::size_t MAX_STATIC_FIELDS = 4096;
+inline constexpr std::size_t MAX_STRING_KEY_BYTES = 16384;
+inline constexpr std::size_t MAX_ENCODED_KEY_BYTES = 1048576;
+inline constexpr std::size_t KEY_FRAME_BYTES = 6;
 
 // HOST-ONLY canonical key/slot proof. Guest Symbol parsing, Unicode NFC,
 // LLVM lowering, untrusted actor admission and wire coding are NOT enabled.
@@ -59,6 +65,8 @@ public:
     const std::string& name() const noexcept { return name_; }
 
     static Key string(std::string name) {
+        if (name.size() > MAX_STRING_KEY_BYTES)
+            throw std::invalid_argument("String property key exceeds 16384 UTF-8 bytes");
         if (!valid_utf8(name)) throw std::invalid_argument("malformed UTF-8 String key");
         return Key(Domain::String, std::move(name));
     }
@@ -118,6 +126,15 @@ public:
     }
 private:
     explicit Layout(std::vector<Key> keys, bool sort) : keys_(std::move(keys)) {
+        if (keys_.size() > MAX_STATIC_FIELDS)
+            throw std::invalid_argument("static property layout exceeds 4096 fields");
+        std::size_t bytes = 0;
+        for (const auto& key : keys_) {
+            const auto entry = KEY_FRAME_BYTES + key.name().size();
+            if (entry > MAX_ENCODED_KEY_BYTES - bytes)
+                throw std::invalid_argument("static property layout exceeds 1 MiB tagged-key budget");
+            bytes += entry;
+        }
         if (sort) std::sort(keys_.begin(), keys_.end(), KeyLess{});
         for (std::size_t slot = 0; slot < keys_.size(); ++slot) {
             if (!slot_by_key_.emplace(keys_[slot], slot).second)
