@@ -131,6 +131,72 @@ int main(void) {
     check(ores_native_execution_context_store_insert(executions, &root, &e1));
 
     /*
+     * Every store instance owns its own non-recycled public slot range.
+     * Generation-only checks would incorrectly accept an equal {slot=1,gen=1}
+     * from another store or a newly opened replacement instance.
+     */
+    OresNativeExecutionContextStore* foreign_executions =
+        ores_native_execution_context_store_open(2);
+    check(foreign_executions != NULL);
+    OresNativeExecutionHandle foreign_execution = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        foreign_executions, &root, &foreign_execution));
+    check(foreign_execution.slot != e1.slot);
+    OresNativeExecutionContext probe = {0};
+    check(!ores_native_execution_context_store_get(
+        executions, foreign_execution, &probe));
+    check(!ores_native_execution_context_store_get(
+        foreign_executions, e1, &probe));
+    check(!ores_native_execution_context_store_retain(
+        executions, foreign_execution));
+    check(!ores_native_execution_context_store_release(
+        executions, foreign_execution));
+
+    OresNativeContinuationStore* foreign_continuations =
+        ores_native_continuation_store_open(2, executions);
+    check(foreign_continuations != NULL);
+    OresNativeContinuationHandle c_local = {0, 0}, c_foreign = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, e1, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 1, 10, &c_local));
+    check(ores_native_continuation_store_publish(
+        foreign_continuations, e1, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 1, 11, &c_foreign));
+    check(c_local.slot != c_foreign.slot);
+    OresNativeContinuationRecord c_probe = {0};
+    check(!ores_native_continuation_store_get(
+        continuations, c_foreign, &c_probe));
+    check(!ores_native_continuation_store_get(
+        foreign_continuations, c_local, &c_probe));
+    check(!ores_native_continuation_store_try_claim_resume(
+        continuations, c_foreign, &c_probe));
+    check(!ores_native_continuation_store_cancel(
+        foreign_continuations, c_local));
+    check(!ores_native_continuation_store_release(
+        continuations, c_foreign));
+    check(ores_native_continuation_store_release(
+        continuations, c_local));
+    check(ores_native_continuation_store_release(
+        foreign_continuations, c_foreign));
+    check(ores_native_continuation_store_close(foreign_continuations));
+
+    check(ores_native_execution_context_store_release(
+        foreign_executions, foreign_execution));
+    check(ores_native_execution_context_store_close(foreign_executions));
+    foreign_executions = ores_native_execution_context_store_open(2);
+    check(foreign_executions != NULL);
+    OresNativeExecutionHandle replacement_execution = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        foreign_executions, &root, &replacement_execution));
+    check(replacement_execution.slot != foreign_execution.slot);
+    check(!ores_native_execution_context_store_get(
+        foreign_executions, foreign_execution, &probe));
+    check(ores_native_execution_context_store_release(
+        foreign_executions, replacement_execution));
+    check(ores_native_execution_context_store_close(foreign_executions));
+
+
+    /*
      * Actor boundary -> await -> supervisor CONTROL. Each resume happens on a
      * newly-created pthread after the suspending C stack has returned.
      */
