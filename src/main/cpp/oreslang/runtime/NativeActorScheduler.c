@@ -597,6 +597,9 @@ int ores_native_actor_scheduler_terminal_state(
         OresNativeActorScheduler* s,
         OresNativeActorRef actor,
         OresNativeActorTerminalState* output) {
+    // Failed or stale ActorRef queries may never retain an older terminal
+    // receipt in caller memory. Zero is not a terminal; check return code.
+    if (output) *output = (OresNativeActorTerminalState){0};
     if (!s || !output) return 0;
     lock(s);
     int available = matching(s, actor)
