@@ -319,8 +319,8 @@ int main() {
         mutableSelected.device = "gpu-elsewhere";
         mutableSelected.queue_id = 999;
         mutableSelected.generation = 999;
-        check(claimed.claim.binding.input.tenant == valid.tenant);
-        check(claimed.claim.binding.output.device == valid.device);
+        check(claimed.claim().binding.input.tenant == valid.tenant);
+        check(claimed.claim().binding.output.device == valid.device);
         check(claimed.queue().queue_id == valid.queue_id);
         check(claimed.queue().generation == valid.generation);
         check(claimed.queue().maximum_in_flight == valid.maximum_in_flight);
@@ -332,6 +332,9 @@ int main() {
         static_assert(!std::is_move_assignable_v<QueueClaimedGpuBinding>,
                 "an admitted queue receipt must not be retargeted by assignment");
         static_assert(std::is_same_v<
+                decltype(claimed.claim()), const ClaimedGpuBinding&>,
+                "a caller must not replace the admitted fence tokens or binding");
+        static_assert(std::is_same_v<
                 decltype(claimed.queue()), const GpuQueueLocation&>,
                 "the selected queue must only be exposed as a const reference");
         check(source.status() == oreslang::gpu::Status::InFlight);
@@ -341,8 +344,9 @@ int main() {
         });
         auto transferred = std::move(claimed);
         expect<std::logic_error>([&] { (void)claimed.queue(); });
+        expect<std::logic_error>([&] { (void)claimed.claim(); });
         check(transferred.queue().queue_id == valid.queue_id);
-        BufferFence::complete_pair(source, result, transferred.claim.tickets, true);
+        BufferFence::complete_pair(source, result, transferred.claim().tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
     }
