@@ -302,11 +302,26 @@ private:
         require("as");
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end' to close model");
+            if (token_.text == "if" || token_.text == "while" || token_.text == "for" ||
+                    token_.text == "loop" || token_.text == "switch" || token_.text == "match" ||
+                    token_.text == "select" || token_.text == "nb" || token_.text == "do") {
+                fail("MODEL_DYNAMIC_TOPOLOGY: model v1 topology must be statically ordered");
+            }
+            if (token_.text == "spawn" || token_.text == "stop" || token_.text == "await" ||
+                    token_.text == "readch" || token_.text == "writech" || token_.text == "rt" ||
+                    token_.text == "throw" || token_.text == "raise" || token_.text == "panic" ||
+                    token_.text == "yield") {
+                fail("MODEL_EFFECTFUL_BODY: model graph cannot directly perform effects or suspension");
+            }
             if (token_.kind != Kind::Identifier || reserved(token_.text))
                 fail("MODEL_NON_LAYER_EXPRESSION: model v1 body accepts only nominal operation calls");
 
             ModelOpCall operation;
             operation.name = identifier();
+            while (accept(".")) {
+                operation.name += ".";
+                operation.name += identifier();
+            }
             if (!accept("("))
                 fail("MODEL_NON_LAYER_EXPRESSION: model operation name must be followed by '('");
 
