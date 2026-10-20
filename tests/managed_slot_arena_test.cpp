@@ -109,6 +109,24 @@ static void test_actor_local_arena() {
     lease->reset();
 }
 
+static void guest_compact_publication_quarantines_offset() {
+    using Arena = ActorManagedSlotArena<2, 8, ManagedRefMode::Compressed32>;
+    const ActorHeapIdentity actor{81, 11, 2};
+    Arena arena(actor);
+    std::uint64_t value = 5;
+    const auto first = arena.allocate(actor, &value, sizeof(value));
+    check(first.has_value(), "could not allocate first compact object");
+    arena.mark_guest_compact_published(actor, *first);
+    arena.release(actor, *first);
+    const auto second = arena.allocate(actor, &value, sizeof(value));
+    check(second.has_value() && second->reference != first->reference,
+          "published compact slot was recycled into a stale reference");
+    check(!arena.allocate(actor, &value, sizeof(value)),
+          "quarantined published compact slot became available");
+    rejects([&] { arena.mark_guest_compact_published(actor, *first); },
+            "stale guest compact publication accepted");
+}
+
 static void test_domain_id_saturation() {
     std::atomic<std::uint64_t> counter{std::numeric_limits<std::uint64_t>::max() - 1};
     check(detail::reserve_managed_slot_arena_id(counter) ==
@@ -148,6 +166,7 @@ int main() {
     test_domain_id_saturation();
     test_actor_local_arena<ManagedRefMode::Compressed32>();
     test_actor_local_arena<ManagedRefMode::Native64>();
+    guest_compact_publication_quarantines_offset();
 #if defined(__unix__) || defined(__APPLE__)
     destructor_never_frees_a_live_lease();
 #endif
