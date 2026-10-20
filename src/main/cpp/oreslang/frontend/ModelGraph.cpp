@@ -323,7 +323,7 @@ void rewrite_model_expression(std::unique_ptr<Expression>& expr,
                     } else {
                         const auto value = bound.find(argument.parameter);
                         if (value == bound.end())
-                            model_fail("MODEL_UNKNOWN_CONFIG",
+                            model_fail("MODEL_UNKNOWN_FORMAL",
                                        "unknown model parameter '" +
                                        argument.parameter + "'");
                         call->arguments.push_back(
@@ -480,7 +480,7 @@ void admit_and_lower_models(Program& program) {
             for (const auto& argument : operation.static_arguments)
                 if (argument.kind == ModelStaticArg::Kind::Parameter &&
                     !parameter_names.count(argument.parameter))
-                    model_fail("MODEL_UNKNOWN_CONFIG",
+                    model_fail("MODEL_UNKNOWN_FORMAL",
                                "unknown model parameter '" + argument.parameter + "'");
         }
     }
