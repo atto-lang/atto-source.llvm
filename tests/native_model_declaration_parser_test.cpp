@@ -1,5 +1,6 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/ModelGraphAdmission.hpp"
+#include "oreslang/frontend/ModelRunFencing.hpp"
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -59,6 +60,35 @@ int main() {
         check(oreslang::model::graph_digest(hir, "app::Tax@v1") !=
                   oreslang::model::graph_digest(hir, "other::Tax@v1"),
               "nominal model type must affect graph digest");
+
+        const auto graph_id = oreslang::model::graph_digest(hir, "app::Tax@v1");
+        const std::string profile(64, 'b');
+        const oreslang::model::ModelOwner owner{
+            "app::Tax@v1", graph_id, 7, "instance-1", 11, profile
+        };
+        const oreslang::model::RunStamp run{
+            "run-1", "app::Tax@v1", graph_id, 7, "instance-1", 11, profile
+        };
+        auto ledger = oreslang::model::validate_and_commit(owner, run, {});
+        check(ledger.committed_run_ids.count("run-1") == 1, "run stamp commit");
+        try {
+            (void)oreslang::model::validate_and_commit(owner, run, ledger);
+            throw std::runtime_error("duplicate run unexpectedly committed");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_RUN_REPLAY") != std::string_view::npos,
+                  "wrong duplicate run diagnostic");
+        }
+        auto stale = run;
+        stale.parameter_version = 12;
+        try {
+            (void)oreslang::model::validate_and_commit(owner, stale, {});
+            throw std::runtime_error("stale parameter version unexpectedly committed");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_STALE_PARAMETER_VERSION") != std::string_view::npos,
+                  "wrong stale parameter diagnostic");
+        }
+        check(oreslang::model::next_graph_generation(7) == 8, "graph generation increment");
+        check(oreslang::model::next_parameter_version(11) == 12, "parameter version increment");
 
         const auto cfg_a = oreslang::parse_model_declarations(
             "define model X as Apply(1) end");
