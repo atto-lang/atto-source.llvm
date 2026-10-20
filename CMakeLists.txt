@@ -978,6 +978,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_nested_future_type_admission_fail_closed
         source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
+
+    # Entry<K,V> is a compiler-owned nominal product in Java/GraalVM.
+    # Native lowering is intentionally denied until representation, ownership,
+    # projection and transport parity land together.
+    oreslang_contract_test(reject_native_entry_shadow_class
+        entry-shadow-class-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_actor
+        entry-shadow-actor-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_parameter_until_parity
+        entry-parameter-unimplemented.ores --diagnostic "native Entry<K,V> requires nominal product lowering and ownership parity")
+    oreslang_contract_test(reject_native_entry_return_until_parity
+        entry-return-unimplemented.ores --diagnostic "native Entry<K,V> requires nominal product lowering and ownership parity")
+    oreslang_contract_test(reject_native_entry_local_until_parity
+        entry-local-unimplemented.ores --diagnostic "native Entry<K,V> requires nominal product lowering and ownership parity")
+
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
     # Source await/select/Futures still fail closed pending pinned-frame lowering.
