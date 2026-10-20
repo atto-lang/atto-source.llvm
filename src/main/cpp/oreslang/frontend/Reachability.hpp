@@ -527,10 +527,24 @@ inline ReachabilityResult analyze_reachability(
         retained.insert(reachability_detail::qualify(program, name));
     }
 
+    std::vector<ReachabilityRootReason> root_reasons;
+    root_reasons.reserve(root_reason_set.size());
+    for (const auto& item : root_reason_set)
+        root_reasons.push_back(
+                ReachabilityRootReason{std::get<0>(item), std::get<1>(item)});
+
+    std::vector<ReachabilityEdge> edges;
+    edges.reserve(edge_set.size());
+    for (const auto& item : edge_set)
+        edges.push_back(ReachabilityEdge{
+                std::get<0>(item), std::get<1>(item), std::get<2>(item)});
+
     ReachabilityResult result{
         reachability_detail::sorted(root_symbols),
         reachability_detail::sorted(retained),
-        reachability_detail::sorted(removed)};
+        reachability_detail::sorted(removed),
+        std::move(root_reasons),
+        std::move(edges)};
     validate_reachability_result(result);
     return result;
 }
