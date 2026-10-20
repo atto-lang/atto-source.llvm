@@ -148,6 +148,22 @@ jobs:
             timeout 90s /tmp/oreslang-nio-fd-state-machine-exact-head
             timeout 90s /tmp/oreslang-nio-fd-close-eintr-exact-head
           done
-          python3 -I -B scripts/verify-native-nio-source-local.py \
-            "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+          # Authenticate the postflight checker again: compiling the native
+          # fixture is not permission to execute worktree Python that could
+          # have been swapped after the preflight.
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO postflight verifier differs from committed Git blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-postflight>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
           echo "NATIVE_NIO_EXACT_SOURCE_PASS attempts=3 suites=11 bridge=isolated-test-doubles fd_authority=trusted-host-real-epoll-eventfd-only"

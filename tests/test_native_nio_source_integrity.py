@@ -64,7 +64,7 @@ class NativeNioWorktreeTests(unittest.TestCase):
         # when all synthetic Git worktree fixtures would otherwise pass.
         root = CHECKER.parents[1]
         workflows = {
-            '.github/workflows/native-nio-ownership-no-llvm.yml': (1, False),
+            '.github/workflows/native-nio-ownership-no-llvm.yml': (2, False),
             '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (5, True),
         }
         for path, (expected_loaders, checks_test_blob) in workflows.items():
