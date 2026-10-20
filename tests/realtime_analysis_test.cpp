@@ -121,5 +121,51 @@ int main() {
                 "external call diagnostic");
     }
 
+    {
+        Program program;
+        program.functions.reserve(realtime_detail::kMaxRealtimeFunctions + 1);
+        program.functions.push_back(pure("main", integer(0)));
+        for (std::size_t i = 1; i <= realtime_detail::kMaxRealtimeFunctions; ++i)
+            program.functions.push_back(pure("unused_" + std::to_string(i), integer(0)));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted, "oversized function table must reject");
+        require(report.reason == "function count exceeds hard-RT analysis budget",
+                "function budget diagnostic");
+    }
+
+    {
+        Program program;
+        for (std::size_t i = 0; i < realtime_detail::kMaxRealtimeCallDepth; ++i) {
+            const std::string name = i == 0 ? "main" : "deep_" + std::to_string(i);
+            const std::string next = "deep_" + std::to_string(i + 1);
+            program.functions.push_back(pure(name, call(next)));
+        }
+        program.functions.push_back(pure(
+            "deep_" + std::to_string(realtime_detail::kMaxRealtimeCallDepth),
+            integer(1)));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted, "over-depth call graph must reject");
+        require(report.reason == "call depth exceeds hard-RT analysis budget",
+                "call-depth budget diagnostic");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(pure("leaf", integer(1)));
+        Function main = pure("main", integer(0));
+        main.statements.reserve(realtime_detail::kMaxRealtimeCallEdges + 1);
+        for (std::size_t i = 0; i <= realtime_detail::kMaxRealtimeCallEdges; ++i) {
+            Statement statement;
+            statement.kind = Statement::Kind::Call;
+            statement.expression = call("leaf");
+            main.statements.push_back(std::move(statement));
+        }
+        program.functions.push_back(std::move(main));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted, "oversized call-edge graph must reject");
+        require(report.reason == "call-edge count exceeds hard-RT analysis budget",
+                "call-edge budget diagnostic");
+    }
+
     return 0;
 }
