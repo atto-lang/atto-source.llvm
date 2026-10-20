@@ -98,6 +98,109 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_carrier_main_requires_protection_and_codeowner_review(self):
+        good_protection = {
+            "required_pull_request_reviews": {
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [], "teams": [], "apps": []
+                },
+            },
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+
+        def good_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": BASE},
+                }
+            if route == "repos/trusted/ci/branches/main/protection":
+                return good_protection
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=good_api):
+            self.assertEqual(v3.checked_carrier_main("trusted/ci", BASE), BASE)
+
+        def unprotected_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": False,
+                    "commit": {"sha": BASE},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=unprotected_api):
+            with self.assertRaisesRegex(v3.Denied, "carrier main is not protected"):
+                v3.checked_carrier_main("trusted/ci", BASE)
+
+        weak = json.loads(json.dumps(good_protection))
+        weak["required_pull_request_reviews"]["require_code_owner_reviews"] = False
+
+        def weak_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": BASE},
+                }
+            if route == "repos/trusted/ci/branches/main/protection":
+                return weak
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=weak_api):
+            with self.assertRaisesRegex(v3.Denied, "CODEOWNER"):
+                v3.checked_carrier_main("trusted/ci", BASE)
+
+    def test_carrier_main_rejects_bypass_or_base_drift(self):
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": BASE},
+                }
+            if route == "repos/trusted/ci/branches/main/protection":
+                return {
+                    "required_pull_request_reviews": {
+                        "require_code_owner_reviews": True,
+                        "dismiss_stale_reviews": True,
+                        "required_approving_review_count": 1,
+                        "bypass_pull_request_allowances": {
+                            "users": [{"login": "bypass"}],
+                            "teams": [],
+                            "apps": [],
+                        },
+                    },
+                    "enforce_admins": {"enabled": True},
+                    "allow_force_pushes": {"enabled": False},
+                    "allow_deletions": {"enabled": False},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "bypasses"):
+                v3.checked_carrier_main("trusted/ci", BASE)
+
+        def drift_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": "2" * 40},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=drift_api):
+            with self.assertRaisesRegex(v3.Denied, "advanced beyond reviewed base"):
+                v3.checked_carrier_main("trusted/ci", BASE)
+
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
