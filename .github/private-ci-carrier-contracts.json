@@ -3,17 +3,21 @@
   "carriers": {
     "usa-acc/usa-acc-e2e": {
       "repository_id": 1346346666,
-      "base_sha": "b868fdfdb1f6169621a24b90ad77aa739b935e25",
+      "base_sha": "b5fd9ab0574050cdacb4f70e9a1919057d40fd5f",
       "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
       "workflow_blob_sha": "7d84b1473e42ff9f6f2596a1bf85e5d16c96d5e6",
       "test_plans": {
-        "ci/test-plans/llvm-pr669.json": {
-          "blob_sha": "f3ccc4b849536ad53e3729ff19fed3dbbe6d0a5b",
-          "allowed_prs": [669]
+        "ci/test-plans/llvm-pr725.json": {
+          "blob_sha": "3c13780de32a44079f6eb1a5b941a35aa1dde021",
+          "allowed_prs": [725]
         },
-        "ci/test-plans/llvm-pr674.json": {
-          "blob_sha": "801457e8b0f462d3e5d8d4052c8e16da1cb6d118",
-          "allowed_prs": [674]
+        "ci/test-plans/llvm-pr726.json": {
+          "blob_sha": "a0e0818d6b931aee516580a37d4a3474cead183a",
+          "allowed_prs": [726]
+        },
+        "ci/test-plans/llvm-pr729.json": {
+          "blob_sha": "a57b3c1d23b83a701bbdb10b589bb5213f363abd",
+          "allowed_prs": [729]
         }
       }
     }
