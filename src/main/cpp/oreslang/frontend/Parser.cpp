@@ -1947,7 +1947,7 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (!program.models.empty())
-        throw std::runtime_error("MODEL_LOWERING_UNSUPPORTED: typed model operator signatures, "
+        throw std::runtime_error("MODEL_LOWERING_NOT_IMPLEMENTED: typed model operator signatures, "
                                  "effect checking and native guest lowering are not implemented");
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
