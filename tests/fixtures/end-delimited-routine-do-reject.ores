@@ -1,1 +1,0 @@
-routine identity(int x) -> int do return x; end
