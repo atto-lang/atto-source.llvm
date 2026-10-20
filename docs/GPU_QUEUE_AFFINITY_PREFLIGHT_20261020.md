@@ -46,3 +46,13 @@ fences IN_FLIGHT and permit exact-pair completion.
 Run the full existing target `dop_gpu_admission_test` through CMake/CTest
 with GCC/Clang, ASan/UBSan and stepful exact-tree source evidence.
 No physical GPU performance or driver execution is claimed by this test.
+
+## October 20 immutable receipt hardening
+
+The queue-targeted claim now returns a `QueueClaimedGpuBinding` containing
+both original paired-fence tickets and an immutable deep copy of the selected
+queue descriptor. A mutable caller-held descriptor cannot retarget an
+already-claimed operation. The queue receipt allocation and string copy
+happen **before** both buffer fences enter `IN_FLIGHT`; after admission only
+`noexcept` moves construct the return value, preserving failure atomicity.
+This receipt is still host *metadata*, not a hardware queue capability.
