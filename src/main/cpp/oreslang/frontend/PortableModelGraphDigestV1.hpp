@@ -124,3 +124,135 @@ inline bool canonical_i64(const std::string& s, std::int64_t& value) {
     auto r = std::from_chars(s.data(), s.data() + s.size(), value);
     return r.ec == std::errc{} && r.ptr == s.data() + s.size();
 }
+
+inline void encode_constant(Bytes& out, const Constant& c) {
+    out.u8(static_cast<std::uint8_t>(ordinal(c.kind,
+        {"bool","i64","f64bits","string","symbol"}, "MODEL_INVALID_CONST")));
+    if (c.kind == "bool") {
+        if (c.value != "true" && c.value != "false") fail("MODEL_INVALID_CONST");
+        out.u8(c.value == "true" ? 1 : 0);
+    } else if (c.kind == "i64") {
+        std::int64_t v = 0;
+        if (!canonical_i64(c.value, v)) {
+            bool lexical = !c.value.empty();
+            std::size_t first = (!c.value.empty() && c.value[0] == '-') ? 1 : 0;
+            if (first >= c.value.size()) lexical = false;
+            for (std::size_t i = first; lexical && i < c.value.size(); ++i)
+                lexical = c.value[i] >= '0' && c.value[i] <= '9';
+            if (lexical) fail("MODEL_CONST_OVERFLOW");
+            fail("MODEL_INVALID_CONST");
+        }
+        out.u64(static_cast<std::uint64_t>(v));
+    } else if (c.kind == "f64bits") {
+        if (c.value.size() != 18 || c.value[0] != '0' || c.value[1] != 'x')
+            fail("MODEL_INVALID_CONST");
+        std::uint64_t bits = 0;
+        auto result = std::from_chars(c.value.data() + 2, c.value.data() + 18, bits, 16);
+        if (result.ec != std::errc{} || result.ptr != c.value.data() + 18)
+            fail("MODEL_INVALID_CONST");
+        if (((bits >> 52) & 0x7ffULL) == 0x7ffULL) fail("MODEL_NONFINITE_CONST");
+        out.u64(bits);
+    } else if (c.kind == "string" || c.kind == "symbol") {
+        out.string(c.value);
+    } else fail("MODEL_INVALID_CONST");
+}
+
+inline void encode_port(Bytes& out, const Port& port) {
+    if (std::holds_alternative<NominalPort>(port)) {
+        const auto& p = std::get<NominalPort>(port);
+        out.u8(1); out.string(p.type_abi); out.u64(p.bytes); return;
+    }
+    const auto& p = std::get<BufferPort>(port);
+    if (p.shape.size() > 8) fail("MODEL_INVALID_PORT");
+    out.u8(0);
+    out.u8(static_cast<std::uint8_t>(ordinal(p.dtype,
+        {"bool","i32","i64","f32","f64"}, "MODEL_INVALID_PORT")));
+    out.u8(static_cast<std::uint8_t>(p.shape.size()));
+    for (auto d : p.shape) out.u64(d);
+    const std::string layout = p.layout ? *p.layout : (p.shape.empty() ? "scalar" : "contiguous");
+    if ((p.shape.empty() && layout != "scalar") || (!p.shape.empty() && layout != "contiguous"))
+        fail("MODEL_INVALID_PORT");
+    out.u8(static_cast<std::uint8_t>(ordinal(layout, {"scalar","contiguous"}, "MODEL_INVALID_PORT")));
+    if (!p.unit) out.u8(0);
+    else { out.u8(1); out.string(*p.unit); }
+}
+
+inline std::vector<std::uint8_t> canonical_bytes(const Graph& graph) {
+    if (graph.version != 1 || graph.nodes.empty() || graph.outputs.empty())
+        fail("MODEL_INVALID_RESOLVED_GRAPH");
+    Bytes out;
+    const std::string prefix("ORESLANG-MODEL-GRAPH-V1\0", 24);
+    out.data.insert(out.data.end(), prefix.begin(), prefix.end());
+    out.u32(1);
+    out.string(graph.model_type_id);
+
+    std::unordered_map<std::string,std::uint32_t> ordinals;
+    for (std::uint32_t i = 0; i < graph.nodes.size(); ++i) {
+        if (graph.nodes[i].id.empty() || !ordinals.emplace(graph.nodes[i].id, i).second)
+            fail("MODEL_DUPLICATE_NODE");
+    }
+
+    out.u32(static_cast<std::uint32_t>(graph.nodes.size()));
+    for (std::uint32_t index = 0; index < graph.nodes.size(); ++index) {
+        const auto& node = graph.nodes[index];
+        const auto& sig = node.signature;
+        if (node.const_args.size() != sig.const_kinds.size()) fail("MODEL_CONST_ARITY_MISMATCH");
+        out.string(node.op);
+        out.string(sig.abi);
+        out.digest(sig.impl_digest);
+        out.u8(static_cast<std::uint8_t>(ordinal(sig.provenance,
+            {"verified-ores","trusted-native"}, "MODEL_INVALID_OP_SIGNATURE")));
+        out.u8(static_cast<std::uint8_t>(ordinal(sig.effect,
+            {"pure","io","network","random","clock","actor","ffi","suspend"},
+            "MODEL_INVALID_OP_SIGNATURE")));
+        out.u8(sig.vjp ? 1 : 0);
+        out.u32(static_cast<std::uint32_t>(sig.const_kinds.size()));
+        for (const auto& kind : sig.const_kinds)
+            out.u8(static_cast<std::uint8_t>(ordinal(kind,
+                {"bool","i64","f64bits","string","symbol"}, "MODEL_INVALID_OP_SIGNATURE")));
+        out.u32(static_cast<std::uint32_t>(node.const_args.size()));
+        for (std::size_t i = 0; i < node.const_args.size(); ++i) {
+            if (node.const_args[i].kind != sig.const_kinds[i]) fail("MODEL_CONST_TYPE_MISMATCH");
+            encode_constant(out, node.const_args[i]);
+        }
+        out.u32(static_cast<std::uint32_t>(node.inputs.size()));
+        for (const auto& parent : node.inputs) {
+            auto it = ordinals.find(parent);
+            if (it == ordinals.end() || it->second >= index) fail("MODEL_FORWARD_OR_CYCLIC_EDGE");
+            out.u32(it->second);
+        }
+        out.u32(static_cast<std::uint32_t>(sig.inputs.size()));
+        for (const auto& input : sig.inputs) encode_port(out, input);
+        encode_port(out, sig.output);
+        out.u64(sig.scratch_bytes);
+        out.u8(sig.profile.freestanding ? 1 : 0);
+        out.u8(static_cast<std::uint8_t>(ordinal(sig.profile.allocation,
+            {"none","scratch","dynamic"}, "MODEL_INVALID_OP_PROFILE")));
+        out.u8(sig.profile.deterministic ? 1 : 0);
+    }
+
+    std::unordered_set<std::string> seen;
+    out.u32(static_cast<std::uint32_t>(graph.outputs.size()));
+    for (const auto& output : graph.outputs) {
+        auto it = ordinals.find(output);
+        if (it == ordinals.end()) fail("MODEL_UNKNOWN_OUTPUT");
+        if (!seen.insert(output).second) fail("MODEL_DUPLICATE_OUTPUT");
+        out.u32(it->second);
+    }
+    return out.data;
+}
+
+inline std::string digest(const Graph& graph) {
+    const auto bytes = canonical_bytes(graph);
+    const auto hash = llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(bytes.data(), bytes.size()));
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(64);
+    for (auto byte : hash) {
+        out.push_back(hex[(byte >> 4) & 0x0f]);
+        out.push_back(hex[byte & 0x0f]);
+    }
+    return out;
+}
+
+} // namespace oreslang::model::portable_v1
