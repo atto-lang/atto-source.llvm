@@ -187,6 +187,27 @@ class NativeNioWorktreeTests(unittest.TestCase):
         (self.repo / 'shadow.c').write_text('int x;\n')
         self.reject('dirty')
 
+    def test_hardlinked_tracked_input_is_rejected(self):
+        # A tracked file's bytes/index can both match HEAD, while an
+        # external hardlink can mutate its inode during the compiler run.
+        # Disallow aliases even before they have been modified.
+        external = Path(self.tmp.name) / 'external-source-alias.c'
+        os.link(self.repo / 'source.c', external)
+        status = run('git', 'status', '--porcelain=v1', cwd=self.repo)
+        self.assertEqual('', status.stdout, status.stderr)
+        self.assertEqual(2, os.stat(self.repo / 'source.c').st_nlink)
+        self.reject('multiply-linked tracked source')
+
+    def test_hardlink_removed_before_gate_is_admissible(self):
+        # Normal uniquely linked worktree content remains legal. There must
+        # be no permanent quarantine for a correctly repaired checkout.
+        external = Path(self.tmp.name) / 'temporary-source-alias.c'
+        os.link(self.repo / 'source.c', external)
+        self.reject('multiply-linked tracked source')
+        external.unlink()
+        self.assertEqual(1, os.stat(self.repo / 'source.c').st_nlink)
+        self.assertEqual(0, self.gate().returncode)
+
     def test_filemode_false_does_not_hide_chmod(self):
         self.assertEqual(0, run('git', 'config', 'core.fileMode', 'false', cwd=self.repo).returncode)
         (self.repo / 'source.c').chmod(0o755)
