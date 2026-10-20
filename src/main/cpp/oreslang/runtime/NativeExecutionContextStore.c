@@ -178,9 +178,15 @@ int ores_native_execution_context_store_insert(
             (uint32_t)(((uint64_t)store->cursor + offset) % store->capacity);
         uint32_t lane = 0;
         ExecutionBlock* block = block_for(store, index, &lane);
-        if (!block->live[lane] && block->generation[lane] != 0) {
+        if (block->live[lane]) {
+            if (block->runtime_domain[lane] == context->id.runtime_domain
+                    && block->execution[lane] == context->id.execution) {
+                unlock_store(store);
+                return 0; /* duplicate logical identity */
+            }
+        } else if (block->generation[lane] != 0
+                && free_index == UINT32_MAX) {
             free_index = index;
-            break;
         }
     }
     if (free_index == UINT32_MAX) {
