@@ -695,10 +695,16 @@ if(BUILD_TESTING)
             --ir-absent "oreslang_int_array_try_region_open"
             --run 42 --clang "${ORE_CLANG}")
     endif()
-    oreslang_contract_test(native_tree_shake_overload_fails_closed
+    oreslang_contract_test(native_tree_shake_overload_arity
         named-call-arity-overload-main.ores
         --tree-shake
-        --diagnostic "native reachability rejects overloaded function name")
+        --ir "call i64 @pick")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_overload_arity_executes
+            named-call-arity-overload-main.ores
+            --tree-shake
+            --run 43 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_tree_shake_keeps_scalar_resume_abi
         native-rt-aot-counter.ores
         --tree-shake
