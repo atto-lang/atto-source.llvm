@@ -658,6 +658,10 @@ if(BUILD_TESTING)
         named-call-arity-overload-main.ores
         --tree-shake
         --diagnostic "native reachability rejects overloaded function name")
+    oreslang_contract_test(native_tree_shake_keeps_scalar_resume_abi
+        native-rt-aot-counter.ores
+        --tree-shake
+        --ir "oreslang_rt_spin_resume")
     oreslang_contract_test(native_tree_shake_library_keeps_public_api
         tree-shake-library.ores
         --tree-shake
