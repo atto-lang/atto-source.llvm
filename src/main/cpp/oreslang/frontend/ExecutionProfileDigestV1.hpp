@@ -82,7 +82,7 @@ inline std::vector<std::uint8_t> canonical_bytes(const Profile& p) {
         if(i&&p.numeric_features[i-1]>=f)fail("MODEL_NONCANONICAL_EXECUTION_PROFILE");
     }
     Bytes out;
-    const std::string prefix("ORESLANG-MODEL-PROFILE-V1\0",25);
+    const std::string prefix("ORESLANG-MODEL-PROFILE-V1\0",26);
     out.data.insert(out.data.end(),prefix.begin(),prefix.end());
     out.u32(1);
     out.string(p.backend_id);
