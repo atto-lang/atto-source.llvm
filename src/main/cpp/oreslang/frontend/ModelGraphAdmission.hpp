@@ -134,6 +134,10 @@ inline void validate_scalar(const std::string& value, bool formal_allowed,
         std::string stripped;
         for (char c : value) if (c != '_') stripped.push_back(c);
         require(!stripped.empty(), "MODEL_INVALID_CONST");
+        const auto first_digit = stripped.front() == '-' ? std::size_t(1) : std::size_t(0);
+        require(first_digit < stripped.size(), "MODEL_INVALID_CONST");
+        require(stripped[first_digit] != '0' || first_digit + 1 == stripped.size(),
+                "MODEL_INVALID_CONST");
         std::int64_t parsed = 0;
         const auto res = std::from_chars(stripped.data(), stripped.data() + stripped.size(), parsed);
         if (res.ec == std::errc::result_out_of_range) throw std::runtime_error("MODEL_CONST_OVERFLOW");
