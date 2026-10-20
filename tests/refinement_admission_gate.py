@@ -54,6 +54,18 @@ UNSUPPORTED = {
         "type Port = int with value gte 1;\n"
         "fnc main(): int { return 42; }\n"
     ),
+    "annotation-comment-trivia": (
+        "@ /* compiler metadata */ Range(min=1,max=2) type R = int;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
+    "zorde-comment-trivia": (
+        "type Port = Zorde /* validator */ . /* projection */ infer<S>;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
+    "where-after-comment": (
+        "type Safe = string /* no restrictions in comment */ where it.length > 0;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
     "where-after-annotation-decoy": (
         "// @Size(min=1,max=32)\n"
         "type Safe = string where it.length > 0;\n"
