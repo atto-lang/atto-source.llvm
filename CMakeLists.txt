@@ -46,8 +46,7 @@ if(BUILD_TESTING)
     # Bracket syntax has its own AST identity before semantic admission. This
     # parser-only test must not imply that native checked-index lowering exists.
     add_executable(oreslang-checked-index-ast-test
-        tests/checked_index_ast_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp)
+        tests/checked_index_ast_test.cpp)
     target_include_directories(oreslang-checked-index-ast-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-checked-index-ast-test PRIVATE
