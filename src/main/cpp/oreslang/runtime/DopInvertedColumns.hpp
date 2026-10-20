@@ -26,9 +26,7 @@ namespace detail {
  * The counter is not host-mutable: only InvertedColumns can allocate IDs.
  */
 class InvertedOwnerSequence final {
-    template<class...>
-    friend class InvertedColumns;
-
+public:
     static std::uint64_t allocate() {
         std::uint64_t id = next_.load(std::memory_order_relaxed);
         while (true) {
@@ -39,6 +37,7 @@ class InvertedOwnerSequence final {
         }
     }
 
+private:
     inline static std::atomic<std::uint64_t> next_{1};
 };
 
