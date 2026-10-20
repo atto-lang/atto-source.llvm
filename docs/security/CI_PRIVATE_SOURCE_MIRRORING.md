@@ -102,6 +102,19 @@ The reviewed carrier base must contain neither
 `main` advance, delete/recreate, workflow change, or test-plan change fails
 closed until the source contract is independently reviewed again.
 
+Carrier `main` is also a live authorization boundary. The v3 publisher
+requires it to be protected with CODEOWNER review, stale-review dismissal,
+at least one approval, administrator enforcement, force-push/deletion disabled,
+and no pull-request-review bypass actors. A pinned carrier SHA is not treated as
+a substitute for live review enforcement.
+
+The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
+performed by a separate no-checkout job with `contents: write` that validates
+both ephemeral refs still point at the exact carrier commit before deleting the
+`ci/authorized-<CARRIER_COMMIT_SHA>` and `ci/oreslang-<SOURCE_TREE_SHA>` refs.
+Ref deletion limits accidental continued reachability; it does not claim to
+erase already-created Git objects, Actions logs, or provider-side retention.
+
 After reconstructing the exact source root tree in the carrier, the publisher
 requires the uploaded subtree SHA to equal the original PR root-tree SHA. It
 creates an `ores-private-ci-receipt-v3` binding source repository ID, PR

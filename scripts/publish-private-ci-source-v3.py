@@ -283,6 +283,42 @@ def protected_authority(repository, source_pr, test_plan):
     return main_sha, contract
 
 
+def checked_carrier_main(repository, expected_sha):
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if (branch.get("name") != "main"
+            or branch.get("protected") is not True):
+        raise Denied("carrier main is not protected")
+    base_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "carrier main SHA"
+    )
+    if base_sha != expected_sha:
+        raise Denied("carrier main advanced beyond reviewed base")
+
+    protection = gh_api(f"repos/{repository}/branches/main/protection")
+    reviews = protection.get("required_pull_request_reviews")
+    if (not isinstance(reviews, dict)
+            or reviews.get("require_code_owner_reviews") is not True
+            or reviews.get("dismiss_stale_reviews") is not True
+            or not isinstance(reviews.get("required_approving_review_count"), int)
+            or isinstance(reviews.get("required_approving_review_count"), bool)
+            or reviews.get("required_approving_review_count", 0) < 1):
+        raise Denied("carrier main does not enforce independent CODEOWNER review")
+    admins = protection.get("enforce_admins")
+    force = protection.get("allow_force_pushes")
+    delete = protection.get("allow_deletions")
+    if (not isinstance(admins, dict) or admins.get("enabled") is not True
+            or not isinstance(force, dict) or force.get("enabled") is not False
+            or not isinstance(delete, dict) or delete.get("enabled") is not False):
+        raise Denied("carrier main admin/force/delete protection incomplete")
+    bypasses = reviews.get("bypass_pull_request_allowances")
+    if bypasses is not None:
+        if (not isinstance(bypasses, dict)
+                or any(not isinstance(bypasses.get(k, []), list)
+                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
+            raise Denied("carrier main has pull-request review bypasses")
+    return base_sha
+
+
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
     if (repo.get("id") != contract["repository_id"]
@@ -294,10 +330,7 @@ def checked_destination(repository, contract):
             or repo.get("disabled") is not False
             or repo.get("fork") is not False):
         raise Denied("carrier identity/state differs from protected contract")
-    ref = gh_api(f"repos/{repository}/git/ref/heads/main")
-    base_sha = valid_sha(ref.get("object", {}).get("sha"), "carrier main SHA")
-    if base_sha != contract["base_sha"]:
-        raise Denied("carrier main advanced beyond reviewed base")
+    base_sha = checked_carrier_main(repository, contract["base_sha"])
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
     base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
