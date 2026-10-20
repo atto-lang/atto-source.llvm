@@ -9,6 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "oreslang/runtime/DopLayout.hpp"
+
 namespace oreslang::analysis {
 
 // Native compiler-side advisory. No mutation, loans, safe-rewrite or
@@ -102,6 +104,23 @@ inline std::vector<LayoutFinding> advise_layout(const LayoutRegion& r) {
             *r.hints.structural_changes_per_pass >= r.rows / 8 + (r.rows % 8 != 0))
         findings.push_back({"ORES-LAYOUT135", "Benchmark deferred ECS mutation batches and generation-safe handles."});
     return findings;
+}
+
+// This geometry-only rule is derivable from an actual Oreslang native
+// DopLayout::Plan. Unlike hot-path advice, it does not require profiler
+// evidence, but it still does not prove that another layout is faster.
+inline std::vector<LayoutFinding> advise_dop_plan_padding(const dop::Plan& plan) {
+    if (plan.layout() != dop::Layout::AoSoA || plan.rows() == 0)
+        return {};
+    const auto payload = dop::checked_mul(
+        dop::checked_mul(plan.rows(), plan.fields()), plan.scalar_bytes());
+    const auto physical = plan.byte_length(); // checked by Plan constructor
+    const auto extra = physical - payload;
+    const auto quarter = payload / 4 + (payload % 4 != 0);
+    if (extra >= quarter)
+        return {{"ORES-LAYOUT141",
+                "AoSoA physical storage exceeds logical scalar payload by >=25%; benchmark tile geometry and tail utilization."}};
+    return {};
 }
 
 } // namespace oreslang::analysis
