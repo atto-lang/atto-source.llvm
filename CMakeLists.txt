@@ -32,6 +32,20 @@ if(BUILD_TESTING)
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
+
+    # Parser/HIR admission only for first-class models. Parser.cpp is linked
+    # directly so this test does not imply LLVM IR/codegen support.
+    add_executable(oreslang-native-model-parser-gate-test
+        tests/native_model_parser_gate_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-model-parser-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-model-parser-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_model_parser_failclosed_gate
+        COMMAND oreslang-native-model-parser-gate-test)
+    set_tests_properties(native_model_parser_failclosed_gate PROPERTIES TIMEOUT 20)
     add_executable(oreslang-native-core-sync-test tests/native_core_sync_test.c)
     set_target_properties(oreslang-native-core-sync-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
