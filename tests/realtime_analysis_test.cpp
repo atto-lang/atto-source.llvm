@@ -137,6 +137,21 @@ int main() {
     }
 
     {
+        Function limited = pure("limited", integer(0));
+        for (int i = 0; i < 3; ++i) {
+            Statement statement;
+            statement.kind = Statement::Kind::Call;
+            statement.expression = call("leaf");
+            limited.statements.push_back(std::move(statement));
+        }
+        const auto facts = realtime_detail::direct_facts(limited, 1);
+        require(facts.call_budget_exceeded,
+                "direct call discovery must stop at supplied edge budget");
+        require(facts.calls.size() == 1,
+                "direct call vector must not grow beyond supplied edge budget");
+    }
+
+    {
         Program program;
         program.functions.push_back(pure("leaf", integer(1)));
         Function main = pure("main", integer(0));
