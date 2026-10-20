@@ -116,6 +116,8 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--ir")
+    parser.add_argument("--ir-absent", action="append", default=[])
+    parser.add_argument("--tree-shake", action="store_true")
     parser.add_argument("--diagnostic")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
@@ -129,9 +131,10 @@ def main():
     # A rejected-source test must never silently skip other requested gates.
     if args.diagnostic is not None:
         require(bool(args.diagnostic), "--diagnostic requires nonempty text")
-        require(args.run is None and args.ir is None and
-                not args.no_native_abi and not args.no_main_link and
-                not args.verify_object and args.native_runtime is None,
+        require(args.run is None and args.ir is None and not args.ir_absent and
+                not args.tree_shake and not args.no_native_abi and
+                not args.no_main_link and not args.verify_object and
+                args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
     if args.ir is not None:
         require(bool(args.ir), "--ir requires nonempty text")
@@ -149,6 +152,8 @@ def main():
         cmd.append("--target=" + args.target)
     if args.experimental_owned_int:
         cmd.append("--experimental-owned-int")
+    if args.tree_shake:
+        cmd.append("--tree-shake")
     cmd.append(args.fixture)
     compile_result = subprocess.run(
         cmd, capture_output=True, text=True, check=False, timeout=20
@@ -169,6 +174,10 @@ def main():
     if args.ir:
         require(args.ir in ir_evidence_text(compile_result.stdout, args.ir),
                 "expected executable LLVM IR was absent (comments do not count): " + args.ir)
+    for forbidden in args.ir_absent:
+        require(forbidden, "--ir-absent requires nonempty text")
+        require(forbidden not in ir_without_comments(compile_result.stdout),
+                "forbidden LLVM IR survived tree shaking: " + forbidden)
     if args.no_native_abi:
         require("oreslang_owned_i64_region_" not in compile_result.stdout,
                 "ordinary source unexpectedly references the experimental native heap ABI")
