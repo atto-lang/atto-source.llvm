@@ -202,6 +202,15 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 180)
+    # Structural readonly/record/struct syntax is not lowered by the native
+    # scalar compiler. Positive comment decoys and real negative source files
+    # must prove the compiler-owned diagnostic with absolutely no partial IR.
+    add_test(NAME native_structural_shape_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_shape_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_structural_shape_admission_failclosed
+        PROPERTIES TIMEOUT 180)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"

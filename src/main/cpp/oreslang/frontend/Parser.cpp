@@ -64,42 +64,41 @@ bool refinement_annotation(std::string_view name) {
            name == "Min" || name == "Max" || name == "Range";
 }
 
-void reject_unsupported_refinement_surface(std::string_view source) {
-    // Whitespace and nested comments are lexical separators, including
-    // BETWEEN the tokens of an annotation or Zorde.infer qualification.
-    // The gate must classify these before the restricted parser could
-    // accidentally erase a refinement as an untyped ordinary name.
-    auto skip_ignored = [&](std::size_t position) {
-        for (;;) {
-            while (position < source.size() &&
-                   std::isspace(static_cast<unsigned char>(source[position])))
-                ++position;
-            if (source.substr(position, 2) == "//") {
-                const auto end = source.find('\n', position + 2);
-                position = end == std::string_view::npos ? source.size() : end;
-            } else if (source.substr(position, 2) == "/*") {
-                const auto start = position;
-                position += 2;
-                std::size_t depth = 1;
-                while (depth) {
-                    if (position == source.size())
-                        throw std::runtime_error("unterminated block comment at byte " +
-                                                 std::to_string(start));
-                    if (source.substr(position, 2) == "/*") {
-                        // Refuse adversarial deeply nested comment gaps
-                        // before scanning an unbounded amount of ignored
-                        // text between protected refinement tokens.
-                        if (depth >= 128)
-                            throw std::runtime_error(
-                                "native refinement boundary comment nesting limit exceeded");
-                        position += 2; ++depth;
-                    } else if (source.substr(position, 2) == "*/") {
-                        position += 2; --depth;
-                    } else ++position;
-                }
-            } else return position;
+// Look ahead through source trivia without interpreting a contextual identifier
+// as a shape unless the following syntax genuinely opens a row schema.
+std::size_t skip_shape_trivia(std::string_view source, std::size_t at) {
+    for (;;) {
+        while (at < source.size() &&
+               std::isspace(static_cast<unsigned char>(source[at]))) ++at;
+        if (source.substr(at, 2) == "//") {
+            const auto end = source.find('\n', at + 2);
+            at = end == std::string_view::npos ? source.size() : end;
+            continue;
         }
-    };
+        if (source.substr(at, 2) == "/*") {
+            const auto start = at;
+            at += 2;
+            std::size_t depth = 1;
+            while (depth != 0) {
+                if (at == source.size())
+                    throw std::runtime_error("unterminated block comment at byte " +
+                                             std::to_string(start));
+                if (source.substr(at, 2) == "/*") {
+                    if (depth >= 128)
+                        throw std::runtime_error(
+                            "native refinement boundary comment nesting limit exceeded");
+                    at += 2; ++depth;
+                }
+                else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
+                else ++at;
+            }
+            continue;
+        }
+        return at;
+    }
+}
+
+void reject_unsupported_type_surfaces(std::string_view source) {
     bool in_type = false;
     for (std::size_t at = 0; at < source.size();) {
         const unsigned char ch = static_cast<unsigned char>(source[at]);
@@ -117,7 +116,12 @@ void reject_unsupported_refinement_surface(std::string_view source) {
                 if (at == source.size())
                     throw std::runtime_error("unterminated block comment at byte " +
                                              std::to_string(start));
-                if (source.substr(at, 2) == "/*") { at += 2; ++depth; }
+                if (source.substr(at, 2) == "/*") {
+                    if (depth >= 128)
+                        throw std::runtime_error(
+                            "native refinement boundary comment nesting limit exceeded");
+                    at += 2; ++depth;
+                }
                 else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
                 else ++at;
             }
@@ -138,7 +142,7 @@ void reject_unsupported_refinement_surface(std::string_view source) {
 
         if (source[at] == '@') {
             const auto marker = at++;
-            at = skip_ignored(at);
+            at = skip_shape_trivia(source, at);
             const auto start = at;
             if (at < source.size() && identifier_start(source[at])) {
                 ++at;
@@ -157,6 +161,18 @@ void reject_unsupported_refinement_surface(std::string_view source) {
             const auto start = at++;
             while (at < source.size() && identifier_part(source[at])) ++at;
             const auto word = source.substr(start, at - start);
+            // The native scalar frontend has no typed record/struct row
+            // witness, read-only borrow proof or aggregate lowering. Reject
+            // before producing partial IR; retain 'record' as a contextual
+            // ordinary identifier when it is NOT followed by a row brace.
+            if (word == "structural" ||
+                    ((word == "record" || word == "struct") &&
+                     source.substr(skip_shape_trivia(source, at), 1) == "{")) {
+                throw std::runtime_error(
+                    "native structural shape boundary unsupported: typed readonly "
+                    "view/aggregate lowering required at byte " +
+                    std::to_string(start));
+            }
             if (word == "newtype") {
                 throw std::runtime_error(
                     "native refinement boundary unsupported: nominal newtype "
@@ -172,9 +188,10 @@ void reject_unsupported_refinement_surface(std::string_view source) {
                     "lowering required at byte " + std::to_string(start));
             }
             if (in_type && word == "Zorde") {
-                std::size_t probe = skip_ignored(at);
+                std::size_t probe = skip_shape_trivia(source, at);
                 if (probe < source.size() && source[probe] == '.') {
-                    probe = skip_ignored(probe + 1);
+                    ++probe;
+                    probe = skip_shape_trivia(source, probe);
                     const auto id = probe;
                     if (probe < source.size() && identifier_start(source[probe])) {
                         ++probe;
@@ -770,6 +787,18 @@ private:
                 [&](const GenericParameter& p) { return p.name == type; });
             if (!generic) fail("native return type requires int or scalar generic slot");
         }
+        // Postfix throws/raises/panics are proposal-only typed exceptional
+        // contracts. Reject at the exact signature boundary; admitting them
+        // without typed calls, unwind and actor CONTROL would erase safety.
+        const auto reject_unlowered_exception_effect = [&]() {
+            if (token_.text == "throws" || token_.text == "raises" ||
+                    token_.text == "panics") {
+                fail("native postfix exceptional effect '" +
+                     std::string(token_.text) +
+                     "' requires typed effect checking and unwind lowering");
+            }
+        };
+        reject_unlowered_exception_effect();
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -786,6 +815,7 @@ private:
                 value.declared_effects.bits |= bit;
             } while (accept(","));
         }
+        reject_unlowered_exception_effect();
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
@@ -2004,7 +2034,7 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     // Compiler-owned fail-closed gate. Tests assert this diagnostic rather
     // than relying on incidental lexer/parser failure for refinement syntax.
-    reject_unsupported_refinement_surface(source);
+    reject_unsupported_type_surfaces(source);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&
@@ -2019,4 +2049,5 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
 }
 
 } // namespace oreslang
+
 
