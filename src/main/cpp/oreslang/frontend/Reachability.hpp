@@ -283,9 +283,24 @@ inline ReachabilityResult analyze_reachability(
     };
 
     const auto mark_function = [&](const std::string& name) {
-        if (functions.find(name) == functions.end())
-            throw std::runtime_error("native reachability root/function not found: " + name);
-        if (retained_functions.insert(name).second) work.emplace_back('f', name);
+        const auto found = functions.find(name);
+        if (found == functions.end())
+            throw std::runtime_error(
+                    "native reachability root/function not found: " + name);
+        if (retained_functions.insert(name).second)
+            work.emplace_back('f', name);
+
+        // LLVM source ABI suffixing depends on overload-family cardinality.
+        // If a retained source-public overload survives, preserve its whole
+        // family so tree shaking cannot silently rename that exported symbol.
+        if (found->second->exported &&
+                function_family_sizes.at(found->second->name) > 1) {
+            for (const auto& [slot, candidate] : functions) {
+                if (candidate->name != found->second->name) continue;
+                if (retained_functions.insert(slot).second)
+                    work.emplace_back('f', slot);
+            }
+        }
     };
     const auto mark_actor = [&](const std::string& name) {
         if (actors.find(name) == actors.end())
