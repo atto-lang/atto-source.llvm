@@ -44,6 +44,7 @@ static void control(void* raw, size_t actor, uint64_t payload) {
 // relying on incidental pthread scheduling or elapsed-time comparisons.
 typedef struct {
     atomic_int entered, release, dispatched, control_position, seen, errors;
+    atomic_uint_fast64_t seen_data_slots;
 } PriorityState;
 static void priority_data(void* raw, size_t actor, uint64_t payload) {
     PriorityState* p = (PriorityState*)raw;
@@ -53,6 +54,19 @@ static void priority_data(void* raw, size_t actor, uint64_t payload) {
             sched_yield();
     }
     if (payload != actor) atomic_fetch_add(&p->errors, 1);
+    /* Bit-address the six selected actor IDs, not the delivery count: a
+     * duplicated valid DATA turn may otherwise conceal a missing one. */
+    const size_t slots[] = {0, 63, 64, 4095, 4096, 65535};
+    unsigned index = 0;
+    for (; index < sizeof(slots) / sizeof(slots[0]); ++index)
+        if (slots[index] == actor) break;
+    if (index == sizeof(slots) / sizeof(slots[0])) {
+        atomic_fetch_add(&p->errors, 1);
+    } else {
+        uint_fast64_t bit = UINT64_C(1) << index;
+        if (atomic_fetch_or(&p->seen_data_slots, bit) & bit)
+            atomic_fetch_add(&p->errors, 1);
+    }
     atomic_fetch_add(&p->dispatched, 1);
     atomic_fetch_add(&p->seen, 1);
 }
@@ -95,6 +109,7 @@ static void run_priority_boundary_regression(void) {
     assert(atomic_load(&state.control_position) == 1);
     assert(atomic_load(&state.dispatched) == COUNT + 1);
     assert(atomic_load(&state.seen) == COUNT);
+    assert(atomic_load(&state.seen_data_slots) == ((UINT64_C(1) << COUNT) - 1));
     assert(atomic_load(&state.errors) == 0);
     assert(ores_native_actor_scheduler_accepted(scheduler) == COUNT + 1);
     assert(ores_native_actor_scheduler_completed(scheduler) == COUNT + 1);
