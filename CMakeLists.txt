@@ -29,6 +29,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Model declarations are parsed into nominal source AST, but deliberately
+    # not allowed through native guest lowering until trusted op resolution.
+    add_executable(oreslang-native-model-parser-test
+        tests/native_model_declaration_parser_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-model-parser-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-model-parser-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_model_declaration_parser_and_execution_gate
+        COMMAND oreslang-native-model-parser-test)
+    set_tests_properties(native_model_declaration_parser_and_execution_gate PROPERTIES TIMEOUT 20)
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
