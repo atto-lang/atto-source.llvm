@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/Reachability.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
@@ -66,6 +67,7 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    bool tree_shake = false;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
@@ -84,6 +86,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--tree-shake") {
+            if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
+            tree_shake = true;
         } else if (arg.rfind("--target=", 0) == 0) {
             if (target_seen) { std::cerr << "duplicate target option\n"; return 2; }
             target_seen = true;
@@ -120,7 +125,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--tree-shake] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -312,6 +317,36 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
+        if (tree_shake) {
+            const auto main_function = std::find_if(
+                    ast.functions.begin(), ast.functions.end(),
+                    [](const oreslang::Function& fn) { return fn.name == "main"; });
+
+            std::vector<std::string> function_roots;
+            if (main_function != ast.functions.end())
+                function_roots.push_back("main");
+
+            // If there is no process entry point, treat the compilation as a
+            // library surface. Wasm/Cortex-M likewise expose public functions
+            // through a host/freestanding ABI, so their public API stays rooted.
+            const bool preserve_exported_api =
+                    main_function == ast.functions.end() ||
+                    wasm32_target || cortex_m_target;
+
+            std::vector<std::string> actor_roots;
+            if (wasm32_target) {
+                // The Wasm backend exposes init/on_message/teardown for every
+                // admitted guest actor. Those host entrypoints are semantic
+                // roots even when no ordinary source function spawns them.
+                for (const auto& actor : ast.actors)
+                    actor_roots.push_back(actor.name);
+            }
+
+            const auto reachability = oreslang::analyze_reachability(
+                    ast, function_roots, preserve_exported_api, actor_roots);
+            ast = oreslang::prune_program(std::move(ast), reachability);
+        }
+
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
