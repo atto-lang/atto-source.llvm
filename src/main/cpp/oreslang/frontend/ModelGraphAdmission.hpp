@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <charconv>
 #include <cmath>
-#include <cstdlib>
-#include <cerrno>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -149,10 +147,16 @@ inline void validate_scalar(const std::string& value, bool formal_allowed,
             require((c >= '0' && c <= '9') || c == '.' || c == 'e' ||
                     c == 'E' || c == '+' || c == '-', "MODEL_INVALID_CONST");
         }
-        char* end = nullptr;
-        errno = 0;
-        const double parsed = std::strtod(value.c_str(), &end);
-        require(end == value.c_str() + value.size(), "MODEL_INVALID_CONST");
+        // Locale-independent, nonallocating C++17 numeric parsing.
+        // strtod() may interpret decimal points differently under LC_NUMERIC.
+        double parsed = 0.0;
+        const auto converted = std::from_chars(
+            value.data(), value.data() + value.size(), parsed,
+            std::chars_format::general);
+        if (converted.ec == std::errc::result_out_of_range)
+            throw std::runtime_error("MODEL_NONFINITE_CONST");
+        require(converted.ec == std::errc{} &&
+                converted.ptr == value.data() + value.size(), "MODEL_INVALID_CONST");
         require(std::isfinite(parsed), "MODEL_NONFINITE_CONST");
         return;
     }
