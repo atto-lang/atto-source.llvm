@@ -102,6 +102,16 @@ static void run_priority_boundary_regression(void) {
         assert(ores_native_actor_scheduler_send(scheduler, refs[i], indices[i]));
     assert(ores_native_actor_scheduler_publish_control(
         scheduler, refs[COUNT - 1], UINT64_C(0xdecafbad)));
+    /* Stop wins against NEW sends, not against work already admitted before
+     * the stop linearized. The stopped actor must drain its high-slot
+     * CONTROL first and then its previously accepted DATA, with no ABA. */
+    assert(ores_native_actor_scheduler_stop(scheduler, refs[COUNT - 1]));
+    assert(!ores_native_actor_scheduler_send(
+        scheduler, refs[COUNT - 1], UINT64_C(12345)));
+    assert(!ores_native_actor_scheduler_publish_control(
+        scheduler, refs[COUNT - 1], UINT64_C(0xdecafbad)));
+    assert(!ores_native_actor_scheduler_poll_done(
+        scheduler, refs[COUNT - 1]));
     atomic_store_explicit(&state.release, 1, memory_order_release);
     assert(ores_native_actor_scheduler_drain(scheduler));
     /* The blocker is dispatched first, then globally earliest CONTROL,
@@ -114,7 +124,10 @@ static void run_priority_boundary_regression(void) {
     assert(ores_native_actor_scheduler_accepted(scheduler) == COUNT + 1);
     assert(ores_native_actor_scheduler_completed(scheduler) == COUNT + 1);
     assert(ores_native_actor_scheduler_control_completed(scheduler) == 1);
-    for (size_t i = 0; i < COUNT; ++i) {
+    assert(ores_native_actor_scheduler_rejected(scheduler) == 2);
+    assert(ores_native_actor_scheduler_poll_done(
+        scheduler, refs[COUNT - 1]));
+    for (size_t i = 0; i < COUNT - 1; ++i) {
         assert(ores_native_actor_scheduler_stop(scheduler, refs[i]));
         assert(ores_native_actor_scheduler_poll_done(scheduler, refs[i]));
     }
