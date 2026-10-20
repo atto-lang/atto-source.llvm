@@ -57,7 +57,23 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
           EXPECTED_TREE="$(git rev-parse --verify HEAD^{tree})"
-          python3 -I -B scripts/verify-native-nio-source-local.py "$EXPECTED_HEAD" "$EXPECTED_TREE"
+          # Execute the exact verifier Git blob, never the mutable worktree
+          # pathname. A maliciously swapped or staged checker must be denied.
+          checker=scripts/verify-native-nio-source-local.py
+          approved="$(git rev-parse --verify "HEAD:$checker")"
+          staged="$(git rev-parse --verify ":$checker")"
+          raw="$(git hash-object --no-filters -- "$checker")"
+          if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
+            echo "NIO verifier is not the committed source blob" >&2
+            exit 2
+          fi
+          git cat-file blob "$approved" |
+            python3 -I -B -c '
+          import sys
+          source = sys.stdin.buffer.read()
+          exec(compile(source, "<approved-native-nio-verifier>", "exec"),
+               {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
+          ' "$EXPECTED_HEAD" "$EXPECTED_TREE"
           echo "NATIVE_NIO_EXACT_SOURCE_HEAD=$EXPECTED_HEAD"
           echo "NATIVE_NIO_EXACT_SOURCE_TREE=$EXPECTED_TREE"
       - name: Compile manager and C ABI against actual private source files
