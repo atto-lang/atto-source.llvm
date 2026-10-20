@@ -43,8 +43,11 @@ struct OresNativeActorScheduler {
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
     /* One-way bootstrap profile: all worker pthreads already exist before
-     * DATA/CONTROL admission, and hot path cannot create new pthreads. */
+     * DATA/CONTROL admission, and hot path cannot create new pthreads.
+     * A failed bootstrap poisons this scheduler: RT preparation is a
+     * single-shot state transition, never a resource-dependent retry loop. */
     int realtime_preallocated;
+    int realtime_prestart_failed;
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
@@ -376,10 +379,20 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
 int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* s) {
     if (!s) return 0;
     lock(s);
-    int ok = !s->retired && !s->realtime_preallocated
-        && s->accepted == 0 && s->outstanding == 0
-        && ensure_workers_locked(s, s->worker_count);
-    if (ok) s->realtime_preallocated = 1;
+    int ok = 0;
+    if (!s->retired && !s->realtime_preallocated
+            && !s->realtime_prestart_failed
+            && s->accepted == 0 && s->outstanding == 0) {
+        ok = ensure_workers_locked(s, s->worker_count);
+        if (ok) {
+            s->realtime_preallocated = 1;
+        } else {
+            /* Fail closed. Even a first-pthread EAGAIN is a failed bootstrap
+             * attempt: callers must tear this scheduler down rather than make
+             * RT service admission depend on a later resource-timing retry. */
+            s->realtime_prestart_failed = 1;
+        }
+    }
     unlock(s);
     return ok;
 }
