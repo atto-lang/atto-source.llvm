@@ -41,7 +41,10 @@ struct OresNativeActorScheduler {
     /* Mutex-owned occupancy indexes, never actor ownership or authority. */
     uint64_t* ready_control_bits;
     uint64_t* ready_data_bits;
-    size_t ready_word_count;
+    /* One bit per nonempty 64-actor leaf word: max 16 summary words. */
+    uint64_t* summary_control_bits;
+    uint64_t* summary_data_bits;
+    size_t ready_word_count, summary_word_count;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
     OresNativeActorTaskFn callback;
@@ -91,7 +94,7 @@ enum { ORES_LARGE_POOL_MAX_MAILBOX_CELLS = 1048576 };
 
 static void refresh_ready_locked(OresNativeActorScheduler* s, size_t i) {
     if (i >= s->actor_count) abort();
-    ActorLane* lane = &s->actors[i];
+    const ActorLane* lane = &s->actors[i];
     const size_t word = i / ORES_READY_WORD_BITS;
     if (word >= s->ready_word_count) abort();
     const uint64_t bit = UINT64_C(1) << (i % ORES_READY_WORD_BITS);
@@ -103,33 +106,62 @@ static void refresh_ready_locked(OresNativeActorScheduler* s, size_t i) {
         s->ready_data_bits[word] |= bit;
     else
         s->ready_data_bits[word] &= ~bit;
+    /* Summaries update under the same scheduler mutex as the leaf indexes:
+     * no coherence/ABA read race and no per-turn heap allocation. */
+    const size_t summary = word / ORES_READY_WORD_BITS;
+    if (summary >= s->summary_word_count) abort();
+    const uint64_t summary_bit = UINT64_C(1) << (word % ORES_READY_WORD_BITS);
+    if (s->ready_control_bits[word])
+        s->summary_control_bits[summary] |= summary_bit;
+    else
+        s->summary_control_bits[summary] &= ~summary_bit;
+    if (s->ready_data_bits[word])
+        s->summary_data_bits[summary] |= summary_bit;
+    else
+        s->summary_data_bits[summary] &= ~summary_bit;
 }
 
-/* Search only populated words with exactly the rotating slot order used
- * before indexing. Never mutate the cursor speculatively: physical permits
- * may deny admission after selection, and must not reorder queued mail. */
+/* Hierarchical ready selection: at most 16 summary words for 65,536 actor
+ * slots rather than repeatedly scanning 1,024 empty leaf words. Maintain
+ * the previous rotating slot order and never advance a cursor on a failed
+ * physical gate acquisition. */
 static size_t select_ready_locked(const OresNativeActorScheduler* s,
                                   const uint64_t* index,
+                                  const uint64_t* summary_bits,
                                   size_t start, int control) {
     for (int wrap = 0; wrap < 2; ++wrap) {
         const size_t begin = wrap ? 0 : start;
         const size_t end = wrap ? start : s->actor_count;
         if (begin >= end) continue;
-        const size_t first = begin / ORES_READY_WORD_BITS;
-        const size_t last = (end - 1) / ORES_READY_WORD_BITS;
-        for (size_t word = first; word <= last; ++word) {
-            uint64_t bits = index[word];
-            if (word == first)
-                bits &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
-            if (word == last)
-                bits &= UINT64_MAX >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
-            if (!bits) continue;
-            const unsigned bit = (unsigned)__builtin_ctzll(bits);
-            const size_t slot = word * ORES_READY_WORD_BITS + bit;
-            const ActorLane* lane = &s->actors[slot];
-            if (lane->active || !(control ? lane->has_control : lane->queued))
-                abort(); /* Stale occupancy index is a correctness failure. */
-            return slot;
+        const size_t first_word = begin / ORES_READY_WORD_BITS;
+        const size_t last_word = (end - 1) / ORES_READY_WORD_BITS;
+        const size_t first_summary = first_word / ORES_READY_WORD_BITS;
+        const size_t last_summary = last_word / ORES_READY_WORD_BITS;
+        for (size_t group = first_summary; group <= last_summary; ++group) {
+            uint64_t words = summary_bits[group];
+            if (group == first_summary)
+                words &= UINT64_MAX << (first_word % ORES_READY_WORD_BITS);
+            if (group == last_summary)
+                words &= UINT64_MAX >> (63 - (last_word % ORES_READY_WORD_BITS));
+            while (words) {
+                const unsigned ordinal = (unsigned)__builtin_ctzll(words);
+                const size_t word = group * ORES_READY_WORD_BITS + ordinal;
+                if (word >= s->ready_word_count || !index[word]) abort();
+                uint64_t bits = index[word];
+                if (word == first_word)
+                    bits &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
+                if (word == last_word)
+                    bits &= UINT64_MAX >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
+                if (bits) {
+                    const unsigned bit = (unsigned)__builtin_ctzll(bits);
+                    const size_t slot = word * ORES_READY_WORD_BITS + bit;
+                    const ActorLane* lane = &s->actors[slot];
+                    if (lane->active || !(control ? lane->has_control : lane->queued))
+                        abort(); /* A stale bit is an internal scheduler bug. */
+                    return slot;
+                }
+                words &= words - 1;
+            }
         }
     }
     return SIZE_MAX;
@@ -138,7 +170,8 @@ static size_t select_ready_locked(const OresNativeActorScheduler* s,
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* CONTROL always takes precedence, including over cache-warm DATA. */
-    size_t i = select_ready_locked(s, s->ready_control_bits, s->next_actor, 1);
+    size_t i = select_ready_locked(s, s->ready_control_bits,
+                                   s->summary_control_bits, s->next_actor, 1);
     if (i != SIZE_MAX) {
         *actor = i;
         *control = 1;
@@ -154,7 +187,8 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
             return 1;
         }
     }
-    i = select_ready_locked(s, s->ready_data_bits, s->next_actor, 0);
+    i = select_ready_locked(s, s->ready_data_bits,
+                            s->summary_data_bits, s->next_actor, 0);
     if (i == SIZE_MAX) return 0;
     *actor = i;
     *control = 0;
@@ -298,8 +332,14 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         / ORES_READY_WORD_BITS;
     s->ready_control_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
     s->ready_data_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    s->summary_word_count = (s->ready_word_count + ORES_READY_WORD_BITS - 1)
+        / ORES_READY_WORD_BITS;
+    s->summary_control_bits = (uint64_t*)calloc(s->summary_word_count, sizeof(uint64_t));
+    s->summary_data_bits = (uint64_t*)calloc(s->summary_word_count, sizeof(uint64_t));
     if (!s->actors || !s->slots || !s->threads
-        || !s->ready_control_bits || !s->ready_data_bits) goto allocation_failed;
+        || !s->ready_control_bits || !s->ready_data_bits
+        || !s->summary_control_bits || !s->summary_data_bits)
+        goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
@@ -329,6 +369,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->summary_data_bits);
+    free(s->summary_control_bits);
     free(s->ready_data_bits);
     free(s->ready_control_bits);
     free(s->threads);
@@ -689,6 +731,8 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->summary_data_bits);
+    free(s->summary_control_bits);
     free(s->ready_data_bits);
     free(s->ready_control_bits);
     free(s->threads);
