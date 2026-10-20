@@ -41,6 +41,19 @@ int main() {
     assert(errors == 0 && successes > 0);
     assert(process.used_bytes() == 0 && actor.used_bytes() == 0);
 
+    // Pair admission is all-or-nothing regardless of which ledger is tight.
+    ActorShardBudget tight_actor(256);
+    ActorShardBudget roomy_vm(4096);
+    assert(!ActorShardBudget::try_reserve_pair(tight_actor, roomy_vm, 512));
+    assert(tight_actor.used_bytes() == 0);
+    assert(roomy_vm.used_bytes() == 0);
+
+    ActorShardBudget roomy_actor(4096);
+    ActorShardBudget tight_vm(256);
+    assert(!ActorShardBudget::try_reserve_pair(roomy_actor, tight_vm, 512));
+    assert(roomy_actor.used_bytes() == 0);
+    assert(tight_vm.used_bytes() == 0);
+
     ActorShardBudget retired_pair_actor(4096);
     ActorShardBudget retired_pair_vm(4096);
     retired_pair_actor.mark_retired_after_done();
