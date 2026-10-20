@@ -52,6 +52,7 @@ static void run_case(ChildCase scenario) {
     NativeIpcReceiptTable table(2);
     const auto original = message(1, "sessionA");
     table.admit(original);
+    table.commit_dispatch(original);
     pid_t pid = fork();
     assert(pid >= 0);
     if (pid == 0) {
@@ -111,9 +112,9 @@ static void run_case(ChildCase scenario) {
     int status = 0;
     assert(waitpid(pid, &status, 0) == pid);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    const std::size_t uncertain = table.mark_transport_lost("sessionA");
+    const std::size_t uncertain = table.mark_transport_lost(original);
     assert(uncertain == (done ? 0u : 1u));
-    assert(table.mark_transport_lost("sessionA") == 0);
+    assert(table.mark_transport_lost(original) == 0);
     assert(table.counters() == (std::pair<std::size_t, std::size_t>{0,0}));
     assert(table.invariant());
     if (scenario == ChildCase::crash_before_ack) assert(!ack && !done);
@@ -131,18 +132,22 @@ int main() {
     run_case(ChildCase::crash_after_ack);
     run_case(ChildCase::completed);
     run_case(ChildCase::forged_ack);
-    NativeIpcReceiptTable cross_session(3);
+    // A delayed EOF from an old route/grant must not retire a replacement
+    // connection that reuses the same textual session name.
+    NativeIpcReceiptTable cross_epoch(3);
     auto old_message = message(1, "sessionA");
-    auto new_message = message(2, "sessionB");
+    auto new_message = message(2, "sessionA");
     ++new_message.route_epoch;
-    cross_session.admit(old_message);
-    cross_session.admit(new_message);
-    assert(cross_session.mark_transport_lost("sessionA") == 1);
-    assert(cross_session.counters() == (std::pair<std::size_t, std::size_t>{1,1}));
-    cross_session.accept_verified(new_message, IpcReceiptStage::remote_accepted);
-    cross_session.accept_verified(new_message, IpcReceiptStage::handler_committed);
-    assert(cross_session.counters() == (std::pair<std::size_t, std::size_t>{0,0}));
-    assert(cross_session.invariant());
+    ++new_message.capability_generation;
+    cross_epoch.admit(old_message);
+    cross_epoch.admit(new_message);
+    assert(cross_epoch.mark_transport_lost(old_message) == 1);
+    assert(cross_epoch.counters() == (std::pair<std::size_t, std::size_t>{1,1}));
+    cross_epoch.commit_dispatch(new_message);
+    cross_epoch.accept_verified(new_message, IpcReceiptStage::remote_accepted);
+    cross_epoch.accept_verified(new_message, IpcReceiptStage::handler_committed);
+    assert(cross_epoch.counters() == (std::pair<std::size_t, std::size_t>{0,0}));
+    assert(cross_epoch.invariant());
     std::cout << "native-ipc-two-process-EOF PASS (NOT authenticated transport)\n";
 #else
     std::cout << "native-ipc-two-process: unsupported target (Linux required)\n";
