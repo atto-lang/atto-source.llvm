@@ -195,6 +195,7 @@ int ores_native_failure_trace_render(
     }
     report->rendered_bytes = writer.written;
     report->required_bytes = writer.required;
-    report->text_truncated = writer.required > writer.written;
+    report->text_truncated =
+        capacity != 0 && writer.required > writer.written;
     return 1;
 }
