@@ -233,6 +233,39 @@ int main() {
 
     {
         Program program;
+        Function dead = fn("dead_array_owner", integer(0));
+        LocalBinding dead_array;
+        dead_array.name = "items";
+        dead_array.int_array = true;
+        dead.locals.push_back(std::move(dead_array));
+        program.functions.push_back(std::move(dead));
+        program.functions.push_back(fn("main", integer(42)));
+
+        const auto before = analyze_runtime_features(program, false, false);
+        assert(before.contains(RuntimeFeature::IntArrayRuntime));
+
+        auto shaken = tree_shake_program(std::move(program), {"main"}, false);
+        const auto after = analyze_runtime_features(shaken.program, false, false);
+        assert(!after.contains(RuntimeFeature::IntArrayRuntime));
+        assert(after.names().empty());
+    }
+
+    {
+        Program program;
+        Function live = fn("main", integer(42));
+        LocalBinding live_array;
+        live_array.name = "items";
+        live_array.int_array = true;
+        live.locals.push_back(std::move(live_array));
+        program.functions.push_back(std::move(live));
+
+        auto shaken = tree_shake_program(std::move(program), {"main"}, false);
+        const auto features = analyze_runtime_features(shaken.program, false, false);
+        assert(features.names() == std::vector<std::string>{"int-array-runtime"});
+    }
+
+    {
+        Program program;
         Function main = fn("main", integer(0));
         LocalBinding owned;
         owned.name = "owned";
