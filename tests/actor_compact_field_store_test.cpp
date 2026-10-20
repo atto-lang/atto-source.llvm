@@ -38,6 +38,10 @@ static void actor_isolation_and_compact_field_roundtrip() {
     check(alice.link(*a, 0, *b), "actor-local link rejected");
     check(alice.link(*b, 0, *a), "cycle creation failed");
     check(alice.link(*a, 1, *a), "self edge rejected");
+    check(bob.link(*other, 0, *other), "foreign heap self-edge fixture failed");
+    check(alice.snapshot(*a)->links[1].storage()
+              == bob.snapshot(*other)->links[0].storage(),
+          "two actor heaps did not share the same independent local offset");
 
     const auto snapshot = alice.snapshot(*a);
     check(snapshot.has_value(), "object snapshots missing");
