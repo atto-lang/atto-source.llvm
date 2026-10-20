@@ -39,6 +39,17 @@ typedef struct {
 
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* RT bootstrap: prestart every configured carrier in all four domains before
+ * exposing the VM to guest work. No carrier will be created on its DATA or
+ * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
+ * Only the trusted host may invoke this before guest admission; it is not a
+ * hard-real-time certification or proof of bounded OS scheduling latency.
+ */
+OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config);
+/* Equivalent post-open preparation for still-private, completely cold VMs.
+ * A failed preparation must be followed by external-host VM teardown.
+ */
+int ores_native_vm_prepare_realtime(OresNativeVM* vm);
 /* Opt-in quota/cpuset-aware carrier admission. An explicit nonzero
  * carrier_workers is preserved for its domain, while zero-valued domains
  * divide remaining detected CPU capacity (at least one pthread per domain).
