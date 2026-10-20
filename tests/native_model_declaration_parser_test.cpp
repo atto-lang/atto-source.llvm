@@ -38,10 +38,11 @@ int main() {
         // Compiler-owned signature example: dollar-denominated scalar graph.
         const oreslang::model::Port usd{"f64", {}, "USD"};
         const oreslang::model::Port mass{"f64", {}, "kg"};
+        const std::string digest(64, '0');
         const oreslang::model::Registry trusted = {
-            {"Validate", {"Validate", usd, usd, "pure", "v1", 0, false}},
-            {"Apply", {"Apply", usd, usd, "pure", "v1", 0, false}},
-            {"Round", {"Round", usd, usd, "pure", "v1", 0, false}}
+            {"Validate", {"Validate", usd, usd, "pure", "v1", digest, "verified-ores", 0, false}},
+            {"Apply", {"Apply", usd, usd, "pure", "v1", digest, "verified-ores", 0, false}},
+            {"Round", {"Round", usd, usd, "pure", "v1", digest, "verified-ores", 0, false}}
         };
         auto hir = oreslang::model::admit(non_ml[0], trusted,
                                         oreslang::model::Limits{64, 64, 4096});
@@ -56,7 +57,7 @@ int main() {
         const auto cfg_b = oreslang::parse_model_declarations(
             "define model X as Apply(2) end");
         const oreslang::model::Registry cfg_registry = {
-            {"Apply", {"Apply", usd, usd, "pure", "v1", 0, false}}
+            {"Apply", {"Apply", usd, usd, "pure", "v1", digest, "verified-ores", 0, false}}
         };
         const auto hir_a = oreslang::model::admit(cfg_a[0], cfg_registry);
         const auto hir_b = oreslang::model::admit(cfg_b[0], cfg_registry);
@@ -79,6 +80,24 @@ int main() {
         } catch (const std::exception& e) {
             check(std::string_view(e.what()).find("MODEL_PORT_TYPE_MISMATCH") != std::string_view::npos,
                   "wrong unit mismatch diagnostic: " + std::string(e.what()));
+        }
+        bad = trusted;
+        bad.at("Apply").impl_digest = "bad";
+        try {
+            (void)oreslang::model::admit(non_ml[0], bad);
+            throw std::runtime_error("unsound implementation digest");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_INVALID_IMPL_DIGEST") != std::string_view::npos,
+                  "wrong implementation digest diagnostic: " + std::string(e.what()));
+        }
+        bad = trusted;
+        bad.at("Apply").provenance = "guest-asserted";
+        try {
+            (void)oreslang::model::admit(non_ml[0], bad);
+            throw std::runtime_error("unsound operation provenance");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_INVALID_OP_PROVENANCE") != std::string_view::npos,
+                  "wrong provenance diagnostic: " + std::string(e.what()));
         }
         bad = trusted;
         bad.at("Apply").effect = "io";
