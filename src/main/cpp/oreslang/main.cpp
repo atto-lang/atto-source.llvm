@@ -194,6 +194,7 @@ int main(int argc, char** argv) {
 
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
+        std::vector<std::string> additional_tree_shake_slots;
 
         if (rt_report_seen && path != nullptr && rt_report_path == path)
             throw std::runtime_error("rt-report path must not overwrite source input");
@@ -218,6 +219,23 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(
                     "native-hard-rt admission failed [" + report.diagnostic +
                     "]: " + report.reason);
+            }
+            if (report.source_admitted) {
+                const auto admitted = std::find_if(
+                        ast.functions.begin(),
+                        ast.functions.end(),
+                        [&](const oreslang::Function& fn) {
+                            return fn.name + "/" +
+                                    std::to_string(fn.parameters.size()) ==
+                                    report.entry;
+                        });
+                if (admitted == ast.functions.end())
+                    throw std::runtime_error(
+                            "hard-RT/tree-shake entry identity drift");
+                additional_tree_shake_slots.push_back(
+                        oreslang::native_function_slot(
+                                admitted->name,
+                                admitted->parameters.size()));
             }
         }
 
@@ -409,7 +427,9 @@ int main(int argc, char** argv) {
             auto shaken = oreslang::tree_shake_program(
                     std::move(ast),
                     tree_shake_roots,
-                    actor_roots);
+                    actor_roots,
+                    {},
+                    additional_tree_shake_slots);
             ast = std::move(shaken.program);
             retained_runtime_features = oreslang::analyze_runtime_features(
                     ast, wasm32_target, cortex_m_target);
