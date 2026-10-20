@@ -28,6 +28,22 @@ struct OresActorArena {
     LoanEntry entries[ORES_MAX_LOANS];
 };
 static _Atomic(uint64_t) next_domain = 1;
+/* Saturate forever rather than wrapping from UINT64_MAX back to 1: domain
+ * reuse could otherwise make foreign actor-ref offsets look authoritative. */
+static uint64_t reserve_domain(void) {
+    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    while (current != 0 && current != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(&next_domain, &current,
+                current + 1, memory_order_relaxed, memory_order_relaxed))
+            return current;
+    }
+    abort();
+}
+#ifdef ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION
+void ores_actor_arena_test_set_next_domain(uint64_t next) {
+    atomic_store_explicit(&next_domain, next, memory_order_relaxed);
+}
+#endif
 /* A turn token alone is not execution authority. Bind the admitted turn to
  * its physical carrier; migration is allowed only after leave + new enter. */
 static _Thread_local OresActorArena* carrier_arena;
@@ -78,8 +94,7 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     a->scratch = (unsigned char*) calloc(1, scratch_bytes);
     if (!a->meta || !a->free_slots || !a->slab || !a->scratch) deny();
     atomic_flag_clear(&a->lock);
-    a->domain = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (!a->domain || a->domain == UINT64_MAX) deny();
+    a->domain = reserve_domain();
     a->owner = owner;
     a->incarnation = incarnation;
     a->slots = slots;
