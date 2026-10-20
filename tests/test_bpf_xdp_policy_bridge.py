@@ -162,6 +162,26 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(len(calls),1)
 
 
+    def test_policy_bundle_pins_all_imported_modules_and_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            cli=make_policy_bundle(root)
+            observed=policy_bundle_hash(cli)
+            self.assertEqual(observed,policy_bundle_hash(cli))
+            module=cli.parent.parent/'src'/'contract.mjs'
+            module.write_bytes(b'modified authority contract')
+            self.assertNotEqual(policy_bundle_hash(cli),observed)
+            module.unlink()
+            module.symlink_to(cli)
+            with self.assertRaises(Denied):
+                policy_bundle_hash(cli)
+            module.unlink()
+            module.write_bytes(b'restored')
+            extra=cli.parent.parent/'profiles'/'evil.json'
+            extra.write_bytes(b'{}')
+            with self.assertRaises(Denied):
+                policy_bundle_hash(cli)
+
     def test_policy_checker_denial_prevents_ir_and_object_emission(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp)
