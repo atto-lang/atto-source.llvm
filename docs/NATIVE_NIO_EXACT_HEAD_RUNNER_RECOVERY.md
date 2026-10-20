@@ -257,3 +257,24 @@ GCC and Clang ASan+UBSan. It is **not** execution of the private C VM
 and cannot stand in for exact-head CI or the combined C VM plus actor
 scheduler. The production regression is committed to source-local
 native VM lifecycle CI and requires a runner to execute.
+
+## Unexpected owned-FD close failure quarantine (2026-10-19)
+
+The host manager's `close_owned_eventfd` now separates authenticated Linux
+`close() == 0` or `EINTR` reclamation from an **unknown close result**. The
+unknown result invalidates the old handle and *quarantines* that manager slot:
+it must not become available for another minted eventfd even though the
+underlying numeric FD may already have been released. Never retry the same
+numeric FD after a failed Linux `close`, because another thread may have
+reused it. The broker's logical reclamation receipt still fails closed and
+must not be forged from an ambiguous kernel result. Quarantined slots are
+permanently withheld until manager destruction, with operator escalation for
+an unexpected close error; capacity reduction is preferable to stale authority.
+
+The source-local native broker state-machine fixture defines
+`ORESLANG_NIO_TEST_HOOKS` and injects an ambiguous outcome **after an actual
+successful kernel close**, proving that the old capability cannot act and the
+slot stays quarantined through an unrelated normal close. These hooks are not
+compiled into release builds and do not alter guest APIs. Full native-tree
+compilation, the actual fixture, sanitizer results, and actor integration are
+**NOT VERIFIED** until a real current-head runner executes BUILD/TEST steps.
