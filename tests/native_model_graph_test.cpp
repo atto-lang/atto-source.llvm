@@ -9,7 +9,7 @@
 namespace {
 
 constexpr const char* kSharedExecutableCorpusRevision =
-    "model-core-i64-v1.2026-10-20.2";
+    "model-core-i64-v1.2026-10-20.3";
 
 void expect_error(const std::string& code, const std::string& source) {
     try {
@@ -24,7 +24,7 @@ void expect_error(const std::string& code, const std::string& source) {
 
 int main() {
     assert(std::string(kSharedExecutableCorpusRevision) ==
-           "model-core-i64-v1.2026-10-20.2");
+           "model-core-i64-v1.2026-10-20.3");
     assert(oreslang::model_sha256("abc") ==
            "ba7816bf8f01cfea414140de5dae2223"
            "b00361a396177a9cb410ff61f20015ad");
@@ -155,6 +155,13 @@ int main() {
     )ores";
     auto negative_literal = oreslang::parse_program(negative_literal_source);
     assert(negative_literal.model_runs.size() == 1);
+
+    expect_error("MODEL_UNKNOWN_FORMAL", R"ores(
+        fnc AddDelta(int delta, int input): int { return input + delta; }
+        define model Bad as
+            AddDelta(missing)
+        end
+    )ores");
 
     expect_error("MODEL_CONST_OVERFLOW", R"ores(
         fnc AddDelta(int delta, int input): int { return input + delta; }
