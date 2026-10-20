@@ -70,7 +70,12 @@ static bool paths_alias(const char* source_path, const std::string& report_path)
         std::filesystem::path(report_path), report_error);
     if (source_error || report_error)
         throw std::runtime_error("cannot safely resolve rt-report/source paths");
-    return source == report;
+    if (source == report) return true;
+    std::error_code identity_error;
+    const bool same_file = std::filesystem::equivalent(source, report, identity_error);
+    if (!identity_error) return same_file;
+    if (identity_error == std::errc::no_such_file_or_directory) return false;
+    throw std::runtime_error("cannot safely compare rt-report/source identity");
 }
 
 static void collect_tree_shake_expression_calls(
