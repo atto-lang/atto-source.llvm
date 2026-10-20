@@ -165,11 +165,24 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
             state.snapshots.back()->copy_into(
                 state.published.data(), state.published.size());
             bool raw_snapshot_rejected = false;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
             try {
+                // Deliberately exercise the source-compatibility trap.
                 (void)state.region->snapshot_column(1);
             } catch (const std::logic_error&) {
                 raw_snapshot_rejected = true;
             }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
             assert(raw_snapshot_rejected);
             assert(state.region->read(0, 1) == 0);
         } else {
