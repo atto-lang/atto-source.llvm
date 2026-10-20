@@ -197,8 +197,8 @@ int main(void) {
 
 
     /*
-     * Actor boundary -> await -> supervisor CONTROL. Each resume happens on a
-     * newly-created pthread after the suspending C stack has returned.
+     * Actor boundary -> await -> await -> supervisor CONTROL. Each resume
+     * happens on a new pthread after the suspending C stack has returned.
      */
     OresNativeSuspensionLink actor_link = suspend_and_drop_stack(
         executions, continuations, e1, (OresNativeContinuationHandle){0, 0},
@@ -214,31 +214,39 @@ int main(void) {
     OresNativeExecutionHandle e3 =
         resume_on_new_thread(executions, continuations, await_link, 102);
 
-    OresNativeSuspensionLink supervisor_link = suspend_and_drop_stack(
+    OresNativeSuspensionLink second_await_link = suspend_and_drop_stack(
         executions, continuations, e3, await_link.continuation,
-        ORES_CONTINUATION_BOUNDARY_SUPERVISOR_CONTROL, 8, 1003);
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 7, 1003);
     check(ores_native_execution_context_store_release(executions, e3));
     OresNativeExecutionHandle e4 =
-        resume_on_new_thread(executions, continuations, supervisor_link, 103);
+        resume_on_new_thread(executions, continuations, second_await_link, 103);
+
+    OresNativeSuspensionLink supervisor_link = suspend_and_drop_stack(
+        executions, continuations, e4, second_await_link.continuation,
+        ORES_CONTINUATION_BOUNDARY_SUPERVISOR_CONTROL, 8, 1004);
+    check(ores_native_execution_context_store_release(executions, e4));
+    OresNativeExecutionHandle e5 =
+        resume_on_new_thread(executions, continuations, supervisor_link, 104);
 
     OresNativeExecutionTraceFrame execution_frames[8];
     OresNativeContinuationTraceFrame continuation_frames[8];
     OresNativeLogicalTraceResult trace;
     check(ores_native_logical_trace_snapshot(
-        executions, continuations, e4,
+        executions, continuations, e5,
         execution_frames, 8,
         continuation_frames, 8,
         &trace));
     check(!trace.corrupt);
     check(!trace.execution_truncated);
     check(!trace.continuation_truncated);
-    check(trace.execution_count == 4);
-    check(trace.continuation_count == 3);
+    check(trace.execution_count == 5);
+    check(trace.continuation_count == 4);
 
-    check(execution_frames[0].context.id.execution == 103);
-    check(execution_frames[1].context.id.execution == 102);
-    check(execution_frames[2].context.id.execution == 101);
-    check(execution_frames[3].context.id.execution == 100);
+    check(execution_frames[0].context.id.execution == 104);
+    check(execution_frames[1].context.id.execution == 103);
+    check(execution_frames[2].context.id.execution == 102);
+    check(execution_frames[3].context.id.execution == 101);
+    check(execution_frames[4].context.id.execution == 100);
     for (size_t i = 0; i < trace.execution_count; ++i)
         check_allocation(execution_frames[i].context, actor_heap);
 
@@ -247,9 +255,12 @@ int main(void) {
     check(continuation_frames[1].record.boundary
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     check(continuation_frames[2].record.boundary
+        == ORES_CONTINUATION_BOUNDARY_AWAIT);
+    check(continuation_frames[3].record.boundary
         == ORES_CONTINUATION_BOUNDARY_ACTOR_MESSAGE);
     check(continuation_frames[0].record.code_generation == 8);
-    check(continuation_frames[1].record.source_token == 1002);
+    check(continuation_frames[1].record.source_token == 1003);
+    check(continuation_frames[2].record.source_token == 1002);
     check_allocation((OresNativeExecutionContext){
         .id = continuation_frames[0].record.execution_id,
         .allocation = continuation_frames[0].record.allocation
@@ -257,7 +268,7 @@ int main(void) {
 
     OresNativeLogicalTraceResult bounded;
     check(ores_native_logical_trace_snapshot(
-        executions, continuations, e4,
+        executions, continuations, e5,
         execution_frames, 2,
         continuation_frames, 2,
         &bounded));
@@ -267,12 +278,12 @@ int main(void) {
     /* Rendering zero execution frames must still discover causal continuations. */
     OresNativeLogicalTraceResult causal_only;
     check(ores_native_logical_trace_snapshot(
-        executions, continuations, e4,
+        executions, continuations, e5,
         NULL, 0,
         continuation_frames, 8,
         &causal_only));
     check(causal_only.execution_count == 0 && causal_only.execution_truncated);
-    check(causal_only.continuation_count == 3);
+    check(causal_only.continuation_count == 4);
     check(!causal_only.continuation_truncated && !causal_only.corrupt);
 
     /* The currently live execution owns no native stack pointer in either store. */
@@ -280,9 +291,11 @@ int main(void) {
     check(sizeof(OresNativeSuspensionLink) == 32);
 
     /* Tear down from newest to oldest; store references keep ancestors alive. */
-    check(ores_native_execution_context_store_release(executions, e4));
+    check(ores_native_execution_context_store_release(executions, e5));
     check(ores_native_continuation_store_release(
         continuations, supervisor_link.continuation));
+    check(ores_native_continuation_store_release(
+        continuations, second_await_link.continuation));
     check(ores_native_continuation_store_release(
         continuations, await_link.continuation));
     check(ores_native_continuation_store_release(
