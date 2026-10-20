@@ -4,7 +4,11 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Reachability.hpp'
+      - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/native_reachability_contract_test.cpp'
+      - 'tests/contract.py'
+      - 'tests/fixtures/tree-shake-dead-symbols.ores'
+      - 'CMakeLists.txt'
       - '.github/workflows/reachability-contract.yml'
 
 jobs:
