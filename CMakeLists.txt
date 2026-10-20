@@ -1758,6 +1758,21 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Two-level indexed CONTROL/DATA dispatch for up to 65,536 actor slots.
+    # This test exercises the actual native scheduler, not a source-free model.
+    add_executable(oreslang-native-indexed-ready-test
+        tests/native_actor_indexed_ready_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-indexed-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-indexed-ready-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-indexed-ready-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_indexed_ready_priority_fifo_and_sparse_high_slot
+        COMMAND oreslang-native-indexed-ready-test)
+    set_tests_properties(native_actor_indexed_ready_priority_fifo_and_sparse_high_slot
+        PROPERTIES TIMEOUT 60 ENVIRONMENT "ORES_NATIVE_CARRIER_CPU_AFFINITY=0")
+
     # Real native scheduler: stable pthread slot preference, bounded fallback,
     # zero allocation in dispatch and preserved per-actor exclusive ownership.
     add_executable(oreslang-native-carrier-locality-test
