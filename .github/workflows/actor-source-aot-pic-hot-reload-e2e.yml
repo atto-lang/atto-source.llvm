@@ -1,0 +1,113 @@
+name: Actor source AOT/PIC hot reload E2E (SHARED and PRIVATE)
+on:
+  pull_request:
+    paths:
+      - 'tests/native_source_actor_pic_private_test.cpp'
+      - 'tests/native_source_actor_pic_hot_reload_test.cpp'
+      - 'tests/source_actor_pic_hot_reload.py'
+      - 'tests/fixtures/actor-hot-reload-aot-*.ores'
+      - 'src/main/cpp/oreslang/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/actor-source-aot-pic-hot-reload-e2e.yml'
+  push:
+    branches: [tests/private-source-actor-pic-e2e-20261020]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-actor-pic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact source tree without persisted token
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify source identity and required guest files
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD^{tree} | grep -Eq '^[a-f0-9]{40}$'
+          test -f tests/native_source_actor_pic_private_test.cpp
+          test -f tests/fixtures/actor-hot-reload-aot-v1.ores
+          test -f tests/fixtures/actor-hot-reload-aot-v2.ores
+      - name: Install real LLVM compiler toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure and compile actual Oreslang guest compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Verify no target is absent or skipped
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N -R '^native_source_actor_aot_pic_hot_reload(_asan_ubsan)?$' | tee build/pic-inventory.log
+          grep -q 'Total Tests: 2' build/pic-inventory.log
+      - name: Run real source compiler, two private actor heaps and shared-actor PIC smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -V -R '^native_source_actor_aot_pic_hot_reload$' --output-on-failure 2>&1 | tee build/pic-e2e.log
+          grep -F 'ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS' build/pic-e2e.log
+          grep -F 'ACTUAL_ORES_SOURCE_AOT_PIC_V1_V2_PASS' build/pic-e2e.log
+      - name: Sanitizers execute the same real source-compiled actors
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -V -R '^native_source_actor_aot_pic_hot_reload_asan_ubsan$' --output-on-failure 2>&1 | tee build/pic-sanitizers.log
+          grep -F 'ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS' build/pic-sanitizers.log
+          grep -F 'ACTUAL_ORES_SOURCE_AOT_PIC_V1_V2_PASS' build/pic-sanitizers.log
+      - name: Verify exact-HEAD receipts and all required tests
+        if: always()
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          def git(*args):
+              return subprocess.run(["git",*args],capture_output=True,text=True,check=False).stdout.strip()
+          expected=os.environ["EXPECTED_SHA"]
+          observed=git("rev-parse","HEAD")
+          tree=git("rev-parse","HEAD^{tree}")
+          files=[Path("build/pic-e2e.log"),Path("build/pic-sanitizers.log")]
+          required=[
+              "ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS",
+              "ACTUAL_ORES_SOURCE_AOT_PIC_V1_V2_PASS",
+          ]
+          verified=(len(expected)==40 and observed==expected and len(tree)==40
+                    and all(f.is_file() and all(m in f.read_text(encoding="utf-8") for m in required)
+                            for f in files))
+          evidence={"source_head":observed,"source_tree":tree,"expected_head":expected,
+                    "trusted_source_aot_pic_executed":verified,
+                    "authenticated_production_loader":False,
+                    "llvm_orc_jit_executed":False,
+                    "physical_sandbox_verified":False,
+                    "test_logs":[str(f) for f in files]}
+          out=Path("build/ci-evidence/source-actor-aot-pic.json")
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_text(json.dumps(evidence,sort_keys=True)+"\n",encoding="utf-8")
+          print(json.dumps(evidence,indent=2,sort_keys=True))
+          if not verified:
+              raise SystemExit("SOURCE-GENERATED ACTOR AOT/PIC NOT VERIFIED")
+          PY
+      - name: Retain exact source guest CI receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-actor-pic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ci-evidence/source-actor-aot-pic.json
+            build/pic-e2e.log
+            build/pic-sanitizers.log
+          if-no-files-found: error
+          retention-days: 7
