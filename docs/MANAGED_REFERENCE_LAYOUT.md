@@ -148,6 +148,25 @@ faster; don't allocate a 32-GiB virtual cage for every tiny actor.
 
 ## Compiler-facing actor object fields (next native slice)
 
+The compiler analysis layer now also has
+`types/ManagedRefLayoutPlan.hpp`, a fail-closed physical-layout selector
+for **already-proven logical reference kinds**. Given authenticated actor
+heap and lifetime evidence, it selects 4-byte actor offsets, or an 8-byte
+native64 representation when the proven arena exceeds the compressed range
+or the caller deliberately requests native64. It rejects absent actor
+ownership/lifetime proof, invalid alignment and unsupported 32-bit actor
+lowering. Cross-actor capabilities, explicitly shared regions and FFI
+pointers stay separate physical categories; opaque capabilities never
+guess a native pointer width. Typed dense-row indices require their own
+row-identity/generation evidence.
+
+This policy is a compiler-side building block, not yet wired to native
+Oreslang `Ref<T>` HIR or LLVM `getelementptr`/load/store emission.
+`native_compiler_managed_ref_layout_admission` tests both positive
+selection and negative proof boundaries; it is included in the target-ABI
+sanitizer matrix.
+
+
 The native `ActorCompactFieldStore<Bytes, Nodes, LinksPerNode>` now
 demonstrates real, 4-byte object-field storage with an actor-owned region.
 Each object contains a conventional i64 payload and a contiguous array of
