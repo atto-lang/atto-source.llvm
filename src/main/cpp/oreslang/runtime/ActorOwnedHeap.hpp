@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/runtime/ActorHeapIdentity.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -57,6 +58,7 @@ private:
     std::size_t used_ = 0;
     std::size_t live_count_ = 0;
     const std::uint64_t actor_id_;
+    const OresNativeAllocationDomainRef allocation_domain_;
     const std::uint64_t heap_identity_;
     std::uint64_t incarnation_ = 1;
     bool retired_ = false;
@@ -79,8 +81,32 @@ private:
     }
 
 public:
+    /*
+     * Preferred runtime constructor: heap ownership is the authenticated actor
+     * allocation capability, never the transient logical execution id.
+     */
+    explicit ActorOwnedHeap(OresNativeAllocationDomainRef allocation_domain)
+        : actor_id_(allocation_domain.owner),
+          allocation_domain_(allocation_domain),
+          heap_identity_(new_identity()) {
+        if (allocation_domain.kind != ORES_ALLOCATION_DOMAIN_ACTOR
+                || allocation_domain.domain == 0
+                || allocation_domain.generation == 0)
+            throw std::invalid_argument("invalid actor allocation domain");
+    }
+
+    explicit ActorOwnedHeap(ActorHeapIdentity identity)
+        : ActorOwnedHeap(actor_allocation_domain(identity)) {}
+
+    /*
+     * Legacy host-only prototype constructor. It intentionally carries no
+     * authenticated runtime allocation capability; new runtime integrations
+     * must use ActorHeapIdentity or OresNativeAllocationDomainRef.
+     */
     explicit ActorOwnedHeap(std::uint64_t actor_id)
-        : actor_id_(actor_id), heap_identity_(new_identity()) {
+        : actor_id_(actor_id),
+          allocation_domain_{ORES_ALLOCATION_DOMAIN_NONE, 0, 0, 0},
+          heap_identity_(new_identity()) {
         if (actor_id == 0) throw std::invalid_argument("zero actor id");
     }
 
@@ -90,6 +116,12 @@ public:
     ActorOwnedHeap& operator=(ActorOwnedHeap&&) = delete;
 
     std::uint64_t actor_id() const noexcept { return actor_id_; }
+    OresNativeAllocationDomainRef allocation_domain() const noexcept {
+        return allocation_domain_;
+    }
+    bool allocation_domain_bound() const noexcept {
+        return allocation_domain_.kind == ORES_ALLOCATION_DOMAIN_ACTOR;
+    }
     std::size_t used() const noexcept { return used_; }
     std::size_t live_allocations() const noexcept { return live_count_; }
     bool retired() const noexcept { return retired_; }
