@@ -254,7 +254,8 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
-            --clang "${ORE_SOURCE_I64_CLANG}")
+            --clang "${ORE_SOURCE_I64_CLANG}"
+            --corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/model-executable-v1-conformance.cases")
     set_tests_properties(native_model_source_execution PROPERTIES TIMEOUT 120)
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
