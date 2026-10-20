@@ -144,5 +144,16 @@ int main() {
                 1, 1, 1, 1, 8, 8) == ORES_RT_ARENA_ALIGNMENT,
             "misaligned backing must reject");
 
+    alignas(std::max_align_t)
+        std::array<unsigned char, sizeof(OresRealtimeActorArena) + 1024> overlap{};
+    auto* overlapping_control =
+        reinterpret_cast<OresRealtimeActorArena*>(overlap.data());
+    require(ores_rt_actor_arena_init(
+                overlapping_control,
+                overlap.data(),
+                overlap.size(),
+                2, 2, 2, 1, 8, 8) == ORES_RT_ARENA_INVALID,
+            "control object cannot overlap backing memory");
+
     return 0;
 }
