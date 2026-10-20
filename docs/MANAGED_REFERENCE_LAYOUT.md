@@ -154,3 +154,57 @@ representation selection, raw FFI pinning, and benchmark-based mode selection
 remain subsequent integration work. The pure codec permits offsets spanning
 up to 32 GiB minus 8 bytes at 8-byte alignment; this does not mean Oreslang
 reserves that much memory per actor.
+
+## Actual actor-slab compact32 bridge (experimental)
+
+`ActorArena.c` is the existing native bounded, carrier-bound actor slab. Its
+new `ores_actor_arena_compact_encode/read/write` functions bind a compact
+slot offset to an **authenticated actor turn** and a host-only arena domain.
+The native guest field is `uint32_t` (`OresArenaCompactHandle.bits`), while
+the host descriptor separately records a domain ID. A foreign actor cannot
+successfully use that host descriptor against its own arena. The C API never
+returns a native address or performs FFI pinning.
+
+In a slot-aligned slab, the bits are:
+
+```text
+bits = (slot_index * slot_bytes / 8) + 1
+0 = null
+slot_index = (((bits - 1) * 8) / slot_bytes)
+```
+
+The decode must *also* establish a non-null reference, a valid object start,
+the correct owning actor's turn/carrier, a live slot previously admitted to
+compact storage, field bounds and exclusive-loan eligibility on writes.
+The slot stride must be divisible by eight. Malformed offsets, stale turns,
+invalid object starts and unaligned slots fail closed.
+
+**ABA guarantee:** once a slot has ever published a bare compact offset,
+dropping its object zeroizes the slot and *quarantines that slot until arena
+retirement*; unlike an ordinary generation-tagged handle, this 32-bit offset
+cannot encode a generation number. Unpublished slots retain ordinary
+generation-checked free-list reuse. This conservative policy prevents an
+old compact reference from silently becoming a reference to a newly allocated
+object at the same offset. It trades high churn efficiency for correctness;
+future recycling is conditional on a proven no-incoming-references/ownership
+analysis or a redesigned compact slot+generation representation.
+
+**Not yet proven:** the parser/ownership checker does not admit general
+source-level managed `Ref<T>` in the LLVM backend. A future compiler cannot
+materialize a host descriptor from arbitrary guest-supplied `u32`. It must
+also prohibit compact storage from flowing across actor mailboxes, validate
+actor epoch and borrow lifetimes on suspension, and ensure the actor base
+loaded after carrier migration comes from the current actor context.
+
+The backend-only `ManagedRefLowering.hpp` now constructs LLVM IR that
+keeps the guest reference as `i32`, zero extends and shifts its offset,
+checks null, arena-base presence, byte bounds, and an externally established
+actor/liveness predicate before executing a non-`inbounds` GEP. This emitter
+does *not* supply that predicate or integrate it with source-level AST/HIR.
+A separate LLVM verifier test checks its CFG and representation. The existing
+source compiler remains fail-closed for unsupported pointer operations.
+
+Memory policy: compressed32 is an **actor-local region storage choice**; it
+does not shrink native FFI/OS pointers, require 4 GiB globally contiguous
+address space, or justify reserving 32 GiB per actor. Small actor heaps,
+bounded allocation, and per-actor recycling/retirement remain preferable.
