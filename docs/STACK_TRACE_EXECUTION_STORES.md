@@ -134,7 +134,35 @@ While a compiler-generated root continuation is executing,
 `oreslang_source_actor_current_execution_handle` returns the live
 generation-checked ExecutionHandle and
 `oreslang_source_actor_snapshot_current_trace` snapshots its logical ancestry.
-These hooks are intended for throw/raise/panic rendering after those exceptional
-effects have native source lowering. They do not by themselves admit unsupported
-exception syntax and they never expose the underlying store or a native stack
-pointer.
+
+`NativeFailureTrace` adds the allocation-free failure-side layer. Capture
+takes an authoritative current ExecutionHandle plus the live stores, pins that
+current execution while the multi-lock snapshot is taken, and records the
+effective failure kind and numeric code. A stale current handle fails outright;
+a missing older ancestry node is instead reported through the trace's explicit
+`corrupt` marker. This distinction prevents a stale failure site from being
+presented as a successful-but-corrupt trace.
+
+The renderer writes only value metadata into caller-owned storage:
+
+    panic code=77 execution=<slot>@<generation>
+      execution runtime=<domain> id=<id> ... allocation=actor:<domain>/<slot>@<generation>
+      execution runtime=<domain> id=<parent> ...
+      boundary await source=<token> codegen=<generation> state=<state> ...
+
+It allocates no memory, owns no native frame pointer, supports a size-only pass,
+and reports output truncation explicitly. Current native/symbolized machine
+frames remain a separate prefix captured while the failing native stack is
+alive.
+
+The source actor runtime exposes
+`oreslang_source_actor_capture_failure_trace(kind, code, ...)`, so future
+lowered throw/raise/panic code does not receive or expose the underlying
+ExecutionContextStore or ContinuationStore. It is valid only while the traced
+resumed continuation is active.
+
+This branch still does **not** admit unsupported general source raise/panic
+syntax. The failure kind is diagnostic metadata after lexical unwind has chosen
+the effective control-plane effect. The next exception-lowering slice should
+invoke this capture after defer/finally unwind and before actor-local hook /
+supervisor promotion, then prepend any current native symbolized frames.
