@@ -367,3 +367,14 @@ inputs per compiler. **This is isolated sanitizer verification**, not
 compilation of the full GitHub tree or passing CTest, and it does not authorize
 private-source CI mirroring.
 
+
+### Native trap ABI admission matrix (host contract only)
+
+The host-side GuestFailureBoundary x GuestFailureOrigin gate is exhaustively
+checked over all 65,536 byte-tag combinations. Only an ordinary guest throw
+may enter a trap; explicit catch additionally admits permission denial and
+an explicitly assigned guest deadline origin. Invalid, reserved, unknown and
+future numeric tags fail closed. The C++ regression checks bounded UTF-8
+diagnostics and rejects invalid FailureKind tags. Diagnostic text and Java
+stack traces are never origin authority. These are host-only policy fixtures,
+not native guest exception lowering or executable trap-result ABI parity.
