@@ -83,7 +83,12 @@ std::size_t skip_shape_trivia(std::string_view source, std::size_t at) {
                 if (at == source.size())
                     throw std::runtime_error("unterminated block comment at byte " +
                                              std::to_string(start));
-                if (source.substr(at, 2) == "/*") { at += 2; ++depth; }
+                if (source.substr(at, 2) == "/*") {
+                    if (depth >= 128)
+                        throw std::runtime_error(
+                            "native refinement boundary comment nesting limit exceeded");
+                    at += 2; ++depth;
+                }
                 else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
                 else ++at;
             }
@@ -111,7 +116,12 @@ void reject_unsupported_type_surfaces(std::string_view source) {
                 if (at == source.size())
                     throw std::runtime_error("unterminated block comment at byte " +
                                              std::to_string(start));
-                if (source.substr(at, 2) == "/*") { at += 2; ++depth; }
+                if (source.substr(at, 2) == "/*") {
+                    if (depth >= 128)
+                        throw std::runtime_error(
+                            "native refinement boundary comment nesting limit exceeded");
+                    at += 2; ++depth;
+                }
                 else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
                 else ++at;
             }
@@ -2039,4 +2049,5 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
 }
 
 } // namespace oreslang
+
 
