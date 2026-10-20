@@ -242,6 +242,16 @@ public:
     void test_deny_next_cleanup(unsigned count = 1) noexcept {
         authority_.test_deny_next_reclaim(count);
     }
+    // Fault-inject an unknown kernel close outcome inside the REAL broker's
+    // authenticated physical-close callback, not merely a ledger denial.
+    void test_uncertain_next_physical_close(unsigned count = 1) noexcept {
+        std::lock_guard<std::mutex> guard(mu_);
+        manager_.test_uncertain_next_owned_close(count);
+    }
+    std::size_t test_quarantined_manager_slots() const noexcept {
+        std::lock_guard<std::mutex> guard(mu_);
+        return manager_.test_quarantined_owned_slots();
+    }
     bool test_has_pending_terminal(bool require_published = false) noexcept {
         std::unique_lock<std::mutex> guard(mu_, std::try_to_lock);
         return guard.owns_lock() && pending_.has_value() &&
