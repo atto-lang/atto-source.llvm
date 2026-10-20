@@ -17,8 +17,9 @@ extern "C" {
  * touches an arena while a turn is active.
  *
  * Initialization and seal/prefault occur before the hard-RT window. After
- * sealing, allocations are fixed-capacity O(1) free-stack operations; drop and
- * turn-leave zeroization are bounded by slot_bytes and scratch_bytes.
+ * sealing, allocations are fixed-capacity O(1) free-stack operations; every
+ * slot start is max_align_t-aligned, and zeroization is bounded by the aligned
+ * slot stride and scratch capacity.
  */
 typedef enum OresRtArenaStatus {
     ORES_RT_ARENA_OK = 0,
@@ -64,6 +65,7 @@ typedef struct OresRealtimeActorArena {
     uint64_t epoch;
     size_t slot_count;
     size_t slot_bytes;
+    size_t slot_stride;
     size_t scratch_bytes;
     size_t scratch_top;
     size_t free_count;
