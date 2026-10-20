@@ -21,7 +21,6 @@ The CMake cache setting is:
 -DORES_MANAGED_REF_MODE=native64
 ```
 
-(without the space after `-D` when invoking CMake).
 
 ## Compressed actor reference
 
@@ -62,7 +61,7 @@ The optimizer/layout planner may choose among:
 
 | Logical relationship | Preferred physical form |
 | --- | --- |
-| actor-owned object graph edge | compressed32 actor-relative ref |
+| actor-owned object graph edge | compressed32 ref, or typed dense32 local index when table-backed |
 | huge actor-owned object graph | native64 managed ref |
 | ECS entity/component row | typed dense32 index |
 | SoA/AoSoA column relation | dense index/offset when possible |
@@ -77,7 +76,7 @@ Managed-reference width must not force an AoS object model. A logical
 selected later. This allows the compiler to:
 
 1. keep conventional actor objects in AoS while storing graph edges as 4-byte
-   actor-relative references;
+   actor-relative references or typed heap-local indices;
 2. split homogeneous or hot fields into SoA columns;
 3. tile fields as AoSoA to match SIMD/cache-line geometry;
 4. represent ECS relations as typed dense indices instead of pointers;
