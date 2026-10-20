@@ -18,6 +18,11 @@ CONTROL_WITH_DECOYS = (
     "fnc main(): int { return 42; }\n"
 )
 UNSUPPORTED = {
+    "excessive-comment-nesting": (
+        "@" + "/*" * 129 + "*/" * 129 +
+        " Size(min=1,max=5)\ntype Name = string;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
     "annotation": "@Size(min=1,max=32)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "with": "type NonEmpty = string with length gt 0;\nfnc main(): int { return 42; }\n",
     "where": "type NonBlank = string where it.trim().length > 0;\nfnc main(): int { return 42; }\n",
@@ -46,6 +51,14 @@ UNSUPPORTED = {
     "invalid-with": "type T = string with length gt 0 or length eq 10;\nfnc main(): int { return 42; }\n",
     "effective-hole": "type T = int with value gte 1 and value ne 2;\nfnc main(): int { return 42; }\n",
     "spaced-annotation": "@ Range(min=1,max=2) type R = int;\nfnc main(): int { return 42; }\n",
+    "comment-separated-annotation": (
+        "@/* first */ /* second /* nested */ */ Size(min=1,max=5)\n"
+        "type Name = string;\nfnc main(): int { return 42; }\n"
+    ),
+    "comment-separated-static-schema": (
+        "type Port = Zorde/*comment*/. /*second*/ infer<PortSchema>;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
     "notempty-annotation": "@NotEmpty\ntype DisplayName = string;\nfnc main(): int { return 42; }\n",
     "length-annotation": "@Length(10)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "refinement-after-nested-comment": (
@@ -93,9 +106,12 @@ def main() -> None:
                 raise AssertionError(f"{case}: failed admission leaked partial LLVM IR/stdout")
             if not result.stderr.strip():
                 raise AssertionError(f"{case}: failure had no diagnostic")
-            if "native refinement boundary unsupported" not in result.stderr:
+            marker = ("native refinement boundary comment nesting limit exceeded"
+                      if case == "excessive-comment-nesting"
+                      else "native refinement boundary unsupported")
+            if marker not in result.stderr:
                 raise AssertionError(
-                    f"{case}: rejection was incidental parser failure, not compiler-owned gate"
+                    f"{case}: expected compiler-owned admission diagnostic {marker!r}"
                 )
         print(f"native fail-closed refinements: {len(UNSUPPORTED)} negative cases + positive control")
 

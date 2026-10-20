@@ -65,6 +65,41 @@ bool refinement_annotation(std::string_view name) {
 }
 
 void reject_unsupported_refinement_surface(std::string_view source) {
+    // Whitespace and nested comments are lexical separators, including
+    // BETWEEN the tokens of an annotation or Zorde.infer qualification.
+    // The gate must classify these before the restricted parser could
+    // accidentally erase a refinement as an untyped ordinary name.
+    auto skip_ignored = [&](std::size_t position) {
+        for (;;) {
+            while (position < source.size() &&
+                   std::isspace(static_cast<unsigned char>(source[position])))
+                ++position;
+            if (source.substr(position, 2) == "//") {
+                const auto end = source.find('\n', position + 2);
+                position = end == std::string_view::npos ? source.size() : end;
+            } else if (source.substr(position, 2) == "/*") {
+                const auto start = position;
+                position += 2;
+                std::size_t depth = 1;
+                while (depth) {
+                    if (position == source.size())
+                        throw std::runtime_error("unterminated block comment at byte " +
+                                                 std::to_string(start));
+                    if (source.substr(position, 2) == "/*") {
+                        // Refuse adversarial deeply nested comment gaps
+                        // before scanning an unbounded amount of ignored
+                        // text between protected refinement tokens.
+                        if (depth >= 128)
+                            throw std::runtime_error(
+                                "native refinement boundary comment nesting limit exceeded");
+                        position += 2; ++depth;
+                    } else if (source.substr(position, 2) == "*/") {
+                        position += 2; --depth;
+                    } else ++position;
+                }
+            } else return position;
+        }
+    };
     bool in_type = false;
     for (std::size_t at = 0; at < source.size();) {
         const unsigned char ch = static_cast<unsigned char>(source[at]);
@@ -103,8 +138,7 @@ void reject_unsupported_refinement_surface(std::string_view source) {
 
         if (source[at] == '@') {
             const auto marker = at++;
-            while (at < source.size() &&
-                   std::isspace(static_cast<unsigned char>(source[at]))) ++at;
+            at = skip_ignored(at);
             const auto start = at;
             if (at < source.size() && identifier_start(source[at])) {
                 ++at;
@@ -138,13 +172,9 @@ void reject_unsupported_refinement_surface(std::string_view source) {
                     "lowering required at byte " + std::to_string(start));
             }
             if (in_type && word == "Zorde") {
-                std::size_t probe = at;
-                while (probe < source.size() &&
-                       std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                std::size_t probe = skip_ignored(at);
                 if (probe < source.size() && source[probe] == '.') {
-                    ++probe;
-                    while (probe < source.size() &&
-                           std::isspace(static_cast<unsigned char>(source[probe]))) ++probe;
+                    probe = skip_ignored(probe + 1);
                     const auto id = probe;
                     if (probe < source.size() && identifier_start(source[probe])) {
                         ++probe;
