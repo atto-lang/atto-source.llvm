@@ -44,7 +44,7 @@ struct RunLedger {
 };
 
 inline void validate_owner(const ModelOwner& owner) {
-    require_fence_id(owner.model_type_id, "MODEL_INVALID_TYPE_ID");
+    require_fence_id(owner.model_type_id, "MODEL_INVALID_MODEL_TYPE_ID");
     require_fence_digest(owner.graph_digest, "MODEL_INVALID_GRAPH_DIGEST");
     if (owner.graph_generation < 0) throw std::runtime_error("MODEL_INVALID_GRAPH_GENERATION");
     require_fence_id(owner.instance_id, "MODEL_INVALID_INSTANCE_ID");
