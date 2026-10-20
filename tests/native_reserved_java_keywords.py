@@ -37,6 +37,33 @@ CASES = {
         "pub fnc choose(int value): int { return value ? 1 : 0; }",
         "native ternary expression requires typed bool conditions and branch-merge lowering",
     ),
+    # No rebranding opaque values as i64, not even behind nesting, comments,
+    # an immediate return, or a local statement. These tests intentionally
+    # require a diagnostic and ZERO bytes of emitted LLVM IR.
+    "unknown-return-type": (
+        "pub fnc normalize(int value): unknown { return value; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "unknown-local-type": (
+        "pub fnc main(): int { const value: unknown = 1; return 0; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "any-second-parameter": (
+        "pub fnc normalize(int tag, any value): int { return tag; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "ternary-typed-bool": (
+        "pub fnc choose(int ignored): int { return true ? 1 : 0; }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
+    "ternary-nested-parentheses": (
+        "pub fnc choose(int value): int { return (value ? 1 : 0); }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
+    "ternary-chained": (
+        "pub fnc choose(int value): int { return value ? 1 : value ? 2 : 3; }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
     # Enum/pattern declaration kinds are reserved; not executable source support yet.
     "enum-function": (
         "pub fnc enum(): int { return 42; }",
