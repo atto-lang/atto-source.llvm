@@ -1,11 +1,11 @@
 #include "oreslang/runtime/NativeTraceStore.h"
-#include <assert.h>
+#include <stdlib.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdint.h>
 
-static void check(int good) { assert(good); }
+static void check(int good) { if (!good) abort(); }
 static OresNativeExecutionContext value(uint64_t execution) {
     OresNativeExecutionContext v = {0};
     v.id.runtime_domain = 3;
@@ -59,6 +59,22 @@ int main(void) {
     check(ores_native_trace_store_release(c,ch));
     check(!ores_native_continuation_store_load(c,ch,&out));
     check(ores_native_trace_store_release(e,second));
+    /* Exhaustion is bounded; forged generation and zero-slot keys are invalid. */
+    OresNativeTraceHandle all[8];
+    for (int i = 0; i < 8; ++i) {
+        OresNativeExecutionContext each = value((uint64_t) i + 10);
+        all[i] = ores_native_execution_store_insert(e, &each);
+        check(all[i].store_id);
+    }
+    check(!ores_native_execution_store_insert(e, &v).store_id);
+    OresNativeTraceHandle forged = all[0];
+    forged.slot_generation += (UINT64_C(1) << 32);
+    check(!ores_native_execution_store_load(e, forged, &fetched));
+    forged = all[0];
+    forged.slot_generation &= UINT64_C(0xFFFFFFFF00000000);
+    check(!ores_native_execution_store_load(e, forged, &fetched));
+    for (int i = 0; i < 8; ++i)
+        check(ores_native_trace_store_release(e, all[i]));
     Worker w = {.store=e};
     pthread_t workers[8];
     for (size_t i=0;i<8;i++) check(pthread_create(&workers[i],NULL,churn,&w)==0);
