@@ -58,54 +58,95 @@ public:
             && owner_.generation == owner.generation;
     }
     bool vm_wide() const noexcept { return scheduler_ == nullptr; }
+
     bool retired() const noexcept {
-        return (state_.load(std::memory_order_acquire) & kRetiredBit) != 0;
+        std::lock_guard<std::mutex> hold(state_lock_);
+        return (state_ & kRetiredBit) != 0;
     }
-    /** Retirement and byte admission share one atomic linearization point.
-     * A reservation CAS can either precede retirement (and remains charged)
-     * or observe its bit and fail. No allocation can be admitted after the
-     * retired bit has been published. */
+
+    /**
+     * Retirement and reservation use the same ledger mutex. For paired
+     * actor/VM admissions, both ledgers are locked together so retirement,
+     * capacity checks and both byte increments have one linearization point.
+     */
     void mark_retired_after_done() noexcept {
-        state_.fetch_or(kRetiredBit, std::memory_order_acq_rel);
+        std::lock_guard<std::mutex> hold(state_lock_);
+        state_ |= kRetiredBit;
     }
 
     bool try_reserve(std::uint64_t bytes) noexcept {
-        if (bytes == 0 || bytes > maximum_) return false;
-        std::uint64_t previous = state_.load(std::memory_order_acquire);
-        for (;;) {
-            if ((previous & kRetiredBit) != 0) return false;
-            const std::uint64_t used = previous & kMaxBytes;
-            if (used > maximum_ - bytes) return false;
-            if (state_.compare_exchange_weak(previous, previous + bytes,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
-                return true;
-            }
-        }
+        std::lock_guard<std::mutex> hold(state_lock_);
+        if (!can_reserve_locked(bytes)) return false;
+        state_ += bytes;
+        return true;
     }
+
     void release(std::uint64_t bytes) noexcept {
-        if (!bytes || bytes > maximum_) std::abort();
-        std::uint64_t previous = state_.load(std::memory_order_acquire);
-        for (;;) {
-            if ((previous & kMaxBytes) < bytes) std::abort();
-            // Preserve the retired bit and atomically refund exactly once.
-            if (state_.compare_exchange_weak(previous, previous - bytes,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) return;
-        }
+        std::lock_guard<std::mutex> hold(state_lock_);
+        release_locked(bytes);
     }
+
+    /**
+     * Atomically reserve the same byte count against two distinct ledgers.
+     * No observer using these ledger APIs can see a committed charge in only
+     * one ledger, and actor retirement cannot interleave between the checks.
+     */
+    static bool try_reserve_pair(
+            ActorShardBudget& actor, ActorShardBudget& vm,
+            std::uint64_t bytes) noexcept {
+        if (&actor == &vm || bytes == 0) return false;
+        std::scoped_lock hold(actor.state_lock_, vm.state_lock_);
+        if (!actor.can_reserve_locked(bytes) || !vm.can_reserve_locked(bytes)) {
+            return false;
+        }
+        actor.state_ += bytes;
+        vm.state_ += bytes;
+        return true;
+    }
+
+    /** Refund a previously committed pair reservation exactly once. */
+    static void release_pair(
+            ActorShardBudget& actor, ActorShardBudget& vm,
+            std::uint64_t bytes) noexcept {
+        if (&actor == &vm || bytes == 0) std::abort();
+        std::scoped_lock hold(actor.state_lock_, vm.state_lock_);
+        actor.release_locked(bytes);
+        vm.release_locked(bytes);
+    }
+
     std::uint64_t used_bytes() const noexcept {
-        return state_.load(std::memory_order_acquire) & kMaxBytes;
+        std::lock_guard<std::mutex> hold(state_lock_);
+        return state_ & kMaxBytes;
     }
     std::uint64_t maximum_bytes() const noexcept { return maximum_; }
+
 private:
+    bool can_reserve_locked(std::uint64_t bytes) const noexcept {
+        if (bytes == 0 || bytes > maximum_ || (state_ & kRetiredBit) != 0) {
+            return false;
+        }
+        const std::uint64_t used = state_ & kMaxBytes;
+        return used <= maximum_ - bytes;
+    }
+
+    void release_locked(std::uint64_t bytes) noexcept {
+        if (!bytes || bytes > maximum_ || (state_ & kMaxBytes) < bytes) {
+            std::abort();
+        }
+        // Unsigned subtraction changes only the low counter because underflow
+        // was rejected; the permanent retirement tombstone remains set.
+        state_ -= bytes;
+    }
+
     static constexpr std::uint64_t kRetiredBit = UINT64_C(1) << 63;
     static constexpr std::uint64_t kMaxBytes = kRetiredBit - 1;
     std::uint64_t maximum_;
     OresNativeActorScheduler* scheduler_ = nullptr;
     OresNativeActorRef owner_ = {};
-    // The high bit is a permanent retirement tombstone; the low 63 bits
-    // are bytes currently reserved. Both change in a single atomic word.
-    std::atomic<std::uint64_t> state_{0};
-};
+    mutable std::mutex state_lock_;
+    // High bit: permanent retirement tombstone. Low 63 bits: charged bytes.
+    std::uint64_t state_ = 0;
+}
 
 /**
  * Trusted host retirement barrier. The scheduler MUST remain alive throughout
@@ -144,18 +185,15 @@ public:
             throw std::invalid_argument("invalid native snapshot owner, size or budget");
         }
         reserved_bytes_ = oreslang::dop::checked_mul(length, sizeof(double));
-        if (!vm_budget_.try_reserve(reserved_bytes_)) {
-            throw std::length_error("VM snapshot quota exhausted");
-        }
-        if (!actor_budget_.try_reserve(reserved_bytes_)) {
-            vm_budget_.release(reserved_bytes_);
-            throw std::length_error("actor snapshot quota exhausted");
+        if (!ActorShardBudget::try_reserve_pair(
+                actor_budget_, vm_budget_, reserved_bytes_)) {
+            throw std::length_error("actor/VM snapshot quota exhausted");
         }
         try {
             values_.resize(length);
         } catch (...) {
-            actor_budget_.release(reserved_bytes_);
-            vm_budget_.release(reserved_bytes_);
+            ActorShardBudget::release_pair(
+                actor_budget_, vm_budget_, reserved_bytes_);
             throw;
         }
     }
@@ -179,6 +217,15 @@ public:
         require_open();
         return values_.size();
     }
+    void copy_into(double* output, std::size_t available) const {
+        require_owner();
+        std::lock_guard<std::mutex> hold(lock_);
+        require_open();
+        if (!output || available < values_.size()) {
+            throw std::out_of_range("invalid snapshot destination span");
+        }
+        std::copy(values_.begin(), values_.end(), output);
+    }
     void close() {
         require_owner();
         retire_unchecked();
@@ -195,8 +242,8 @@ private:
             for (std::size_t i = 0; i < released.size(); ++i) raw[i] = 0.0;
             std::atomic_signal_fence(std::memory_order_seq_cst);
         } // vector allocation is actually freed before refunding quota
-        actor_budget_.release(reserved_bytes_);
-        vm_budget_.release(reserved_bytes_);
+        ActorShardBudget::release_pair(
+            actor_budget_, vm_budget_, reserved_bytes_);
     }
     friend class ActorShardColumns; // Only the creating shard can populate a snapshot.
     void write_from_owner(std::size_t i, double value) {
@@ -254,18 +301,15 @@ public:
             throw std::invalid_argument("shard budget owner, generation or VM scope mismatch");
         }
         reserved_bytes_ = plan_.byte_length();
-        if (!vm_budget_.try_reserve(reserved_bytes_)) {
-            throw std::length_error("VM shard memory budget exceeded");
-        }
-        if (!actor_budget_.try_reserve(reserved_bytes_)) {
-            vm_budget_.release(reserved_bytes_);
-            throw std::length_error("actor shard memory budget exceeded");
+        if (!ActorShardBudget::try_reserve_pair(
+                actor_budget_, vm_budget_, reserved_bytes_)) {
+            throw std::length_error("actor/VM shard memory budget exceeded");
         }
         try {
             data_.resize(static_cast<std::size_t>(reserved_bytes_) / sizeof(double));
         } catch (...) {
-            actor_budget_.release(reserved_bytes_);
-            vm_budget_.release(reserved_bytes_);
+            ActorShardBudget::release_pair(
+                actor_budget_, vm_budget_, reserved_bytes_);
             throw;
         }
     }
@@ -278,8 +322,8 @@ public:
             for (std::size_t i = 0; i < released.size(); ++i) bytes[i] = 0.0;
             std::atomic_signal_fence(std::memory_order_seq_cst);
         } // free native allocation before permitting another actor reservation
-        actor_budget_.release(reserved_bytes_);
-        vm_budget_.release(reserved_bytes_);
+        ActorShardBudget::release_pair(
+            actor_budget_, vm_budget_, reserved_bytes_);
     }
 
     ActorShardColumns(const ActorShardColumns&) = delete;
@@ -338,13 +382,17 @@ public:
         return result;
     }
 
-    /** Detached result copy: this does not expose a mutable actor heap view. */
+    /**
+     * Legacy unmetered detached copy is intentionally fail-closed. Keeping the
+     * signature catches old host callers without permitting an allocation
+     * whose lifetime escapes the actor/VM ledgers.
+     */
+    [[deprecated("use snapshot_column_leased or copy_column_into")]]
     std::vector<double> snapshot_column(std::uint32_t field) const {
         require_owner();
         if (field >= fields()) throw std::out_of_range("invalid shard field");
-        std::vector<double> result(rows());
-        for (std::size_t i = 0; i < rows(); ++i) result[i] = data_[index(i, field)];
-        return result;
+        throw std::logic_error(
+            "unmetered detached snapshots are disabled; use a leased snapshot");
     }
 
 private:
