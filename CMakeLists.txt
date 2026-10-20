@@ -649,6 +649,23 @@ if(BUILD_TESTING)
             --ir-absent "oreslang_source_actor_spawn"
             --run 42 --clang "${ORE_CLANG}")
     endif()
+    oreslang_contract_test(native_tree_shake_overload_fails_closed
+        named-call-arity-overload-main.ores
+        --tree-shake
+        --diagnostic "native reachability rejects overloaded function name")
+    oreslang_contract_test(native_tree_shake_library_keeps_public_api
+        tree-shake-library.ores
+        --tree-shake
+        --ir "@api"
+        --ir-absent "@dead_private")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_library_remains_linkable
+            tree-shake-library.ores
+            --tree-shake
+            --ir "@api"
+            --ir-absent "@dead_private"
+            --no-main-link --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
