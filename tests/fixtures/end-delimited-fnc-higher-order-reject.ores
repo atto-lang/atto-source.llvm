@@ -1,0 +1,1 @@
+fnc callback() -> () => void do return factory(); end
