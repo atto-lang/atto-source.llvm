@@ -14,6 +14,7 @@ message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/frontend/TreeShaker.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
@@ -29,6 +30,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(oreslang-native-tree-shaker-test
+        tests/native_tree_shaker_test.cpp
+        src/main/cpp/oreslang/frontend/TreeShaker.cpp)
+    target_include_directories(oreslang-native-tree-shaker-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-tree-shaker-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_tree_shaker_reachability_contract
+        COMMAND oreslang-native-tree-shaker-test)
+    set_tests_properties(native_tree_shaker_reachability_contract PROPERTIES TIMEOUT 20)
+
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
