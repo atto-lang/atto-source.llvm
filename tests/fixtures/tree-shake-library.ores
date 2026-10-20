@@ -1,0 +1,12 @@
+// Tree-shaken library: public API roots its private live dependency only.
+fnc dead_private(): int {
+  return 99;
+}
+
+fnc private_helper(): int {
+  return 42;
+}
+
+pub fnc api(): int {
+  return private_helper();
+}
