@@ -423,6 +423,30 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
+int oreslang_source_actor_capture_failure_trace(
+        OresNativeFailureTraceKind kind,
+        uint32_t code,
+        OresNativeExecutionTraceFrame* execution_frames,
+        size_t execution_capacity,
+        OresNativeContinuationTraceFrame* continuation_frames,
+        size_t continuation_capacity,
+        OresNativeFailureTraceReport* out) {
+    if (!out || !ores_native_store_handle_valid(current_source_execution)
+            || !group.executions || !group.continuations)
+        return 0;
+    return ores_native_failure_trace_capture(
+        group.executions,
+        group.continuations,
+        current_source_execution,
+        kind,
+        code,
+        execution_frames,
+        execution_capacity,
+        continuation_frames,
+        continuation_capacity,
+        out);
+}
+
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
