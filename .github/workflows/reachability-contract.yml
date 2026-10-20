@@ -9,6 +9,8 @@ on:
       - 'tests/contract.py'
       - 'tests/fixtures/tree-shake-dead-symbols.ores'
       - 'tests/fixtures/tree-shake-library.ores'
+      - 'tests/fixtures/tree-shake-dead-owned-region.ores'
+      - 'tests/fixtures/tree-shake-live-array.ores'
       - 'CMakeLists.txt'
       - '.github/workflows/reachability-contract.yml'
 
