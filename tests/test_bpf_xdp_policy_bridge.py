@@ -161,6 +161,18 @@ class AdmissionTests(unittest.TestCase):
                         with self.assertRaisesRegex(Denied,'compiler executable changed'):
                             build(args)
                     compiler.write_bytes(b'fake compiler')
+                    policy_contract=policy.parent.parent/'src'/'contract.mjs'
+                    prior_contract=policy_contract.read_bytes()
+                    def tamper_policy(argv, expected=0, timeout=90):
+                        result=fake(argv, expected, timeout)
+                        if argv[0] == 'clang':
+                            policy_contract.write_bytes(b'changed policy after ELF generation')
+                        return result
+                    with patch('bpf_xdp_policy_bridge.run_command', side_effect=tamper_policy), \
+                         patch('bpf_xdp_policy_bridge.verify_object_metadata'):
+                        with self.assertRaisesRegex(Denied, 'target-policy bundle changed'):
+                            build(args)
+                    policy_contract.write_bytes(prior_contract)
             # A policy-grant mismatch denies without compiling any LLVM IR.
             args.grants=''
             calls=[]
