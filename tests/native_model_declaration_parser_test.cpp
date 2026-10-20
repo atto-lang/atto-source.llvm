@@ -1,0 +1,65 @@
+#include "oreslang/frontend/Parser.hpp"
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <functional>
+#include <iostream>
+
+static void check(bool condition, const std::string& label) {
+    if (!condition) throw std::runtime_error("native model parser test: " + label);
+}
+static void rejected(std::string_view source, std::string_view diagnostic) {
+    try {
+        (void)oreslang::parse_model_declarations(source);
+    } catch (const std::exception& e) {
+        check(std::string_view(e.what()).find(diagnostic) != std::string_view::npos,
+              "wrong diagnostic: " + std::string(e.what()));
+        return;
+    }
+    throw std::runtime_error("model parser unexpectedly accepted: " + std::string(source));
+}
+int main() {
+    try {
+        const auto ml = oreslang::parse_model_declarations(
+            "define model Classifier(features: int = 784, hidden: int = 512) as "
+            "Dense(features, hidden) ReLU() Dense(hidden, 10) end");
+        check(ml.size() == 1, "ML declaration count");
+        check(ml[0].name == "Classifier", "ML nominal type");
+        check(ml[0].formals.size() == 2, "ML formals");
+        check(ml[0].formals[0].default_value == "784", "default metadata");
+        check(ml[0].operations.size() == 3, "ML ordered graph");
+        check(ml[0].operations[0].arguments[0].formal_reference, "symbolic arg");
+        const auto non_ml = oreslang::parse_model_declarations(
+            "define module app as define model Tax(rate: float = 0.15) as "
+            "Validate() Apply(rate) Round() end end");
+        check(non_ml.size() == 1 && non_ml[0].operations.size() == 3, "non-ML module");
+        check(non_ml[0].formals[0].default_value == "0.15", "float default");
+        check(oreslang::parse_model_declarations("fnc model(): int { return 42; }").empty(),
+              "contextual model function name");
+        rejected("define model Bad as end", "MODEL_EMPTY_BODY");
+        rejected("define model Bad(x: int, x: int) as Op(x) end", "MODEL_DUPLICATE_FORMAL");
+        rejected("define model Bad as Op(x) end", "MODEL_UNKNOWN_FORMAL");
+        rejected("define model Bad as Op(foo: 1, foo: 2) end", "MODEL_DUPLICATE_ARGUMENT");
+        rejected("define model Bad as Op(a: 1, 2) end", "MODEL_POSITIONAL_AFTER_NAMED");
+        rejected("define model Bad as Op(1 + 2) end", "expected ')'");
+        rejected("define model Bad as Op(foo()) end", "MODEL_UNKNOWN_FORMAL");
+        rejected("define model Bad(x: int = z) as Op(x) end", "MODEL_DYNAMIC_ARGUMENT");
+        std::string many = "define model Many as ";
+        for (int i = 0; i < 65; ++i) many += "Op() ";
+        many += "end";
+        rejected(many, "MODEL_NODE_BUDGET");
+        try {
+            (void)oreslang::parse_program(
+                "define model Tax(rate: float = 0.15) as Apply(rate) end");
+            throw std::runtime_error("native compiler silently admitted unlowered model");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()).find("MODEL_LOWERING_UNSUPPORTED") != std::string_view::npos,
+                  "native typed lowering must fail closed: " + std::string(e.what()));
+        }
+        std::cout << "PASS native model parser positive, negative and unimplemented lowering boundaries\n";
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << '\n';
+        return 1;
+    }
+}
