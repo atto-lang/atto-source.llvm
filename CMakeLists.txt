@@ -1075,6 +1075,30 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_llvm_compressed32_checked_pointer_lowering
         COMMAND oreslang-managed-ref-llvm-lowering-test)
+
+    # Compiler-internal reference MIR: verified actor provenance, bounded
+    # layout choice and strict FFI/mailbox/suspension rejection.
+    add_executable(oreslang-managed-ref-mir-test
+        tests/managed_ref_mir_test.cpp)
+    target_include_directories(oreslang-managed-ref-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-mir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME actor_compressed32_typed_mir_authorization
+        COMMAND oreslang-managed-ref-mir-test)
+
+    # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
+    # actor reference in i32 and use native ActorArena.c checked accessors.
+    # Not yet full source-level Ref<T> lowering.
+    add_executable(oreslang-managed-ref-mir-llvm-test
+        tests/managed_ref_mir_llvm_test.cpp)
+    target_include_directories(oreslang-managed-ref-mir-llvm-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-managed-ref-mir-llvm-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-managed-ref-mir-llvm-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_llvm_actor_compact32_mir_scalar_c_abi
+        COMMAND oreslang-managed-ref-mir-llvm-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
