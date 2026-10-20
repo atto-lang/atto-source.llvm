@@ -109,6 +109,7 @@ def main():
                 str(runtime / "NativeContinuationStore.c"),
                 str(runtime / "NativeAwaitTraceBridge.c"),
                 str(runtime / "NativeLogicalTrace.c"),
+                str(runtime / "NativeFailureTrace.c"),
                 "-std=c11", "-pthread", "-I", str(source_dirs),
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
             ]
