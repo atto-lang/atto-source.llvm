@@ -8,10 +8,19 @@
 #include <stdatomic.h>
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
-/* Only compiled in the isolated fault-injection CTest; absent in production. */
-static _Atomic int fail_next_carrier_create;
+/* Only compiled in the isolated fault-injection CTest; absent in production.
+ * SIZE_MAX means disabled; N means allow exactly N create attempts to reach
+ * pthread_create(), then fail the following attempt once and disarm. */
+static _Atomic size_t fail_carrier_create_after = SIZE_MAX;
 void ores_native_actor_scheduler_test_fail_next_create(void) {
-    atomic_store_explicit(&fail_next_carrier_create, 1, memory_order_relaxed);
+    atomic_store_explicit(&fail_carrier_create_after, 0, memory_order_relaxed);
+}
+void ores_native_actor_scheduler_test_fail_create_after(
+        size_t successful_creates_before_failure) {
+    atomic_store_explicit(
+        &fail_carrier_create_after,
+        successful_creates_before_failure,
+        memory_order_relaxed);
 }
 #endif
 static int create_carrier(pthread_t* tid, void* context);
@@ -350,11 +359,25 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
  * acknowledges an unserviceable first message. */
 static int create_carrier(pthread_t* tid, void* context) {
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
-    /* Fail exactly the next OS worker creation, without ever linking this
-     * fault injector into the production ABI or exported symbol table. */
-    if (atomic_exchange_explicit(
-            &fail_next_carrier_create, 0, memory_order_relaxed))
-        return EAGAIN;
+    /* Deterministically fail one selected worker-create attempt. The CAS
+     * loop keeps the test hook well-defined even if independent scheduler
+     * fixtures create carriers concurrently. Production builds omit it. */
+    size_t remaining = atomic_load_explicit(
+        &fail_carrier_create_after, memory_order_relaxed);
+    for (;;) {
+        if (remaining == SIZE_MAX) break;
+        if (remaining == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &fail_carrier_create_after, &remaining, SIZE_MAX,
+                    memory_order_relaxed, memory_order_relaxed))
+                return EAGAIN;
+            continue;
+        }
+        if (atomic_compare_exchange_weak_explicit(
+                &fail_carrier_create_after, &remaining, remaining - 1,
+                memory_order_relaxed, memory_order_relaxed))
+            break;
+    }
 #endif
     return pthread_create(tid, NULL, carrier, context);
 }

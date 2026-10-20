@@ -62,6 +62,43 @@ int main(void) {
     require(ores_native_actor_scheduler_drain(poisoned));
     require(ores_native_actor_scheduler_try_destroy(poisoned));
 
+    /* Partial RT bootstrap is the harder case: one carrier exists before the
+     * second pthread create fails. That already-started carrier must remain
+     * idle until teardown, while every later admission surface stays closed. */
+    OresNativeActorScheduler* partial =
+        ores_native_actor_scheduler_open_typed_control(
+            2, 1, 2, deliver, deliver, NULL, &state);
+    require(partial != NULL);
+    ores_native_actor_scheduler_test_fail_create_after(1);
+    require(!ores_native_actor_scheduler_prestart_realtime(partial));
+    require(ores_native_actor_scheduler_started_carriers(partial) == 1);
+
+    OresNativeActorRef partial_parent =
+        ores_native_actor_scheduler_spawn(partial, 0);
+    OresNativeActorRef partial_child =
+        ores_native_actor_scheduler_spawn(partial, 1);
+    require(partial_parent.generation != 0 && partial_child.generation != 0);
+
+    require(ores_native_actor_scheduler_try_send(
+        partial, partial_parent, 77) == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    require(!ores_native_actor_scheduler_submit(partial, 0, 77));
+    require(!ores_native_actor_scheduler_publish_control(
+        partial, partial_parent, 88));
+    require(ores_native_actor_scheduler_accepted(partial) == 0);
+    require(ores_native_actor_scheduler_control_completed(partial) == 0);
+    require(ores_native_actor_scheduler_started_carriers(partial) == 1);
+
+    ores_native_actor_scheduler_retire(partial);
+    require(ores_native_actor_scheduler_drain(partial));
+    require(ores_native_actor_scheduler_poll_done(partial, partial_parent));
+    require(ores_native_actor_scheduler_poll_done(partial, partial_child));
+    OresNativeActorTerminalState partial_terminal = {0};
+    require(ores_native_actor_scheduler_terminal_state(
+        partial, partial_parent, &partial_terminal));
+    require(partial_terminal.accepted_user_messages == 0);
+    require(partial_terminal.processed_user_messages == 0);
+    require(ores_native_actor_scheduler_try_destroy(partial));
+
     OresNativeActorScheduler* s =
         ores_native_actor_scheduler_open(2, 2, 2, deliver, &state);
     require(s != NULL);

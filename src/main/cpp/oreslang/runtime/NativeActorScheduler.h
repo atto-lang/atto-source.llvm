@@ -180,8 +180,13 @@ uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* schedule
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
-/* Test-only deterministic worker-create failure; no production symbol. */
+/* Test-only deterministic worker-create failure; no production symbols. */
 void ores_native_actor_scheduler_test_fail_next_create(void);
+/* Allow exactly N create attempts to reach pthread_create(), then inject one
+ * EAGAIN on the following create attempt. Used to prove partial RT bootstrap
+ * failure cannot later recover through ordinary DATA/CONTROL admission. */
+void ores_native_actor_scheduler_test_fail_create_after(
+    size_t successful_creates_before_failure);
 #endif
 #ifdef __cplusplus
 }
