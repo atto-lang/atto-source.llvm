@@ -1,5 +1,6 @@
 #include "oreslang/runtime/FailureDispatchPipeline.hpp"
 
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -301,5 +302,6 @@ int main() {
     CHECK(ores_native_execution_context_store_live(executions) == 0);
     CHECK(ores_native_continuation_store_close(continuations));
     CHECK(ores_native_execution_context_store_close(executions));
+    std::puts("FAILURE_DISPATCH_PIPELINE_PASS");
     return 0;
 }
