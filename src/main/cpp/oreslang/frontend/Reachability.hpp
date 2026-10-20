@@ -274,8 +274,43 @@ inline void append_reachability_json_array(
     out.push_back(']');
 }
 
+inline bool reachability_strictly_sorted_unique(
+        const std::vector<std::string>& values) {
+    for (std::size_t i = 1; i < values.size(); ++i)
+        if (!(values[i - 1] < values[i])) return false;
+    return true;
+}
+
+inline void validate_reachability_result(const ReachabilityResult& result) {
+    if (!reachability_strictly_sorted_unique(result.roots) ||
+        !reachability_strictly_sorted_unique(result.retained_symbols) ||
+        !reachability_strictly_sorted_unique(result.removed_symbols))
+        throw std::runtime_error("native reachability manifest requires sorted unique symbol sets");
+
+    for (const auto& root : result.roots) {
+        if (!std::binary_search(
+                result.retained_symbols.begin(), result.retained_symbols.end(), root))
+            throw std::runtime_error("native reachability root is not retained: " + root);
+    }
+
+    std::size_t retained = 0;
+    std::size_t removed = 0;
+    while (retained < result.retained_symbols.size() &&
+           removed < result.removed_symbols.size()) {
+        if (result.retained_symbols[retained] == result.removed_symbols[removed])
+            throw std::runtime_error(
+                "native reachability symbol appears in retained and removed sets: " +
+                result.retained_symbols[retained]);
+        if (result.retained_symbols[retained] < result.removed_symbols[removed])
+            ++retained;
+        else
+            ++removed;
+    }
+}
+
 inline std::string canonical_reachability_json(
         const ReachabilityResult& result, bool library_build) {
+    validate_reachability_result(result);
     std::string out;
     out.reserve(256);
     out += "{\"format\":\"ores-reachability/1\",\"buildKind\":";
