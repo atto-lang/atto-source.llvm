@@ -22,9 +22,20 @@ fnc bounded_ticks(int ticks): int {
 }
 fnc step_state(int state, int event, int ticks): int {
     if (bounded_ticks(ticks) eq 0) { return -1; } fi
-    if ((state * 10 + event) eq 0) { return 1; } fi
-    if ((state * 10 + event) eq 11) { return tick_state(ticks); } fi
-    if ((state * 10 + event) eq 12) { return finish_state(ticks); } fi
-    if ((state * 10 + event) eq 23) { return 0; } fi
+    // Match both coordinates separately. Packing with state*10+event
+    // aliases out-of-domain inputs (e.g. state 0, event 11 -> 1,1).
+    if (state eq 0) {
+        if (event eq 0) { return 1; } fi
+        return -1;
+    } fi
+    if (state eq 1) {
+        if (event eq 1) { return tick_state(ticks); } fi
+        if (event eq 2) { return finish_state(ticks); } fi
+        return -1;
+    } fi
+    if (state eq 2) {
+        if (event eq 3) { return 0; } fi
+        return -1;
+    } fi
     return -1;
 }
