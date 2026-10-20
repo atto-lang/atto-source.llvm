@@ -1290,7 +1290,15 @@ private:
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
         if (accept("(")) {
+            // Java/Graal's () is a zero-slot Tuple, not grouping.
+            // Native scalar lowering must reject all tuple arities before IR.
+            if (token_.text == ")") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
             auto inner = expression();
+            if (token_.text == ",") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
             require(")");
             return inner;
         }
@@ -1298,6 +1306,24 @@ private:
             auto expr = make_expression(Expression::Kind::Integer, offset);
             expr->integer = integer_literal();
             return expr;
+        }
+        // Explicit brace tuples and nominal Entry values have no LLVM native
+        // product ABI. Do not lower them as scalars, and do not steal ordinary
+        // calls to a user function named tuple(...).
+        if (token_.text == "tuple") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "{") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
+        }
+        if (token_.text == "Entry") {
+            Lexer lookahead = lexer_;
+            const Token next = lookahead.next();
+            // '<' in native expressions is currently parsed as generic-call
+            // syntax, so Entry<...> must fail before scalar lowering.
+            if (next.text == "." || next.text == "<") {
+                fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
         }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
