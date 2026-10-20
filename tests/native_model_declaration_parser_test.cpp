@@ -118,6 +118,11 @@ int main() {
         check(epv1::digest(feature_profile) ==
                   "dad02ababd944847f5fac379b1c9e8f924233df789a46f436b70e48f3881d55b",
               "execution feature mutation");
+        auto target_profile = reference_profile;
+        target_profile.target_triple = "x86_64-unknown-linux-gnu";
+        check(epv1::digest(target_profile) ==
+                  "50d472c73b925bb180cada7a0def1f4d386f58a09bbdcd547221ed67bbc5a7e1",
+              "execution target mutation");
 
         const rv1::Registry resolved_registry = {
             {"PriceInput", portable_sig('1', {}, {})},
