@@ -208,3 +208,21 @@ Memory policy: compressed32 is an **actor-local region storage choice**; it
 does not shrink native FFI/OS pointers, require 4 GiB globally contiguous
 address space, or justify reserving 32 GiB per actor. Small actor heaps,
 bounded allocation, and per-actor recycling/retirement remain preferable.
+
+## Measuring real benefits (opt-in)
+
+Configure `-DORES_ENABLE_MANAGED_REF_BENCHMARKS=ON` and run
+`oreslang-managed-ref-microbench` under the same CPU affinity, build mode,
+input graph and allocator configuration for both modes. The benchmark reports
+`reference_bytes`, edge-column capacity in bytes, traversed edges, elapsed
+wall time and a checksum. Its bounded reproducible graph walk is **host-only**,
+not source-compiled actor workloads, cache-miss instrumentation, a GC/allocator
+benchmark, or a claim about Node.js/V8 performance.
+
+Measure independently on target hardware: peak RSS, committed/virtual heap
+bytes, L1/L2/LLC misses, cycles per dereference, tail latency, throughput,
+actor-creation overhead, arena fragmentation and exhaustion under churn.
+The compression policy must be a per-actor or per-heap **layout decision before
+allocation**, not an automatic in-place width change after objects are live.
+Compare against `native64` without treating smaller reference columns as
+proof of faster overall workloads.
