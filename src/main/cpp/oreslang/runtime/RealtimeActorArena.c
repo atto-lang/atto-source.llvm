@@ -106,6 +106,17 @@ OresRtArenaStatus ores_rt_actor_arena_init(
     if (((uintptr_t)backing & (uintptr_t)(alignment - 1)) != 0)
         return ORES_RT_ARENA_ALIGNMENT;
 
+    const uintptr_t backing_start = (uintptr_t)backing;
+    if (backing_bytes > UINTPTR_MAX - backing_start)
+        return ORES_RT_ARENA_INVALID;
+    const uintptr_t backing_end = backing_start + backing_bytes;
+    const uintptr_t control_start = (uintptr_t)arena;
+    if (sizeof(*arena) > UINTPTR_MAX - control_start)
+        return ORES_RT_ARENA_INVALID;
+    const uintptr_t control_end = control_start + sizeof(*arena);
+    if (control_start < backing_end && backing_start < control_end)
+        return ORES_RT_ARENA_INVALID;
+
     const size_t required =
         ores_rt_actor_arena_required_bytes(slot_count, slot_bytes, scratch_bytes);
     if (required == 0 || backing_bytes < required)
