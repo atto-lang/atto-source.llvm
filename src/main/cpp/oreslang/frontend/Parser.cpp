@@ -1291,7 +1291,10 @@ private:
         if (token_.text == "Entry") {
             Lexer lookahead = lexer_;
             const Token next = lookahead.next();
-            if (next.text == "." || next.text == "<") {
+            // '<' also starts an ordinary scalar comparison (Entry < 3).
+            // Do not reserve it as a generic-product opener in expression
+            // position until the parser can distinguish those grammars.
+            if (next.text == ".") {
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
