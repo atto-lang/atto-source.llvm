@@ -8,7 +8,7 @@ and are vendored as the deterministic line-oriented projection supplied by
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 import subprocess
 import tempfile
 
@@ -43,7 +43,7 @@ def decode_ascii_hex(value: str) -> str:
     return raw.decode("ascii")
 
 
-def load_corpus(path: Path) -> list[Case]:
+def load_corpus(path: Path) -> List[Case]:
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != "ORESLANG_MODEL_EXECUTABLE_CASES_V1":
         raise AssertionError("invalid shared model corpus header")
@@ -54,7 +54,7 @@ def load_corpus(path: Path) -> list[Case]:
     if lines[2] != f"profile|{_EXPECTED_PROFILE}":
         raise AssertionError(f"unexpected corpus profile: {lines[2]!r}")
 
-    cases: list[Case] = []
+    cases: List[Case] = []
     for line in lines[3:]:
         if not line or line.startswith("identity|"):
             continue
@@ -126,7 +126,10 @@ def verify(compiler: Path, clang: Path, corpus_path: Path):
             # are compile-only until the native test ABI gains a lossless i64
             # return transport.
             if item.llvm_mode == "compile_only":
-                if item.case_id == "price-adjust-i64-minimum" and                         b"-9223372036854775808" not in out:
+                if (
+                    item.case_id == "price-adjust-i64-minimum"
+                    and b"-9223372036854775808" not in out
+                ):
                     raise AssertionError(
                         f"{item.case_id}: signed i64 minimum missing from LLVM IR")
                 print(f"PASS model compile-only {item.case_id}", flush=True)
