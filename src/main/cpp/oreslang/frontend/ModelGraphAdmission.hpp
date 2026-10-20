@@ -199,9 +199,11 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     require(!source.operations.empty(), "MODEL_EMPTY_BODY");
     require(limits.max_nodes > 0 && limits.max_depth > 0 && limits.max_bytes >= 0,
             "MODEL_INVALID_BUDGET");
-    require(source.operations.size() <= limits.max_nodes, "MODEL_NODE_BUDGET");
+    require(source.operations.size() <= 64 && source.operations.size() <= limits.max_nodes,
+            "MODEL_NODE_BUDGET");
     require(source.operations.size() <= limits.max_depth, "MODEL_DEPTH_BUDGET");
     require(source.formals.size() <= 16, "MODEL_FORMAL_BUDGET");
+    require(model_identifier(source.name), "MODEL_NONCONSTANT_CONFIG");
     std::unordered_set<std::string> formals;
     ModelGraph result;
     for (const auto& formal : source.formals) {
@@ -215,6 +217,7 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     result.name = source.name;
     std::optional<Port> prior;
     for (const auto& operation : source.operations) {
+        require(model_identifier(operation.name), "MODEL_INVALID_OP_ID");
         require(operation.arguments.size() <= 16, "MODEL_ARGUMENT_BUDGET");
         const auto it = trusted.find(operation.name);
         if (it == trusted.end() || it->second.name != operation.name)
