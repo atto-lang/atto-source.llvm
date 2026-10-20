@@ -206,19 +206,19 @@ public:
     ~ActorColumnSnapshot() { retire_unchecked(); }
 
     double read(std::size_t i) const {
-        require_owner();
+        require_reader();
         std::lock_guard<std::mutex> hold(lock_);
         require_open();
         return values_.at(i);
     }
     std::size_t length() const {
-        require_owner();
+        require_reader();
         std::lock_guard<std::mutex> hold(lock_);
         require_open();
         return values_.size();
     }
     void copy_into(double* output, std::size_t available) const {
-        require_owner();
+        require_reader();
         std::lock_guard<std::mutex> hold(lock_);
         require_open();
         if (!output || available < values_.size()) {
@@ -227,7 +227,7 @@ public:
         std::copy(values_.begin(), values_.end(), output);
     }
     void close() {
-        require_owner();
+        require_close_authority();
         retire_unchecked();
     }
 private:
@@ -247,16 +247,30 @@ private:
     }
     friend class ActorShardColumns; // Only the creating shard can populate a snapshot.
     void write_from_owner(std::size_t i, double value) {
-        require_owner();
+        require_owner_turn();
         std::lock_guard<std::mutex> hold(lock_);
         require_open();
         values_.at(i) = value;
     }
-    void require_owner() const {
+    void require_owner_turn() const {
         if (actor_budget_.retired() || !scheduler_
                 || !ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) {
             throw std::logic_error("native snapshot retired or foreign owner turn");
         }
+    }
+    void require_reader() const {
+        if (actor_budget_.retired()) {
+            throw std::logic_error("native snapshot owner retired");
+        }
+        require_close_authority();
+    }
+    void require_close_authority() const {
+        if (!scheduler_) throw std::logic_error("native snapshot scheduler unavailable");
+        if (ores_native_actor_scheduler_is_current_actor(scheduler_, owner_)) return;
+        if (ores_native_actor_scheduler_is_current_carrier(scheduler_)) {
+            throw std::logic_error("foreign actor carrier cannot access native snapshot");
+        }
+        // No scheduler callback is active on this thread: trusted host access.
     }
     void require_open() const {
         if (revoked_) throw std::logic_error("native snapshot revoked");
