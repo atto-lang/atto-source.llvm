@@ -58,6 +58,37 @@ class NativeNioWorktreeTests(unittest.TestCase):
                   + marker + function + '\n}\nverify_exact_worktree\n')
         return run('bash', '-c', script, cwd=self.repo, env=env)
 
+    def test_github_workflows_require_immutable_blob_loader(self):
+        # Read the *committed* workflow definitions. Future edits that
+        # reintroduce a mutable verifier/test pathname must fail CI even
+        # when all synthetic Git worktree fixtures would otherwise pass.
+        root = CHECKER.parents[1]
+        workflows = {
+            '.github/workflows/native-nio-ownership-no-llvm.yml': (1, False),
+            '.github/workflows/native-vm-nio-source-local-sanitizers.yml': (5, True),
+        }
+        for path, (expected_loaders, checks_test_blob) in workflows.items():
+            with self.subTest(workflow=path):
+                source = subprocess.check_output(
+                    ('git', 'show', 'HEAD:' + path), cwd=root, text=True)
+                self.assertGreaterEqual(
+                    source.count('git cat-file blob "$approved"'),
+                    expected_loaders)
+                self.assertGreaterEqual(
+                    source.count('git hash-object --no-filters -- "$checker"'),
+                    expected_loaders - int(checks_test_blob))
+                self.assertNotIn(
+                    'python3 -I scripts/verify-native-nio-source-local.py',
+                    source)
+                self.assertNotIn(
+                    'python3 -I -B scripts/verify-native-nio-source-local.py',
+                    source)
+                if checks_test_blob:
+                    self.assertIn(
+                        'git hash-object --no-filters -- "$test_path"', source)
+                    self.assertNotIn(
+                        'python3 -I -B -m unittest discover', source)
+
     def test_clean_approved_blob_loader(self):
         result = self.gate_from_committed_shell()
         self.assertEqual(0, result.returncode, result.stderr)
