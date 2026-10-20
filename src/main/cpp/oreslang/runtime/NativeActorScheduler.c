@@ -88,6 +88,31 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+static void publish_terminal_locked(
+        OresNativeActorScheduler* s, size_t actor_index) {
+    ActorLane* lane = &s->actors[actor_index];
+    if (!lane->spawned || lane->terminal_valid
+            || !lane->retired || lane->active || lane->queued || lane->has_control)
+        return;
+    if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
+        return;
+    if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
+            && lane->requested_terminal_kind
+                != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
+        abort();
+    if (lane->processed_user_messages > lane->accepted_user_messages)
+        abort();
+
+    lane->terminal = (OresNativeActorTerminalState){
+        .actor = {s->domain, (uint64_t)actor_index, lane->generation},
+        .kind = lane->requested_terminal_kind,
+        .accepted_user_messages = lane->accepted_user_messages,
+        .processed_user_messages = lane->processed_user_messages,
+        .abandoned_user_messages = 0,
+        .abandoned_control_messages = 0,
+    };
+    lane->terminal_valid = 1;
+}
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
