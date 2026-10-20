@@ -184,6 +184,34 @@ int main() {
         const auto resolved_default_source = oreslang::parse_model_declarations(
             "define model PriceEstimate(tax_bps: int = 1500) as "
             "PriceInput() ApplyTaxBps(tax_bps) RoundCents() end");
+        auto check_lowering_failure = [&](oreslang::ModelDecl source,
+                                         const rv1::Overrides& values,
+                                         std::string_view expected) {
+            try {
+                (void)rv1::lower(source, "finance.PriceEstimate@v1", resolved_registry, values);
+                throw std::runtime_error("invalid direct model AST escaped resolved lowering");
+            } catch (const std::exception& e) {
+                check(std::string_view(e.what()) == expected,
+                      "resolved lowering failed with incorrect model diagnostic");
+            }
+        };
+        const auto unused_source = oreslang::parse_model_declarations(
+            "define model PriceEstimate(unused: int = 1) as "
+            "PriceInput() ApplyTaxBps(1500) RoundCents() end");
+        auto malformed_unused = unused_source[0];
+        malformed_unused.formals[0].default_value = "1garbage";
+        check_lowering_failure(malformed_unused, {}, "MODEL_INVALID_CONST");
+        check_lowering_failure(unused_source[0], {{"unused", "2garbage"}},
+                               "MODEL_INVALID_CONST");
+        auto too_many_nodes = unused_source[0];
+        while (too_many_nodes.operations.size() < 65)
+            too_many_nodes.operations.push_back(too_many_nodes.operations.front());
+        check_lowering_failure(too_many_nodes, {}, "MODEL_NODE_BUDGET");
+        auto too_many_formals = unused_source[0];
+        while (too_many_formals.formals.size() < 17)
+            too_many_formals.formals.push_back(too_many_formals.formals.front());
+        check_lowering_failure(too_many_formals, {}, "MODEL_FORMAL_BUDGET");
+
         const auto resolved_default = rv1::lower(
             resolved_default_source[0], "finance.PriceEstimate@v1", resolved_registry);
         check(pv1::digest(resolved_default) == graph_id,
