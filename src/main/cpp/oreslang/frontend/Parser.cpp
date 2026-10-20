@@ -86,6 +86,12 @@ void reject_unsupported_refinement_surface(std::string_view source) {
                         throw std::runtime_error("unterminated block comment at byte " +
                                                  std::to_string(start));
                     if (source.substr(position, 2) == "/*") {
+                        // Refuse adversarial deeply nested comment gaps
+                        // before scanning an unbounded amount of ignored
+                        // text between protected refinement tokens.
+                        if (depth >= 128)
+                            throw std::runtime_error(
+                                "native refinement boundary comment nesting limit exceeded");
                         position += 2; ++depth;
                     } else if (source.substr(position, 2) == "*/") {
                         position += 2; --depth;
