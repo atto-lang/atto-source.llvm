@@ -777,6 +777,18 @@ private:
                 [&](const GenericParameter& p) { return p.name == type; });
             if (!generic) fail("native return type requires int or scalar generic slot");
         }
+        // Postfix throws/raises/panics are proposal-only typed exceptional
+        // contracts. Reject at the exact signature boundary; admitting them
+        // without typed calls, unwind and actor CONTROL would erase safety.
+        const auto reject_unlowered_exception_effect = [&]() {
+            if (token_.text == "throws" || token_.text == "raises" ||
+                    token_.text == "panics") {
+                fail("native postfix exceptional effect '" +
+                     std::string(token_.text) +
+                     "' requires typed effect checking and unwind lowering");
+            }
+        };
+        reject_unlowered_exception_effect();
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -793,6 +805,7 @@ private:
                 value.declared_effects.bits |= bit;
             } while (accept(","));
         }
+        reject_unlowered_exception_effect();
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
