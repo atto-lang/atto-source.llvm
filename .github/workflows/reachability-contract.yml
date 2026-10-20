@@ -14,17 +14,30 @@ on:
       - 'CMakeLists.txt'
       - '.github/workflows/reachability-contract.yml'
 
+permissions:
+  contents: read
+
 jobs:
   native-reachability:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Compile standalone native reachability contract
         run: |
           c++ -std=c++17 -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp \
             tests/native_reachability_contract_test.cpp \
             -o /tmp/oreslang-native-reachability-test
-      - name: Run contract tests
+      - name: Run standalone contract tests
         run: /tmp/oreslang-native-reachability-test
+      - name: Install focused LLVM toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure focused compiler build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Compile Oreslang LLVM compiler
+        run: cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Execute tree-shaking compiler contracts
+        run: ctest --test-dir build -R '^native_tree_shake_' --output-on-failure --timeout 120
