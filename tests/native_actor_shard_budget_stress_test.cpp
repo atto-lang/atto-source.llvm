@@ -24,9 +24,7 @@ int main() {
         pool.emplace_back([&] {
             for (int i = 0; i < per_thread; i++) {
                 constexpr std::uint64_t bytes = 512;
-                if (!process.try_reserve(bytes)) continue;
-                if (!actor.try_reserve(bytes)) {
-                    process.release(bytes);
+                if (!ActorShardBudget::try_reserve_pair(actor, process, bytes)) {
                     continue;
                 }
                 ++successes;
@@ -35,8 +33,7 @@ int main() {
                     ++errors;
                 }
                 if ((i & 15) == 0) std::this_thread::yield();
-                actor.release(bytes);
-                process.release(bytes);
+                ActorShardBudget::release_pair(actor, process, bytes);
             }
         });
     }
@@ -44,7 +41,15 @@ int main() {
     assert(errors == 0 && successes > 0);
     assert(process.used_bytes() == 0 && actor.used_bytes() == 0);
 
-    // Retirement and reservation contend on one 64-bit atomic word.
+    ActorShardBudget retired_pair_actor(4096);
+    ActorShardBudget retired_pair_vm(4096);
+    retired_pair_actor.mark_retired_after_done();
+    assert(!ActorShardBudget::try_reserve_pair(
+            retired_pair_actor, retired_pair_vm, 512));
+    assert(retired_pair_actor.used_bytes() == 0);
+    assert(retired_pair_vm.used_bytes() == 0);
+
+    // Retirement and reservation contend on the same ledger lock.
     // Once retirement has completed, no new reserve may report success.
     ActorShardBudget racing(8192);
     std::atomic<bool> start{false}, retired{false};
