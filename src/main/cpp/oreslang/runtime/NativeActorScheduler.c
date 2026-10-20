@@ -27,6 +27,8 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    /* Stable actor-lifetime allocation capability, independent of turn ids. */
+    OresNativeAllocationDomainRef allocation_domain;
     OresNativeExecutionAuthority authority;
 } ActorLane;
 struct OresNativeActorScheduler {
@@ -208,14 +210,9 @@ static void* carrier(void* raw) {
         executing_claim = execution_claim;
         executing_context = (OresNativeExecutionContext){
             .id = {s->domain, execution_id},
-            .allocation = {
-                ORES_ALLOCATION_DOMAIN_ACTOR,
-                s->domain,
-                (uint64_t)i,
-                lane->generation
-            },
-            .parent_execution = 0,
-            .continuation = 0
+            .allocation = lane->allocation_domain,
+            .parent_execution = {0, 0},
+            .continuation = {0, 0}
         };
         executing = s;
         if (typed_failure) s->panic_callback(s->context, i, failure);
@@ -424,6 +421,12 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
     a->generation = a->authority.generation;
+    a->allocation_domain = (OresNativeAllocationDomainRef){
+        ORES_ALLOCATION_DOMAIN_ACTOR,
+        s->domain,
+        (uint64_t)i,
+        a->generation
+    };
     OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
     unlock(s);
     return ref;
