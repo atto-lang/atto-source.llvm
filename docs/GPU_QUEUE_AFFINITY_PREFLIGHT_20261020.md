@@ -56,3 +56,12 @@ already-claimed operation. The queue receipt allocation and string copy
 happen **before** both buffer fences enter `IN_FLIGHT`; after admission only
 `noexcept` moves construct the return value, preserving failure atomicity.
 This receipt is still host *metadata*, not a hardware queue capability.
+
+## Immutable handle audit
+
+The queue receipt now exposes the selected target through `queue() const`
+only. The receipt owns a private immutable descriptor; caller code cannot
+replace its pointer or assign a different queued receipt after the two
+buffer fences have been admitted. The moved-from receipt's `queue()` accessor
+throws rather than dereference an empty owner. Source metadata is copied
+before admission; device/provider authentication remains a separate gate.
