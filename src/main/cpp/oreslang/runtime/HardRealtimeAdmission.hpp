@@ -22,7 +22,9 @@ enum class Requirement : std::uint64_t {
     BlockingIoAbsent          = 1ull << 14,
     FfiQualified              = 1ull << 15,
     UntrustedJitExcluded      = 1ull << 16,
-    TimingEvidence            = 1ull << 17
+    TimingEvidence            = 1ull << 17,
+    DynamicLoadingDisabled    = 1ull << 18,
+    WorkersPrestarted         = 1ull << 19
 };
 
 constexpr std::uint64_t bit(Requirement requirement) noexcept {
@@ -55,10 +57,12 @@ struct TimingBudget {
 struct Capabilities {
     bool full_guest_aot{};
     bool runtime_codegen_disabled{};
+    bool dynamic_loading_disabled{};
     bool zero_tracing_gc_critical_path{};
     bool deterministic_actor_regions{};
     bool memory_preallocated{};
     bool memory_prefaulted{};
+    bool workers_prestarted{};
     bool bounded_dispatch{};
     bool bounded_priority_inversion{};
     bool critical_worker_isolation{};
@@ -96,10 +100,12 @@ inline Admission evaluate_hard_realtime(
 
     require(capabilities.full_guest_aot, Requirement::FullGuestAot);
     require(capabilities.runtime_codegen_disabled, Requirement::RuntimeCodegenDisabled);
+    require(capabilities.dynamic_loading_disabled, Requirement::DynamicLoadingDisabled);
     require(capabilities.zero_tracing_gc_critical_path, Requirement::ZeroTracingGcCriticalPath);
     require(capabilities.deterministic_actor_regions, Requirement::DeterministicActorRegions);
     require(capabilities.memory_preallocated, Requirement::MemoryPreallocated);
     require(capabilities.memory_prefaulted, Requirement::MemoryPrefaulted);
+    require(capabilities.workers_prestarted, Requirement::WorkersPrestarted);
     require(capabilities.bounded_dispatch, Requirement::BoundedDispatch);
     require(capabilities.bounded_priority_inversion, Requirement::BoundedPriorityInversion);
     require(capabilities.critical_worker_isolation, Requirement::CriticalWorkerIsolation);
