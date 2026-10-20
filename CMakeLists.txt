@@ -5,6 +5,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Managed Oreslang references are a language/runtime storage policy, separate
+# from the native target ABI. Keep compact actor-local references as the
+# default on 64-bit hosts while preserving an explicit full-width mode.
+set(ORES_MANAGED_REF_MODE "compressed32" CACHE STRING
+    "Default native managed reference representation: compressed32 or native64")
+set_property(CACHE ORES_MANAGED_REF_MODE PROPERTY STRINGS compressed32 native64)
+if(ORES_MANAGED_REF_MODE STREQUAL "native64")
+    add_compile_definitions(ORES_MANAGED_REF_DEFAULT_NATIVE64=1)
+elseif(NOT ORES_MANAGED_REF_MODE STREQUAL "compressed32")
+    message(FATAL_ERROR
+        "ORES_MANAGED_REF_MODE must be compressed32 or native64; got '${ORES_MANAGED_REF_MODE}'")
+endif()
+message(STATUS "Oreslang managed reference mode: ${ORES_MANAGED_REF_MODE}")
+
 find_package(LLVM CONFIG REQUIRED)
 if(LLVM_VERSION_MAJOR LESS 14)
     message(FATAL_ERROR "Oreslang requires LLVM 14 or newer; found ${LLVM_PACKAGE_VERSION}")
@@ -29,6 +43,32 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
+    # arena with no system allocator or lock path after initialization.
+    add_executable(oreslang-realtime-actor-arena-test
+        tests/realtime_actor_arena_test.cpp
+        src/main/cpp/oreslang/runtime/RealtimeActorArena.c)
+    target_include_directories(oreslang-realtime-actor-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-realtime-actor-arena-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-realtime-actor-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_realtime_actor_arena_contract
+        COMMAND oreslang-realtime-actor-arena-test)
+    set_tests_properties(native_realtime_actor_arena_contract PROPERTIES TIMEOUT 15)
+
+    # Compiler-owned transitive effect/call-graph hard-RT admission.
+    add_executable(oreslang-realtime-analysis-test
+        tests/realtime_analysis_test.cpp)
+    target_include_directories(oreslang-realtime-analysis-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-realtime-analysis-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_realtime_transitive_effect_analysis
+        COMMAND oreslang-realtime-analysis-test)
+    set_tests_properties(native_realtime_transitive_effect_analysis PROPERTIES TIMEOUT 15)
+
     # Oreslang core synchronization, not Java/JVM locks. The C11 gate itself
     # is freestanding and nonparking; pthreads are used only in this test.
     find_package(Threads REQUIRED)
@@ -155,6 +195,12 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_realtime_profile_cli
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
+
     # Executable source admission gate: function values are not nominal classes.
     add_test(NAME native_callable_nominal_boundary
         COMMAND "${Python3_EXECUTABLE}"
@@ -187,6 +233,14 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # First executable-level tree-shaking proof: main/pub roots plus transitive
+    # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
+    add_test(NAME native_tree_shaking_direct_calls
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_tree_shaking.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_tree_shaking_direct_calls PROPERTIES TIMEOUT 120)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest
@@ -1079,6 +1133,13 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-dop-layout-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
+
+    add_executable(oreslang-managed-ref-test tests/managed_ref_test.cpp)
+    target_include_directories(oreslang-managed-ref-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_managed_reference_width_and_dod_layout
+        COMMAND oreslang-managed-ref-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
