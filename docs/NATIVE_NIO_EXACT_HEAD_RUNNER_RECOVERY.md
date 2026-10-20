@@ -327,3 +327,31 @@ source-org policy remain release gates, not a substitute for protected
 source/destination/snapshot review. P0 exposure incidents #22/#77 and
 unmerged policy PRs #1123/#1217/#1300/#1317 still forbid cross-org private
 source copying merely to use another organization's Actions minutes.
+
+## Fail-closed generation-bound actor terminal-state receipts (2026-10-19)
+
+A native scheduler `terminal_state` lookup could previously return
+failure for a stale, foreign, incomplete or null ActorRef while leaving
+a previously copied terminal record in the caller's output buffer.
+The C VM wrapper likewise returned failure on invalid VM or domain
+without clearing that buffer. No caller may treat prior data as a fresh
+or authorized terminal receipt. Both layers now zero non-null output
+storage before checking authority, and only return 1 when a matching,
+completed actor's immutable terminal record was copied.
+
+The existing `native_actor_scheduler_test.c` and `native_ores_vm_test.c`
+now assert zero output after premature, foreign, stale and invalid-domain
+lookups, including failure immediately after a successful read. The
+native VM NIO sanitizer script compiles and executes both full C
+scheduler/VM test fixtures with GCC and Clang ASan+UBSan, three times
+per compiler. Workflow path filters cover both test files.
+
+Local isolated verification extracted the exact prepatch function bodies
+from source Git blobs: the prepatch 4,000-case negative-control harness
+failed due to retained output (exit 42), while the fixed logic passed
+3 x 4,000 cases on GCC and Clang ASan+UBSan and GCC TSan.
+These tests use lightweight surrounding test structs, not the complete
+native scheduler or full-tree LLVM compiler. The committed C tests
+are **NOT_EXECUTED** until an authorized runner compiles and runs them.
+All positive callers must still check the return code; all-zero output
+is not proof of a terminal.
