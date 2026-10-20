@@ -43,14 +43,11 @@ typedef struct {
     uint64_t continuation;
 } OresNativeExecutionContext;
 
-#if defined(__cplusplus)
+#ifdef __cplusplus
+}
 static_assert(sizeof(OresNativeExecutionContext) == 64,
               "execution context ABI must remain fixed-width and pointer-free");
 #else
 _Static_assert(sizeof(OresNativeExecutionContext) == 64,
                "execution context ABI must remain fixed-width and pointer-free");
-#endif
-
-#ifdef __cplusplus
-}
 #endif
