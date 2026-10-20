@@ -5,7 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void check(int ok) { if (!ok) abort(); }
+static void check_impl(int ok, const char* expr, int line) {
+    if (!ok) {
+        fprintf(stderr, "FAILURE_TRACE_CHECK_FAIL line=%d expr=%s\n", line, expr);
+        abort();
+    }
+}
+#define check(expr) check_impl((expr), #expr, __LINE__)
 
 static void verify_kind(
         OresNativeExecutionContextStore* executions,
