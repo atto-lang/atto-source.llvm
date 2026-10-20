@@ -8,6 +8,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+namespace pv1 = oreslang::model::portable_v1;
 
 static void check(bool condition, const std::string& label) {
     if (!condition) throw std::runtime_error("native model parser test: " + label);
@@ -54,7 +55,6 @@ int main() {
               "nominal typed USD ports");
         check(hir.upper_bound_bytes == 32, "conservative buffer budget");
         check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
-        namespace pv1 = oreslang::model::portable_v1;
         const pv1::NominalPort price{"finance.Price@v1", 16};
         const pv1::Profile pp{true, "none", true};
         auto portable_sig = [&](char digest_char, std::vector<std::string> kinds,
