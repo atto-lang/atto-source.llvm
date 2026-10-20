@@ -11,6 +11,7 @@
 #include <openssl/crypto.h>
 
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
