@@ -51,6 +51,28 @@ static void trap_compare(BoolResult status) {
 }
 
 int main() {
+    // Externally supplied pointer ABI must not dereference null. When an
+    // output exists it receives a canonical Fatal, never success/None.
+    {
+        Scalar input = i64(7);
+        BoolResult output = some(true);
+        oreslang_assert_equal_scalar_v0(nullptr, &input, 0, &output);
+        match(output, malformed());
+        output = some(true);
+        oreslang_assert_equal_scalar_v0(&input, nullptr, 1, &output);
+        match(output, malformed());
+        output = some(true);
+        oreslang_assert_equal_scalar_v0(nullptr, nullptr, 1, &output);
+        match(output, malformed());
+        oreslang_assert_equal_scalar_v0(&input, &input, 0, nullptr);
+        oreslang_assert_equal_scalar_v0(nullptr, nullptr, 0, nullptr);
+        output = some(true);
+        oreslang_assert_trap_bool_v0(nullptr, &output);
+        match(output, malformed());
+        oreslang_assert_trap_bool_v0(&output, nullptr);
+        oreslang_assert_trap_bool_v0(nullptr, nullptr);
+    }
+
     compare(i64(10), i64(10), 0);
     compare(i64(10), i64(10), 1);
     compare(i64(10), i64(20), 0);
