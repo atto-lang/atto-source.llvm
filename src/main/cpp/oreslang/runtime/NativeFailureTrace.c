@@ -7,7 +7,7 @@
 
 static int valid_kind(OresNativeFailureTraceKind kind) {
     return kind >= ORES_FAILURE_TRACE_THROW
-        && kind <= ORES_FAILURE_TRACE_FATAL;
+        && kind <= ORES_FAILURE_TRACE_PROCESS_EXIT;
 }
 
 const char* ores_native_failure_trace_kind_name(
@@ -18,6 +18,7 @@ const char* ores_native_failure_trace_kind_name(
         case ORES_FAILURE_TRACE_PANIC: return "panic";
         case ORES_FAILURE_TRACE_CANCEL: return "cancel";
         case ORES_FAILURE_TRACE_FATAL: return "fatal";
+        case ORES_FAILURE_TRACE_PROCESS_EXIT: return "process-exit";
     }
     return "invalid";
 }
