@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <iomanip>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <sstream>
