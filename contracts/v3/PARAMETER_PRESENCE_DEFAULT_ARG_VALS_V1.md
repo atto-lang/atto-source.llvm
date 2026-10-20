@@ -156,20 +156,51 @@ source expression order, actual argument origins, explicit omissions,
 default type and target formal order, **without evaluating** anything.
 It never grants runtime execution authority.
 
-Java's v3 JUnit admission suite contains 28 authored tests as of
-2026-10-19, including parser placement, field declaration annotation
-rejection, nested synthetic type/borrow admission and forged plan
-rejection. These are **not yet compiler-executed** because Java
+Java's v3 JUnit admission suite includes parser placement, forbidden
+annotation targets, nested type/borrow rejection, forged call-preview
+plans, and deterministic source-contract fingerprint tests. The
+authored JUnit tests are **not yet compiler-executed** because Java
 source-org GitHub Actions jobs have no executed steps. LLVM's v3
 parser currently rejects unsupported syntax explicitly; LLVM's
 native type/ABI lowering has not been integrated.
 
+### Versioned source-contract preview fingerprints (Java tooling only)
+
+`V3SourceContractFingerprint.sha256Hex(parameters, annotations)` is
+a **diagnostic/pre-integration SHA-256 digest**, not a signed provenance
+proof, nominal type identity or executable ABI hash. It canonicalizes
+validated declaration metadata using a fixed UTF-8 length-prefixed
+binary encoding (32-bit lengths/counts, big-endian primitive fields):
+
+- Domain `oreslang/v3/parameter-source-contract-preview`, followed by
+  schema version 1 and the formal count.
+- For each formal in declaration order: exact name, recursively encoded
+  **raw staged TypeRef** (name/inference flag/children), structural and
+  mutable flags, explicit name-suffix presence, inferred effective
+  omittability, unresolved preview Option classification and an explicit
+  default-present bit.
+- Closed defaults use **fixed stable wire tags**:
+  integer=1 (signed int64), boolean=2, string=3 (UTF-8 length-prefixed),
+  None=4 (no payload). The absent-default bit differs from None.
+  Malformed UTF-16 and type nesting beyond 64 are rejected.
+
+Equivalent `@DefaultArgVals(name: value)` and per-formal
+`@Default(value)` spellings yield the same normalized fingerprint;
+a written `name?` differs from default-only implied omission even if
+both can be omitted. Names, order, type spelling and literal values
+alter the digest. A backend importing an executable signature or
+performing hot reload must additionally verify lexical owner,
+signature generation, resolved nominal types, trust/ownership domains,
+callee ABI and compatible effect/version metadata. **Never** use this
+preview hash as a standalone hot-reload or call authorization token.
+
 The independent source-free runner
 `ores-dummy-org-oreslang-stack/ores-dummy-org-oreslang-stack-infra`
-passed 20,000 pure named-order permutations and 40,000 mixed
-default/Option/omission trials in Actions run `39312060679`;
-the synthetic runner contains no private Java/LLVM compiler source.
-Passing this reference model is not equivalent to compiler conformance.
+ran synthetic presence/default, deep type/ownership, call-provenance,
+and Java 25 readiness checks in Actions run `39343052498`. That job
+executed GraalVM JDK 25 and an independently authored Java smoke test,
+but **not private Java/LLVM compiler source**. Passing these reference
+models is not equivalent to real compiler conformance.
 
 **Cross-organization source mirroring remains forbidden.** Java
 private-CI approval PR #1523 is open, not merged. The official
