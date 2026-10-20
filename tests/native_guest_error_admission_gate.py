@@ -28,6 +28,11 @@ cases = [
      "native exception/control effect unsupported"),
     ("pub fnc main(): int { panic 1; return 0; }\n",
      "native exception/control effect unsupported"),
+    # Native trap must not be silently parsed as ordinary source code until
+    # tagged TrapResult ABI and cleanup / unwind paths are implemented.
+    ("pub trap fnc risky(): int { return 1; }\n"
+     "pub fnc main(): int { return 0; }\n", None),
+    ("pub fnc main(): int { return trap 1; }\n", None),
 ]
 with tempfile.TemporaryDirectory(prefix="ores-native-error-gate-") as tmp:
     source = Path(tmp) / "main.ores"
@@ -52,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="ores-native-error-gate-") as tmp:
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, timeout=20)
         assert out.returncode != 0, f"unexpected admission of native source: {text}"
-        assert diagnostic in out.stderr, (
+        assert diagnostic is None or diagnostic in out.stderr, (
             f"expected native parser diagnostic {diagnostic!r}, "
             f"got stderr={out.stderr!r}, stdout={out.stdout!r}")
 print("LLVM guest Error/typed effects remain fail-closed after positive native IR control")
