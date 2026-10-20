@@ -1,0 +1,4 @@
+// Negative compiler admission: duplicate signature must reject without LLVM IR.
+fnc next_fsm(int state): int { return state; }
+fnc next_fsm(int state): int { return state; }
+pub fnc main(): int { return next_fsm(0); }
