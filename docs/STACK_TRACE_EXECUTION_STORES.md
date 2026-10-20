@@ -28,6 +28,22 @@ are {u32 slot, u32 generation} with slot zero and generation zero invalid.
 Generation overflow permanently retires the slot instead of wrapping, so stale
 handles cannot regain authority through ABA.
 
+The slot is **not** a per-store array index. Execution and continuation stores
+reserve disjoint ranges of positive 32-bit slot identifiers through one atomic
+process-wide allocator. Each store translates its reserved global slot back to
+a local AoSoA lane only after checking the slot belongs to that store.
+Ranges are never recycled, including after closing and reopening a store.
+Consequently a handle from a different store or an earlier instance cannot
+validate solely because its generation matches. This preserves the existing
+8-byte handle and 64-byte execution context ABI without a pointer or side
+table in persisted records.
+
+The shared slot namespace is intentionally finite: at most 2^32-1 slots
+can be reserved over the **entire process lifetime**, including closed stores.
+A later open fails closed if reserving its full requested capacity would wrap
+or exhaust that namespace. Callers should therefore use long-lived bounded
+stores, not create a new store for each execution or actor.
+
 Execution records retain their parent execution while live. Continuation
 records retain their originating execution and their parent continuation.
 Release walks ancestry iteratively rather than recursively.
