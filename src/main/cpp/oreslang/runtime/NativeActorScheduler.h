@@ -129,6 +129,11 @@ int ores_native_actor_scheduler_prestart_carriers(
     OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_all_carriers_started(
     OresNativeActorScheduler* scheduler);
+/* True only when the scheduler mutex was successfully initialized with the
+ * POSIX priority-inheritance protocol. Hard-RT admission should require this
+ * (or a separately qualified synchronization protocol). */
+int ores_native_actor_scheduler_priority_inheritance_enabled(
+    OresNativeActorScheduler* scheduler);
 /* Carriers created on demand unless explicitly prestarted; includes workers
  * until retirement. */
 size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
