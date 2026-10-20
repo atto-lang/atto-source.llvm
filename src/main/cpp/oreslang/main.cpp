@@ -416,6 +416,20 @@ int main(int argc, char** argv) {
             std::vector<std::string> function_roots;
             bool preserve_exported_api = false;
             if (!tree_shake_roots.empty()) {
+                for (const auto& requested : tree_shake_roots) {
+                    const auto matches = std::count_if(
+                            ast.functions.begin(),
+                            ast.functions.end(),
+                            [&](const oreslang::Function& fn) {
+                                return fn.name == requested;
+                            });
+                    if (matches == 0)
+                        throw std::runtime_error(
+                                "unknown tree-shake root: " + requested);
+                    if (matches != 1)
+                        throw std::runtime_error(
+                                "ambiguous tree-shake root: " + requested);
+                }
                 function_roots = tree_shake_roots;
             } else {
                 const auto main_function = std::find_if(
