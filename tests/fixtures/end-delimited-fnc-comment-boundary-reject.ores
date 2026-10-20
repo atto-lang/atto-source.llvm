@@ -1,1 +1,1 @@
-fnc main() -> int /* ; do end */ do /* end */ return 0; end // do end
+fnc main() -> int /* ; as do end */ as /* end */ return 0; end // as do end
