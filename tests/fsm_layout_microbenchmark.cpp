@@ -73,9 +73,12 @@ const char* name(Layout l) {
 }
 int main(int argc,char** argv) {
     try {
-        if(argc!=3)throw std::invalid_argument("usage: benchmark ROWS REPS");
+        if(argc!=3 && argc!=4)throw std::invalid_argument("usage: benchmark ROWS REPS [AOSOA_LANES]");
         const auto rows=std::stoull(argv[1]);
         const auto reps=std::stoul(argv[2]);
+        const auto lanes=argc==4 ? std::stoul(argv[3]) : 4ul;
+        if(lanes!=2 && lanes!=4 && lanes!=8 && lanes!=16)
+            throw std::invalid_argument("AoSoA lanes must be 2,4,8,16");
         if(rows<1 || rows>1000000 || reps<1 || reps>100)
             throw std::invalid_argument("bounds: rows 1..1000000, reps 1..100");
         std::cout<<"layout,mode,rows,reps,lanes,bytes,ns_per_entity_update,digest\n";
@@ -83,11 +86,11 @@ int main(int argc,char** argv) {
             std::uint64_t reference=0;
             bool first=true;
             for(Layout l:{Layout::AoS,Layout::SoA,Layout::AoSoA}) {
-                const auto result=run(l,rows,static_cast<std::uint32_t>(reps),column,4);
+                const auto result=run(l,rows,static_cast<std::uint32_t>(reps),column,static_cast<std::uint32_t>(lanes));
                 if(!first && result.digest!=reference)throw std::runtime_error("layout digest mismatch");
                 reference=result.digest;first=false;
                 std::cout<<name(l)<<","<<(column?"column":"fsm_full")<<","<<rows<<","<<reps
-                         <<","<<(l==Layout::AoSoA?4:1)<<","<<result.bytes<<","<<result.ns_per_row
+                         <<","<<(l==Layout::AoSoA?lanes:1ul)<<","<<result.bytes<<","<<result.ns_per_row
                          <<","<<result.digest<<"\n";
             }
         }
