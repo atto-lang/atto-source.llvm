@@ -1291,10 +1291,12 @@ private:
         if (token_.text == "Entry") {
             Lexer lookahead = lexer_;
             const Token next = lookahead.next();
-            // '<' also starts an ordinary scalar comparison (Entry < 3).
-            // Do not reserve it as a generic-product opener in expression
-            // position until the parser can distinguish those grammars.
-            if (next.text == ".") {
+            // This constrained native expression grammar interprets '<'
+            // after an identifier as generic call type arguments, not as
+            // relational comparison. Reject Entry product syntax before it
+            // can be treated as an ordinary scalar generic call.
+            // A local scalar named Entry remains legal without this suffix.
+            if (next.text == "." || next.text == "<") {
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
