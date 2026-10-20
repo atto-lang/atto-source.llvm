@@ -13,7 +13,9 @@ typedef struct {
     uint64_t slot_generation;
 } OresNativeTraceHandle;
 
-/* Only source/causal IDs are retained; no native frame pointers. */
+/* Archival/snapshot trace record only. This is deliberately distinct from
+ * OresNativeContinuationRecord in NativeContinuationStore.h, which owns live
+ * resume state and execution pins. No native frame pointers are retained. */
 typedef struct {
     OresNativeTraceHandle parent_execution;
     OresNativeTraceHandle parent_continuation;
@@ -21,7 +23,7 @@ typedef struct {
     uint64_t await_site;
     uint64_t causal_kind;
     uint64_t reserved;
-} OresNativeContinuationRecord;
+} OresNativeTraceContinuationRecord;
 
 /* Opaque, preallocated, bounded AoSoA with 8 lanes per block. */
 typedef struct OresNativeTraceStore OresNativeTraceStore;
@@ -34,19 +36,19 @@ void ores_native_trace_store_close(OresNativeTraceStore* store);
 OresNativeTraceHandle ores_native_execution_store_insert(
     OresNativeTraceStore* store, const OresNativeExecutionContext* value);
 OresNativeTraceHandle ores_native_continuation_store_insert(
-    OresNativeTraceStore* store, const OresNativeContinuationRecord* value);
+    OresNativeTraceStore* store, const OresNativeTraceContinuationRecord* value);
 int ores_native_execution_store_load(OresNativeTraceStore* store,
     OresNativeTraceHandle handle, OresNativeExecutionContext* out);
 int ores_native_continuation_store_load(OresNativeTraceStore* store,
-    OresNativeTraceHandle handle, OresNativeContinuationRecord* out);
+    OresNativeTraceHandle handle, OresNativeTraceContinuationRecord* out);
 int ores_native_trace_store_release(OresNativeTraceStore* store,
     OresNativeTraceHandle handle);
 
 #ifdef __cplusplus
 }
-static_assert(sizeof(OresNativeContinuationRecord) == 64,
+static_assert(sizeof(OresNativeTraceContinuationRecord) == 64,
               "continuation record ABI must be exactly 64 bytes");
 #else
-_Static_assert(sizeof(OresNativeContinuationRecord) == 64,
+_Static_assert(sizeof(OresNativeTraceContinuationRecord) == 64,
                "continuation record ABI must be exactly 64 bytes");
 #endif
