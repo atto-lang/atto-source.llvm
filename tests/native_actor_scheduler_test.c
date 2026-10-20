@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 #define ACTORS 5
 #define EACH 200
 static void check(int ok) { if (!ok) abort(); }
@@ -37,6 +38,11 @@ int main(void) {
     check(ores_native_actor_scheduler_prestart_carriers(scheduler));
     check(ores_native_actor_scheduler_all_carriers_started(scheduler));
     check(ores_native_actor_scheduler_started_carriers(scheduler) == 8);
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
+    check(ores_native_actor_scheduler_priority_inheritance_enabled(scheduler));
+#else
+    check(!ores_native_actor_scheduler_priority_inheritance_enabled(scheduler));
+#endif
     OresNativeActorRef refs[ACTORS];
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
