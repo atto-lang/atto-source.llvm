@@ -106,3 +106,44 @@ Exactly-once **local terminal future completion** is guaranteed. Exactly-once di
 ## Compatibility and implementation status
 
 Existing canonical design: `docs/ACTOR_UNARY_STREAM_TRANSPORT_API_V1.md`. Java draft PR #984 uses UUID in a host-only reply slot, while Java draft PR #1493 already uses monotonic **per-session** request IDs for TCP/WebSocket. They solve different layers: migrate local correlation to caller-owned generational slots without weakening authenticated wire session identity. This document is a proposal only; it is not evidence that source-level supervisor application RPC or generic typed protocol dispatch currently compiles.
+
+## Reference actor systems alignment (2026-10-20)
+
+This design borrows *invariants*, not the exact surface syntax, from the following:
+
+| System | Adopt for Oreslang | Critical nuance |
+|---|---|---|
+| Erlang/OTP `gen_server:call` / `send_request` | opaque call reference, caller-specific correlated replies, lifecycle failure and timeouts | OTP 24+ aliases abandon late responses: once local deadline wins, a late reply cannot pollute a new call. Self-call must reject. |
+| Elixir `GenServer.call` / `handle_call` | one reply per request, optional asynchronous deferred response, supervised lifecycle | Do not block an Oreslang native scheduler worker. Returning without immediate reply must retain a bounded reply capability until eventual completion. |
+| Scala Akka Typed `ask` | statically typed response protocol, request-scoped `replyTo`, explicit deadlines, caller-side response adaptation on own actor lane | `ask` timeout need not cancel callee work. Multi-stage/multiple reply workflows belong to a per-session actor or stream protocol rather than overloading unary requests. |
+| Rust Actix `Addr.send` / `Message::Result` | typed response futures and bounded mailbox admission; optional async handlers | Actix `ResponseFuture` and `ResponseActFuture` have different actor-state access semantics; Oreslang must preserve its own serial actor / critical borrow invariants after await. |
+| Ruby Ractor send/receive/ports | explicit isolation and shareable-vs-moved message data | An opaque local `ReplyPort` must not permit mutable pointer sharing across actor heaps; copy/move/share transfer rules still apply. |
+
+Primary references:
+- https://www.erlang.org/doc/apps/stdlib/gen_server.html
+- https://hexdocs.pm/elixir/GenServer.html
+- https://doc.akka.io/libraries/akka-core/current/typed/interaction-patterns.html
+- https://docs.rs/actix/latest/actix/dev/trait.MessageResponse.html
+- https://docs.ruby-lang.org/en/master/Ractor.html
+
+### Admission and nonblocking safety
+
+For source-level `await ref.request(request)`, reserve one pending slot and a mailbox/byte credit, then perform serialized actor mail admission. A failed admission must cancel/fail the slot before returning. Actor handlers must not be re-entered by a `CompletableFuture`/native callback from the producer's thread. Deliver the result as a VM scheduler event on the original logical execution context. The host proof classes alone do **not** enforce this; they cannot be wired straight to guest continuations.
+
+Recommended default request deadline is finite and policy-configurable (a 5-second convenience default is consistent with Erlang/Elixir, but tight internal or hard-RT services should supply their own limits). The VM timer must drive expiration; the host-only `timeout()` operation is a state transition primitive, not a timer. Do not equate a timeout with guaranteed cessation of remote work. Cancellation is advisory unless the callee cooperates.
+
+Supervisor application RPC requires an explicit service capability; it must **not** give children access to CONTROL queues, restart authority or panic interception. Queued application calls are never admitted under the reserved CONTROL capacity. `self.request(...)` rejects; additional wait-for cycles need diagnostics and timeouts.
+
+### Host substrate implemented in the design branches
+
+Java host: `src/main/java/dev/oreslang/runtime/GenerationalReplyRegistry.java`, with JDK-only smoke and JUnit adapter tests. Native host: `src/main/cpp/oreslang/runtime/NativeGenerationalReplySlots.hpp` and CTest `native_actor_supervisor_generational_reply_host_only`. Both use caller-owned bounded array slots, 32-bit per-slot generations, opaque endpoint incarnation identity, typed one-shot terminal completion, cancellation/timeout, retired-endpoint fencing and no UUID per local call.
+
+**Exact-tree caveat:** these are host-only modules and tests, not a replacement for the UUID-bearing draft `ActorUnaryReplySlot` in Java PR #984 and not Oreslang source-language `request()`/supervisor `app_run()` lowering. `ActorRuntime` scheduling integration, execution contexts, source type mapping, user-call privileges, actor failure monitoring, actual monotonic deadline timers, remote proxy framing and JDK25/Graal native-image production validation remain outstanding. Only the isolated local host sanity checks may be described as executed; do not claim full compiler/VM parity from CMake test registration.
+
+### Next integration gates
+
+1. Bind VM-owned endpoint incarnation to actual actor/supervisor lifecycle, including hot replacement and group shutdown.
+2. Replace UUID-backed *local* unary dispatch correlation in stacked Java draft #984 without altering TCP/WebSocket's authenticated session/generation/request ID envelope in #1493.
+3. Add typed application-service declaration/checking for supervisors, preserving strict CONTROL separation and compile-time request-to-response mapping.
+4. Lower `Future<R>` continuation delivery to native+JVM scheduling, never inline on respondent worker; add cycle detection and deadlines.
+5. Execute JUnit/CTest, sanitizer/loom stress, Java 25/GraalVM native-image and end-to-end source conformance on exact merged tree; benchmark allocations/call and p99 versus UUID backed host bridge.
