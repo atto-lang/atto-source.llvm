@@ -43,6 +43,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Bracket syntax has its own AST identity before semantic admission. This
+    # parser-only test must not imply that native checked-index lowering exists.
+    add_executable(oreslang-checked-index-ast-test
+        tests/checked_index_ast_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp)
+    target_include_directories(oreslang-checked-index-ast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-checked-index-ast-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_checked_index_ast_identity
+        COMMAND oreslang-checked-index-ast-test)
+    set_tests_properties(native_checked_index_ast_identity PROPERTIES TIMEOUT 15)
+
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
     add_executable(oreslang-realtime-actor-arena-test
@@ -1031,6 +1044,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
+    # Parse bracket access distinctly, then fail closed at ownership until
+    # a certified closed-view field/slot domain is implemented.
+    oreslang_contract_test(reject_unverified_checked_index
+        checked-index-unverified-reject.ores
+        --diagnostic "native checked index read requires certified closed-view typing and ownership")
     add_executable(oreslang-dop-layout-test tests/dop_layout_test.cpp)
     target_include_directories(oreslang-dop-layout-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
