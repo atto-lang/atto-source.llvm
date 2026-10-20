@@ -298,7 +298,7 @@ private:
         }
         if (token_.kind == Kind::Integer) {
             argument.kind = ModelStaticArg::Kind::Integer;
-            argument.integer = integer_literal();
+            argument.integer = model_integer_literal();
             return argument;
         }
         if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
@@ -334,7 +334,7 @@ private:
                         const bool negative = accept("-");
                         parameter.has_default = true;
                         parameter.default_value =
-                            negative ? negative_integer_literal() : integer_literal();
+                            negative ? negative_integer_literal() : model_integer_literal();
                         seen_default = true;
                     } else if (seen_default) {
                         fail("MODEL_CONFIG_DEFAULT_ORDER: required model parameters cannot follow defaults");
@@ -616,9 +616,19 @@ private:
         std::int64_t value = 0;
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
         if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
-            fail("integer literal overflows signed 64-bit result");
+            fail("MODEL_CONST_OVERFLOW: model constant exceeds signed i64");
         advance();
         return -value;
+    }
+
+    std::int64_t model_integer_literal() {
+        std::string digits = checked_integer_digits();
+        std::int64_t value = 0;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            fail("MODEL_CONST_OVERFLOW: model constant exceeds signed i64");
+        advance();
+        return value;
     }
 
     std::int64_t integer_literal() {
