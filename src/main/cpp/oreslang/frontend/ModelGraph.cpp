@@ -73,21 +73,24 @@ std::string canonical_constant(std::int64_t value) {
     return "i64:" + std::to_string(value);
 }
 
-std::string canonical_expression(const Expression& expr,
-                                 const std::unordered_set<std::string>& parameters) {
+std::string canonical_expression(
+        const Expression& expr,
+        const std::unordered_map<std::string, std::size_t>& parameter_indexes) {
     using Kind = Expression::Kind;
     switch (expr.kind) {
         case Kind::Integer:
             return canonical_constant(expr.integer);
-        case Kind::Variable:
-            if (!parameters.count(expr.name))
+        case Kind::Variable: {
+            const auto found = parameter_indexes.find(expr.name);
+            if (found == parameter_indexes.end())
                 model_fail("MODEL_EFFECTFUL_BODY",
                            "verified model op reads non-parameter '" + expr.name + "'");
-            return "name:" + expr.name;
+            return "arg:" + std::to_string(found->second);
+        }
         case Kind::Negate:
             if (!expr.left)
                 model_fail("MODEL_EFFECTFUL_BODY", "malformed unary model expression");
-            return "unary:-(" + canonical_expression(*expr.left, parameters) + ")";
+            return "unary:-(" + canonical_expression(*expr.left, parameter_indexes) + ")";
         case Kind::Add:
         case Kind::Subtract:
         case Kind::Multiply: {
@@ -96,8 +99,8 @@ std::string canonical_expression(const Expression& expr,
             const char op = expr.kind == Kind::Add ? '+' :
                             expr.kind == Kind::Subtract ? '-' : '*';
             return std::string("binary:") + op + "(" +
-                canonical_expression(*expr.left, parameters) + "," +
-                canonical_expression(*expr.right, parameters) + ")";
+                canonical_expression(*expr.left, parameter_indexes) + "," +
+                canonical_expression(*expr.right, parameter_indexes) + ")";
         }
         default:
             model_fail("MODEL_EFFECTFUL_BODY",
@@ -119,12 +122,12 @@ std::string operation_impl_digest(const Function& fn) {
     if (!fn.result)
         model_fail("MODEL_INVALID_OP_SIGNATURE",
                    "operation '" + fn.name + "' has no return value");
-    std::unordered_set<std::string> parameters;
-    for (const auto& parameter : fn.parameters)
-        parameters.insert(parameter.name);
+    std::unordered_map<std::string, std::size_t> parameter_indexes;
+    for (std::size_t i = 0; i < fn.parameters.size(); ++i)
+        parameter_indexes.emplace(fn.parameters[i].name, i);
     const std::string canonical =
         operation_abi(fn.parameters.size()) + "|return=" +
-        canonical_expression(*fn.result, parameters);
+        canonical_expression(*fn.result, parameter_indexes);
     return model_sha256(canonical);
 }
 
@@ -527,6 +530,10 @@ void admit_and_lower_models(Program& program) {
             (void)operation_impl_digest(fn); // validates the return expression.
         }
         model.graph_digest = graph_digest(program, model, functions);
+        // Native executable-v1 is deliberately the exact portable i64 subset:
+        // ordered linear topology, i64 configuration, and verified
+        // literal/parameter/negate/add/subtract/multiply operation expressions.
+        model.portable_profile = "model-core-i64-v1";
     }
 
     for (auto& function : program.functions)
