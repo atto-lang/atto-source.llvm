@@ -342,9 +342,12 @@ int main(int argc, char** argv) {
                     actor_roots.push_back(actor.name);
             }
 
-            const auto reachability = oreslang::analyze_reachability(
-                    ast, function_roots, preserve_exported_api, actor_roots);
-            ast = oreslang::prune_program(std::move(ast), reachability);
+            auto shaken = oreslang::tree_shake_program(
+                    std::move(ast),
+                    function_roots,
+                    preserve_exported_api,
+                    actor_roots);
+            ast = std::move(shaken.program);
         }
 
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
