@@ -85,8 +85,8 @@ int main() {
     const std::string excess(max_control_diagnostic_bytes + 4096, 'x');
     if (bounded_control_diagnostic(excess) != exact) return 111;
     const std::string edge(1023, 'x');
-    if (bounded_control_diagnostic(edge + "\\xE2\\x82\\xAC") != edge) return 112;
-    if (bounded_control_diagnostic("\\xED\\xA0\\x80") != "???") return 113;
+    if (bounded_control_diagnostic(edge + "\xE2\x82\xAC") != edge) return 112;
+    if (bounded_control_diagnostic("\xED\xA0\x80") != "???") return 113;
     try {
         (void)Failure::make(static_cast<FailureKind>(255), "guest-controlled");
         return 114;
