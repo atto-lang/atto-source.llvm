@@ -160,6 +160,20 @@ def main():
                          timeout=30)
         if actual.stdout.count("ACTUAL_ORES_SOURCE_AOT_PIC_V1_V2_PASS") != 1:
             raise RuntimeError("native actor PIC v1/v2 success marker missing")
+        private_host = temp / "hot-private-source-actor"
+        checked([args.cxx, "-std=c++17", "-O1", "-DNDEBUG", *sanitizer,
+                 "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-pthread",
+                 "-rdynamic", "-I", str(include),
+                 str(source_root / "tests/native_source_actor_pic_private_test.cpp"),
+                 str(heap_object), "-ldl", "-o", str(private_host)], timeout=60)
+        private = checked([str(private_host), *(str(path) for path in paths)],
+                          timeout=30)
+        if private.stdout.count(
+                "ACTUAL_ORES_SOURCE_PRIVATE_AOT_PIC_ISOLATION_PASS") != 1:
+            raise RuntimeError("private actor source PIC isolation proof missing")
+        print("PASS private source-generated AOT PIC: independent heaps,"
+              " targeted code revision, no cross-actor mutation")
+
         print("PASS compiler-generated .ores AOT PIC: v1=42 -> v2=86 -> 128")
         print("PASS one actor-owned heap, generation-pinned DSO retirement")
         print("PASS independent fixture field-layout refusal and 3 mutations")
