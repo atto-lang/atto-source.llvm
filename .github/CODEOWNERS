@@ -1,5 +1,5 @@
 # Critical build and CI ownership.
-# Enforcement requires repository branch/ruleset policy to require CODEOWNER review.
+# Enforcement uses branch/ruleset CODEOWNER policy when available, or the v3 exact review-attested authority.
 /.github/ @ORESoftware
 /scripts/ @ORESoftware
 /CMakeLists.txt @ORESoftware
