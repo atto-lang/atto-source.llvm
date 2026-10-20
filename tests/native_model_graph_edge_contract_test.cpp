@@ -34,6 +34,16 @@ int main() {
     try {
         p::NominalPort price{"finance.Price@v1", 16};
         p::NominalPort mass{"finance.Weight@v1", 16};
+
+        p::Graph external_unary{1, "finance.PriceTransform@v1", {
+            {"input", "ValidatePrice", {}, {}, sig({price})}
+        }, {"input"}};
+        require(p::digest(external_unary).size() == 64,
+                "unary external input boundary must be digestible");
+        p::Graph external_binary{1, "finance.Bad@v1", {
+            {"input", "BinaryInput", {}, {}, sig({price, price})}
+        }, {"input"}};
+        deny("MODEL_PORT_ARITY_MISMATCH", external_binary);
         deny("MODEL_PORT_ARITY_MISMATCH", graph({}, {price}));
         deny("MODEL_PORT_ARITY_MISMATCH", graph({"source"}, {}));
         deny("MODEL_PORT_ARITY_MISMATCH", graph({"source", "source"}, {price}));
