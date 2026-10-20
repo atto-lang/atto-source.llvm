@@ -110,6 +110,16 @@ struct ClaimedGpuBinding {
     gpu::BufferFence::PairTickets tickets;
 };
 
+/* Immutable-by-value selection receipt. Queue IDs and generations are
+ * metadata, not device capabilities; provider-side attestation remains
+ * mandatory at actual submission. */
+struct QueueClaimedGpuBinding {
+    ClaimedGpuBinding claim;
+    GpuQueueLocation queue;
+};
+static_assert(std::is_nothrow_move_constructible_v<QueueClaimedGpuBinding>,
+              "post-fence queue claim return must not throw");
+
 // After the two fences become IN_FLIGHT, building the return value must not
 // allocate or throw. Keep these guarantees checked if the IR types evolve.
 static_assert(std::is_nothrow_move_constructible_v<GpuBinding>,
@@ -134,15 +144,20 @@ inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
 /** Queue-targeted trusted-host claim. Unlike the legacy queue-neutral
  * helper, a provider calling this path cannot claim wrong-device buffers.
  * Successful host fence admission is NOT physical launch/queue capacity. */
-inline ClaimedGpuBinding claim_gpu_for_queue(
+inline QueueClaimedGpuBinding claim_gpu_for_queue(
         const Kernel& kernel, GpuTarget target,
         const DeviceBuffer& input, const DeviceBuffer& output,
         const GpuQueueLocation& queue) {
     auto binding = preflight_gpu(kernel, target, input, output);
     validate_gpu_queue(binding, queue);
+    // Copying strings may throw: snapshot the selected queue BEFORE
+    // committing either buffer to IN_FLIGHT; no post-fence allocations.
+    GpuQueueLocation selected = queue;
     auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
             binding.bytes_per_buffer, &binding.input, &binding.output);
-    return ClaimedGpuBinding{std::move(binding), std::move(tickets)};
+    return QueueClaimedGpuBinding{
+            ClaimedGpuBinding{std::move(binding), std::move(tickets)},
+            std::move(selected)};
 }
 
 } // namespace oreslang::dop
