@@ -1,6 +1,8 @@
 #include "oreslang/runtime/HardRealtimeContract.hpp"
 
 #include <cassert>
+#include <cstdint>
+#include <limits>
 
 using namespace oreslang::runtime::rt;
 
@@ -25,6 +27,13 @@ int main() {
     assert(admit_native_hard_rt(ffi, good).failure ==
            AdmissionFailure::UnknownFfi);
 
+    Effects tracing{};
+    tracing.tracing_gc = true;
+    assert(admit_native_hard_rt(tracing, good).failure ==
+           AdmissionFailure::TracingGc);
+    assert(diagnostic_code(AdmissionFailure::TracingGc) ==
+           "RT011_COLLECTOR_INTERFERENCE");
+
     Effects cleanup{};
     cleanup.unbounded_cleanup = true;
     assert(admit_native_hard_rt(cleanup, good).failure ==
@@ -34,6 +43,18 @@ int main() {
     impossible.wcet_ns = 950'000;
     impossible.max_blocking_ns = 100'000;
     assert(!admit_native_hard_rt({}, impossible));
+
+    TimingBudget overflow = good;
+    overflow.deadline_ns = std::numeric_limits<std::uint64_t>::max();
+    overflow.wcet_ns = std::numeric_limits<std::uint64_t>::max() - 10;
+    overflow.max_blocking_ns = 8;
+    overflow.max_jitter_ns = 8;
+    assert(admit_native_hard_rt({}, overflow).failure ==
+           AdmissionFailure::MissingTimingBudget);
+
+    TimingBudget exact = good;
+    exact.deadline_ns = 650'000;
+    assert(admit_native_hard_rt({}, exact));
 
     TimingBudget missing{};
     assert(admit_native_hard_rt({}, missing).failure ==
