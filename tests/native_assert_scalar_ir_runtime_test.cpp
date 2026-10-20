@@ -1,6 +1,7 @@
 #include "oreslang/runtime/NativeAssertScalarAbi.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <stdexcept>
 
