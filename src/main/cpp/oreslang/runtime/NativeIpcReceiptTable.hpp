@@ -15,6 +15,7 @@ namespace oreslang::runtime {
 
 enum class IpcReceiptStage {
     local_admitted,
+    dispatch_committed,
     remote_accepted,
     handler_committed,
     handler_failed,
@@ -63,6 +64,8 @@ public:
             throw std::invalid_argument("cross-stream or stale actor incarnation");
         if (message.message_sequence <= last_sequence_)
             throw std::invalid_argument("duplicate/reordered message sequence");
+        if (message.frame_sequence <= last_frame_sequence_)
+            throw std::invalid_argument("duplicate/reordered frame sequence");
         if (message.route_epoch < last_route_epoch_ ||
             message.capability_generation < last_capability_generation_)
             throw std::invalid_argument("route or capability generation rollback");
@@ -78,39 +81,63 @@ public:
         if (!inserted) throw std::invalid_argument("duplicate sequence");
         has_stream_ = true;
         last_sequence_ = message.message_sequence;
+        last_frame_sequence_ = message.frame_sequence;
         last_route_epoch_ = message.route_epoch;
         last_capability_generation_ = message.capability_generation;
         ++transport_credits_;
     }
 
+    /** Trusted LOCAL publication fence. No physical write may begin before
+     *  this succeeds; failure after commitment is indeterminate, never a
+     *  definitive never-sent result.
+     */
+    void commit_dispatch(const IpcReceiptEnvelope& message) {
+        validate(message);
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto iter = pending_.find(message.message_sequence);
+        if (iter == pending_.end() || !(iter->second.envelope == message) ||
+            iter->second.stage != IpcReceiptStage::local_admitted)
+            throw std::invalid_argument("invalid or duplicate IPC dispatch commitment");
+        iter->second.stage = IpcReceiptStage::dispatch_committed;
+    }
+
+    /** Trusted LOCAL rejection before dispatch commitment. */
+    void reject_before_remote(const IpcReceiptEnvelope& message) {
+        validate(message);
+        std::lock_guard<std::mutex> guard(mutex_);
+        auto iter = pending_.find(message.message_sequence);
+        if (iter == pending_.end() || !(iter->second.envelope == message) ||
+            iter->second.stage != IpcReceiptStage::local_admitted)
+            throw std::invalid_argument("invalid local pre-remote IPC rejection");
+        pending_.erase(iter);
+        --transport_credits_;
+    }
+
     // IMPORTANT: This function DOES NOT authenticate receipts. The trusted
     // transport adapter must verify peer, capability and frame integrity first.
+    // Host-local verdicts are never accepted from a peer-authenticated frame.
     void accept_verified(const IpcReceiptEnvelope& message, IpcReceiptStage next) {
         validate(message);
+        if (next == IpcReceiptStage::outcome_unknown ||
+            next == IpcReceiptStage::rejected_before_remote)
+            throw std::invalid_argument(
+                "local transport decision cannot be asserted by peer receipt");
         std::lock_guard<std::mutex> guard(mutex_);
         auto iter = pending_.find(message.message_sequence);
         if (iter == pending_.end() || !(iter->second.envelope == message))
             throw std::invalid_argument("forged/stale/unmatched receipt");
         const auto previous = iter->second.stage;
-        if (previous == IpcReceiptStage::local_admitted) {
-            if (next == IpcReceiptStage::remote_accepted) {
-                iter->second.stage = next;
-                --transport_credits_;
-                return;
-            }
-            if (next == IpcReceiptStage::rejected_before_remote ||
-                next == IpcReceiptStage::outcome_unknown) {
-                --transport_credits_;
-                pending_.erase(iter);
-                return;
-            }
-        } else if (previous == IpcReceiptStage::remote_accepted) {
-            if (next == IpcReceiptStage::handler_committed ||
-                next == IpcReceiptStage::handler_failed ||
-                next == IpcReceiptStage::outcome_unknown) {
-                pending_.erase(iter);
-                return;
-            }
+        if (previous == IpcReceiptStage::dispatch_committed &&
+            next == IpcReceiptStage::remote_accepted) {
+            iter->second.stage = next;
+            --transport_credits_;
+            return;
+        }
+        if (previous == IpcReceiptStage::remote_accepted &&
+            (next == IpcReceiptStage::handler_committed ||
+             next == IpcReceiptStage::handler_failed)) {
+            pending_.erase(iter);
+            return;
         }
         throw std::invalid_argument("illegal or duplicate IPC receipt transition");
     }
@@ -122,47 +149,46 @@ public:
         IpcReceiptStage last_observed;
     };
 
-    /** Atomically retire correlations bound to a locally known dead session.
-     *  The result identifies every affected message for guest Future/error
-     *  settlement. All copies/allocations complete BEFORE any state removal,
-     *  so bad_alloc cannot strand a subset of unreported correlations.
+    /** Atomically retire correlations bound to one complete locally trusted
+     *  transport epoch. Textual session names are reusable and are therefore
+     *  insufficient loss authority. Message/frame sequence and digest identify
+     *  individual messages, not the transport epoch.
+     *
+     *  All copies/allocations complete BEFORE any state removal, so bad_alloc
+     *  cannot strand a subset of unreported correlations.
      */
     std::vector<LostCorrelation> retire_transport_lost(
-            const std::string& trusted_session) {
-        if (!token(trusted_session))
-            throw std::invalid_argument("invalid local transport session");
+            const IpcReceiptEnvelope& trusted_epoch) {
+        validate(trusted_epoch);
         std::lock_guard<std::mutex> guard(mutex_);
         std::vector<LostCorrelation> retired;
         std::size_t matching = 0;
         for (const auto& [sequence, entry] : pending_) {
             (void)sequence;
-            matching += entry.envelope.session == trusted_session ? 1u : 0u;
+            matching += same_transport_epoch(entry.envelope, trusted_epoch) ? 1u : 0u;
         }
         retired.reserve(matching);
         for (const auto& [sequence, entry] : pending_) {
             (void)sequence;
-            if (entry.envelope.session == trusted_session)
+            if (same_transport_epoch(entry.envelope, trusted_epoch))
                 retired.push_back({entry.envelope, entry.stage});
         }
         // No throwing operations after this point while the mutex is held.
         for (auto it = pending_.begin(); it != pending_.end();) {
-            if (it->second.envelope.session != trusted_session) {
+            if (!same_transport_epoch(it->second.envelope, trusted_epoch)) {
                 ++it;
                 continue;
             }
-            if (it->second.stage == IpcReceiptStage::local_admitted)
+            if (it->second.stage == IpcReceiptStage::local_admitted ||
+                it->second.stage == IpcReceiptStage::dispatch_committed)
                 --transport_credits_;
             it = pending_.erase(it);
         }
         return retired;
     }
 
-    /** Compatibility count-only API. New adapters should use the identity-
-     *  preserving variant above to settle every indeterminate caller exactly
-     *  once. This method cannot safely be used for future completion.
-     */
-    std::size_t mark_transport_lost(const std::string& trusted_session) {
-        return retire_transport_lost(trusted_session).size();
+    std::size_t mark_transport_lost(const IpcReceiptEnvelope& trusted_epoch) {
+        return retire_transport_lost(trusted_epoch).size();
     }
 
     std::pair<std::size_t, std::size_t> counters() const {
@@ -176,7 +202,8 @@ public:
             return false;
         std::size_t waiting = 0;
         for (const auto& item : pending_)
-            waiting += item.second.stage == IpcReceiptStage::local_admitted ? 1 : 0;
+            waiting += (item.second.stage == IpcReceiptStage::local_admitted ||
+                        item.second.stage == IpcReceiptStage::dispatch_committed) ? 1 : 0;
         return waiting == transport_credits_;
     }
 
@@ -189,6 +216,15 @@ private:
                 return false;
         }
         return true;
+    }
+    static bool same_transport_epoch(
+            const IpcReceiptEnvelope& a, const IpcReceiptEnvelope& b) {
+        return std::tie(a.domain, a.sender, a.destination, a.session,
+                        a.sender_incarnation, a.destination_incarnation,
+                        a.route_epoch, a.capability_generation)
+            == std::tie(b.domain, b.sender, b.destination, b.session,
+                        b.sender_incarnation, b.destination_incarnation,
+                        b.route_epoch, b.capability_generation);
     }
     static bool digest(const std::string& value) {
         if (value.size() != 64) return false;
@@ -214,7 +250,7 @@ private:
     mutable std::mutex mutex_;
     bool has_stream_ = false;
     Stream stream_;
-    std::uint64_t last_sequence_ = 0, last_route_epoch_ = 0;
+    std::uint64_t last_sequence_ = 0, last_frame_sequence_ = 0, last_route_epoch_ = 0;
     std::uint64_t last_capability_generation_ = 0;
     std::size_t transport_credits_ = 0;
     std::map<std::uint64_t, Entry> pending_;
