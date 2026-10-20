@@ -25,7 +25,12 @@ class NativeNioWorktreeTests(unittest.TestCase):
         self.repo = Path(self.tmp.name) / 'repo'
         self.repo.mkdir()
         (self.repo / 'scripts').mkdir()
-        shutil.copyfile(CHECKER, self.repo / 'scripts' / CHECKER.name)
+        # Fixture checker bytes come from the committed Git object, not from
+        # a path which could be swapped immediately after the parent gate.
+        committed_checker = subprocess.check_output(
+            ('git', 'show', 'HEAD:scripts/verify-native-nio-source-local.py'),
+            cwd=CHECKER.parents[1])
+        (self.repo / 'scripts' / CHECKER.name).write_bytes(committed_checker)
         (self.repo / '.gitignore').write_text('/build/\n/cmake-build-*/\n/.cache/\n*.o\n')
         (self.repo / 'source.c').write_text('int source(void) { return 1; }\n')
         for args in [('init', '-q'), ('config', 'user.name', 'Source Free Gate'),
