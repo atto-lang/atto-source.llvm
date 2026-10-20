@@ -126,20 +126,33 @@ aggregate, call, string, conditional and async feature limits.
 
 ## Tree shaking
 
-The native compiler now has an opt-in `--tree-shake` direct-call reachability
-slice. It runs after parsing/semantic admission and before LLVM IR emission.
+The native compiler has an opt-in `--tree-shake` semantic reachability pass.
+The complete source program is parsed, ownership/type admitted, and verified
+for the selected target before any declaration is removed. Tree shaking is
+therefore an artifact optimization, not conditional compilation.
 
-Current roots are `main` and `pub` functions. The pass follows direct
-same-module calls transitively and removes unreachable private functions, which
-also prevents function-local runtime requirements from being discovered by
-later codegen when their owning function is removed.
+Without explicit roots, `main` and all `pub` functions are roots. Repeating
+`--tree-shake-root=name` selects an exact executable root set and may remove
+otherwise-public functions. Direct calls are resolved with the same name/arity
+selector used by ownership checking and LLVM codegen. Public overload families
+remain intact when required to preserve their emitted ABI identity.
 
-This is deliberately narrower than the cross-backend target: classes, actor
-types, dynamic dispatch, reflection/FFI, hot-load roots, stdlib/module pruning,
-and the versioned reachability report still need follow-up support. Rootless
-strict tree shaking fails closed rather than silently producing an empty
+Reachability also follows class construction/initializers, actor spawns and
+handlers, actor payload/state expressions, scoped locals, cleanup paths and
+target ABI roots. Unreachable functions, classes and actors are physically
+removed from `Program` before final LLVM lowering. The pruned program carries
+an explicit runtime-feature set; native actor, owned-i64-region and
+`Array<int>` imports are emitted only when retained source still requires
+them. Wasm actors use their separate guest ABI and do not pull the native actor
+runtime.
+
+The backend-neutral semantic report uses `ores-reachability/1`. Unknown
+dependencies, duplicate semantic identities, malformed reports, incomplete
+retained/removed classification and runtime-feature drift fail closed.
+Rootless strict tree shaking also fails instead of silently producing an empty
 artifact.
 
-The executed CTest gate compiles both shaken and unshaken IR through Clang and
-requires identical process behavior while asserting the dead private symbol is
-absent from the shaken IR.
+Dynamic dispatch/reflection, FFI/hot-load roots, whole-stdlib/package pruning
+and final linked-section/byte attribution remain follow-up work. CTest contains
+both control and shaken IR checks, native execution equivalence, library-root
+coverage, runtime-subsystem removal/retention and target-specific actor tests.
