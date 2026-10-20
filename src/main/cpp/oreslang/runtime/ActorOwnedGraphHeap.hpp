@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/ActorHeapRetirementProof.hpp"
+#include "oreslang/runtime/ManagedRef.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -15,6 +16,27 @@
 #include <utility>
 
 namespace oreslang::runtime {
+
+// Heap domains are lifetime-unique capability IDs, not a wrapping counter.
+// Reserve UINT64_MAX as terminal exhaustion so no old handle can become
+// valid again if the domain allocator is stressed to its numeric limit.
+namespace detail {
+// Shared by ALL ActorOwnedGraphHeap template specializations in this binary.
+// A class-template static counter would restart at 1 for every capacity/layout
+// and permit foreign graph handles to alias a different heap configuration.
+inline std::atomic<std::uint64_t> next_actor_graph_heap_id{1};
+
+inline std::uint64_t reserve_actor_graph_heap_id(
+        std::atomic<std::uint64_t>& next) {
+    std::uint64_t current = next.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    throw std::overflow_error("actor graph heap ID space exhausted");
+}
+} // namespace detail
 
 // Fixed-capacity, strictly owner-confined native graph heap.
 //
@@ -33,6 +55,15 @@ class ActorOwnedGraphHeap final {
     static_assert(NodeBytes > 0, "node payload must have positive size");
     static_assert(LinksPerNode > 0, "node link capacity must be positive");
 
+    // Internal graph edges never leave this heap. Since remove() purges every
+    // incoming edge before a slot can be reused, adjacency needs only the
+    // heap-local slot identity; public capability handles keep generation and
+    // heap identity checks at the API boundary.
+    struct GraphSlotTag final {};
+    using LocalLinkRef = DenseIndex32<GraphSlotTag>;
+    static_assert(sizeof(LocalLinkRef) == 4,
+                  "actor-local graph adjacency must remain a compact 32-bit index");
+
 public:
     struct Handle final {
         std::uint64_t heap;
@@ -49,14 +80,13 @@ private:
         // Compiler-lowered drop glue. No C++ virtual tables, heap-owned
         // closures, or C++ exceptions on deterministic actor retirement.
         void (*drop)(void*) noexcept = nullptr;
-        std::array<Handle, LinksPerNode> links{};
+        std::array<LocalLinkRef, LinksPerNode> links{};
         std::size_t length = 0;
         std::size_t link_count = 0;
         std::uint64_t generation = 1;
         bool live = false;
     };
 
-    inline static std::atomic<std::uint64_t> next_heap_id_{1};
     const ActorHeapIdentity owner_;
     const std::uint64_t heap_id_;
     ActorHeapBorrowGate borrow_gate_;
@@ -87,6 +117,12 @@ private:
         return slot;
     }
 
+    static LocalLinkRef local_link(Handle id) {
+        auto ref = LocalLinkRef::from_index(id.slot);
+        if (!ref) throw std::overflow_error("actor graph local index exhausted");
+        return *ref;
+    }
+
     void erase_all() noexcept {
         // Revoke every public handle BEFORE any destructor can observe it.
         // Destructor glue must not reenter this arena or follow weak links.
@@ -99,7 +135,7 @@ private:
             slot.live = false;
             if (was_live && drop) drop(slot.payload.data());
             std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
-            slot.links.fill(Handle{0, 0, 0});
+            slot.links.fill(LocalLinkRef{});
             slot.length = 0;
             slot.link_count = 0;
             if (slot.generation < std::numeric_limits<std::uint64_t>::max())
@@ -112,7 +148,8 @@ private:
 
 public:
     explicit ActorOwnedGraphHeap(ActorHeapIdentity owner)
-        : owner_(owner), heap_id_(next_heap_id_.fetch_add(1, std::memory_order_relaxed)),
+        : owner_(owner), heap_id_(detail::reserve_actor_graph_heap_id(
+              detail::next_actor_graph_heap_id)),
           borrow_gate_(owner) {
         if (!owner_.runtime || !owner_.actor || !owner_.epoch || !heap_id_)
             throw std::invalid_argument("invalid actor graph heap identity");
@@ -124,6 +161,9 @@ public:
     ~ActorOwnedGraphHeap() { erase_all(); }
 
     std::uint64_t heap_id() const noexcept { return heap_id_; }
+    static constexpr std::size_t local_link_storage_bytes() noexcept {
+        return sizeof(LocalLinkRef);
+    }
     ActorHeapIdentity owner() const noexcept { return owner_; }
     bool retired() const noexcept { return retired_; }
 
@@ -223,11 +263,12 @@ public:
         require_open_access(actor);
         Slot& from = require_node(source);
         (void)require_node(target);
+        const LocalLinkRef local_target = local_link(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
-            if (from.links[i] == target) return false;
+            if (from.links[i] == local_target) return false;
         }
         if (from.link_count == LinksPerNode) return false;
-        from.links[from.link_count++] = target;
+        from.links[from.link_count++] = local_target;
         ++active_edges_;
         return true;
     }
@@ -235,9 +276,12 @@ public:
     bool is_linked(ActorHeapIdentity actor, Handle source, Handle target) {
         require_open_access(actor);
         Slot& from = require_node(source);
-        if (target.heap != heap_id_) throw std::logic_error("foreign actor graph handle");
+        // Querying a stale target is a capability error, not a valid
+        // negative adjacency result: reject stale generations and slots.
+        (void)require_node(target);
+        const LocalLinkRef local_target = local_link(target);
         for (std::size_t i = 0; i < from.link_count; ++i) {
-            if (from.links[i] == target) return true;
+            if (from.links[i] == local_target) return true;
         }
         return false;
     }
@@ -249,12 +293,13 @@ public:
         Slot& deleted = require_node(id);
         if (deleted.generation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor graph node generation exhausted");
+        const LocalLinkRef deleted_ref = local_link(id);
         for (auto& slot : slots_) {
             if (!slot.live) continue;
             std::size_t keep = 0;
             const std::size_t before = slot.link_count;
             for (std::size_t i = 0; i < before; ++i) {
-                if (!(slot.links[i] == id)) slot.links[keep++] = slot.links[i];
+                if (!(slot.links[i] == deleted_ref)) slot.links[keep++] = slot.links[i];
             }
             slot.link_count = keep;
             active_edges_ -= before - keep;
@@ -269,7 +314,7 @@ public:
         if (drop) drop(deleted.payload.data());
         dropping_ = false;
         std::fill(deleted.payload.begin(), deleted.payload.end(), std::byte{0});
-        deleted.links.fill(Handle{0, 0, 0});
+        deleted.links.fill(LocalLinkRef{});
         deleted.length = 0;
         deleted.link_count = 0;
     }

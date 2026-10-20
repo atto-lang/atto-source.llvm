@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 25611)
+Total output lines: 1992
+
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 
@@ -229,7 +232,22 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        // V3 question-mark types/argument presence require a proof-carrying
+        // Option/default/native ABI; never reinterpret them as scalar parameters.
+        if (ch == '?') {
+            throw std::runtime_error("native v3 '?' type/argument syntax requires "
+                                     "versioned Option and default ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
+            throw std::runtime_error("native @DefaultArgVals declaration requires "
+                                     "checked named defaults, ownership and ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        // Admit '@' as a TOKEN only so existing parameter-local @Default guards
+        // can issue their specific fail-closed diagnostic instead of a generic
+        // unsupported-token error. No annotation execution is enabled.
+        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -299,6 +317,13 @@ bool native_constructor_scalar_tree(const Expression& expr) {
     return false;
 }
 
+// A runtime callable's code/signature must never be forged as a nominal
+// object or actor identity in the constrained native frontend.
+bool callable_nominal_name(std::string_view name) {
+    return name == "Callable" || name == "Fnc" || name == "Function"
+            || name == "Routine" || name == "Method";
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -366,6 +391,8 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (callable_nominal_name(actor.name))
+            fail("callable signatures cannot be declared as nominal actor types");
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -414,6 +441,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -445,6 +473,8 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (callable_nominal_name(result.name))
+            fail("callable signatures cannot be declared as nominal class types");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -460,6 +490,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -682,6 +714,8 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
@@ -805,416 +839,7 @@ private:
                         require("<");
                         declared_type.kind = SourceType::Kind::Future;
                         if (accept("int")) declared_type.argument = "int";
-                        else declared_type.argument = identifier();
-                        require(">");
-                        fail("Future<T> requires native continuation lowering");
-                    } else {
-                        if (token_.text == "owned" && !experimental_owned_int_)
-                            fail("experimental owned int requires --experimental-owned-int");
-                        binding.heap_owned = experimental_owned_int_ && accept("owned");
-                        require("int");
-                    }
-                }
-                require("=");
-                if (accept("spawn")) {
-                    if (explicit_type && !typed_actor_ref)
-                        fail("spawn initializer requires ActorRef<T> type or inference");
-                    ActorSpawnBinding spawned;
-                    spawned.name = binding.name;
-                    spawned.offset = binding.offset;
-                    spawned.actor_type = identifier();
-                    spawned.declared_type.kind = SourceType::Kind::ActorRef;
-                    spawned.declared_type.argument =
-                        typed_actor_ref ? declared_type.argument : spawned.actor_type;
-                    if (spawned.declared_type.argument != spawned.actor_type)
-                        fail("ActorRef<T> type mismatch with spawned actor");
-                    require("(");
-                    require(")");
-                    require(";");
-                    value.actor_spawns.push_back(std::move(spawned));
-                    continue;
-                }
-                if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires ': int'");
-                binding.initializer = expression();
-            }
-            require(";");
-            value.locals.push_back(std::move(binding));
-        }
-        // Restrict the first general-source CFG slice to synchronous
-        // if/else arms containing field writes or direct function calls.
-        // They may change owned scalar state only when both predecessors
-        // agree at the join; checked below by the ownership verifier.
-        auto branch_arm = [&](bool finally_scope = false) {
-            std::vector<Statement> actions;
-            while (token_.text != "}") {
-                if (token_.kind == Kind::End || actions.size() == 16)
-                    fail("native conditional arm limit exceeded (16)");
-                if (token_.text == "while" || token_.text == "for" ||
-                        token_.text == "loop") {
-                    fail("native realtime source loop requires verified LLVM continuation lowering");
-                }
-                if (token_.text == "rt") {
-                    advance();
-                    if (token_.text == "cooperate") {
-                        throw std::runtime_error(
-                            "native rt cooperate requires verified heap-owned continuation lowering"
-                            " at byte " + std::to_string(token_.offset));
-                    }
-                    fail("unsupported native runtime operation in conditional arm");
-                }
-                Statement statement;
-                statement.offset = token_.offset;
-                if (finally_scope && (token_.text == "return" ||
-                        token_.text == "break" || token_.text == "continue"))
-                    fail("return/break/continue cannot escape finally; finally is cleanup-only");
-                if (finally_scope && (token_.text == "defer" || token_.text == "try"))
-                    fail("native finally nested defer/try requires scoped cleanup lowering");
-                if (token_.text == "let")
-                    fail("native branch-local class owner requires destructor/drop lowering");
-                if (accept("const") || accept("val")) {
-                    statement.kind = Statement::Kind::ScopedLocal;
-                    statement.branch_local = std::make_unique<LocalBinding>();
-                    statement.branch_local->offset = statement.offset;
-                    statement.branch_local->name = identifier();
-                    require(":");
-                    require("int");
-                    require("=");
-                    statement.branch_local->initializer = expression();
-                    require(";");
-                    actions.push_back(std::move(statement));
-                    continue;
-                }
-                auto target = primary();
-                if (target->kind == Expression::Kind::Field && accept("=")) {
-                    if (!target->left || target->left->kind != Expression::Kind::Variable)
-                        fail("native conditional requires named class field");
-                    statement.kind = Statement::Kind::FieldWrite;
-                    statement.receiver = target->left->name;
-                    statement.field = target->name;
-                    statement.expression = expression();
-                } else if (target->kind == Expression::Kind::Call ||
-                           target->kind == Expression::Kind::ArrayCall) {
-                    statement.kind = Statement::Kind::Call;
-                    statement.expression = std::move(target);
-                } else {
-                    fail("native conditional arm requires field assignment or direct call");
-                }
-                require(";");
-                actions.push_back(std::move(statement));
-            }
-            return actions;
-        };
-        bool return_guards_started = false;
-        bool terminal_try_finally = false;
-        std::size_t branch_count = 0;
-        while (token_.text != "return") {
-            if (token_.text == "while" && experimental_rt_scalar_loop_) {
-                if (value.scalar_while || value.locals.size() != 1 ||
-                        !value.statements.empty() || !value.early_returns.empty() ||
-                        !value.actor_spawns.empty() || !value.actor_actions.empty() ||
-                        value.has_declared_effects || !value.parameters.empty() ||
-                        value.returns_void)
-                    fail("experimental scalar loop requires one local and no effects");
-                const LocalBinding& local = value.locals.front();
-                if (!local.owner_mutable || local.heap_owned || local.int_array ||
-                        !local.class_name.empty() || !local.initializer ||
-                        local.initializer->kind != Expression::Kind::Integer)
-                    fail("experimental scalar loop requires val scalar integer initializer");
-                auto loop = std::make_unique<ScalarWhileLoop>();
-                loop->counter = local.name;
-                loop->initial = local.initializer->integer;
-                require("while");
-                require("(");
-                if (identifier() != loop->counter)
-                    fail("experimental scalar loop condition must read its counter");
-                require("<");
-                loop->upper_bound = integer_literal();
-                require(")");
-                require("{");
-                if (identifier() != loop->counter)
-                    fail("experimental scalar loop must update its counter");
-                require("=");
-                if (identifier() != loop->counter)
-                    fail("experimental scalar loop cannot read another owner");
-                require("+");
-                if (integer_literal() != 1)
-                    fail("experimental scalar loop increment must be exactly one");
-                require(";");
-                require("}");
-                if (loop->initial < 0 || loop->upper_bound < loop->initial ||
-                        loop->upper_bound > 1000000000LL)
-                    fail("experimental scalar loop requires bounded nonnegative i64 range");
-                value.scalar_while = std::move(loop);
-                if (token_.text != "return")
-                    fail("experimental scalar loop must be followed by a single return");
-                continue;
-            }
-            if (token_.text == "while" || token_.text == "for" ||
-                    token_.text == "loop") {
-                fail("native realtime source loop requires verified LLVM continuation lowering");
-            }
-            if (token_.text == "try") {
-                if (terminal_try_finally || return_guards_started)
-                    fail("native terminal try/finally must be a single return-only scope");
-                terminal_try_finally = true;
-                require("try");
-                require("{");
-                if (token_.text == "defer" || token_.text == "throw") {
-                    // First typed-i64 exceptional CFG: one unconditional throw,
-                    // LIFO scoped field cleanups, and a local catch. No await,
-                    // exception-producing calls or nested try are admitted.
-                    if (value.returns_void || !value.statements.empty() ||
-                            !value.actor_actions.empty())
-                        fail("native caught throw requires a single terminal int try scope");
-                    // No partially inferred effect set can masquerade as a
-                    // complete exception/cleanup summary at this boundary.
-                    if (value.has_declared_effects)
-                        throw std::runtime_error(
-                            "native caught throw effect-qualified function unsupported at byte " +
-                            std::to_string(token_.offset));
-                    while (accept("defer")) {
-                        if (value.caught_throw_defers.size() == 8)
-                            fail("native caught throw defer limit exceeded (8)");
-                        Statement deferred;
-                        deferred.kind = Statement::Kind::FieldWrite;
-                        deferred.offset = token_.offset;
-                        auto target = primary();
-                        if (target->kind != Expression::Kind::Field ||
-                                !target->left ||
-                                target->left->kind != Expression::Kind::Variable)
-                            fail("native caught throw defer requires named class field write");
-                        deferred.receiver = target->left->name;
-                        deferred.field = target->name;
-                        require("=");
-                        deferred.expression = expression();
-                        if (!native_pure_scalar_tree(*deferred.expression))
-                            fail("native caught throw defer requires nonthrowing scalar/field expression");
-                        require(";");
-                        value.caught_throw_defers.push_back(std::move(deferred));
-                    }
-                    require("throw");
-                    value.caught_throw_value = expression();
-                    if (!native_pure_scalar_tree(*value.caught_throw_value))
-                        fail("native caught throw requires nonthrowing int payload");
-                    require(";");
-                    require("}");
-                    require("catch");
-                    require("(");
-                    value.catch_binding = identifier();
-                    for (const auto& param : value.parameters)
-                        if (param.name == value.catch_binding)
-                            fail("native caught throw binding shadows parameter");
-                    for (const auto& local : value.locals)
-                        if (local.name == value.catch_binding)
-                            fail("native caught throw binding shadows local owner");
-                    require(")");
-                    require("{");
-                    require("return");
-                    value.result = expression();
-                    if (!native_pure_scalar_tree(*value.result))
-                        fail("native caught throw catch return requires nonthrowing scalar/field read");
-                    require(";");
-                    require("}");
-                    require("finally");
-                    require("{");
-                    auto cleanup = branch_arm(true);
-                    require("}");
-                    for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
-                        if (it->kind != Statement::Kind::FieldWrite ||
-                                !native_pure_scalar_tree(*it->expression))
-                            fail("native caught throw finally requires nonthrowing field write");
-                        it->kind = Statement::Kind::Defer;
-                        value.statements.push_back(std::move(*it));
-                    }
-                    require("}");
-                    return value;
-                }
-                continue;
-            }
-            // A void program entrypoint may fall through with success status 0.
-            // Other functions retain their existing explicit-return requirement.
-            if (token_.text == "}" && value.returns_void &&
-                    value.name == "main" && value.parameters.empty()) {
-                require("}");
-                return value;
-            }
-            if (token_.kind == Kind::End || token_.text == "}") {
-                if (return_guards_started) fail("expected 'return'");
-                fail("missing final return");
-            }
-            // The initial native finally slice admits only guarded returns
-            // and a terminal return in the protected region. No potentially
-            // throwing calls, nested effects or suspension can be skipped.
-            if (terminal_try_finally && token_.text != "if")
-                fail("native terminal try supports only return guards and final return");
-            if (token_.text == "if") {
-                const auto offset = token_.offset;
-                require("if");
-                require("(");
-                auto lhs = expression();
-                if (!accept("eq")) require("==");
-                auto rhs = expression();
-                if (terminal_try_finally &&
-                        (!nonthrowing_protected_read(*lhs) ||
-                         !nonthrowing_protected_read(*rhs)))
-                    fail("native protected try guard requires nonthrowing scalar/field reads");
-                require(")");
-                require("{");
-                if (accept("return")) {
-                    if (value.returns_void)
-                        fail("guarded early return requires int result");
-                    if (value.early_returns.size() == 8)
-                        fail("native guarded return limit exceeded (8)");
-                    GuardedReturn guard;
-                    guard.offset = offset;
-                    guard.lhs = std::move(lhs);
-                    guard.rhs = std::move(rhs);
-                    guard.result = expression();
-                    if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
-                        fail("native protected try return requires nonthrowing scalar/field read");
-                    require(";");
-                    require("}");
-                    require("fi");
-                    value.early_returns.push_back(std::move(guard));
-                    return_guards_started = true;
-                } else {
-                    if (terminal_try_finally)
-                        fail("native terminal try supports only guarded return branches");
-                    if (return_guards_started)
-                        fail("native conditional statements cannot follow return guards");
-                    if (++branch_count > 8)
-                        fail("native conditional CFG limit exceeded (8)");
-                    Statement conditional;
-                    conditional.kind = Statement::Kind::Conditional;
-                    conditional.offset = offset;
-                    conditional.condition_lhs = std::move(lhs);
-                    conditional.condition_rhs = std::move(rhs);
-                    conditional.then_statements = branch_arm();
-                    require("}");
-                    require("else");
-                    require("{");
-                    conditional.else_statements = branch_arm();
-                    require("}");
-                    require("fi");
-                    value.statements.push_back(std::move(conditional));
-                }
-                continue;
-            }
-            if (return_guards_started)
-                fail("native statements cannot follow guarded returns");
-            if (token_.text != "defer" && exceptional_control(token_.text))
-                fail("native exception/control effect unsupported");
-            if (accept("defer")) {
-                Statement deferred;
-                deferred.kind = Statement::Kind::Defer;
-                deferred.offset = token_.offset;
-                auto target = primary();
-                if (target->kind == Expression::Kind::Field && accept("=")) {
-                    if (!target->left || target->left->kind != Expression::Kind::Variable)
-                        fail("native deferred field assignment requires named class receiver");
-                    deferred.receiver = target->left->name;
-                    deferred.field = target->name;
-                    deferred.expression = expression();
-                } else if (target->kind == Expression::Kind::Call) {
-                    deferred.expression = std::move(target);
-                } else {
-                    fail("native defer requires a direct function call or class field assignment");
-                }
-                require(";");
-                value.statements.push_back(std::move(deferred));
-                continue;
-            }
-            if (accept("stop")) {
-                value.actor_stops.push_back(identifier());
-                require(";");
-                value.actor_actions.push_back({ActorAction::Kind::Stop,
-                                               value.actor_stops.size() - 1});
-                continue;
-            }
-            if (token_.text == "rt") {
-                const auto intrinsic_offset = token_.offset;
-                advance();
-                if (accept("array_commit_filled")) {
-                    // Restricted, compiler-only transaction over four
-                    // owned array fields in declaration order.
-                    Statement effect;
-                    effect.kind = Statement::Kind::ArrayCommitFilled;
-                    effect.offset = intrinsic_offset;
-                    require("(");
-                    effect.receiver = identifier();
-                    require(",");
-                    effect.array_commit_length = expression();
-                    for (std::size_t i = 0; i < 4; ++i) {
-                        require(",");
-                        effect.array_commit_values.push_back(expression());
-                    }
-                    require(")");
-                    require(";");
-                    value.statements.push_back(std::move(effect));
-                    continue;
-                }
-                if (token_.text == "cooperate") {
-                    throw std::runtime_error(
-                            "native rt cooperate requires verified heap-owned continuation lowering"
-                            " at byte " + std::to_string(token_.offset));
-                }
-                fail("native rt statement unsupported until suspension lowering");
-            }
-            Statement statement;
-            statement.offset = token_.offset;
-            auto action = primary();
-            if (action->kind == Expression::Kind::Field && action->name == "send"
-                    && accept("(")) {
-                // Nested class receivers cannot alias unrelated ActorRef names.
-                if (!action->left || action->left->kind != Expression::Kind::Variable)
-                    fail("native actor send requires direct named ActorRef receiver");
-                ActorSend send;
-                send.offset = statement.offset;
-                send.reference = action->left->name;
-                send.payload = expression();
-                require(")");
-                require(";");
-                value.actor_sends.push_back(std::move(send));
-                value.actor_actions.push_back({ActorAction::Kind::Send,
-                                               value.actor_sends.size() - 1});
-                continue;
-            }
-            if (action->kind == Expression::Kind::Field && accept("=")) {
-                // No nested assignment may resolve through a flattened field.
-                if (!action->left || action->left->kind != Expression::Kind::Variable)
-                    fail("native field assignment requires direct named class receiver");
-                statement.kind = Statement::Kind::FieldWrite;
-                statement.receiver = action->left->name;
-                statement.field = action->name;
-                statement.expression = expression();
-            } else if (action->kind == Expression::Kind::Call ||
-                       action->kind == Expression::Kind::ArrayCall) {
-                statement.kind = Statement::Kind::Call;
-                statement.expression = std::move(action);
-            } else {
-                fail("expected class field assignment or function call statement");
-            }
-            require(";");
-            value.statements.push_back(std::move(statement));
-        }
-        require("return");
-        if (!value.returns_void) {
-            value.result = expression();
-            if (value.scalar_while &&
-                    (value.result->kind != Expression::Kind::Variable ||
-                     value.result->name != value.scalar_while->counter))
-                fail("experimental scalar loop must return the counter");
-            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
-                fail("native protected try return requires nonthrowing scalar/field read");
-        }
-        require(";");
-        if (terminal_try_finally) {
-            require("}");
-            // Java/Graal syntax requires catch. This native subset has no
-            // throw-capable operations inside try; catch must be empty and
-            // remains unreachable until typed exceptional CFG is implemented.
-            require("catch");
+ …5611 tokens truncated…uire("catch");
             require("(");
             identifier();
             require(")");
@@ -1958,3 +1583,4 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
 }
 
 } // namespace oreslang
+
