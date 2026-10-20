@@ -262,6 +262,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "ownership violation: field read conflicts with active mutable borrow");
             return;
         }
+        case Expression::Kind::Index:
+            reject(expr, "native checked index read requires certified closed-view typing and ownership");
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
         case Expression::Kind::Negate:
@@ -349,6 +351,8 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             check_pure_guard(*expr.left, locals, functions);
             check_pure_guard(*expr.right, locals, functions);
             return;
+        case Expression::Kind::Index:
+            reject(expr, "native checked index read requires certified closed-view typing and ownership");
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::Borrow:
@@ -763,6 +767,8 @@ void validate_i64_ownership(const Program& program) {
         using Ops = std::vector<ownership::Operation>;
         std::function<void(const Expression&, Ops&)> add_effects;
         add_effects = [&](const Expression& expr, Ops& operations) {
+            if (expr.kind == Expression::Kind::Index)
+                reject(expr, "native checked index read requires certified closed-view typing and ownership");
             if (expr.kind == Expression::Kind::Variable) {
                 const auto found = cfg_entry.find(expr.name);
                 const bool object = found != cfg_entry.end() && !found->second.class_name.empty();
