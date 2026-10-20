@@ -4,6 +4,7 @@
 #include "llvm/Support/SHA256.h"
 #include <charconv>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -114,15 +115,14 @@ struct Bytes {
     }
 };
 
-inline bool canonical_i64(const std::string& s, std::int64_t& value) {
+inline bool canonical_i64_syntax(const std::string& s) {
     if (s.empty() || s[0] == '+') return false;
     std::size_t first = s[0] == '-' ? 1 : 0;
     if (first == s.size()) return false;
     if (s[first] == '0' && first + 1 != s.size()) return false;
     for (std::size_t i = first; i < s.size(); ++i)
         if (s[i] < '0' || s[i] > '9') return false;
-    auto r = std::from_chars(s.data(), s.data() + s.size(), value);
-    return r.ec == std::errc{} && r.ptr == s.data() + s.size();
+    return true;
 }
 
 inline void encode_constant(Bytes& out, const Constant& c) {
@@ -132,16 +132,12 @@ inline void encode_constant(Bytes& out, const Constant& c) {
         if (c.value != "true" && c.value != "false") fail("MODEL_INVALID_CONST");
         out.u8(c.value == "true" ? 1 : 0);
     } else if (c.kind == "i64") {
+        if (!canonical_i64_syntax(c.value)) fail("MODEL_INVALID_CONST");
         std::int64_t v = 0;
-        if (!canonical_i64(c.value, v)) {
-            bool lexical = !c.value.empty();
-            std::size_t first = (!c.value.empty() && c.value[0] == '-') ? 1 : 0;
-            if (first >= c.value.size()) lexical = false;
-            for (std::size_t i = first; lexical && i < c.value.size(); ++i)
-                lexical = c.value[i] >= '0' && c.value[i] <= '9';
-            if (lexical) fail("MODEL_CONST_OVERFLOW");
+        auto parsed = std::from_chars(c.value.data(), c.value.data() + c.value.size(), v);
+        if (parsed.ec == std::errc::result_out_of_range) fail("MODEL_CONST_OVERFLOW");
+        if (parsed.ec != std::errc{} || parsed.ptr != c.value.data() + c.value.size())
             fail("MODEL_INVALID_CONST");
-        }
         out.u64(static_cast<std::uint64_t>(v));
     } else if (c.kind == "f64bits") {
         if (c.value.size() != 18 || c.value[0] != '0' || c.value[1] != 'x')
