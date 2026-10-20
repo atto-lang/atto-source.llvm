@@ -168,3 +168,49 @@ Java-vs-LLVM guest trace equivalence are still open work.
   proof.
 - Benchmark AoS/SoA/AoSoA against *identical logical work* and disclose tile
   widths, temporary memory, CPU flags, warmup and latency distribution.
+
+
+## Reproducible (non-normative) scalar layout microbenchmark
+
+`tests/fsm_layout_microbenchmark.cpp` is committed as a small *host C++*
+experiment over the **real native checked `DopLayout.hpp` planner**. It
+runs two deliberately different, reproducible logical workloads:
+
+- `fsm_full`: read the complete `{state, version, ticks}` row, apply a
+  deterministic flat-FSM transition and write all three fields if accepted.
+- `column`: scan/update only the hot `ticks` column.
+
+For any selected row count and repetition count, AoS/SoA/AoSoA executions
+MUST yield matching final logical-field digests per workload, regardless of
+physical padding. The program emits CSV rows for layout/mode/rows/reps/tile
+lanes/allocated bytes/nanoseconds per entity update/digest. It does **not**
+pick a winner, make a SIMD/codegen claim or claim latency percentiles/RT WCET.
+
+Example:
+```sh
+c++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+  -I src/main/cpp tests/fsm_layout_microbenchmark.cpp -o /tmp/fsm-bench
+for size in 1 16 1024 65536 1000000; do
+  for lanes in 2 4 8 16; do
+    /tmp/fsm-bench "$size" 3 "$lanes"
+  done
+done
+```
+
+The benchmark has explicit size bounds (1..1,000,000 rows and 1..100
+repetitions), lane admission (2/4/8/16), checked physical offsets and
+reference digest matching. It currently measures scalar C++ loops and the
+layout address planner; it **does not** include generated Oreslang code,
+batched SIMD kernels, heterogeneous ECS archetype queries, GPU, allocator
+transposition cost, thermal/cpu-frequency stability or robust statistics.
+Thus the CSV is evidence for correctness and an exploratory measurement,
+not evidence one layout is best for production.
+
+**Exact-source test run:** private [Actions #39462019055](https://github.com/hacker-house-medellin-test/api-contract-e2e/actions/runs/39462019055)
+fully executed and passed g++ and clang++/ASan+UBSan with additional
+benchmark compilations and 2/4/8/16 tile-width digest checks. Runner
+verified the benchmark Git blob `c11fa340892afe44f9eccc84a73fa5b0bc7cc35c`
+in addition to the A1/A2 host-test and production-layout-header Git blobs.
+This is a private **exact-blob** regression capsule, not an exact full-tree
+guest backend test. Benchmark output must not be used to certify SIMD,
+compiled guest parity, or unconditional performance rankings.
