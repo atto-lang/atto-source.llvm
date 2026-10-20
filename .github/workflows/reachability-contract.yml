@@ -8,6 +8,7 @@ on:
       - 'tests/native_reachability_contract_test.cpp'
       - 'tests/contract.py'
       - 'tests/fixtures/tree-shake-dead-symbols.ores'
+      - 'tests/fixtures/tree-shake-library.ores'
       - 'CMakeLists.txt'
       - '.github/workflows/reachability-contract.yml'
 
