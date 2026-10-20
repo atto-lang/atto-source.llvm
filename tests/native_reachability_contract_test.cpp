@@ -1,5 +1,6 @@
 #include "oreslang/frontend/Reachability.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <stdexcept>
@@ -52,16 +53,17 @@ int main() {
         program.functions.push_back(fn("dead", integer(0)));
         program.functions.push_back(fn("main", call("live")));
 
-        const auto result = analyze_reachability(program, {"main"}, false);
+        auto shaken = tree_shake_program(std::move(program), {"main"}, false);
+        const auto& result = shaken.reachability;
         assert(result.roots == std::vector<std::string>{"__root__.main"});
         assert(has(result.retained_symbols, "__root__.main"));
         assert(has(result.retained_symbols, "__root__.live"));
         assert(has(result.retained_symbols, "__root__.leaf"));
         assert(has(result.removed_symbols, "__root__.dead"));
 
-        auto pruned = prune_program(std::move(program), result);
-        assert(pruned.functions.size() == 3);
-        assert(std::none_of(pruned.functions.begin(), pruned.functions.end(),
+        assert(shaken.program.functions.size() == 3);
+        assert(std::none_of(shaken.program.functions.begin(),
+                            shaken.program.functions.end(),
                 [](const Function& item) { return item.name == "dead"; }));
 
         assert(canonical_reachability_json(result, false) ==
