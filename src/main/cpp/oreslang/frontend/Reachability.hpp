@@ -439,8 +439,12 @@ inline ReachabilityResult analyze_reachability(
         std::set<std::string> function_dependencies;
         std::set<std::string> actor_dependencies;
         std::set<std::string> class_dependencies;
+        std::string current_semantic;
+        ReachabilityReason function_reason = ReachabilityReason::DirectCall;
 
         if (kind == 'f') {
+            current_semantic =
+                    function_semantic_name(name, *functions.at(name));
             reachability_detail::scan_function(
                     *functions.at(name),
                     functions,
@@ -448,6 +452,8 @@ inline ReachabilityResult analyze_reachability(
                     actor_dependencies,
                     class_dependencies);
         } else if (kind == 'a') {
+            current_semantic = name;
+            function_reason = ReachabilityReason::ActorBody;
             const auto& actor = *actors.at(name);
             for (const auto& field : actor.fields) {
                 reachability_detail::scan_expression(
@@ -464,6 +470,8 @@ inline ReachabilityResult analyze_reachability(
                     actor_dependencies,
                     class_dependencies);
         } else if (kind == 'c') {
+            current_semantic = name;
+            function_reason = ReachabilityReason::ClassInitializer;
             const auto& klass = *classes.at(name);
             for (const auto& field : klass.fields)
                 reachability_detail::scan_expression(
@@ -472,9 +480,27 @@ inline ReachabilityResult analyze_reachability(
             throw std::runtime_error("native reachability internal work-kind corruption");
         }
 
-        for (const auto& dep : function_dependencies) mark_function(dep);
-        for (const auto& dep : actor_dependencies) mark_actor(dep);
-        for (const auto& dep : class_dependencies) mark_class(dep);
+        for (const auto& dep : function_dependencies) {
+            add_edge(
+                    current_semantic,
+                    function_semantic_name(dep, *functions.at(dep)),
+                    function_reason);
+            mark_function(dep);
+        }
+        for (const auto& dep : actor_dependencies) {
+            add_edge(
+                    current_semantic,
+                    dep,
+                    ReachabilityReason::ActorSpawn);
+            mark_actor(dep);
+        }
+        for (const auto& dep : class_dependencies) {
+            add_edge(
+                    current_semantic,
+                    dep,
+                    ReachabilityReason::ClassReference);
+            mark_class(dep);
+        }
     }
 
     std::set<std::string> retained;
