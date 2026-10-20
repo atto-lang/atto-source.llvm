@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/TreeShaker.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
@@ -66,6 +67,9 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    bool tree_shake = false;
+    bool emit_reachability_manifest = false;
+    oreslang::TreeShakeMode tree_shake_mode = oreslang::TreeShakeMode::Executable;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
@@ -84,6 +88,24 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg.rfind("--tree-shake=", 0) == 0) {
+            if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
+            tree_shake = true;
+            const std::string mode = arg.substr(std::string_view("--tree-shake=").size());
+            if (mode == "executable") {
+                tree_shake_mode = oreslang::TreeShakeMode::Executable;
+            } else if (mode == "library") {
+                tree_shake_mode = oreslang::TreeShakeMode::Library;
+            } else {
+                std::cerr << "tree-shake mode must be executable or library\n";
+                return 2;
+            }
+        } else if (arg == "--emit-reachability-manifest") {
+            if (emit_reachability_manifest) {
+                std::cerr << "duplicate reachability manifest option\n";
+                return 2;
+            }
+            emit_reachability_manifest = true;
         } else if (arg.rfind("--target=", 0) == 0) {
             if (target_seen) { std::cerr << "duplicate target option\n"; return 2; }
             target_seen = true;
@@ -119,8 +141,12 @@ int main(int argc, char** argv) {
     std::unique_ptr<oreslang::CoreLog> coreLog;
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
+    if (emit_reachability_manifest && !tree_shake) {
+        std::cerr << "--emit-reachability-manifest requires --tree-shake=executable|library\n";
+        return 2;
+    }
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--tree-shake=executable|library] [--emit-reachability-manifest] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -311,6 +337,20 @@ int main(int argc, char** argv) {
                 return depth;
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
+        }
+        oreslang::NativeReachabilityManifest reachability;
+        if (tree_shake) {
+            // Full-program backend verification happens before pruning. Dead
+            // source cannot hide invalid target lowering merely because the
+            // selected build roots do not reach it.
+            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            reachability = oreslang::tree_shake_program(ast, tree_shake_mode);
+            if (emit_reachability_manifest) {
+                std::cout << reachability.to_canonical_json() << '\n';
+                std::cout.flush();
+                if (coreLog) coreLog->dump(stderr);
+                return 0;
+            }
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
         std::cout.flush();
