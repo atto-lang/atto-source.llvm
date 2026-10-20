@@ -197,8 +197,32 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Parser-level model HIR only. Values remain inert until typed ModelGraph
+// admission binds compiler-owned operation signatures and resource/provenance data.
+struct ModelParam {
+    std::string name;
+    std::string type;
+    std::unique_ptr<Expression> default_value;
+};
+struct ModelArgument {
+    std::string name; // empty for positional
+    std::unique_ptr<Expression> value;
+};
+struct ModelOpCall {
+    std::string name;
+    std::vector<ModelArgument> arguments;
+};
+struct ModelDecl {
+    std::string name;
+    bool public_visibility = false;
+    std::vector<ModelParam> parameters;
+    std::vector<ModelOpCall> operations;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::vector<ModelDecl> models;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
