@@ -685,6 +685,104 @@ if(BUILD_TESTING)
     oreslang_contract_test(call_scoped_borrow_parameter_refresh unsupported-borrow-param.ores
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_function
+        tree-shake-dead-symbols.ores
+        --ir "@dead_helper")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_array_runtime
+        tree-shake-dead-symbols.ores
+        --ir "@dead_array_runtime"
+        --ir "@oreslang_int_array_try_region_open")
+    oreslang_contract_test(native_tree_shake_prunes_dead_semantic_ir
+        tree-shake-dead-symbols.ores
+        --tree-shake
+        --ir "call i64 @live_helper"
+        --ir-absent "@dead_helper"
+        --ir-absent "@dead_array_runtime"
+        --ir-absent "DeadWorker"
+        --ir-absent "DeadBox"
+        --ir-absent "oreslang_source_actor_spawn"
+        --ir-absent "oreslang_int_array_try_region_open"
+        --ir-absent "oreslang_int_array_try_new"
+        --ir-absent "oreslang_int_array_region_close")
+    oreslang_contract_test(native_tree_shake_preflight_all_source
+        tree-shake-dead-symbols.ores
+        --target wasm32
+        --tree-shake
+        --diagnostic "wasm32 native caught-throw guest unsupported")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_owned_region
+        tree-shake-dead-owned-region.ores
+        --experimental-owned-int
+        --ir "@dead_owned_region"
+        --ir "@oreslang_owned_i64_region_open")
+    oreslang_contract_test(native_tree_shake_prunes_dead_owned_region
+        tree-shake-dead-owned-region.ores
+        --experimental-owned-int
+        --tree-shake
+        --ir-absent "@dead_owned_region"
+        --ir-absent "oreslang_owned_i64_region_open"
+        --ir-absent "oreslang_owned_i64_region_new"
+        --ir-absent "oreslang_owned_i64_region_close")
+    oreslang_contract_test(native_tree_shake_keeps_live_owned_region
+        owned-native-region-main.ores
+        --experimental-owned-int
+        --tree-shake
+        --ir "@oreslang_owned_i64_region_open"
+        --ir "@oreslang_owned_i64_region_new")
+    oreslang_contract_test(native_tree_shake_keeps_live_array_runtime
+        tree-shake-live-array.ores
+        --tree-shake
+        --ir "@oreslang_int_array_try_region_open"
+        --ir "@oreslang_int_array_try_new")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_live_array_executes
+            tree-shake-live-array.ores
+            --tree-shake
+            --ir "@oreslang_int_array_try_region_open"
+            --run 42 --clang "${ORE_CLANG}"
+            --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
+        oreslang_contract_test(native_tree_shake_preserves_executable_behavior
+            tree-shake-dead-symbols.ores
+            --tree-shake
+            --ir-absent "@dead_helper"
+            --ir-absent "@dead_array_runtime"
+            --ir-absent "oreslang_source_actor_spawn"
+            --ir-absent "oreslang_int_array_try_region_open"
+            --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_tree_shake_overload_arity
+        named-call-arity-overload-main.ores
+        --tree-shake
+        --ir "call i64 @pick")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_overload_arity_executes
+            named-call-arity-overload-main.ores
+            --tree-shake
+            --run 43 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_tree_shake_keeps_scalar_resume_abi
+        native-rt-aot-counter.ores
+        --tree-shake
+        --ir "oreslang_rt_spin_resume")
+    oreslang_contract_test(native_tree_shake_wasm_actor_avoids_native_actor_runtime
+        wasm32-source-actor-counter.ores
+        --target wasm32
+        --tree-shake
+        --ir "oreslang_wasm_actor_on_message"
+        --ir-absent "oreslang_source_actor_spawn"
+        --ir-absent "ores_actor_i64_heap_field_init")
+    oreslang_contract_test(native_tree_shake_library_keeps_public_api
+        tree-shake-library.ores
+        --tree-shake
+        --ir "@api"
+        --ir-absent "@dead_private")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_tree_shake_library_remains_linkable
+            tree-shake-library.ores
+            --tree-shake
+            --ir "@api"
+            --ir-absent "@dead_private"
+            --no-main-link --clang "${ORE_CLANG}")
+    endif()
     add_test(NAME native_named_call_lexical_ir_order
         COMMAND "${Python3_EXECUTABLE}"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
