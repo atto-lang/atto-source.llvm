@@ -1,0 +1,7 @@
+fnc read(int value, int key): int {
+    return value[key];
+}
+
+pub fnc main(): int {
+    return read(7, 0);
+}
