@@ -226,6 +226,20 @@ bool callable_nominal_name(std::string_view name) {
             || name == "Routine" || name == "Method";
 }
 
+// Entry is a compiler-owned nominal product in the Java/Graal frontend.
+// Until the native backend has a real two-slot representation, projection
+// ownership, value equality, transport traits and ABI tests, it must not be
+// forgeable as an ordinary user class/actor nominal.
+bool entry_builtin_name(std::string_view name) {
+    return name == "Entry";
+}
+
+[[noreturn]] void reject_native_entry_boundary(std::size_t offset) {
+    throw std::runtime_error(
+        "native Entry<K,V> requires nominal product lowering and ownership parity"
+        " at byte " + std::to_string(offset));
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -295,6 +309,8 @@ private:
         actor.name = identifier();
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
+        if (entry_builtin_name(actor.name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -381,6 +397,8 @@ private:
         result.name = identifier();
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
+        if (entry_builtin_name(result.name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -628,7 +646,9 @@ private:
                                                     : Parameter::Mode::Borrow;
                 }
                 if (!accept("int")) {
+                    const std::size_t type_offset = token_.offset;
                     const std::string type = identifier();
+                    if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
@@ -643,7 +663,9 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void && !accept("int")) {
+            const std::size_t type_offset = token_.offset;
             const std::string type = identifier();
+            if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
             const bool generic = std::any_of(value.generic_parameters.begin(),
                 value.generic_parameters.end(),
                 [&](const GenericParameter& p) { return p.name == type; });
@@ -749,6 +771,8 @@ private:
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        if (token_.text == "Entry")
+                            reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
