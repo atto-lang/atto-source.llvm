@@ -67,6 +67,26 @@ void generate_equal(llvm::Module& module, llvm::StructType* scalar,
     llvm::Value* throws_flag = &*iter++;
     llvm::Value* output = &*iter++;
     llvm::IRBuilder<> b(llvm::BasicBlock::Create(c, "entry", fn));
+    // The exported primitive ABI can be reached from host/FFI callers.
+    // Validate the only representable pointer failures before any input
+    // load or output store. A null output is an invalid no-op; null inputs
+    // with an existing output produce the explicit Fatal status.
+    auto* absent_output = llvm::BasicBlock::Create(c, "null.output", fn);
+    auto* has_output = llvm::BasicBlock::Create(c, "has.output", fn);
+    b.CreateCondBr(b.CreateIsNull(output), absent_output, has_output);
+    b.SetInsertPoint(absent_output);
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_output);
+    auto* absent_input = llvm::BasicBlock::Create(c, "null.input", fn);
+    auto* has_input = llvm::BasicBlock::Create(c, "has.input", fn);
+    b.CreateCondBr(b.CreateOr(b.CreateIsNull(left), b.CreateIsNull(right)),
+                   absent_input, has_input);
+    b.SetInsertPoint(absent_input);
+    auto* fatalOnNull = status(result, 0xFFFFFFFDu, EffectKind::Fatal, 0, 0);
+    auto* nullStore = b.CreateStore(fatalOnNull, output);
+    nullStore->setAlignment(llvm::Align(8));
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_input);
     auto* a = b.CreateLoad(scalar, left, "lhs");
     auto* z = b.CreateLoad(scalar, right, "rhs");
     a->setAlignment(llvm::Align(8));
@@ -126,6 +146,21 @@ void generate_trap(llvm::Module& module, llvm::StructType* result) {
     llvm::Value* input = &*iter++;
     llvm::Value* output = &*iter++;
     llvm::IRBuilder<> b(llvm::BasicBlock::Create(c, "entry", fn));
+    auto* absent_output = llvm::BasicBlock::Create(c, "null.output", fn);
+    auto* has_output = llvm::BasicBlock::Create(c, "has.output", fn);
+    b.CreateCondBr(b.CreateIsNull(output), absent_output, has_output);
+    b.SetInsertPoint(absent_output);
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_output);
+    auto* absent_input = llvm::BasicBlock::Create(c, "null.input", fn);
+    auto* has_input = llvm::BasicBlock::Create(c, "has.input", fn);
+    b.CreateCondBr(b.CreateIsNull(input), absent_input, has_input);
+    b.SetInsertPoint(absent_input);
+    auto* fatalOnNull = status(result, 0xFFFFFFFDu, EffectKind::Fatal, 0, 0);
+    auto* nullStore = b.CreateStore(fatalOnNull, output);
+    nullStore->setAlignment(llvm::Align(8));
+    b.CreateRetVoid();
+    b.SetInsertPoint(has_input);
     auto* loaded = b.CreateLoad(result, input, "pending");
     loaded->setAlignment(llvm::Align(8));
     auto* code = b.CreateExtractValue(loaded, {0});
