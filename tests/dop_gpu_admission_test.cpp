@@ -312,14 +312,21 @@ int main() {
             check(result.status() == oreslang::gpu::Status::Idle);
         }
         auto claimed = claim_gpu_for_queue(operation, profile, input, output, valid);
-        check(claimed.binding.input.tenant == valid.tenant);
-        check(claimed.binding.output.device == valid.device);
+        check(claimed.claim.binding.input.tenant == valid.tenant);
+        check(claimed.claim.binding.output.device == valid.device);
+        check(claimed.queue.queue_id == valid.queue_id);
+        check(claimed.queue.generation == valid.generation);
+        check(claimed.queue.maximum_in_flight == valid.maximum_in_flight);
+        // Later mutation of the caller-owned descriptor cannot silently
+        // retarget an admitted operation.
+        check(claimed.queue.tenant == "tenant-A");
+        check(claimed.queue.device == "gpu-0");
         check(source.status() == oreslang::gpu::Status::InFlight);
         check(result.status() == oreslang::gpu::Status::InFlight);
         expect<std::logic_error>([&] {
             (void)claim_gpu_for_queue(operation, profile, input, output, valid);
         });
-        BufferFence::complete_pair(source, result, claimed.tickets, true);
+        BufferFence::complete_pair(source, result, claimed.claim.tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
     }
