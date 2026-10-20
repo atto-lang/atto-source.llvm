@@ -48,11 +48,11 @@ int main(void) {
     OresNativeTraceHandle second = ores_native_execution_store_insert(e,&v);
     check(second.store_id == h.store_id && second.slot_generation != h.slot_generation);
     check(!ores_native_execution_store_load(e,h,&fetched));
-    OresNativeContinuationRecord cont = {0};
+    OresNativeTraceContinuationRecord cont = {0};
     cont.parent_execution = second;
     cont.source_span = 0xF1;
     OresNativeTraceHandle ch = ores_native_continuation_store_insert(c,&cont);
-    OresNativeContinuationRecord out = {0};
+    OresNativeTraceContinuationRecord out = {0};
     check(ch.store_id && ores_native_continuation_store_load(c,ch,&out));
     check(out.parent_execution.store_id == second.store_id && out.source_span == 0xF1);
     check(!ores_native_trace_store_release(e,ch));
