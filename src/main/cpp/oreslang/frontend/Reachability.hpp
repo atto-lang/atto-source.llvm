@@ -427,6 +427,15 @@ inline Program prune_program(Program program, const ReachabilityResult& result) 
     std::set<std::string> removed(
             result.removed_symbols.begin(), result.removed_symbols.end());
     std::set<std::string> source_symbols;
+    std::map<std::string, std::size_t> function_family_sizes;
+    for (const auto& fn : program.functions)
+        ++function_family_sizes[fn.name];
+
+    const auto function_semantic_name = [&](const Function& fn) {
+        return function_family_sizes.at(fn.name) > 1
+                ? native_function_slot(fn.name, fn.parameters.size())
+                : fn.name;
+    };
 
     const auto register_symbol = [&](const std::string& name) {
         const std::string symbol = reachability_detail::qualify(program, name);
@@ -440,7 +449,8 @@ inline Program prune_program(Program program, const ReachabilityResult& result) 
                     "native tree shaking requires exactly one classification for: " + symbol);
     };
 
-    for (const auto& fn : program.functions) register_symbol(fn.name);
+    for (const auto& fn : program.functions)
+        register_symbol(function_semantic_name(fn));
     for (const auto& actor : program.actors) register_symbol(actor.name);
     for (const auto& klass : program.classes) register_symbol(klass.name);
     for (const auto& loop : program.cooperative_loops) register_symbol(loop.name);
@@ -463,7 +473,13 @@ inline Program prune_program(Program program, const ReachabilityResult& result) 
     };
 
     program.functions.erase(
-            std::remove_if(program.functions.begin(), program.functions.end(), should_remove),
+            std::remove_if(
+                    program.functions.begin(),
+                    program.functions.end(),
+                    [&](const Function& fn) {
+                        return retained.count(reachability_detail::qualify(
+                                program, function_semantic_name(fn))) == 0;
+                    }),
             program.functions.end());
     program.actors.erase(
             std::remove_if(program.actors.begin(), program.actors.end(), should_remove),
