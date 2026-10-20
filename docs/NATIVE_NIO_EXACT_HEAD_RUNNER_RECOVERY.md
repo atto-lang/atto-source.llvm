@@ -278,3 +278,17 @@ slot stays quarantined through an unrelated normal close. These hooks are not
 compiled into release builds and do not alter guest APIs. Full native-tree
 compilation, the actual fixture, sanitizer results, and actor integration are
 **NOT VERIFIED** until a real current-head runner executes BUILD/TEST steps.
+
+## Reentrant carrier close with the actual C VM (2026-10-19)
+
+The native VM lifecycle fixture includes 32 complete native-host NIO
+bootstrap, actor spawn/send, callback-triggered close refusal, and external
+host teardown cycles. A **real** scheduler carrier callback calls
+`ores_native_vm_close`, which must return 0 without joining its own
+carrier. The external host observes callback return with bounded polling,
+verifies retired VM NIO access remains unavailable with cleared terminal
+storage, and then safely completes `ores_native_vm_close`. This fixture
+is part of the exact-head source-local C VM+C actor scheduler+C++ NIO
+sanitizer script, not a source-free model. It is **not tested** until a
+real runner compiles and executes that script; do not infer an Actions PASS
+from a commit or source-free model.

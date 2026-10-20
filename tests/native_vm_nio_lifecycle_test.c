@@ -104,6 +104,22 @@ static void on_data(void* ignored, size_t slot, uint64_t value) {
     (void)ignored; (void)slot; (void)value;
     abort(); /* no guest callbacks may be delivered on NIO-only test path */
 }
+/* A real actor carrier must not synchronously close its own scheduler.
+ * The failed close retires the VM but leaves external teardown possible. */
+typedef struct {
+    OresNativeVM* vm;
+    atomic_int invoked;
+    atomic_int close_result;
+    atomic_int returned;
+} ReentrantCarrierClose;
+static void on_carrier_close(void* opaque, size_t slot, uint64_t payload) {
+    ReentrantCarrierClose* state = (ReentrantCarrierClose*)opaque;
+    check(slot == 0 && payload == UINT64_C(0xC105E));
+    atomic_store(&state->invoked, 1);
+    const int result = ores_native_vm_close(state->vm);
+    atomic_store(&state->close_result, result);
+    atomic_store(&state->returned, 1);
+}
 static OresNativeVMConfig config(void) {
     OresNativeVMConfig cfg = {0};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
@@ -342,6 +358,48 @@ int main(void) {
         // and the bootstrap reservation until the issuing host cancels it.
         ores_native_vm_nio_cancel_bootstrap(self_bootstrap);
         check(ores_native_vm_close(self_bootstrap));
+    }
+    // The actual native VM, scheduler, C ABI, and C++ NIO adapter are all
+    // linked by the native lifecycle workflow, not replaced by test doubles.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        ReentrantCarrierClose state;
+        state.vm = NULL;
+        atomic_init(&state.invoked, 0);
+        atomic_init(&state.close_result, -1);
+        atomic_init(&state.returned, 0);
+        OresNativeVMConfig carrier_cfg = config();
+        carrier_cfg.domains[ORES_NATIVE_VM_MAIN].on_message = on_carrier_close;
+        carrier_cfg.domains[ORES_NATIVE_VM_MAIN].context = &state;
+        OresNativeVM* running = ores_native_vm_open(&carrier_cfg);
+        check(running != NULL);
+        state.vm = running;
+        check(ores_native_vm_enable_nio(running, 1, 0, 1));
+        const OresNativeActorRef actor = ores_native_vm_spawn(
+            running, ORES_NATIVE_VM_MAIN, 0);
+        check(actor.scheduler_domain != 0);
+        check(ores_native_vm_try_send(running, ORES_NATIVE_VM_MAIN,
+              actor, UINT64_C(0xC105E)) == ORES_NATIVE_SEND_ACCEPTED);
+        const struct timespec pause = {0, 1000000};
+        int observed = 0;
+        for (int attempt = 0; attempt < 3000; ++attempt) {
+            if (atomic_load(&state.returned)) {
+                observed = 1;
+                break;
+            }
+            nanosleep(&pause, NULL);
+        }
+        check(observed && atomic_load(&state.invoked));
+        check(atomic_load(&state.close_result) == 0);
+        check(ores_native_vm_nio_started(running) == 0);
+        OresNativeNioCompletion stale = {
+            .watch = {UINT64_MAX, UINT8_MAX},
+            .fd = 1234, .events = UINT32_MAX,
+            .outcome = ORES_NATIVE_NIO_READY
+        };
+        check(!ores_native_vm_nio_try_pop(running, &stale));
+        check(stale.watch.ticket == 0 && stale.watch.reactor == 0 &&
+              stale.fd == 0 && stale.events == 0 && stale.outcome == 0);
+        check(ores_native_vm_close(running));
     }
     return 0;
 }
