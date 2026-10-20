@@ -42,6 +42,7 @@ struct Node {
     std::size_t id = 0;
     std::string op;
     std::string abi;
+    std::vector<std::string> config;
     std::optional<Port> input;
     Port output;
     bool vjp = false;
@@ -50,6 +51,7 @@ struct ModelGraph {
     std::string name;
     std::optional<Port> input;
     Port output;
+    std::vector<std::string> formal_config;
     std::vector<Node> nodes;
     std::int64_t upper_bound_bytes = 0;
 };
@@ -113,11 +115,14 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
     require(source.operations.size() <= limits.max_depth, "MODEL_DEPTH_BUDGET");
     require(source.formals.size() <= 16, "MODEL_FORMAL_BUDGET");
     std::unordered_set<std::string> formals;
+    ModelGraph result;
     for (const auto& formal : source.formals) {
         require(formals.insert(formal.name).second, "MODEL_DUPLICATE_FORMAL");
         validate_default(formal);
+        const auto def = formal.default_value.empty() ? std::string("none") : formal.default_value;
+        result.formal_config.push_back(std::to_string(formal.name.size()) + ":" + formal.name + "|"
+            + std::to_string(formal.type.size()) + ":" + formal.type + "|" + def);
     }
-    ModelGraph result;
     result.name = source.name;
     std::optional<Port> prior;
     for (const auto& operation : source.operations) {
@@ -130,10 +135,14 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
         for (char c : sig.abi)
             require(unit_character(c) || c == '.', "MODEL_INVALID_OP_ABI");
         require(sig.scratch_bytes >= 0, "MODEL_INVALID_SCRATCH");
+        std::vector<std::string> config;
         for (const auto& argument : operation.arguments) {
             if (argument.formal_reference)
                 require(formals.find(argument.value) != formals.end(),
                         "MODEL_UNKNOWN_FORMAL");
+            config.push_back(std::to_string(argument.label.size()) + ":" + argument.label + "|"
+                + (argument.formal_reference ? "FORMAL|" : "LITERAL|")
+                + std::to_string(argument.value.size()) + ":" + argument.value);
         }
         const auto output_bytes = port_bytes(sig.output);
         if (sig.input) (void)port_bytes(*sig.input);
@@ -146,7 +155,7 @@ inline ModelGraph admit(const ModelDecl& source, const Registry& trusted,
         }
         charge(result.upper_bound_bytes, output_bytes, limits.max_bytes);
         charge(result.upper_bound_bytes, sig.scratch_bytes, limits.max_bytes);
-        result.nodes.push_back({result.nodes.size(), operation.name, sig.abi,
+        result.nodes.push_back({result.nodes.size(), operation.name, sig.abi, config,
                                 sig.input, sig.output, sig.vjp});
         prior = sig.output;
     }
