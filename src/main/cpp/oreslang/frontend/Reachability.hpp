@@ -67,6 +67,37 @@ struct ReachabilityResult {
     std::vector<ReachabilityEdge> edges{};
 };
 
+struct ReachabilityExplanation {
+    std::string symbol;
+    bool is_root = false;
+    std::vector<ReachabilityReason> root_reasons;
+    std::vector<ReachabilityEdge> incoming_edges;
+};
+
+inline ReachabilityExplanation explain_reachability(
+        const ReachabilityResult& result,
+        const std::string& symbol) {
+    const bool retained = std::binary_search(
+            result.retained_symbols.begin(),
+            result.retained_symbols.end(),
+            symbol);
+    if (!retained)
+        throw std::runtime_error(
+                "cannot explain non-retained native symbol: " + symbol);
+
+    ReachabilityExplanation explanation;
+    explanation.symbol = symbol;
+    explanation.is_root = std::binary_search(
+            result.roots.begin(), result.roots.end(), symbol);
+    for (const auto& root : result.root_reasons)
+        if (root.symbol == symbol)
+            explanation.root_reasons.push_back(root.reason);
+    for (const auto& edge : result.edges)
+        if (edge.to == symbol)
+            explanation.incoming_edges.push_back(edge);
+    return explanation;
+}
+
 enum class RuntimeFeature {
     ActorNativeRuntime,
     OwnedI64Region,
