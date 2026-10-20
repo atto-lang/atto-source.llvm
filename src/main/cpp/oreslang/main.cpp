@@ -318,6 +318,13 @@ int main(int argc, char** argv) {
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
         if (tree_shake) {
+            // Tree shaking must never make target-invalid or otherwise
+            // unlowerable source appear valid. Verify the complete unpruned
+            // Program first and discard that IR; only a fully admitted source
+            // program may then be reduced for the final artifact.
+            (void)oreslang::emit_verified_llvm_ir(
+                    ast, wasm32_target, cortex_m_target);
+
             const auto main_function = std::find_if(
                     ast.functions.begin(), ast.functions.end(),
                     [](const oreslang::Function& fn) { return fn.name == "main"; });
