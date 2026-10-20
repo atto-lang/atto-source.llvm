@@ -145,7 +145,7 @@ int main() {
                   "1dcfd1569621a30e53c969b9bf0e2add7fe94a04c2bf4474fae821555996d21b",
               "model override resolves before graph hashing");
 
-        const std::string profile(64, 'b');
+        const std::string profile = derived_profile;
         const oreslang::model::ModelOwner owner{
             "finance.PriceEstimate@v1", graph_id, 7, "instance-1", 11, profile
         };
