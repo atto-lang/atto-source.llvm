@@ -40,6 +40,7 @@ struct OresNativeActorScheduler {
     size_t next_actor, outstanding, runnable_lanes;
     uint64_t domain;
     uint64_t next_execution;
+    uint64_t reserved_executions;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
     OresNativeActorTaskFn callback;
@@ -177,7 +178,8 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
-        if (!s->next_execution) abort();
+        if (!s->reserved_executions || !s->next_execution) abort();
+        --s->reserved_executions;
         const uint64_t execution_id = s->next_execution;
         s->next_execution = execution_id == UINT64_MAX ? 0 : execution_id + 1;
         OresExecutionClaim execution_claim = {0};
@@ -335,6 +337,13 @@ static int create_carrier(pthread_t* tid, void* context) {
 #endif
     return pthread_create(tid, NULL, carrier, context);
 }
+static int execution_slot_available_locked(OresNativeActorScheduler* s) {
+    /* reserved_executions counts admitted turns that have not yet claimed an
+     * execution id. Keep enough remaining ids for every reservation so
+     * exhaustion is reported at admission rather than crashing a carrier. */
+    return s->next_execution != 0
+        && s->reserved_executions <= UINT64_MAX - s->next_execution;
+}
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
     while (s->started_workers < required) {
@@ -350,7 +359,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
-        || s->accepted == UINT64_MAX) {
+        || s->accepted == UINT64_MAX
+        || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
     }
@@ -364,6 +374,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
@@ -419,7 +430,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted == UINT64_MAX) {
+        } else if (s->accepted == UINT64_MAX
+                || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
             /* enqueue_locked and stop() arbitrate under this same lock.
@@ -460,7 +472,8 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
         const int new_lane = !lane->active && !lane->queued;
@@ -473,6 +486,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
         pthread_cond_signal(&s->ready);
@@ -492,7 +506,8 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
         const int new_lane = !a->active && !a->queued;
@@ -505,6 +520,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        s->reserved_executions++;
         s->accepted++;
         s->outstanding++;
         pthread_cond_signal(&s->ready);
