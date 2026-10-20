@@ -343,8 +343,8 @@ private:
     struct ModelScalar { std::string value; bool formal_reference; };
     ModelScalar model_value(const std::unordered_set<std::string>& formals, bool allow_formal) {
         if (accept("-")) {
-            if (token_.kind != Kind::Integer && token_.kind != Kind::Float)
-                fail("MODEL_NONCONSTANT_CONFIG: expected numeric literal after '-'");
+            if (token_.kind != Kind::Integer)
+                fail("MODEL_NONCONSTANT_CONFIG: signed v1 literals require integer tokens");
             ModelScalar value{"-" + std::string(token_.text), false};
             advance();
             return value;
