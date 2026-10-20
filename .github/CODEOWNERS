@@ -1,3 +1,9 @@
+# Critical build and CI ownership.
+# Enforcement requires repository branch/ruleset policy to require CODEOWNER review.
+/.github/ @ORESoftware
+/scripts/ @ORESoftware
+/CMakeLists.txt @ORESoftware
+
 # Security review for all changes that can authorize private-source exports.
 /.github/CODEOWNERS @ORESoftware
 /.github/workflows/* @ORESoftware
