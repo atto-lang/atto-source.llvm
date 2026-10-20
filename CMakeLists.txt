@@ -976,6 +976,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_nested_future_type_admission_fail_closed
         source-nested-future-flatten-unimplemented.ores --diagnostic "expected '>'")
 
+    # Generic logical failure trace capture/formatting. This is the recording
+    # substrate that throw/raise/panic lowering will call before propagation.
+    add_executable(oreslang-native-failure-trace-test
+        tests/native_failure_trace_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
+    target_include_directories(oreslang-native-failure-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-failure-trace-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-failure-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_failure_trace_capture_and_render
+        COMMAND oreslang-native-failure-trace-test)
+    set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
+
     # Real source-compiled Oreslang actors, not host-only C callback tests.
     # The synchronous stop barrier is allowed only in trusted top-level main.
     # One zero-local await ActorRef.get_ready() is admitted through a traced
