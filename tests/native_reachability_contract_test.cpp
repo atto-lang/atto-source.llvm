@@ -233,6 +233,59 @@ int main() {
 
     {
         Program program;
+        Function main = fn("main", integer(0));
+        LocalBinding owned;
+        owned.name = "owned";
+        owned.heap_owned = true;
+        owned.initializer = integer(7);
+        main.locals.push_back(std::move(owned));
+        program.functions.push_back(std::move(main));
+
+        const auto features = analyze_runtime_features(program, false, false);
+        assert(features.contains(RuntimeFeature::OwnedI64Region));
+        assert(!features.contains(RuntimeFeature::ActorNativeRuntime));
+        assert(!features.contains(RuntimeFeature::IntArrayRuntime));
+        assert(features.names() == std::vector<std::string>{"owned-i64-region"});
+    }
+
+    {
+        Program program;
+        Function main = fn("main", integer(0));
+        LocalBinding array;
+        array.name = "items";
+        array.int_array = true;
+        main.locals.push_back(std::move(array));
+        program.functions.push_back(std::move(main));
+
+        const auto features = analyze_runtime_features(program, false, false);
+        assert(features.contains(RuntimeFeature::IntArrayRuntime));
+        assert(!features.contains(RuntimeFeature::OwnedI64Region));
+    }
+
+    {
+        Program program;
+        ActorDecl actor;
+        actor.name = "Worker";
+        actor.on_message = fn("on_message", integer(0));
+        program.actors.push_back(std::move(actor));
+
+        const auto native = analyze_runtime_features(program, false, false);
+        const auto wasm = analyze_runtime_features(program, true, false);
+        assert(native.contains(RuntimeFeature::ActorNativeRuntime));
+        assert(!wasm.contains(RuntimeFeature::ActorNativeRuntime));
+
+        bool rejected = false;
+        try {
+            validate_runtime_features(
+                    program, false, false, RuntimeFeatureSet{});
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "runtime feature report drift must fail closed");
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("main", call("missing")));
         bool rejected = false;
         try {
