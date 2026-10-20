@@ -261,6 +261,27 @@ inline ReachabilityResult analyze_reachability(
     std::set<std::string> retained_classes;
     std::set<std::string> root_symbols;
 
+    const auto function_semantic_name =
+            [&](const std::string& slot, const Function& fn) {
+        return function_family_sizes.at(fn.name) > 1 ? slot : fn.name;
+    };
+    const auto resolve_function_root = [&](const std::string& requested) {
+        const auto exact = functions.find(requested);
+        if (exact != functions.end()) return requested;
+        std::string match;
+        for (const auto& [slot, fn] : functions) {
+            if (fn->name != requested) continue;
+            if (!match.empty())
+                throw std::runtime_error(
+                        "native reachability ambiguous function root: " + requested);
+            match = slot;
+        }
+        if (match.empty())
+            throw std::runtime_error(
+                    "native reachability root/function not found: " + requested);
+        return match;
+    };
+
     const auto mark_function = [&](const std::string& name) {
         if (functions.find(name) == functions.end())
             throw std::runtime_error("native reachability root/function not found: " + name);
