@@ -22,6 +22,10 @@ int ores_actor_arena_prefault(OresActorArena*);
 /* True only after successful startup prefault and before destruction. */
 int ores_actor_arena_is_prefaulted(OresActorArena*);
 OresArenaTurn ores_actor_arena_enter(OresActorArena*, uint64_t owner, uint64_t incarnation);
+/* Hard-RT entry is distinct from ordinary actor entry and fails closed unless
+ * startup prefault completed. OS/RTOS page locking remains a deployment gate. */
+OresArenaTurn ores_actor_arena_enter_realtime(
+        OresActorArena*, uint64_t owner, uint64_t incarnation);
 void ores_actor_arena_leave(OresActorArena*, OresArenaTurn);
 OresArenaHandle ores_actor_arena_alloc(OresActorArena*, OresArenaTurn, size_t bytes);
 void ores_actor_arena_read(OresActorArena*, OresArenaTurn, OresArenaHandle, size_t offset,
