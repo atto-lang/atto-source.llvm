@@ -59,8 +59,8 @@ static std::size_t retained_suppressed(
 // promoted by a loose truthiness / range / diagnostic-origin heuristic.
 static constexpr bool expected_guest_admission(
         unsigned boundary, unsigned origin) noexcept {
-    return boundary == 0 && origin == 0
-        || boundary == 1 && (origin == 0 || origin == 1 || origin == 2);
+    return (boundary == 0 && origin == 0)
+        || (boundary == 1 && (origin == 0 || origin == 1 || origin == 2));
 }
 
 static bool verify_guest_admission_matrix() noexcept {
