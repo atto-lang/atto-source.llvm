@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
             || std::strcmp(argv[5], "--iterations") != 0
             || !decimal(argv[4], 100000, &requested_rows)
             || !decimal(argv[6], 100000, &iterations)) {
-            std::fputs("usage: native_actor_shard_layout_bench [--layout aos|soa|aosoa --rows 1..100000 --iterations 1..100000]\\n", stderr);
+            std::fputs("usage: native_actor_shard_layout_bench [--layout aos|soa|aosoa --rows 1..100000 --iterations 1..100000]\n", stderr);
             return 2;
         }
         Layout selected;
@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[2], "soa") == 0) selected = Layout::SoA;
         else if (std::strcmp(argv[2], "aosoa") == 0) selected = Layout::AoSoA;
         else {
-            std::fputs("invalid data-oriented layout\\n", stderr);
+            std::fputs("invalid data-oriented layout\n", stderr);
             return 2;
         }
         sizes.assign(1, static_cast<std::size_t>(requested_rows));
@@ -109,8 +109,10 @@ int main(int argc, char** argv) {
             assert(ores_native_actor_scheduler_send(run.scheduler, run.owner, iterations));
             assert(ores_native_actor_scheduler_drain(run.scheduler));
             assert(!run.failed);
-            std::printf("llvm-native rows=%zu layout=%d ns_per_row_update=%.3f\n",
-                    rows, static_cast<int>(layout), run.nanoseconds / (200.0 * rows));
+            std::printf("llvm-native rows=%zu layout=%d iterations=%llu ns_per_row_update=%.3f\n",
+                    rows, static_cast<int>(layout),
+                    static_cast<unsigned long long>(iterations),
+                    run.nanoseconds / (static_cast<double>(iterations) * rows));
             ores_native_actor_scheduler_retire(run.scheduler);
             assert(ores_native_actor_scheduler_try_destroy(run.scheduler));
             assert(run.actor_budget->used_bytes() == 0);
