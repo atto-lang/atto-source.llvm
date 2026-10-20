@@ -49,6 +49,7 @@ def main():
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
+        "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
