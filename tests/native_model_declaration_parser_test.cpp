@@ -39,6 +39,21 @@ int main() {
         check(ml[0].formals[0].default_value == "784", "default metadata");
         check(ml[0].operations.size() == 3, "ML ordered graph");
         check(ml[0].operations[0].arguments[0].formal_reference, "symbolic arg");
+        const auto min_i64 = oreslang::parse_model_declarations(
+            "define model Minimum(delta: int = -9223372036854775808) as "
+            "AddDelta(delta) end");
+        check(min_i64[0].formals[0].default_value == "-9223372036854775808",
+              "signed INT64_MIN default must remain exact");
+        const auto neg_i64 = oreslang::parse_model_declarations(
+            "define model Negative as AddDelta(-2) end");
+        check(neg_i64[0].operations[0].arguments[0].value == "-2",
+              "signed static literal must remain exact");
+        rejected("define model Bad as AddDelta(-(1 + 1)) end",
+                 "MODEL_NONCONSTANT_CONFIG");
+        rejected("define model Bad as AddDelta(-true) end",
+                 "MODEL_NONCONSTANT_CONFIG");
+        rejected("define model Bad as AddDelta(-2.5) end",
+                 "MODEL_NONCONSTANT_CONFIG");
         const auto non_ml = oreslang::parse_model_declarations(
             "define module app as define model Tax(rate: float = 0.15) as "
             "Validate() Apply(rate) Round() end end");
