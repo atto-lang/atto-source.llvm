@@ -78,7 +78,12 @@ int ores_native_await_trace_resume_begin(
         .id = resumed_execution_id,
         .allocation = record.allocation,
         .parent_execution = link.parent,
-        .continuation = link.continuation
+        /*
+         * continuation is OUTGOING from this execution. The incoming boundary
+         * is link.continuation, owned by link.parent and recoverable through
+         * parent execution ancestry.
+         */
+        .continuation = {0, 0}
     };
     OresNativeExecutionHandle execution = {0, 0};
     if (!ores_native_execution_context_store_insert(
