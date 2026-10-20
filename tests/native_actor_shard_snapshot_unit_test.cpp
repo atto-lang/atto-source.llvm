@@ -43,7 +43,7 @@ using oreslang::runtime::ActorColumnSnapshot;
 using oreslang::dop::Layout;
 
 int main() {
-    OresNativeActorScheduler scheduler{1};
+    static OresNativeActorScheduler scheduler{1};
     OresNativeActorRef owner{1, 0, 8};
     current_scheduler = &scheduler;
 
