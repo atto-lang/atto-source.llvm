@@ -432,6 +432,23 @@ if(BUILD_TESTING)
     set_tests_properties(native_compact32_llvm_checked_load_store
         PROPERTIES TIMEOUT 30)
 
+    # Execute the IR rather than trusting string/shape checks alone. The
+    # compatible Clang should match the LLVM major version when available.
+    find_program(ORE_REF32_CLANG
+        NAMES "clang++-${LLVM_VERSION_MAJOR}" clang++
+        clang++-19 clang++-18 clang++-17 clang++-16 clang++-15 clang++-14)
+    if(ORE_REF32_CLANG)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        add_test(NAME native_compact32_llvm_executable_e2e
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e.py"
+                --ir-producer "$<TARGET_FILE:oreslang-managed-ref-llvm-lowering-test>"
+                --clang "${ORE_REF32_CLANG}"
+                --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e_harness.cpp")
+        set_tests_properties(native_compact32_llvm_executable_e2e
+            PROPERTIES TIMEOUT 180)
+    endif()
+
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
