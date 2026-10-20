@@ -80,6 +80,13 @@ struct RealtimeAnalysisReport {
 
 namespace realtime_detail {
 
+// Compiler proof budgets are part of hard-RT admission. Acyclic is not enough:
+// adversarially large DAGs must fail closed before recursive analysis can
+// consume unbounded compiler stack/time.
+inline constexpr std::size_t kMaxRealtimeFunctions = 4096;
+inline constexpr std::size_t kMaxRealtimeCallEdges = 16384;
+inline constexpr std::size_t kMaxRealtimeCallDepth = 256;
+
 inline std::string function_key(std::string_view name, std::size_t arity) {
     return std::string(name) + "/" + std::to_string(arity);
 }
@@ -273,6 +280,12 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         return report;
     }
 
+    if (program.functions.size() > realtime_detail::kMaxRealtimeFunctions) {
+        report.diagnostic = "RT009_SCHEDULING_UNPROVEN";
+        report.reason = "function count exceeds hard-RT analysis budget";
+        return report;
+    }
+
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& function : program.functions) {
         const auto key =
@@ -291,8 +304,17 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     }
 
     std::unordered_map<std::string, realtime_detail::DirectFacts> direct;
-    for (const auto& [key, function] : functions)
-        direct.emplace(key, realtime_detail::direct_facts(*function));
+    std::size_t call_edges = 0;
+    for (const auto& [key, function] : functions) {
+        auto facts = realtime_detail::direct_facts(*function);
+        if (facts.calls.size() > realtime_detail::kMaxRealtimeCallEdges - call_edges) {
+            report.diagnostic = "RT009_SCHEDULING_UNPROVEN";
+            report.reason = "call-edge count exceeds hard-RT analysis budget";
+            return report;
+        }
+        call_edges += facts.calls.size();
+        direct.emplace(key, std::move(facts));
+    }
 
     std::unordered_map<std::string, FunctionEffects> closed_effects;
     std::unordered_map<std::string, std::size_t> closed_depth;
@@ -305,8 +327,13 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
     std::string failure;
     std::string failure_diagnostic;
 
-    std::function<FunctionEffects(const std::string&)> visit =
-        [&](const std::string& key) -> FunctionEffects {
+    std::function<FunctionEffects(const std::string&, std::size_t)> visit =
+        [&](const std::string& key, std::size_t path_depth) -> FunctionEffects {
+        if (path_depth > realtime_detail::kMaxRealtimeCallDepth) {
+            failure = "call depth exceeds hard-RT analysis budget";
+            failure_diagnostic = "RT009_SCHEDULING_UNPROVEN";
+            return {};
+        }
         const auto cached = closed_effects.find(key);
         if (cached != closed_effects.end()) return cached->second;
         if (!active.insert(key).second) {
@@ -334,7 +361,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         unsupported_runtime = unsupported_runtime || facts.unsupported_runtime;
 
         for (const auto& child : facts.calls) {
-            const FunctionEffects child_effects = visit(child);
+            const FunctionEffects child_effects = visit(child, path_depth + 1);
             if (!failure.empty()) {
                 active.erase(key);
                 return {};
@@ -342,6 +369,12 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
             effects = effects.united(child_effects);
             const auto child_depth = closed_depth.at(child);
             depth = std::max(depth, child_depth + 1);
+            if (depth > realtime_detail::kMaxRealtimeCallDepth) {
+                failure = "call depth exceeds hard-RT analysis budget";
+                failure_diagnostic = "RT009_SCHEDULING_UNPROVEN";
+                active.erase(key);
+                return {};
+            }
             const auto child_loops = closed_loops.at(child);
             if (child_loops > UINT64_MAX - loops) {
                 failure = "bounded loop count overflow";
@@ -378,7 +411,7 @@ inline RealtimeAnalysisReport analyze_native_hard_rt(
         return effects;
     };
 
-    report.transitive_effects = visit(report.entry);
+    report.transitive_effects = visit(report.entry, 1);
     report.reachable_functions = reachable.size();
     report.bounded_cleanup = bounded_cleanup;
     report.bounded_calls = bounded_calls;
