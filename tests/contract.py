@@ -132,8 +132,8 @@ def main():
     if args.diagnostic is not None:
         require(bool(args.diagnostic), "--diagnostic requires nonempty text")
         require(args.run is None and args.ir is None and not args.ir_absent and
-                not args.tree_shake and not args.no_native_abi and
-                not args.no_main_link and not args.verify_object and
+                not args.no_native_abi and not args.no_main_link and
+                not args.verify_object and
                 args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
     if args.ir is not None:
