@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/ManagedRef.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -94,6 +96,36 @@ public:
     std::size_t live_allocations() const noexcept { return live_count_; }
     bool retired() const noexcept { return retired_; }
     static constexpr std::size_t capacity = Bytes;
+
+    // 4-byte actor-relative location for compiler-managed object fields. A
+    // CompactRef is NOT a capability: it contains no actor/heap identity,
+    // generation or authorization. Never send it to another actor, put it on
+    // the wire, or decode it without the original lifetime/provenance proof.
+    // The native FFI and ActorRef ABI remain pointer-width independent.
+    using CompactRef = CompressedActorRef;
+    static_assert(sizeof(CompactRef) == 4, "actor-local edge must occupy four bytes");
+
+    // Turn a currently live, generationally checked heap allocation into a
+    // compact local offset. Only 8-byte-aligned object starts are representable
+    // in this mode; other alignments must use a native64/handle representation.
+    std::optional<CompactRef> compact(const Handle& handle) const noexcept {
+        if (!valid(handle)) return std::nullopt;
+        const auto base = reinterpret_cast<std::uintptr_t>(memory_.data());
+        const auto offset = slots_[handle.slot_].offset;
+        if (offset >= Bytes || base > std::numeric_limits<std::uintptr_t>::max() - offset)
+            return std::nullopt;
+        return CompactRef::encode(base, Bytes, base + offset);
+    }
+
+    // Validated bridge for runtimes maintaining the ORIGINAL complete Handle
+    // alongside a compact edge (e.g. an out-of-line generation table). Never
+    // construct a fresh proof by resolving the offset: that would reintroduce
+    // ABA after slot reuse. This function does not disclose host raw pointers.
+    bool compact_matches(const Handle& original, CompactRef ref) const noexcept {
+        if (ref.is_null()) return false;
+        const auto expected = compact(original);
+        return expected.has_value() && *expected == ref;
+    }
 
     // Allocation does not call malloc or invoke any GC. It fails closed under
     // fixed slot/byte limits. Never expose a raw pointer to actor memory.
