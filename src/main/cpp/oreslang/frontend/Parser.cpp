@@ -1333,28 +1333,42 @@ private:
                 require(")");
             }
         }
-        // Class-owned array expressions are intentionally limited to one
-        // field selection followed by a native array method or .size.
-        while (accept(".")) {
-            auto field = make_expression(Expression::Kind::Field, offset);
-            field->left = std::move(expr);
-            field->name = identifier();
-            // Keep ActorRef.send(...) for the outer actor action parser.
-            // Eager ArrayCall parsing would erase the send/stop ordering.
-            if (field->name != "send" && accept("(")) {
-                field->kind = Expression::Kind::ArrayCall;
-                if (!accept(")")) {
-                    do {
-                        if (named_argument_ahead()) {
-                            fail("native array method arguments have no named parameter contract");
-                        }
-                        field->arguments.push_back(expression());
-                    } while (accept(","));
-                    require(")");
+        // Postfix projections have distinct AST authority. Dot fields keep
+        // the existing bounded class/Array<int> contract. Bracket syntax is
+        // represented explicitly, but remains unadmitted until the type and
+        // ownership passes can attach a certified closed-view projection plan.
+        for (;;) {
+            if (accept(".")) {
+                auto field = make_expression(Expression::Kind::Field, offset);
+                field->left = std::move(expr);
+                field->name = identifier();
+                // Keep ActorRef.send(...) for the outer actor action parser.
+                // Eager ArrayCall parsing would erase the send/stop ordering.
+                if (field->name != "send" && accept("(")) {
+                    field->kind = Expression::Kind::ArrayCall;
+                    if (!accept(")")) {
+                        do {
+                            if (named_argument_ahead()) {
+                                fail("native array method arguments have no named parameter contract");
+                            }
+                            field->arguments.push_back(expression());
+                        } while (accept(","));
+                        require(")");
+                    }
                 }
+                expr = std::move(field);
+                if (expr->kind == Expression::Kind::ArrayCall) break;
+                continue;
             }
-            expr = std::move(field);
-            if (expr->kind == Expression::Kind::ArrayCall) break;
+            if (accept("[")) {
+                auto index = make_expression(Expression::Kind::Index, offset);
+                index->left = std::move(expr);
+                index->right = expression();
+                require("]");
+                expr = std::move(index);
+                continue;
+            }
+            break;
         }
         return expr;
     }
@@ -1436,6 +1450,12 @@ private:
                 return;
             case Expression::Kind::Field:
                 validate_expression(*expr.left, parameters, functions);
+                return;
+            case Expression::Kind::Index:
+                if (!expr.left || !expr.right)
+                    throw std::runtime_error("internal malformed native index expression");
+                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.right, parameters, functions);
                 return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions);
