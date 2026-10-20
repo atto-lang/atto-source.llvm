@@ -340,6 +340,28 @@ int main() {
     }
 
     {
+        Program native_program;
+        ActorDecl native_actor;
+        native_actor.name = "Worker";
+        native_actor.on_message = fn("on_message", integer(0));
+        native_program.actors.push_back(std::move(native_actor));
+        auto native_shaken = tree_shake_program(
+                std::move(native_program), {}, false, {"Worker"});
+        assert(native_shaken.runtime_features.contains(
+                RuntimeFeature::ActorNativeRuntime));
+
+        Program wasm_program;
+        ActorDecl wasm_actor;
+        wasm_actor.name = "Worker";
+        wasm_actor.on_message = fn("on_message", integer(0));
+        wasm_program.actors.push_back(std::move(wasm_actor));
+        auto wasm_shaken = tree_shake_program(
+                std::move(wasm_program), {}, false, {"Worker"}, {}, true, false);
+        assert(!wasm_shaken.runtime_features.contains(
+                RuntimeFeature::ActorNativeRuntime));
+    }
+
+    {
         Program program;
         program.functions.push_back(fn("main", call("missing")));
         bool rejected = false;
