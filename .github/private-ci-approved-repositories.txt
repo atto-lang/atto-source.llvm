@@ -2,3 +2,5 @@
 # No repositories are approved by default.
 # Changes must be reviewed by maintainers and security owners on a protected branch.
 # Format: one exact owner/repo per uncommented line, no whitespace or wildcards.
+# Candidate approved by this stacked PR only after governance #692 + independent CODEOWNER/security review:
+opto-sync-test/go-java-validation
