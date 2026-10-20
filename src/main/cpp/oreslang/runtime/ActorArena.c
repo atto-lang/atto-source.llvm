@@ -197,6 +197,9 @@ OresArenaCompactHandle ores_actor_arena_compact_encode(
     enter_lock(a);
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
+    /* Publication changes the allocation's reachable lifetime contract.
+     * Never mutate provenance while external owner loans remain live. */
+    if (s->loans) deny();
     if ((a->slot_bytes & 7u) != 0 || a->slot_bytes == 0) deny();
     const size_t offset = checked_mul((size_t) h.index, a->slot_bytes);
     if ((offset & 7u) != 0 || (uint64_t)(offset / 8u) >= UINT32_MAX) deny();
@@ -244,6 +247,47 @@ void ores_actor_arena_compact_write(
     if (s->loans || (bytes && !src)) deny();
     if (bytes) memcpy(a->slab + index * a->slot_bytes + off, src, bytes);
     leave_lock(a);
+}
+/*
+ * LLVM codegen uses this scalar ABI instead of manually reproducing C
+ * struct-by-value lowering (which differs across native target ABIs).
+ * Source-level Ref<T,Domain> is still compiler-rejected until a verified
+ * ownership/provenance producer can mint the typed MIR; these are not an
+ * integer-to-pointer escape hatch for guest source.
+ */
+uint32_t ores_actor_arena_compact_publish_i32(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint64_t slot_index, uint64_t generation) {
+#if SIZE_MAX < UINT64_MAX
+    if (slot_index > SIZE_MAX) deny();
+#endif
+    const OresArenaTurn turn = {domain, epoch};
+    const OresArenaHandle object = {domain, slot_index, generation};
+    return ores_actor_arena_compact_encode(a, turn, object).bits;
+}
+uint64_t ores_actor_arena_compact_load_i64(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint32_t bits, uint64_t byte_offset) {
+#if SIZE_MAX < UINT64_MAX
+    if (byte_offset > SIZE_MAX) deny();
+#endif
+    const OresArenaTurn turn = {domain, epoch};
+    const OresArenaCompactHandle ref = {domain, bits};
+    uint64_t out = 0;
+    ores_actor_arena_compact_read(a, turn, ref,
+                                  (size_t)byte_offset, &out, sizeof(out));
+    return out;
+}
+void ores_actor_arena_compact_store_i64(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint32_t bits, uint64_t byte_offset, uint64_t value) {
+#if SIZE_MAX < UINT64_MAX
+    if (byte_offset > SIZE_MAX) deny();
+#endif
+    const OresArenaTurn turn = {domain, epoch};
+    const OresArenaCompactHandle ref = {domain, bits};
+    ores_actor_arena_compact_write(a, turn, ref,
+                                   (size_t)byte_offset, &value, sizeof(value));
 }
 OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
     enter_lock(a);

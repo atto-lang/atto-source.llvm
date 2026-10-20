@@ -41,6 +41,22 @@ void ores_actor_arena_compact_read(
 void ores_actor_arena_compact_write(
     OresActorArena*, OresArenaTurn, OresArenaCompactHandle,
     size_t offset, const void* src, size_t bytes);
+
+/* Compiler-owned, scalar-only bridge for checked LLVM MIR. Host supplies an
+ * authenticated physical actor turn; the stored managed reference stays i32.
+ * These are trusted runtime symbols, not Oreslang user-callable functions.
+ * LLVM must NEVER pass an untyped guest integer here as a reference.
+ * No C aggregate-by-value or raw pointer-return ABI is exposed. */
+uint32_t ores_actor_arena_compact_publish_i32(
+    OresActorArena*, uint64_t domain, uint64_t epoch,
+    uint64_t slot_index, uint64_t generation);
+uint64_t ores_actor_arena_compact_load_i64(
+    OresActorArena*, uint64_t domain, uint64_t epoch,
+    uint32_t bits, uint64_t byte_offset);
+void ores_actor_arena_compact_store_i64(
+    OresActorArena*, uint64_t domain, uint64_t epoch,
+    uint32_t bits, uint64_t byte_offset, uint64_t value);
+
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);
 OresArenaScratch ores_actor_arena_scratch_alloc(OresActorArena*, OresArenaTurn,
