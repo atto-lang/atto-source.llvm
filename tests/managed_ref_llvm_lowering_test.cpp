@@ -144,6 +144,62 @@ int main(int argc, char** argv) {
             require(rejected, "wasm32 incorrectly emitted native64 actor pointer arithmetic");
         }
 
+        // A caller cannot forge an undersized access, omit the original
+        // provenance proof, or emit compact pointers into a layout-less module.
+        {
+            llvm::Module negative("ref32-invalid-admission", ctx);
+            negative.setDataLayout("e-p:64:64-i64:64-n8:16:32:64");
+            auto* pty = llvm::Type::getInt8Ty(ctx)->getPointerTo();
+            auto* span_ty = llvm::Type::getInt64Ty(ctx);
+            auto* fail_fn = llvm::Function::Create(
+                llvm::FunctionType::get(llvm::Type::getVoidTy(ctx),
+                    {pty, span_ty}, false),
+                llvm::Function::ExternalLinkage, "probe_invalid", negative);
+            llvm::IRBuilder<> b(llvm::BasicBlock::Create(ctx, "entry", fail_fn));
+            auto* p = fail_fn->getArg(0);
+            auto* span = fail_fn->getArg(1);
+            auto checker = negative.getOrInsertFunction("original_proof",
+                llvm::FunctionType::get(llvm::Type::getInt1Ty(ctx),
+                    {pty, pty, span_ty, llvm::Type::getInt32Ty(ctx)}, false));
+            ActorRef32Access valid{p, p, span, p, checker};
+            auto must_deny = [&](const ActorRef32Access& access,
+                                 std::uint64_t access_bytes,
+                                 const char* why) {
+                bool denied = false;
+                try {
+                    (void)emit_checked_actor_ref32_load(negative, b, access,
+                        llvm::Type::getInt64Ty(ctx), access_bytes);
+                } catch (const std::invalid_argument&) {
+                    denied = true;
+                }
+                require(denied, why);
+            };
+            must_deny(valid, 1, "underreported i64 load width admitted");
+            auto unproven = valid;
+            unproven.original_proof = nullptr;
+            must_deny(unproven, 8, "missing original generation proof admitted");
+            llvm::Module unspecified("ref32-no-target-abi", ctx);
+            auto* other_fn = llvm::Function::Create(
+                llvm::FunctionType::get(llvm::Type::getVoidTy(ctx),
+                    {pty, span_ty}, false),
+                llvm::Function::ExternalLinkage, "probe_unspecified", unspecified);
+            llvm::IRBuilder<> other(llvm::BasicBlock::Create(ctx, "entry", other_fn));
+            auto* other_p = other_fn->getArg(0);
+            ActorRef32Access no_layout{
+                other_p, other_p, other_fn->getArg(1), other_p,
+                unspecified.getOrInsertFunction("original_proof",
+                    llvm::FunctionType::get(llvm::Type::getInt1Ty(ctx),
+                        {pty, pty, span_ty, llvm::Type::getInt32Ty(ctx)}, false))};
+            bool denied = false;
+            try {
+                (void)emit_checked_actor_ref32_load(unspecified, other, no_layout,
+                    llvm::Type::getInt64Ty(ctx), 8);
+            } catch (const std::invalid_argument&) {
+                denied = true;
+            }
+            require(denied, "missing target DataLayout admitted ref32 decode");
+        }
+
         if (argc == 2 && std::string(argv[1]) == "--emit") {
             std::cout << printed;
             return 0;
