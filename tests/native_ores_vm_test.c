@@ -60,6 +60,9 @@ int main(void) {
         enum OresNativeVMDomain kind = (enum OresNativeVMDomain)i;
         require(ores_native_vm_workers(vm, kind) == (i == ORES_NATIVE_VM_SHARED ? 2u : 5u));
         require(ores_native_vm_started_carriers(vm, kind) == 0);
+        /* Even the UNTRUSTED lane is only a host scheduler, not a
+         * security boundary; never accept it as secure actor placement. */
+        require(!ores_native_vm_has_hard_security_boundary(vm, kind));
         refs[i] = ores_native_vm_spawn(vm, kind, 0);
         require(ores_native_vm_started_carriers(vm, kind) == 0);
         require(refs[i].scheduler_domain != 0);

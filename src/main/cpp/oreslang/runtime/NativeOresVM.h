@@ -39,7 +39,33 @@ typedef struct {
 
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in quota/cpuset-aware carrier admission. An explicit nonzero
+ * carrier_workers is preserved for its domain, while zero-valued domains
+ * divide remaining detected CPU capacity (at least one pthread per domain).
+ * This sizes pools, but does NOT pin them, provide isolation, or implement
+ * region/Task ownership. Legacy open() retains its 0 => 5 contract.
+ */
+OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config);
+/* Separate opt-in strict cross-domain physical callback concurrency limit,
+ * including under 4 CPUs. Leaves configured per-domain carrier counts
+ * unchanged. A denied callback stays on its scheduler's ready queue and no
+ * Oreslang actor code or Task is run while waiting for a permit.
+ * Host-only; independently owned nb Task schedulers are not covered yet. */
+OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
+    const OresNativeVMConfig* config, size_t maximum);
+size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm);
+/* Host-detected snapshot, 1 minimum; not the count of exclusive CPU cores. */
+size_t ores_native_vm_effective_cpu_budget(void);
 size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain domain);
+/* Security admission probe, NOT a capability grant.
+ * All four native scheduler domains are in-process host callbacks and have
+ * zero independent VM heaps or OS address-space boundaries, even UNTRUSTED.
+ * Return 0 for all current native domains and invalid refs. Production
+ * UNTRUSTED source must run through an independently validated Graal isolate
+ * or stronger externally sandboxed worker, never this callback alone.
+ */
+int ores_native_vm_has_hard_security_boundary(
+    const OresNativeVM* vm, enum OresNativeVMDomain domain);
 /* Number of physically started carriers, zero until first admitted work. */
 size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);

@@ -1,0 +1,151 @@
+#include "oreslang/runtime/SourceCooperationQuantum.h"
+#include <atomic>
+#include <stdexcept>
+#include <chrono>
+#include <cstdint>
+#include <iostream>
+#include <limits>
+#include <type_traits>
+#include <utility>
+
+struct FakeClock {
+    using rep = std::chrono::steady_clock::rep;
+    using period = std::chrono::steady_clock::period;
+    using duration = std::chrono::steady_clock::duration;
+    using time_point = std::chrono::time_point<FakeClock>;
+    static constexpr bool is_steady = true;
+    static std::atomic<std::int64_t> nanos;
+    static std::atomic<int> reads;
+    static time_point now() noexcept {
+        reads.fetch_add(1, std::memory_order_relaxed);
+        return time_point(std::chrono::duration_cast<duration>(
+            std::chrono::nanoseconds(nanos.load(std::memory_order_relaxed))));
+    }
+};
+std::atomic<std::int64_t> FakeClock::nanos{0};
+std::atomic<int> FakeClock::reads{0};
+
+using Quantum = oreslang::runtime::BasicSourceCooperationQuantum<FakeClock>;
+// A quantum must never be value-copied when a SourceTask resumes on a new
+// carrier: that would reset or duplicate its fairness and watchdog history.
+static_assert(!std::is_copy_constructible_v<Quantum>, "quantum must be task-owned");
+static_assert(!std::is_copy_assignable_v<Quantum>, "quantum must not be reassigned");
+static_assert(!std::is_move_constructible_v<Quantum>, "continuation must retain one quantum");
+static_assert(!std::is_move_assignable_v<Quantum>, "quantum must not migrate separately");
+static_assert(std::is_same_v<decltype(std::declval<Quantum>().completedBackedgesThisDispatch()), std::uint64_t>,
+              "per-dispatch reductions must not wrap at 32 bits");
+static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
+                  std::numeric_limits<std::uint64_t>::max() - 1)
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "the last representable reduction must be counted");
+static_assert(oreslang::runtime::detail::saturatingBackedgeSuccessor(
+                  std::numeric_limits<std::uint64_t>::max())
+                  == std::numeric_limits<std::uint64_t>::max(),
+              "a wrapped reduction counter could bypass the budget");
+
+static void require(bool ok) {
+    if (!ok) throw std::runtime_error("native cooperation-quantum invariant failed");
+}
+
+static void reset_clock() {
+    FakeClock::nanos.store(0);
+    FakeClock::reads.store(0);
+}
+
+static void reduction_fast_path() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    require(FakeClock::reads.load() == 2);
+    for (int i = 1; i <= 512; ++i) {
+        const bool checkDue = q.completedBackedgeNeedsCheck();
+        require(checkDue == (i % 64 == 0));
+        if (checkDue) require(q.shouldCooperateAtCheck() == (i == 512));
+    }
+    require(FakeClock::reads.load() == 9);
+    require(q.completedBackedgesThisDispatch() == 512);
+}
+
+static void overdue_no_yield_region_checks_every_new_boundary() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 1; i <= 511; ++i)
+        require(q.completedBackedgeNeedsCheck() == (i % 64 == 0));
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    // The first deadline was skipped while a lexical guard was live.
+    // Once the guard is dropped, the next completed backedge must permit
+    // handoff immediately instead of waiting for another full batch.
+    for (int i = 513; i <= 560; ++i) {
+        require(q.completedBackedgeNeedsCheck());
+        require(q.shouldCooperateAtCheck());
+    }
+    require(q.completedBackedgesThisDispatch() == 560);
+    require(FakeClock::reads.load() == 2);
+}
+
+static void timer_slow_path() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 0; i < 63; ++i) require(!q.completedBackedgeNeedsCheck());
+    FakeClock::nanos.store(2'050'000);
+    require(FakeClock::reads.load() == 2);
+    require(q.completedBackedgeNeedsCheck());
+    require(q.shouldCooperateAtCheck());
+    require(FakeClock::reads.load() == 3);
+}
+
+static void independent_watchdog_requests_next_safe_boundary() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    for (int i = 0; i < 63; ++i)
+        require(!q.completedBackedgeNeedsCheck());
+    require(q.completedBackedgeNeedsCheck());
+    require(FakeClock::reads.load() == 2);
+    require(q.shouldCooperateAtCheck(true));
+    require(FakeClock::reads.load() == 2); // watcher request needs no clock read
+    require(!q.shouldCooperateAtCheck(false));
+    require(FakeClock::reads.load() == 3);
+}
+
+static void await_is_not_cooperate() {
+    reset_clock();
+    Quantum q;
+    q.beginDispatch();
+    q.recordedCooperate();
+    FakeClock::nanos.store(30'000'000'000LL);
+    q.beginDispatch();
+    require(q.timeSinceLastCooperate() == std::chrono::seconds(30));
+    for (int i = 0; i < 64; ++i) q.completedBackedgeNeedsCheck();
+    require(!q.shouldCooperateAtCheck());
+    q.recordedCooperate();
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
+}
+
+static void repeated_dispatches_keep_task_context() {
+    reset_clock();
+    Quantum q;
+    for (int turn = 0; turn < 2048; ++turn) {
+        FakeClock::nanos.fetch_add(2'000'000);
+        q.beginDispatch();
+        for (int i = 0; i < 512; ++i) {
+            if (q.completedBackedgeNeedsCheck())
+                require(q.shouldCooperateAtCheck() == (i == 511));
+        }
+        q.recordedCooperate();
+    }
+    require(q.completedBackedgesThisDispatch() == 512);
+    require(q.timeSinceLastCooperate() == std::chrono::nanoseconds::zero());
+}
+int main() {
+    reduction_fast_path();
+    overdue_no_yield_region_checks_every_new_boundary();
+    timer_slow_path();
+    independent_watchdog_requests_next_safe_boundary();
+    await_is_not_cooperate();
+    repeated_dispatches_keep_task_context();
+    std::cout << "native quantum 64/512/2ms: PASS (host-only, no guest await parity)\n";
+}

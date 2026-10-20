@@ -20,12 +20,35 @@ enum class FunctionEffect : std::uint32_t {
 };
 
 struct FunctionEffects {
+    // Bits are public for the compiler-owned ABI. Never grant admission to
+    // arbitrary or future/unknown bits: those require an explicit review.
+    static constexpr std::uint32_t KnownBits =
+        static_cast<std::uint32_t>(FunctionEffect::StateRead) |
+        static_cast<std::uint32_t>(FunctionEffect::StateWrite) |
+        static_cast<std::uint32_t>(FunctionEffect::Suspend) |
+        static_cast<std::uint32_t>(FunctionEffect::Io) |
+        static_cast<std::uint32_t>(FunctionEffect::Alloc) |
+        static_cast<std::uint32_t>(FunctionEffect::Block) |
+        static_cast<std::uint32_t>(FunctionEffect::Ffi) |
+        static_cast<std::uint32_t>(FunctionEffect::Throw) |
+        static_cast<std::uint32_t>(FunctionEffect::Raise) |
+        static_cast<std::uint32_t>(FunctionEffect::Panic);
+
     std::uint32_t bits = 0;
-    constexpr bool has(FunctionEffect effect) const {
-        return (bits & static_cast<std::uint32_t>(effect)) != 0;
+    constexpr bool valid() const noexcept {
+        return (bits & ~KnownBits) == 0;
     }
-    constexpr bool permits(FunctionEffects inferred) const {
-        return (bits & inferred.bits) == inferred.bits;
+    constexpr bool has(FunctionEffect effect) const noexcept {
+        const auto bit = static_cast<std::uint32_t>(effect);
+        // A casted composite/zero/unknown flag is not a single effect.
+        return valid() && bit != 0 && (bit & (bit - 1u)) == 0 &&
+               (bit & KnownBits) != 0 && (bits & bit) != 0;
+    }
+    constexpr bool permits(FunctionEffects inferred) const noexcept {
+        // Do not silently approve unrecognized effects, even if both sets
+        // happen to contain the same forged bit.
+        return valid() && inferred.valid() &&
+               (bits & inferred.bits) == inferred.bits;
     }
     constexpr FunctionEffects united(FunctionEffects rhs) const {
         return {bits | rhs.bits};

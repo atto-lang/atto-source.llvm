@@ -2,7 +2,9 @@
 #include "oreslang/runtime/ActorHeapRetirementProof.hpp"
 #include "oreslang/runtime/BoundedMpscQueue.hpp"
 #include "oreslang/runtime/BoundedSpscQueue.hpp"
+#include "oreslang/runtime/ActorHeap.hpp"
 #include "oreslang/runtime/ParkingSignal.hpp"
+#include "oreslang/runtime/SupervisorControlTurn.hpp"
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -22,7 +24,10 @@ struct ActorMessage {
     std::uint64_t id = 0;
     std::int64_t input = 0;
 };
-enum class StepKind : std::uint8_t { done, await_io };
+// CPU cooperation is distinct from both logical turn completion and an IO
+// broker request. Legacy handlers cannot issue COOPERATE without v2 admission.
+enum class StepKind : std::uint8_t { done, await_io, cooperate };
+enum class ResumeCause : std::uint8_t { initial, io, cpu };
 // Per-operation terminal state. Only a Pending->Completed or
 // Pending->Canceled transition may win. A new operation resets the state
 // only after the previous broker result has been consumed on this carrier.
@@ -38,6 +43,11 @@ struct ActorStep {
 // 'resumed' is true exactly once when the pending IO has completed.
 using ActorHandler = ActorStep (*)(void* actor_state, ActorMessage message,
                                    bool resumed, std::int64_t result) noexcept;
+// Optional V2 handler preserves WHY a frame resumed. Existing handlers retain
+// the bool IO contract. Only V2 may use CPU cooperation; a carrier still has
+// exactly one actor and one in-flight logical turn (not multi-actor fairness).
+using ActorHandlerV2 = ActorStep (*)(void* actor_state, ActorMessage message,
+                                    ResumeCause cause, std::int64_t io_result) noexcept;
 // The IO callback runs on a separate broker thread, with separate owned IO
 // state: it must NOT dereference the actor's private heap or use the carrier.
 // It must periodically check the cancellation flag and use bounded/nonblocking
@@ -55,6 +65,7 @@ struct CarrierStats {
     std::uint64_t protocol_failures = 0;
     std::uint64_t actor_thread_tag = 0;
     std::uint64_t abandoned_on_stop = 0; // accepted minus finished turns; valid after join()
+    std::uint64_t cooperations = 0;      // physical handoffs, not completed turns
 };
 
 // Construction and thread start allocate and use syscalls, BEFORE any future
@@ -63,6 +74,11 @@ struct CarrierStats {
 class HungryCarrier final {
     struct ProducerGate;
 public:
+    using NativeHeap = ActorHeap<64, 256>;
+    // Available only while executing on the actor's carrier.
+    // Do not retain across actor termination.
+    static NativeHeap* active_heap() noexcept;
+
     // Handles hold an independent shared lifetime gate. They may be copied,
     // sent to other native producer threads and survive carrier destruction.
     // Creation/copy can allocate or refcount; pre-create them before realtime
@@ -71,6 +87,9 @@ public:
     public:
         ProducerHandle() = default;
         bool try_send(ActorMessage message) const noexcept;
+        // Only wake after successful publication to a reserved slot.
+        // Uses the same shutdown gate as ordinary producers.
+        bool try_wake_control() const noexcept;
         explicit operator bool() const noexcept { return static_cast<bool>(gate_); }
     private:
         friend class HungryCarrier;
@@ -110,8 +129,15 @@ public:
         bool require_strict_no_gc = false;    // fail closed until compiler/allocator proof exists
         bool require_hard_realtime = false;   // fail closed until watchdog/OS proof exists
         std::optional<ActorHeapIdentity> heap_owner; // minted at supervisor admission
+        // Optional externally owned supervisor components; must outlive join.
+        oreslang::SupervisorControlTurn* supervisor_control = nullptr;
+        oreslang::SupervisorControlTurn::Hooks* supervisor_hooks = nullptr;
     };
     HungryCarrier(void* actor_state, ActorHandler handler, void* broker_state,
+                  BrokerOperation operation, Options opts);
+    // Explicit V2-only CPU frame admission; no silent reinterpretation of the
+    // legacy "resumed means IO completed" handler parameter.
+    HungryCarrier(void* actor_state, ActorHandlerV2 handler, void* broker_state,
                   BrokerOperation operation, Options opts);
     ~HungryCarrier() noexcept;
     HungryCarrier(const HungryCarrier&) = delete;
@@ -147,16 +173,19 @@ private:
     };
     void actor_loop() noexcept;
     void broker_loop() noexcept;
-    void run_handler(ActorMessage, bool resumed, std::int64_t result) noexcept;
+    void run_handler(ActorMessage, ResumeCause cause, std::int64_t result) noexcept;
     void wait_actor() noexcept;
     bool has_input_ready() const noexcept;
     bool pop_next_input(ActorMessage& message) noexcept;
     bool try_send_spsc(std::size_t lane, ActorMessage message) noexcept;
     bool enqueue_mpsc(ActorMessage message) noexcept;
+    bool wake_control() noexcept;
     bool pin_cpu() noexcept;
 
     void* actor_state_;
-    ActorHandler handler_;
+    NativeHeap actor_heap_; // separate native heap for each dedicated carrier
+    ActorHandler handler_ = nullptr;
+    ActorHandlerV2 handler_v2_ = nullptr;
     void* broker_state_;
     BrokerOperation operation_;
     Options options_;
@@ -184,11 +213,14 @@ private:
     std::thread broker_thread_;
     // Owned/exclusively accessed by carrier:
     bool pending_ = false;
+    // CPU-cooperating turn remains the unique logical owner and outranks
+    // subsequent mailbox messages, but never urgent supervisor CONTROL.
+    bool cooperating_ = false;
     ActorMessage current_{};
     std::uint64_t generation_ = 0;
     // Atomic telemetry allows reads without touching actor-local state.
     std::atomic<std::uint64_t> accepted_{0}, completed_{0}, io_done_{0},
         parked_{0}, canceled_{0}, stale_{0}, failures_{0}, thread_tag_{0},
-        abandoned_on_stop_{0};
+        abandoned_on_stop_{0}, cooperations_{0};
 };
 } // namespace oreslang::runtime

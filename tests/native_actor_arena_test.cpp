@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <threads.h>
+#include <thread>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
 #include <sys/resource.h>
@@ -57,10 +57,8 @@ static void invalid(enum Misuse m) {
         (void) ores_actor_arena_open(24, 4, 4096, 1024 * 1024, 128);
     } else if (m == FOREIGN_CARRIER_TURN) {
         WrongCarrier wrong = {a, t, h};
-        thrd_t other;
-        if (thrd_create(&other, different_carrier_with_stolen_turn, &wrong) != thrd_success)
-            abort();
-        (void) thrd_join(other, NULL);
+        std::thread other([&wrong] { different_carrier_with_stolen_turn(&wrong); });
+        other.join();
     } else if (m == NESTED_ACTOR_TURN) {
         OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
         (void) ores_actor_arena_enter(other, 33, 2);
@@ -115,10 +113,9 @@ int main(void) {
     ores_actor_arena_leave(a, first);
     /* Durable loans survive turns; scratch is zeroized and recycled. */
     Carrier car = {a, h, 0};
-    thrd_t carrier;
-    CHECK(thrd_create(&carrier, other_carrier, &car) == thrd_success);
     int outcome = -1;
-    CHECK(thrd_join(carrier, &outcome) == thrd_success);
+    std::thread carrier([&] { outcome = other_carrier(&car); });
+    carrier.join();
     CHECK(outcome == 0 && !car.failed);
     OresArenaTurn last = ores_actor_arena_enter(a, 23, 2);
     value = 0; ores_actor_arena_read(a, last, h, 0, &value, sizeof(value));

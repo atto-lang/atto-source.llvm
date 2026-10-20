@@ -12,12 +12,46 @@
 
 using oreslang::runtime::Failure;
 using oreslang::runtime::FailureKind;
+using oreslang::runtime::GuestFailureBoundary;
+using oreslang::runtime::GuestFailureOrigin;
+using oreslang::runtime::admits_guest_failure;
 using oreslang::runtime::bounded_control_diagnostic;
 using oreslang::runtime::combine_failure;
 using oreslang::runtime::failure_priority;
 using oreslang::runtime::max_control_diagnostic_bytes;
 
 int main() {
+    // Boundary contract parity with Java/GraalVM PR #781; not guest lowering.
+    constexpr std::array<GuestFailureOrigin, 11> origins = {
+        GuestFailureOrigin::OrdinaryThrow, GuestFailureOrigin::PermissionDenied,
+        GuestFailureOrigin::DeadlineExceeded, GuestFailureOrigin::Cancellation,
+        GuestFailureOrigin::SchedulerRejected, GuestFailureOrigin::Interrupted,
+        GuestFailureOrigin::Panic, GuestFailureOrigin::Raise,
+        GuestFailureOrigin::ProcessExit, GuestFailureOrigin::HostFatal,
+        GuestFailureOrigin::Unknown
+    };
+    static_assert(admits_guest_failure(GuestFailureBoundary::Trap,
+                                      GuestFailureOrigin::OrdinaryThrow));
+    static_assert(!admits_guest_failure(GuestFailureBoundary::Trap,
+                                       GuestFailureOrigin::PermissionDenied));
+    static_assert(admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                      GuestFailureOrigin::PermissionDenied));
+    static_assert(!admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                       GuestFailureOrigin::Cancellation));
+    for (const auto origin : origins) {
+        const bool ordinary = origin == GuestFailureOrigin::OrdinaryThrow;
+        const bool explicit_recovery = ordinary
+            || origin == GuestFailureOrigin::PermissionDenied
+            || origin == GuestFailureOrigin::DeadlineExceeded;
+        assert(admits_guest_failure(GuestFailureBoundary::Trap, origin) == ordinary);
+        assert(admits_guest_failure(GuestFailureBoundary::ExplicitCatch, origin)
+                == explicit_recovery);
+    }
+    assert(!admits_guest_failure(static_cast<GuestFailureBoundary>(0xff),
+                                 GuestFailureOrigin::OrdinaryThrow));
+    assert(!admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                 static_cast<GuestFailureOrigin>(0xff)));
+
     static_assert(failure_priority(FailureKind::HostFatal) ==
                   failure_priority(FailureKind::ProcessExit));
     static_assert(failure_priority(FailureKind::Cancelled) >

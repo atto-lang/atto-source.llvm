@@ -1,0 +1,1 @@
+pub fnc main(): int { throw 7; return 1; }

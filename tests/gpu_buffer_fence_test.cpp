@@ -1,10 +1,11 @@
 #include "oreslang/runtime/GpuBufferFence.hpp"
 #include <stdexcept>
 #include <iostream>
-#include <atomic>
-#include <thread>
-#include <utility>
 #include <type_traits>
+#include <atomic>
+#include <exception>
+#include <optional>
+#include <thread>
 
 template<class Exception, class F> void expects(F fn) {
     try { fn(); } catch (const Exception&) { return; }
@@ -15,8 +16,6 @@ static void check(bool ok) {
 }
 int main() {
     using namespace oreslang::gpu;
-    static_assert(!std::is_constructible_v<Ticket, std::uint64_t, std::uint64_t>,
-            "guest must not forge GPU completion tickets from integers");
     const Identity id{"tenant-A", "device-0", 7};
     const Identity foreign{"tenant-B", "device-0", 7};
     BufferFence buffer(id, 1024);
@@ -25,29 +24,36 @@ int main() {
     check(buffer.status() == Status::InFlight);
     expects<std::logic_error>([&] { (void)buffer.take(); });
     expects<std::logic_error>([&] { buffer.close_after_retirement(); });
-    // A different allocation can legitimately reuse the SAME numeric
-    // generation and sequence. It must never provide completion authority.
-    BufferFence unrelated(id, 16);
-    auto foreign_ticket = unrelated.begin_command(id);
-    check(foreign_ticket.generation == first.generation
-            && foreign_ticket.sequence == first.sequence);
-    expects<std::logic_error>([&] { buffer.complete(foreign_ticket, true); });
-    expects<std::logic_error>([&] { buffer.cancel_pending(foreign_ticket); });
-    auto tampered = foreign_ticket;
-    tampered.generation = first.generation;
-    tampered.sequence = first.sequence;
-    expects<std::logic_error>([&] { buffer.complete(tampered, true); });
-    unrelated.complete(foreign_ticket, true);
-    unrelated.retire_after_backend_release(id);
-    unrelated.close_after_retirement();
+    static_assert(!std::is_default_constructible<Ticket>::value,
+                  "native device tickets must not be guest-constructible");
+    // Identical generation+sequence on another buffer must NOT authenticate
+    // completion or cancellation of this buffer's in-flight work.
+    BufferFence impostor(id, 1024);
+    auto impostor_ticket = impostor.begin_command(id);
+    check(impostor_ticket.generation() == first.generation());
+    check(impostor_ticket.sequence() == first.sequence());
+    expects<std::logic_error>([&] { buffer.complete(impostor_ticket, true); });
+    expects<std::logic_error>([&] { buffer.cancel_pending(impostor_ticket); });
+    impostor.complete(impostor_ticket, true);
+    impostor.retire_after_backend_release(id);
+    impostor.close_after_retirement();
+    // C++ implicit move must not bypass take()'s in-flight constraint.
+    expects<std::logic_error>([&] { BufferFence stolen(std::move(buffer)); });
+    check(buffer.status() == Status::InFlight);
+    BufferFence retired_target(id, 4);
+    retired_target.retire_after_backend_release(id);
+    retired_target.close_after_retirement();
+    expects<std::logic_error>([&] { retired_target = std::move(buffer); });
+    check(buffer.status() == Status::InFlight);
     buffer.complete(first, true);
     expects<std::logic_error>([&] { buffer.complete(first, true); });
     auto owner = buffer.take();
     expects<std::logic_error>([&] { (void)buffer.status(); });
     buffer.close_after_retirement(); // moved-from wrapper has no handle
     auto next = owner.begin_command(id);
-    check(next.sequence != first.sequence);
+    check(next.sequence() != first.sequence());
     owner.cancel_pending(next);
+    expects<std::logic_error>([&] { owner.acknowledge_cancelled_device_event(first, id); });
     check(owner.status() == Status::Poisoned);
     expects<std::logic_error>([&] { (void)owner.take(); });
     expects<std::logic_error>([&] { owner.retire_after_backend_release(id); });
@@ -66,37 +72,53 @@ int main() {
     failed.retire_after_backend_release(second);
     failed.close_after_retirement();
     expects<std::invalid_argument>([&] { (void)BufferFence(second, 0); });
-
-    // Concurrent take() versus reading the old owner used to race on state_:
-    // active() returned and take() moved the pointer before the second access.
-    // Either operation may win, but never crash or publish a stale snapshot.
-    for (int iteration = 0; iteration < 300; ++iteration) {
-        BufferFence candidate(Identity{"tenant", "race-device", 50}, 64);
-        std::atomic<bool> start{false};
-        std::thread observer([&] {
-            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-            try {
-                const auto snapshot = candidate.snapshot();
-                check(snapshot.bytes == 64 && snapshot.status == Status::Idle);
-            } catch (const std::logic_error&) {
-                // take() won; the old wrapper is correctly invalidated.
-            }
+    // Deterministic concurrent start: a command admission and transfer
+    // compete on *the same* owner wrapper. Exactly one may succeed, and
+    // ThreadSanitizer must observe no state_ or generation data races.
+    for (int trial = 0; trial < 128; ++trial) {
+        BufferFence contended(id, 16);
+        std::optional<BufferFence> transferred;
+        std::optional<Ticket> admitted;
+        std::atomic<bool> go{false};
+        std::exception_ptr admission_error, transfer_error;
+        std::thread command([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { admitted = contended.begin_command(id); }
+            catch (const std::logic_error&) { }
+            catch (...) { admission_error = std::current_exception(); }
         });
-        start.store(true, std::memory_order_release);
-        auto transferred = candidate.take();
-        observer.join();
-        check(transferred.status() == Status::Idle);
-        expects<std::logic_error>([&] { (void)candidate.snapshot(); });
+        std::thread transfer([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { transferred.emplace(contended.take()); }
+            catch (const std::logic_error&) { }
+            catch (...) { transfer_error = std::current_exception(); }
+        });
+        go.store(true, std::memory_order_release);
+        command.join();
+        transfer.join();
+        if (admission_error) std::rethrow_exception(admission_error);
+        if (transfer_error) std::rethrow_exception(transfer_error);
+        check(admitted.has_value() != transferred.has_value());
+        if (admitted) {
+            contended.complete(*admitted, true);
+            contended.retire_after_backend_release(id);
+            contended.close_after_retirement();
+        } else {
+            transferred->retire_after_backend_release(id);
+            transferred->close_after_retirement();
+            expects<std::logic_error>([&] { (void)contended.status(); });
+        }
     }
-
-    BufferFence current(Identity{"tenant", "replacement", 60}, 16);
-    BufferFence incoming(Identity{"tenant", "replacement", 61}, 16);
-    expects<std::logic_error>([&] { current = std::move(incoming); });
-    check(current.status() == Status::Idle);
+    // Move assignment must not orphan an unretired underlying buffer.
+    BufferFence existing(id, 4), incoming(id, 4);
+    expects<std::logic_error>([&] { existing = std::move(incoming); });
+    check(existing.status() == Status::Idle);
     check(incoming.status() == Status::Idle);
-    current.retire_after_backend_release(Identity{"tenant", "replacement", 60});
-    current = std::move(incoming);
-    check(current.status() == Status::Idle);
-    expects<std::logic_error>([&] { (void)incoming.snapshot(); });
+    existing.retire_after_backend_release(id);
+    existing.close_after_retirement();
+    existing = std::move(incoming);
+    check(existing.status() == Status::Idle);
+    existing.retire_after_backend_release(id);
+    existing.close_after_retirement();
     std::cout << "native device fence lifecycle tests passed\n";
 }

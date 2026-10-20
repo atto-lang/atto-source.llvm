@@ -119,8 +119,8 @@ int main() {
         // generation and sequence, but not this submission's private seal.
         BufferFence foreign(Identity{"t", "gpu", 10}, shape.byte_length());
         const auto forged = foreign.begin_command(Identity{"t", "gpu", 10});
-        check(forged.generation == admitted.tickets.input_ticket.generation
-                && forged.sequence == admitted.tickets.input_ticket.sequence);
+        check(forged.generation() == admitted.tickets.input_ticket.generation()
+                && forged.sequence() == admitted.tickets.input_ticket.sequence());
         expect<std::logic_error>([&] { source.complete(forged, true); });
         expect<std::logic_error>([&] { source.cancel_pending(forged); });
         foreign.complete(forged, true);
@@ -210,7 +210,7 @@ int main() {
         BufferFence foreign(Identity{"tenant", "gpu", 501}, 64);
         auto tickets = BufferFence::claim_pair(a, b, 64);
         auto other_ticket = foreign.begin_command(Identity{"tenant", "gpu", 501});
-        check(tickets.input_ticket.sequence == other_ticket.sequence);
+        check(tickets.input_ticket.sequence() == other_ticket.sequence());
         auto mixed = tickets;
         mixed.input_ticket = other_ticket;
         expect<std::logic_error>([&] {
@@ -260,6 +260,31 @@ int main() {
         check(a.status() == oreslang::gpu::Status::InFlight);
         check(b.status() == oreslang::gpu::Status::InFlight);
         BufferFence::complete_pair(a, b, tickets, true);
+    }
+    // Two valid submissions cannot be recombined into a fabricated pair.
+    {
+        BufferFence a(Identity{"t", "d", 801}, 64), b(Identity{"t", "d", 802}, 64);
+        BufferFence c(Identity{"t", "d", 803}, 64), d(Identity{"t", "d", 804}, 64);
+        auto ab = BufferFence::claim_pair(a, b, 64);
+        auto cd = BufferFence::claim_pair(c, d, 64);
+        auto mixed = ab;
+        mixed.output = cd.input;
+        mixed.output_ticket = cd.input_ticket;
+        expect<std::logic_error>([&] { BufferFence::complete_pair(a, c, mixed, true); });
+        check(a.status() == oreslang::gpu::Status::InFlight);
+        check(c.status() == oreslang::gpu::Status::InFlight);
+        BufferFence::complete_pair(a, b, ab, true);
+        BufferFence::complete_pair(c, d, cd, true);
+    }
+    // Owner replacement between preflight and claim must reject before mutation.
+    {
+        BufferFence a(Identity{"t", "d", 901}, 64), b(Identity{"t", "d", 902}, 64);
+        const Identity stale{"t", "d", 900}, expected{"t", "d", 902};
+        expect<std::invalid_argument>([&] {
+            (void)BufferFence::claim_pair(a, b, 64, &stale, &expected);
+        });
+        check(a.status() == oreslang::gpu::Status::Idle);
+        check(b.status() == oreslang::gpu::Status::Idle);
     }
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }

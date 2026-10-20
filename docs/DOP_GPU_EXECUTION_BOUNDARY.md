@@ -163,3 +163,17 @@ test blobs were matched by Git SHA, compiled with Clang C++17
 `-Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined`, and
 the test passed. These tests are not the complete Java DOP/kernel JUnit
 suite, LLVM native CTest matrix, ThreadSanitizer, or real device execution.
+
+## Current-main conflict reconciliation (2026-10-20)
+
+The integration preserves main's private immutable ticket fields, direct-move
+borrow/in-flight checks, F32 host-width and endian admission, empty-dispatch
+rejection, and locale-independent OpenCL emission. Paired admission uses the
+same per-submission proofs as single-buffer commands, plus a shared pair proof
+that prevents combining valid tickets from unrelated submissions. Typed claims
+recheck the preflight allocation identities under both owner/state locks.
+
+The reconciled source adds regression cases for mixed pairs, changed allocation
+identity, and concurrent host read-loan versus take. Earlier test evidence in
+this document applies to earlier snapshots. The reconciled tree still requires
+exact-head CMake/CTest and sanitizer execution; no new executable pass is claimed.

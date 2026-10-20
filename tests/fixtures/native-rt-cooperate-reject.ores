@@ -1,0 +1,4 @@
+pub routine main(): int {
+  rt cooperate;
+  return 0;
+}

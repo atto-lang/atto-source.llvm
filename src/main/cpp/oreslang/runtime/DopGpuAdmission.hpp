@@ -93,7 +93,8 @@ inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
                                   const DeviceBuffer& input, const DeviceBuffer& output) {
     auto binding = preflight_gpu(kernel, target, input, output);
     auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
-                                               binding.bytes_per_buffer);
+                                               binding.bytes_per_buffer,
+                                               &binding.input, &binding.output);
     return ClaimedGpuBinding{std::move(binding), std::move(tickets)};
 }
 
