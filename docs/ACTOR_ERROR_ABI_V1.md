@@ -371,7 +371,7 @@ private-source CI mirroring.
 ### Native trap ABI admission matrix (host contract only)
 
 The host-side GuestFailureBoundary x GuestFailureOrigin gate is exhaustively
-checked over all 65,536 byte-tag combinations. Only an ordinary guest throw
+checked at runtime over all 65,536 byte-tag combinations. Only an ordinary guest throw
 may enter a trap; explicit catch additionally admits permission denial and
 an explicitly assigned guest deadline origin. Invalid, reserved, unknown and
 future numeric tags fail closed. The C++ regression checks bounded UTF-8
