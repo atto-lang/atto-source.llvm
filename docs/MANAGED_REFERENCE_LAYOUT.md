@@ -154,3 +154,114 @@ should hoist redundant base/decode work.
 For ECS/DOP kernels, lowering should prefer index-preserving operations and
 avoid decoding to pointers until a concrete field load/store requires an
 address. This is especially important for vectorized SoA/AoSoA loops.
+
+## Actor-local slot arena proof (runtime, not guest lowering)
+
+`ActorManagedSlotArena<Slots, PayloadBytes, Mode>` now keeps physically
+independent, 8-byte-aligned POD storage for each actor arena. The local managed
+reference field is **4 bytes** in `Compressed32` mode and **8 bytes** in
+`Native64` mode. Offsets refer to real allocated arena storage, not just
+synthetic arithmetic tests. The initial slot prototype uses fixed-size slots,
+with padded storage stride and a separate generation/liveness table.
+
+Trusted host handles carry arena ID and generation *outside* the stored
+compressed field. Admission validates owner runtime/actor/epoch, arena ID,
+a live object **start** (not an interior pointer), and the slot generation.
+The public API copies bytes in/out; it does not expose raw pointers to guest
+code. Freed slots are scrubbed, and stale handles fail closed on reuse.
+Arena IDs and slot generations never wrap. Retirement requires a joined
+carrier proof and draining its lifetime leases; a failed retirement seals
+new admissions until a subsequent retirement attempt succeeds.
+
+**Important limitations:** a bare compressed32 value is not an
+authentication token. It can have identical bit patterns in two different
+actor heaps. That is correct: runtime provenance, region membership and
+actor access must still be checked; guest code may not synthesize, transport
+or reinterpret actor-local references across actors. Slot reuse currently
+protects *trusted host handles*, not arbitrary compact intra-object links:
+those links need verified ownership/borrow lifetimes plus a proven
+incoming-reference invalidation strategy before compiler lowering can store
+them without accompanying generation metadata. The arena is single-owner/
+single-flight; it does not permit unsynchronized access from foreign carrier
+threads. The lifetime lease blocks final reclamation but is not memory
+read/write authorization.
+
+This is **not** general variable-size allocation, compact graph field
+lowering, an actor memory sandbox, or end-to-end source-level compressed
+`Ref<T>`. The general actor-owned heap allocator, compiler HIR/MIR
+representation selection, raw FFI pinning, and benchmark-based mode selection
+remain subsequent integration work. The pure codec permits offsets spanning
+up to 32 GiB minus 8 bytes at 8-byte alignment; this does not mean Oreslang
+reserves that much memory per actor.
+
+## Actual actor-slab compact32 bridge (experimental)
+
+`ActorArena.c` is the existing native bounded, carrier-bound actor slab. Its
+new `ores_actor_arena_compact_encode/read/write` functions bind a compact
+slot offset to an **authenticated actor turn** and a host-only arena domain.
+The native guest field is `uint32_t` (`OresArenaCompactHandle.bits`), while
+the host descriptor separately records a domain ID. A foreign actor cannot
+successfully use that host descriptor against its own arena. The C API never
+returns a native address or performs FFI pinning.
+
+In a slot-aligned slab, the bits are:
+
+```text
+bits = (slot_index * slot_bytes / 8) + 1
+0 = null
+slot_index = (((bits - 1) * 8) / slot_bytes)
+```
+
+The decode must *also* establish a non-null reference, a valid object start,
+the correct owning actor's turn/carrier, a live slot previously admitted to
+compact storage, field bounds and exclusive-loan eligibility on writes.
+The slot stride must be divisible by eight. Malformed offsets, stale turns,
+invalid object starts and unaligned slots fail closed.
+
+**ABA guarantee:** once a slot has ever published a bare compact offset,
+dropping its object zeroizes the slot and *quarantines that slot until arena
+retirement*; unlike an ordinary generation-tagged handle, this 32-bit offset
+cannot encode a generation number. Unpublished slots retain ordinary
+generation-checked free-list reuse. This conservative policy prevents an
+old compact reference from silently becoming a reference to a newly allocated
+object at the same offset. It trades high churn efficiency for correctness;
+future recycling is conditional on a proven no-incoming-references/ownership
+analysis or a redesigned compact slot+generation representation.
+
+**Not yet proven:** the parser/ownership checker does not admit general
+source-level managed `Ref<T>` in the LLVM backend. A future compiler cannot
+materialize a host descriptor from arbitrary guest-supplied `u32`. It must
+also prohibit compact storage from flowing across actor mailboxes, validate
+actor epoch and borrow lifetimes on suspension, and ensure the actor base
+loaded after carrier migration comes from the current actor context.
+
+The backend-only `ManagedRefLowering.hpp` now constructs LLVM IR that
+keeps the guest reference as `i32`, zero extends and shifts its offset,
+checks null, arena-base presence, byte bounds, and an externally established
+actor/liveness predicate before executing a non-`inbounds` GEP. This emitter
+does *not* supply that predicate or integrate it with source-level AST/HIR.
+A separate LLVM verifier test checks its CFG and representation. The existing
+source compiler remains fail-closed for unsupported pointer operations.
+
+Memory policy: compressed32 is an **actor-local region storage choice**; it
+does not shrink native FFI/OS pointers, require 4 GiB globally contiguous
+address space, or justify reserving 32 GiB per actor. Small actor heaps,
+bounded allocation, and per-actor recycling/retirement remain preferable.
+
+## Measuring real benefits (opt-in)
+
+Configure `-DORES_ENABLE_MANAGED_REF_BENCHMARKS=ON` and run
+`oreslang-managed-ref-microbench` under the same CPU affinity, build mode,
+input graph and allocator configuration for both modes. The benchmark reports
+`reference_bytes`, edge-column capacity in bytes, traversed edges, elapsed
+wall time and a checksum. Its bounded reproducible graph walk is **host-only**,
+not source-compiled actor workloads, cache-miss instrumentation, a GC/allocator
+benchmark, or a claim about Node.js/V8 performance.
+
+Measure independently on target hardware: peak RSS, committed/virtual heap
+bytes, L1/L2/LLC misses, cycles per dereference, tail latency, throughput,
+actor-creation overhead, arena fragmentation and exhaustion under churn.
+The compression policy must be a per-actor or per-heap **layout decision before
+allocation**, not an automatic in-place width change after objects are live.
+Compare against `native64` without treating smaller reference columns as
+proof of faster overall workloads.

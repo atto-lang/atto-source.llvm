@@ -42,6 +42,19 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+
+# Opt-in instrumentation: compile the same graph traversal twice to compare
+# resident edge-column bytes and CPU time, without imposing benchmark timing
+# thresholds on correctness CI.
+option(ORES_ENABLE_MANAGED_REF_BENCHMARKS "Build native actor-local ref microbenchmark" OFF)
+if(ORES_ENABLE_MANAGED_REF_BENCHMARKS)
+    add_executable(oreslang-managed-ref-microbench tests/managed_ref_microbench.cpp)
+    target_include_directories(oreslang-managed-ref-microbench PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-microbench PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     # Host-only generational reply slab proof; not source-level actor RPC.
@@ -1164,6 +1177,26 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-managed-ref-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_managed_reference_width_and_dod_layout
         COMMAND oreslang-managed-ref-test)
+
+    add_executable(oreslang-managed-slot-arena-test tests/managed_slot_arena_test.cpp)
+    target_include_directories(oreslang-managed-slot-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-slot-arena-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME actor_managed_slot_arena_compressed32_and_native64
+        COMMAND oreslang-managed-slot-arena-test)
+
+    # Compiler IR primitive: verified i32 managed load, checked actor-local
+    # provenance/bounds branch, and no unsafe LLVM 'inbounds' claims.
+    # This is backend IR infrastructure, not source-level Ref<T> support.
+    add_executable(oreslang-managed-ref-llvm-lowering-test
+        tests/managed_ref_llvm_lowering_test.cpp)
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-managed-ref-llvm-lowering-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_llvm_compressed32_checked_pointer_lowering
+        COMMAND oreslang-managed-ref-llvm-lowering-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
@@ -1709,6 +1742,24 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_arena_persistent_scratch
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
+
+    # Real C actor slab: compact32 encode/decode uses authenticated turn and
+    # quarantines ever-published slots to prevent stale-offset ABA reuse.
+    add_executable(oreslang-native-actor-compact-arena-test
+        tests/native_actor_compact_arena_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-compact-arena-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-compact-arena-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-compact-arena-test PRIVATE
+        ORESLANG_NATIVE_TEST_DOMAIN_EXHAUSTION=1)
+    target_compile_options(oreslang-native-actor-compact-arena-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_compact32_slab_domain_epoch_and_aba
+        COMMAND oreslang-native-actor-compact-arena-test)
+    set_tests_properties(native_actor_compact32_slab_domain_epoch_and_aba
+        PROPERTIES TIMEOUT 25)
+
 
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
