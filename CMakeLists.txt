@@ -655,6 +655,19 @@ if(BUILD_TESTING)
         --target wasm32
         --tree-shake
         --diagnostic "wasm32 native caught-throw guest unsupported")
+    oreslang_contract_test(native_tree_shake_control_keeps_dead_owned_region
+        tree-shake-dead-owned-region.ores
+        --experimental-owned-int
+        --ir "@dead_owned_region"
+        --ir "@oreslang_owned_i64_region_open")
+    oreslang_contract_test(native_tree_shake_prunes_dead_owned_region
+        tree-shake-dead-owned-region.ores
+        --experimental-owned-int
+        --tree-shake
+        --ir-absent "@dead_owned_region"
+        --ir-absent "oreslang_owned_i64_region_open"
+        --ir-absent "oreslang_owned_i64_region_new"
+        --ir-absent "oreslang_owned_i64_region_close")
     if(ORE_CLANG)
         oreslang_contract_test(native_tree_shake_preserves_executable_behavior
             tree-shake-dead-symbols.ores
