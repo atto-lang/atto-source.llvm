@@ -830,6 +830,39 @@ inline void validate_reachability_result(const ReachabilityResult& result) {
     }
 }
 
+inline void validate_reachability_provenance_complete(
+        const ReachabilityResult& result) {
+    validate_reachability_result(result);
+
+    for (const auto& root : result.roots) {
+        const bool explained = std::any_of(
+                result.root_reasons.begin(),
+                result.root_reasons.end(),
+                [&](const ReachabilityRootReason& item) {
+                    return item.symbol == root;
+                });
+        if (!explained)
+            throw std::runtime_error(
+                    "native reachability root lacks provenance: " + root);
+    }
+
+    for (const auto& symbol : result.retained_symbols) {
+        if (std::binary_search(
+                result.roots.begin(), result.roots.end(), symbol))
+            continue;
+        const bool explained = std::any_of(
+                result.edges.begin(),
+                result.edges.end(),
+                [&](const ReachabilityEdge& edge) {
+                    return edge.to == symbol;
+                });
+        if (!explained)
+            throw std::runtime_error(
+                    "native reachability retained symbol lacks provenance: " +
+                    symbol);
+    }
+}
+
 inline std::string canonical_reachability_json(
         const ReachabilityResult& result, bool library_build) {
     validate_reachability_result(result);
