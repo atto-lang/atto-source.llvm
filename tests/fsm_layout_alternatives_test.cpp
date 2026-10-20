@@ -268,8 +268,14 @@ void check_lifecycle() {
     store.end_view(fresh);
     Store independent(Layout::AoS);
     must_reject([&]{ (void)independent.read(h); }, "cross-store handle accepted");
+    const View original_view = store.begin_view();
     const View other_view = independent.begin_view();
     must_reject([&]{ (void)store.read_view(other_view, 2); }, "cross-store view accepted");
+    must_reject([&]{ store.end_view(other_view); }, "foreign loan release admitted");
+    must_reject([&]{ (void)store.read_view({original_view.epoch, {}}, 2); },
+                "fabricated empty-ticket view accepted");
+    check(store.read_view(original_view, 2) == Row{}, "valid loan corrupted by foreign attempts");
+    store.end_view(original_view);
     independent.end_view(other_view);
     store.migrate(Layout::AoSoA);
     must_reject([&]{ (void)store.read_view(held, 2); }, "stale view after migration admitted");
