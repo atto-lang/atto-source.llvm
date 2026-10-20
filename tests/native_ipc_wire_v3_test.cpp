@@ -94,6 +94,14 @@ int main() {
         "0000000000000001000000000000000200000000000000030000000000000004"
         "0000000000000005000000000000000601"
         "c928561e7dd8ed11e10c09aaa07012ab052b1d88d5c5c6362bd8f3161553a840");
+    const auto valid_mac_invalid_receipt = hex(
+        "4f524553030200000000000000070102030405060708090a0b0c0d0e0f10"
+        "0674656e616e740673656e64657206776f726b6572087633676f6c64656e40"
+        "3030303566313261366361383237376261363333363461643961386132316534"
+        "3362656465613666323039333733653237623636326663623761393362313161"
+        "0000000000000001000000000000000200000000000000030000000000000004"
+        "0000000000000005000000000000000604"
+        "158c14bef448a43530fa4bde51315abe967d9ddb4e99de1cbfac1f7dc7f68388");
 
     const auto encoded_data = NativeIpcWireV3::encode_data_frame(
         envelope, payload, 7, binding, key);
@@ -101,6 +109,19 @@ int main() {
     const auto encoded_receipt = NativeIpcWireV3::encode_receipt_frame(
         envelope, 7, IpcReceiptStage::remote_accepted, binding, key);
     assert(encoded_receipt == expected_receipt);
+
+    // Java permits HMAC keys up to 128 bytes. Exercise the RFC HMAC key
+    // reduction path (> SHA-256's 64-byte block) against an independent vector.
+    NativeIpcWireV3::Bytes long_key(128u);
+    for (std::size_t i = 0; i < long_key.size(); ++i)
+        long_key[i] = static_cast<unsigned char>(i);
+    const auto long_key_data = NativeIpcWireV3::encode_data_frame(
+        envelope, payload, 7, binding, long_key);
+    assert(long_key_data.size() == expected_data.size());
+    assert(std::equal(
+        long_key_data.end() - static_cast<std::ptrdiff_t>(NativeIpcWireV3::mac_bytes),
+        long_key_data.end(),
+        hex("11c9a96a57a3d1d5fabcd891eb745d1c248a38904e592445fd50fee13ce9bad4").begin()));
 
     NativeIpcWireV3::InboundReplayGate replay;
     const auto decoded_data = NativeIpcWireV3::decode_data_frame(
@@ -183,14 +204,11 @@ int main() {
         });
     }
     {
-        auto invalid_receipt = expected_receipt;
-        const auto body_size = invalid_receipt.size() - NativeIpcWireV3::mac_bytes;
-        invalid_receipt[body_size - 1u] = 4u;
-        // The original tag no longer matches, so authentication must fail
-        // before an invalid stage can influence receipt state.
+        // Authentication alone never grants authority to an unknown receipt
+        // code. This vector has a valid HMAC for wire code 4.
         rejects([&] {
             NativeIpcWireV3::decode_receipt_frame(
-                invalid_receipt, binding, key);
+                valid_mac_invalid_receipt, binding, key);
         });
     }
 
