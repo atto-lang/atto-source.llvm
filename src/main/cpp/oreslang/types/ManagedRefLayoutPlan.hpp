@@ -25,6 +25,7 @@ struct RefLayoutEvidence final {
     ReferenceDomain domain = ReferenceDomain::ActorPrivate;
     std::uint32_t target_pointer_bits = 64;
     std::uint64_t maximum_arena_span = 0;
+    std::uint64_t maximum_dense_rows = 0;
     std::uint32_t minimum_alignment = 8;
     bool actor_heap_bound = false;
     bool owner_proven = false;
@@ -62,19 +63,18 @@ inline std::optional<RefLayoutPlan> plan_managed_reference(
         case ReferenceDomain::DenseRow:
             if (!evidence.actor_heap_bound || !evidence.owner_proven
                     || !evidence.lifetime_proven || !evidence.dense_index_proven
-                    || evidence.maximum_arena_span == 0
-                    || evidence.maximum_arena_span >
+                    || evidence.maximum_dense_rows == 0
+                    || evidence.maximum_dense_rows >
                        static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) - 1)
                 return std::nullopt;
             return RefLayoutPlan{PhysicalRefStorage::DenseIndex32, 4, 4, false};
         case ReferenceDomain::ActorPrivate:
             if (!evidence.actor_heap_bound || !evidence.owner_proven
                     || !evidence.lifetime_proven || !evidence.maximum_arena_span
-                    || !native64)
+                    || !native64 || evidence.minimum_alignment < 8
+                    || (evidence.minimum_alignment & (evidence.minimum_alignment - 1)))
                 return std::nullopt;
-            if (!evidence.force_native64 && evidence.minimum_alignment >= 8
-                    && (evidence.minimum_alignment &
-                        (evidence.minimum_alignment - 1)) == 0
+            if (!evidence.force_native64
                     && evidence.maximum_arena_span <=
                        runtime::CompressedActorRef::max_addressable_span) {
                 return RefLayoutPlan{PhysicalRefStorage::ActorOffset32, 4, 8, true};
