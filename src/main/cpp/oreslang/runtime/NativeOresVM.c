@@ -381,6 +381,9 @@ int ores_native_vm_poll_done(
 int ores_native_vm_actor_terminal_state(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef ref, OresNativeActorTerminalState* output) {
+    // A null/retired VM or invalid domain cannot leave a prior actor's
+    // terminal receipt in caller-owned output. Return value is authoritative.
+    if (output) *output = (OresNativeActorTerminalState){0};
     return vm && valid_domain(domain) && output
         && ores_native_actor_scheduler_terminal_state(
             vm->schedulers[domain], ref, output);
