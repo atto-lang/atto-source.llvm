@@ -8,11 +8,12 @@ and are vendored as the deterministic line-oriented projection supplied by
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import subprocess
 import tempfile
 
 _MAX_CAPTURE = 2 * 1024 * 1024
-_EXPECTED_REVISION = "model-core-i64-v1.2026-10-20.9"
+_EXPECTED_REVISION = "model-core-i64-v1.2026-10-20.10"
 _EXPECTED_PROFILE = "model-core-i64-v1"
 
 
@@ -22,16 +23,16 @@ class Case:
     expect: str
     java_mode: str
     llvm_mode: str
-    diagnostic: str | None
-    llvm_diagnostic: str | None
-    graph_digest: str | None
-    configured_digest: str | None
-    semantic_result: int | None
-    configuration_i64: int | None
+    diagnostic: Optional[str]
+    llvm_diagnostic: Optional[str]
+    graph_digest: Optional[str]
+    configured_digest: Optional[str]
+    semantic_result: Optional[int]
+    configuration_i64: Optional[int]
     source: str
 
 
-def nullable(value: str) -> str | None:
+def nullable(value: str) -> Optional[str]:
     return None if value == "-" else value
 
 
