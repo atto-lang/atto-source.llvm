@@ -22,7 +22,10 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    // Index is a syntax-bearing bracket projection only. It carries no
+    // authority by itself: ownership/type admission must attach a certified
+    // closed-view plan before LLVM lowering is ever allowed.
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field, Index };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
