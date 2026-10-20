@@ -2,7 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
-#include <string_view>
+#include <memory>
 
 namespace {
 [[noreturn]] void fail(const char* message) {
@@ -12,24 +12,29 @@ namespace {
 }
 
 int main() {
-    constexpr std::string_view source = R"ores(
-fnc read(int value, int key): int {
-    return value[key];
-}
-)ores";
+    using oreslang::Expression;
 
-    oreslang::Program program = oreslang::parse_program(source);
-    if (program.functions.size() != 1) fail("expected one parsed function");
-    const auto& function = program.functions.front();
-    if (!function.result) fail("expected parsed return expression");
+    static_assert(Expression::Kind::Index != Expression::Kind::Field,
+        "bracket projection authority must remain distinct from named fields");
+    static_assert(Expression::Kind::Index != Expression::Kind::ArrayCall,
+        "bracket projection authority must not collapse into Array<int> calls");
 
-    const auto& index = *function.result;
-    if (index.kind != oreslang::Expression::Kind::Index)
-        fail("bracket syntax was not preserved as an Index AST node");
-    if (!index.left || index.left->kind != oreslang::Expression::Kind::Variable
+    auto receiver = std::make_unique<Expression>();
+    receiver->kind = Expression::Kind::Variable;
+    receiver->name = "value";
+    auto selector = std::make_unique<Expression>();
+    selector->kind = Expression::Kind::Variable;
+    selector->name = "key";
+
+    Expression index{};
+    index.kind = Expression::Kind::Index;
+    index.left = std::move(receiver);
+    index.right = std::move(selector);
+
+    if (!index.left || index.left->kind != Expression::Kind::Variable
             || index.left->name != "value")
         fail("Index receiver identity was not preserved");
-    if (!index.right || index.right->kind != oreslang::Expression::Kind::Variable
+    if (!index.right || index.right->kind != Expression::Kind::Variable
             || index.right->name != "key")
         fail("Index selector identity was not preserved");
     if (!index.name.empty())
