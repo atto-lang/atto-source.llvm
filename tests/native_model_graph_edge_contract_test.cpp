@@ -41,6 +41,15 @@ int main() {
         deny("MODEL_PORT_TYPE_MISMATCH", graph({"source"}, {
             p::BufferPort{"f64", {2}, "contiguous", "USD"}}));
         deny("MODEL_FORWARD_OR_CYCLIC_EDGE", graph({"missing"}, {price}));
+
+        auto too_big = graph({"source"}, {price});
+        too_big.nodes[1].signature.output =
+            p::BufferPort{"f64", {static_cast<std::uint64_t>(INT64_MAX)}, "contiguous", std::nullopt};
+        deny("MODEL_SIZE_OVERFLOW", too_big);
+        auto zero_extent = graph({"source"}, {price});
+        zero_extent.nodes[1].signature.output =
+            p::BufferPort{"f64", {static_cast<std::uint64_t>(INT64_MAX), 0}, "contiguous", std::nullopt};
+        require(p::digest(zero_extent).size() == 64, "zero extents must not overflow");
         require(p::digest(graph({"source"}, {price})).size() == 64,
                 "valid model cannot be digested");
         std::cout << "PASS: native resolved graph edge/port admission\n";
