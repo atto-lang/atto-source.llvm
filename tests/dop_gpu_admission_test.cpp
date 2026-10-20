@@ -286,5 +286,43 @@ int main() {
         check(a.status() == oreslang::gpu::Status::Idle);
         check(b.status() == oreslang::gpu::Status::Idle);
     }
+    // Trusted host queue-targeted GPU preflight must fail BEFORE mutation.
+    // This verifies metadata compatibility, not actual device execution.
+    {
+        const Plan shape(Layout::SoA, 7, 2, 4, 16, 1);
+        const Kernel operation(shape, Element::F32, Op::Scale, 2.0f, 0.0f);
+        const GpuTarget profile{64, 8192, 100, true};
+        BufferFence source(Identity{"tenant-A", "gpu-0", 1001}, shape.byte_length());
+        BufferFence result(Identity{"tenant-A", "gpu-0", 1002}, shape.byte_length());
+        const DeviceBuffer input(shape, source), output(shape, result);
+        const auto plan = preflight_gpu(operation, profile, input, output);
+        const GpuQueueLocation valid{"tenant-A", "gpu-0", 9, 21, 4};
+        validate_gpu_queue(plan, valid);
+        for (const auto& foreign : {
+                GpuQueueLocation{"tenant-B", "gpu-0", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-1", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 0, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 0, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 21, 0},
+                GpuQueueLocation{"", "gpu-0", 9, 21, 4}}) {
+            expect<std::invalid_argument>([&] {
+                (void)claim_gpu_for_queue(operation, profile, input, output, foreign);
+            });
+            check(source.status() == oreslang::gpu::Status::Idle);
+            check(result.status() == oreslang::gpu::Status::Idle);
+        }
+        auto claimed = claim_gpu_for_queue(operation, profile, input, output, valid);
+        check(claimed.binding.input.tenant == valid.tenant);
+        check(claimed.binding.output.device == valid.device);
+        check(source.status() == oreslang::gpu::Status::InFlight);
+        check(result.status() == oreslang::gpu::Status::InFlight);
+        expect<std::logic_error>([&] {
+            (void)claim_gpu_for_queue(operation, profile, input, output, valid);
+        });
+        BufferFence::complete_pair(source, result, claimed.tickets, true);
+        check(source.status() == oreslang::gpu::Status::Idle);
+        check(result.status() == oreslang::gpu::Status::Idle);
+    }
+
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }
