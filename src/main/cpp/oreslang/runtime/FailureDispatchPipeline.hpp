@@ -71,7 +71,7 @@ public:
             ActorLocalHook on_raise,
             SupervisorControlTurn& supervisor,
             const SupervisorFailureLane::ActorKey& actor,
-            std::string_view parent_id = {}) noexcept {
+            std::string_view parent_id = {}) {
         reset(scratch);
         FailureDispatchResult result{};
 
