@@ -438,6 +438,15 @@ if(BUILD_TESTING)
         NAMES "clang++-${LLVM_VERSION_MAJOR}" clang++
         clang++-19 clang++-18 clang++-17 clang++-16 clang++-15 clang++-14)
     if(ORE_REF32_CLANG)
+        execute_process(COMMAND "${ORE_REF32_CLANG}" --version
+            OUTPUT_VARIABLE ORE_REF32_CLANG_VERSION_TEXT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        string(REGEX MATCH "version[ \t]+([0-9]+)"
+            ORE_REF32_CLANG_VERSION_MATCH "${ORE_REF32_CLANG_VERSION_TEXT}")
+    endif()
+    if(ORE_REF32_CLANG AND
+       CMAKE_MATCH_1 STREQUAL "${LLVM_VERSION_MAJOR}")
         find_package(Python3 COMPONENTS Interpreter REQUIRED)
         add_test(NAME native_compact32_llvm_executable_e2e
             COMMAND "${Python3_EXECUTABLE}"
@@ -447,6 +456,8 @@ if(BUILD_TESTING)
                 --harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/managed_ref_llvm_e2e_harness.cpp")
         set_tests_properties(native_compact32_llvm_executable_e2e
             PROPERTIES TIMEOUT 180)
+    else()
+        message(STATUS "Oreslang ref32 LLVM executable e2e requires Clang matching LLVM ${LLVM_VERSION_MAJOR}; skipping incompatible toolchain")
     endif()
 
 
