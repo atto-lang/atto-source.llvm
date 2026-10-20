@@ -43,6 +43,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    # Host-only instrumented-trace analyzer (not full guest instrumentation).
+    add_executable(oreslang-concurrency-race-analyzer-test
+        tests/concurrency_race_analyzer_test.cpp)
+    target_include_directories(oreslang-concurrency-race-analyzer-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-concurrency-race-analyzer-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-concurrency-race-analyzer-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_concurrency_vector_clock_host_only
+        COMMAND oreslang-concurrency-race-analyzer-test)
+    set_tests_properties(native_concurrency_vector_clock_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
     add_executable(oreslang-realtime-actor-arena-test
