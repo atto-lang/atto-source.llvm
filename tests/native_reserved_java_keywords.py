@@ -64,6 +64,18 @@ CASES = {
         "pub fnc choose(int value): int { return value ? 1 : value ? 2 : 3; }",
         "native ternary expression requires typed bool conditions and branch-merge lowering",
     ),
+    "trusted-integer-runtime-guard": (
+        "pub fnc choose(int value): int { return Integer.is_int(value); }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
+    "trusted-double-runtime-guard": (
+        "pub fnc choose(int value): int { return Double.is_double(value); }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
+    "trusted-guarded-ternary": (
+        "pub fnc choose(int value): int { return Integer.is_int(value) ? value : 0; }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
     # Enum/pattern declaration kinds are reserved; not executable source support yet.
     "enum-function": (
         "pub fnc enum(): int { return 42; }",
