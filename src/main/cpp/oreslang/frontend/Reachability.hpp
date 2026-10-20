@@ -181,7 +181,10 @@ inline RuntimeFeatureSet analyze_runtime_features(
                     [&](const ClassDecl& candidate) {
                         return candidate.name == local.class_name;
                     });
-            if (klass == program.classes.end()) continue;
+            if (klass == program.classes.end())
+                throw std::runtime_error(
+                        "native runtime feature analysis references unknown class: " +
+                        local.class_name);
             if (std::any_of(
                     klass->fields.begin(), klass->fields.end(),
                     [](const ClassField& field) { return field.int_array; }))
