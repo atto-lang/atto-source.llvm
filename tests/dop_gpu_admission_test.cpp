@@ -314,13 +314,17 @@ int main() {
         auto claimed = claim_gpu_for_queue(operation, profile, input, output, valid);
         check(claimed.claim.binding.input.tenant == valid.tenant);
         check(claimed.claim.binding.output.device == valid.device);
-        check(claimed.queue.queue_id == valid.queue_id);
-        check(claimed.queue.generation == valid.generation);
-        check(claimed.queue.maximum_in_flight == valid.maximum_in_flight);
+        check(claimed.queue->queue_id == valid.queue_id);
+        check(claimed.queue->generation == valid.generation);
+        check(claimed.queue->maximum_in_flight == valid.maximum_in_flight);
         // Later mutation of the caller-owned descriptor cannot silently
         // retarget an admitted operation.
-        check(claimed.queue.tenant == "tenant-A");
-        check(claimed.queue.device == "gpu-0");
+        check(claimed.queue->tenant == "tenant-A");
+        check(claimed.queue->device == "gpu-0");
+        static_assert(!std::is_copy_constructible_v<QueueClaimedGpuBinding>);
+        static_assert(!std::is_assignable_v<
+                decltype(*std::declval<QueueClaimedGpuBinding>().queue), GpuQueueLocation>,
+                "claimed queue selection must not be rewritten");
         check(source.status() == oreslang::gpu::Status::InFlight);
         check(result.status() == oreslang::gpu::Status::InFlight);
         expect<std::logic_error>([&] {
