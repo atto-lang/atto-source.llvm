@@ -143,10 +143,10 @@ credential is present in the carrier.
 Supported invocation:
 
 ```sh
-scripts/run-in-private-ci-destination.sh opto-sync-test/go-java-validation \
-  --source-pr 669 \
+scripts/run-in-private-ci-destination.sh usa-acc/usa-acc-e2e \
+  --source-pr 725 \
   --source-commit FULL_40_HEX_OPEN_PR_HEAD_SHA \
-  --test-plan ci/test-plans/llvm-pr669.json
+  --test-plan ci/test-plans/llvm-pr725.json
 ```
 
 The current carrier contract is review-gated in authority PR #728 and pins only explicitly reviewed source-free plans. The carrier contract by itself authorizes no export.
