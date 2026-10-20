@@ -25,6 +25,14 @@ int main() {
     assert(policy.future.get() == "active" && stats.future.get() == 42);
     assert(registry.pending_count() == 0);
 
+    // Admission failure retires the ticket before guest work begins.
+    auto rejectedAdmission = registry.reserve<int>(actor, child);
+    assert(rejectedAdmission.ticket.fail_admission(actor,
+        std::make_exception_ptr(std::runtime_error("mailbox full"))));
+    denied([&] { rejectedAdmission.future.get(); });
+    assert(!rejectedAdmission.ticket.reply(child, 99));
+    assert(registry.pending_count() == 0);
+
     // Distinct generation even if physical slot is reused.
     auto old = registry.reserve<int>(actor, child);
     const auto oldHandle = old.ticket.local_handle();
