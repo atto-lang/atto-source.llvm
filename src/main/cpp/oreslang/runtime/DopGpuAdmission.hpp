@@ -4,6 +4,8 @@
 #include "oreslang/runtime/GpuBufferFence.hpp"
 
 #include <cstdint>
+#include <limits>
+#include <string>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -72,6 +74,37 @@ inline GpuBinding preflight_gpu(
     return GpuBinding{layout, artifact, src.identity, dst.identity, bytes, total};
 }
 
+/** Provider-owned *description* of a selected GPU queue/stream. It is NOT
+ * an authenticated capability and MUST NOT be constructed by untrusted guest
+ * source. A real provider must authenticate the device, queue generation,
+ * tenant quota and actual occupancy again at physical submission. */
+struct GpuQueueLocation {
+    std::string tenant;
+    std::string device;
+    std::uint64_t queue_id;
+    std::uint64_t generation;
+    std::uint32_t maximum_in_flight;
+};
+
+/** This check happens BEFORE claiming either buffer fence. A queue on the
+ * wrong device or from a stale generation cannot be assigned a typed plan.
+ * No host pointer, actor-state borrow or CPU fallback is authorized here. */
+inline void validate_gpu_queue(const GpuBinding& plan,
+                               const GpuQueueLocation& queue) {
+    if (queue.tenant.empty() || queue.device.empty()
+            || queue.queue_id == 0 || queue.generation == 0
+            || queue.maximum_in_flight == 0) {
+        throw std::invalid_argument("DOP GPU queue identity/limits missing");
+    }
+    if (queue.tenant != plan.input.tenant
+            || queue.tenant != plan.output.tenant
+            || queue.device != plan.input.device
+            || queue.device != plan.output.device) {
+        throw std::invalid_argument(
+                "DOP GPU queue and buffer tenant/device mismatch");
+    }
+}
+
 struct ClaimedGpuBinding {
     GpuBinding binding;
     gpu::BufferFence::PairTickets tickets;
@@ -95,6 +128,20 @@ inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
     auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
                                                binding.bytes_per_buffer,
                                                &binding.input, &binding.output);
+    return ClaimedGpuBinding{std::move(binding), std::move(tickets)};
+}
+
+/** Queue-targeted trusted-host claim. Unlike the legacy queue-neutral
+ * helper, a provider calling this path cannot claim wrong-device buffers.
+ * Successful host fence admission is NOT physical launch/queue capacity. */
+inline ClaimedGpuBinding claim_gpu_for_queue(
+        const Kernel& kernel, GpuTarget target,
+        const DeviceBuffer& input, const DeviceBuffer& output,
+        const GpuQueueLocation& queue) {
+    auto binding = preflight_gpu(kernel, target, input, output);
+    validate_gpu_queue(binding, queue);
+    auto tickets = gpu::BufferFence::claim_pair(input.fence, output.fence,
+            binding.bytes_per_buffer, &binding.input, &binding.output);
     return ClaimedGpuBinding{std::move(binding), std::move(tickets)};
 }
 
