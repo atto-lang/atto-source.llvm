@@ -119,6 +119,9 @@ int main() {
         }
         check(oreslang::model::next_graph_generation(7) == 8, "graph generation increment");
         check(oreslang::model::next_parameter_version(11) == 12, "parameter version increment");
+        check(oreslang::model::plan_cache_key(graph_id, profile) !=
+                  oreslang::model::plan_cache_key(graph_id, std::string(64, 'c')),
+              "execution profile participates in compiled plan cache identity");
         auto expect_fence = [&](oreslang::model::RunStamp candidate, std::string_view code) {
             try {
                 (void)oreslang::model::validate_and_commit(owner, candidate, {});
