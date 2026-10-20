@@ -1,6 +1,6 @@
 # Private CI destinations explicitly approved for oreslang-source.llvm source transfers.
 # No repositories are approved by default.
-# Changes must be reviewed by maintainers and security owners on a protected branch.
+# Changes must be independently security-reviewed and enforced by protected-main rules or the exact v3 review-attested fallback.
 # Format: one exact owner/repo per uncommented line, no whitespace or wildcards.
-# Proposed private carrier; operative only after independent CODEOWNER/security review and protected merge:
+# Proposed private carrier; operative only after independent CODEOWNER/security approval of exact PR #728 head before merge:
 usa-acc/usa-acc-e2e
