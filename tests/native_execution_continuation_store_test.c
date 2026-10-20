@@ -63,8 +63,7 @@ static OresNativeExecutionHandle resume_on_new_thread(
     check(args.context.id.runtime_domain == link.execution_id.runtime_domain);
     check(args.context.parent_execution.slot == link.parent.slot);
     check(args.context.parent_execution.generation == link.parent.generation);
-    check(args.context.continuation.slot == link.continuation.slot);
-    check(args.context.continuation.generation == link.continuation.generation);
+    check(!ores_native_store_handle_valid(args.context.continuation));
     return args.execution;
 }
 
