@@ -84,6 +84,18 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+#ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
+int ores_native_actor_scheduler_test_set_next_execution(
+        OresNativeActorScheduler* s, uint64_t next_execution) {
+    if (!s || !next_execution) return 0;
+    lock(s);
+    const int ok = !s->retired && s->outstanding == 0
+        && s->reserved_executions == 0;
+    if (ok) s->next_execution = next_execution;
+    unlock(s);
+    return ok;
+}
+#endif
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
