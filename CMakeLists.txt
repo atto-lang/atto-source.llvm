@@ -36,7 +36,9 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/frontend/Parser.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
     target_include_directories(oreslang-native-model-parser-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-model-parser-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_options(oreslang-native-model-parser-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_model_declaration_parser_and_execution_gate
