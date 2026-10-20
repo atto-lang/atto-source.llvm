@@ -51,6 +51,14 @@ int main() {
               "nominal typed USD ports");
         check(hir.upper_bound_bytes == 32, "conservative buffer budget");
         check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
+        const auto descriptor = oreslang::model::canonical_descriptor(hir, "app::Tax@v1");
+        check(descriptor.size() == 514, "canonical descriptor byte length");
+        check(oreslang::model::graph_digest(hir, "app::Tax@v1") ==
+                  "7ffbb2b813a560a93cda79dfcdcd999183b65b1bfe2562002e85f5a7ba0b3545",
+              "portable graph digest golden");
+        check(oreslang::model::graph_digest(hir, "app::Tax@v1") !=
+                  oreslang::model::graph_digest(hir, "other::Tax@v1"),
+              "nominal model type must affect graph digest");
 
         const auto cfg_a = oreslang::parse_model_declarations(
             "define model X as Apply(1) end");
