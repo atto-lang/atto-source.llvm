@@ -280,6 +280,67 @@ inline ReachabilityResult analyze_reachability(
 }
 
 
+
+inline Program prune_program(Program program, const ReachabilityResult& result) {
+    validate_reachability_result(result);
+
+    std::set<std::string> retained(
+            result.retained_symbols.begin(), result.retained_symbols.end());
+    std::set<std::string> removed(
+            result.removed_symbols.begin(), result.removed_symbols.end());
+    std::set<std::string> source_symbols;
+
+    const auto register_symbol = [&](const std::string& name) {
+        const std::string symbol = reachability_detail::qualify(program, name);
+        if (!source_symbols.insert(symbol).second)
+            throw std::runtime_error(
+                    "native tree shaking source semantic symbol collision: " + symbol);
+        const bool keep = retained.count(symbol) != 0;
+        const bool drop = removed.count(symbol) != 0;
+        if (keep == drop)
+            throw std::runtime_error(
+                    "native tree shaking requires exactly one classification for: " + symbol);
+    };
+
+    for (const auto& fn : program.functions) register_symbol(fn.name);
+    for (const auto& actor : program.actors) register_symbol(actor.name);
+    for (const auto& klass : program.classes) register_symbol(klass.name);
+    for (const auto& loop : program.cooperative_loops) register_symbol(loop.name);
+
+    if (retained.size() + removed.size() != source_symbols.size())
+        throw std::runtime_error(
+                "native tree shaking manifest contains symbols outside the source program");
+    for (const auto& symbol : retained)
+        if (!source_symbols.count(symbol))
+            throw std::runtime_error(
+                    "native tree shaking retained unknown source symbol: " + symbol);
+    for (const auto& symbol : removed)
+        if (!source_symbols.count(symbol))
+            throw std::runtime_error(
+                    "native tree shaking removed unknown source symbol: " + symbol);
+
+    const auto should_remove = [&](const auto& declaration) {
+        return retained.count(
+                reachability_detail::qualify(program, declaration.name)) == 0;
+    };
+
+    program.functions.erase(
+            std::remove_if(program.functions.begin(), program.functions.end(), should_remove),
+            program.functions.end());
+    program.actors.erase(
+            std::remove_if(program.actors.begin(), program.actors.end(), should_remove),
+            program.actors.end());
+    program.classes.erase(
+            std::remove_if(program.classes.begin(), program.classes.end(), should_remove),
+            program.classes.end());
+    program.cooperative_loops.erase(
+            std::remove_if(program.cooperative_loops.begin(),
+                           program.cooperative_loops.end(), should_remove),
+            program.cooperative_loops.end());
+
+    return program;
+}
+
 inline void append_reachability_json_string(std::string& out, std::string_view value) {
     out.push_back('"');
     static constexpr char hex[] = "0123456789abcdef";
