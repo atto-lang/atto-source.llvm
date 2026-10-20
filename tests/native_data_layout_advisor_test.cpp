@@ -57,6 +57,15 @@ int main() {
     archetype.hints.structural_changes_per_pass.reset();
     require(!has(advise_layout(archetype), "ORES-LAYOUT135"), "unknown churn must not warn");
 
+    // Exact geometry: 10 rows * 4 fields * 4 bytes is 160 bytes of
+    // logical payload; a 64-lane tile physically stores 1024 bytes.
+    oreslang::dop::Plan waste(oreslang::dop::Layout::AoSoA, 10, 4, 4, 64, 64);
+    require(has(advise_dop_plan_padding(waste), "ORES-LAYOUT141"),
+            "missed provable AoSoA tail-space overhead");
+    oreslang::dop::Plan packed(oreslang::dop::Layout::AoSoA, 64, 4, 4, 64, 64);
+    require(!has(advise_dop_plan_padding(packed), "ORES-LAYOUT141"),
+            "fully occupied tile must not report padding waste");
+
     bool failed = false;
     try {
         aos.accessed_fields = {0, 0};
