@@ -188,6 +188,41 @@ int main() {
         assert(rejected && "semantic symbol collisions must fail closed");
     }
 
+
+    {
+        Program program;
+        program.functions.push_back(fn("host_helper", integer(9)));
+
+        ActorDecl hosted;
+        hosted.name = "Hosted";
+        hosted.on_message = fn("on_message", call("host_helper"));
+        program.actors.push_back(std::move(hosted));
+
+        const auto result = analyze_reachability(
+                program, {}, false, {"Hosted"});
+        assert(result.roots == std::vector<std::string>{"__root__.Hosted"});
+        assert(has(result.retained_symbols, "__root__.Hosted"));
+        assert(has(result.retained_symbols, "__root__.host_helper"));
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("class_helper", integer(5)));
+
+        ClassDecl exported;
+        exported.name = "ExportedRecord";
+        ClassField field;
+        field.name = "value";
+        field.initializer_expression = call("class_helper");
+        exported.fields.push_back(std::move(field));
+        program.classes.push_back(std::move(exported));
+
+        const auto result = analyze_reachability(
+                program, {}, false, {}, {"ExportedRecord"});
+        assert(result.roots == std::vector<std::string>{"__root__.ExportedRecord"});
+        assert(has(result.retained_symbols, "__root__.class_helper"));
+    }
+
     {
         Program program;
         program.functions.push_back(fn("main", call("missing")));
