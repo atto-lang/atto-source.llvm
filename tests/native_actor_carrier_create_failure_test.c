@@ -32,6 +32,23 @@ static void until(atomic_int* flag) {
 }
 int main(void) {
     State state = {0};
+
+    /* RT prestart is a one-way bootstrap transition. A failed pthread
+     * allocation permanently poisons this scheduler instance; silently
+     * succeeding on a later retry would make deadline admission depend on
+     * transient host resource timing despite the documented teardown rule. */
+    OresNativeActorScheduler* poisoned =
+        ores_native_actor_scheduler_open(1, 1, 2, deliver, &state);
+    require(poisoned != NULL);
+    ores_native_actor_scheduler_test_fail_next_create();
+    require(!ores_native_actor_scheduler_prestart_realtime(poisoned));
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+    require(!ores_native_actor_scheduler_prestart_realtime(poisoned));
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+    ores_native_actor_scheduler_retire(poisoned);
+    require(ores_native_actor_scheduler_drain(poisoned));
+    require(ores_native_actor_scheduler_try_destroy(poisoned));
+
     OresNativeActorScheduler* s =
         ores_native_actor_scheduler_open(2, 2, 2, deliver, &state);
     require(s != NULL);
