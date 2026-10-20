@@ -173,6 +173,8 @@ int ores_native_continuation_store_publish(
                 &parent_block, &parent_lane, &parent_index)
                 || parent_block->execution_runtime_domain[parent_lane]
                     != context.id.runtime_domain
+                || (parent_block->state[parent_lane] != ORES_CONTINUATION_CLAIMED
+                    && parent_block->state[parent_lane] != ORES_CONTINUATION_COMPLETED)
                 || parent_block->refs[parent_lane] == UINT32_MAX) {
             unlock_store(store);
             (void)ores_native_execution_context_store_release(
