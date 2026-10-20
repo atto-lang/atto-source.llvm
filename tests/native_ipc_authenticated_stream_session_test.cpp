@@ -198,7 +198,7 @@ static void success_case() {
 
     ::close(fds[1]);
     NativeIpcAuthenticatedStreamSession session(
-        OwnedSocketFd(fds[0]), envelope, generation, 4,
+        OwnedSocketFd{fds[0]}, envelope, generation, 4,
         mac_key, connection_binding);
     const auto initial = session.send_nonblocking(envelope, payload);
     assert(initial ==
@@ -249,7 +249,7 @@ static void stale_generation_case() {
 
     ::close(fds[1]);
     NativeIpcAuthenticatedStreamSession session(
-        OwnedSocketFd(fds[0]), envelope, generation, 2,
+        OwnedSocketFd{fds[0]}, envelope, generation, 2,
         mac_key, connection_binding);
     const auto initial = session.send_nonblocking(envelope, payload);
     assert(initial ==
@@ -293,7 +293,7 @@ static void oversized_receipt_case() {
     const auto connection_binding = binding();
 
     NativeIpcAuthenticatedStreamSession session(
-        OwnedSocketFd(fds[0]), envelope, 93, 1,
+        OwnedSocketFd{fds[0]}, envelope, 93, 1,
         mac_key, connection_binding);
 
     const std::uint32_t oversized =
@@ -338,7 +338,7 @@ static void pressured_write_case() {
     const auto connection_binding = binding();
 
     NativeIpcAuthenticatedStreamSession session(
-        OwnedSocketFd(fds[0]), first, 94, 4,
+        OwnedSocketFd{fds[0]}, first, 94, 4,
         mac_key, connection_binding);
     const auto first_status = session.send_nonblocking(first, payload);
     assert(first_status ==
