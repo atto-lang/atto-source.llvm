@@ -1080,6 +1080,41 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
 
+    add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
+    target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-inverted-columns-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-dop-inverted-columns-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-dop-inverted-columns-test PRIVATE Threads::Threads)
+    add_test(NAME dop_inverted_columns_safe_handles COMMAND oreslang-dop-inverted-columns-test)
+    # An opt-in *native host* sanitizer build for the same row/column/borrow
+    # differential stress tests. This does not certify guest source lowering.
+    option(ORESLANG_DOP_ASAN_UBSAN
+           "Build additional SoA C++ regression executable under ASan+UBSan" OFF)
+    if(ORESLANG_DOP_ASAN_UBSAN)
+        if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            message(FATAL_ERROR "SoA ASan/UBSan requires GNU or Clang")
+        endif()
+        add_executable(oreslang-dop-inverted-columns-sanitized-test
+                       tests/dop_inverted_columns_test.cpp)
+        target_include_directories(oreslang-dop-inverted-columns-sanitized-test PRIVATE
+                                   "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-dop-inverted-columns-sanitized-test PRIVATE cxx_std_20)
+        target_compile_options(oreslang-dop-inverted-columns-sanitized-test PRIVATE
+                               -O1 -g -Wall -Wextra -Wpedantic -Werror
+                               -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-dop-inverted-columns-sanitized-test PRIVATE
+                            -fsanitize=address,undefined)
+        target_link_libraries(oreslang-dop-inverted-columns-sanitized-test PRIVATE Threads::Threads)
+        add_test(NAME dop_inverted_columns_asan_ubsan
+                 COMMAND oreslang-dop-inverted-columns-sanitized-test)
+        set_tests_properties(dop_inverted_columns_asan_ubsan PROPERTIES
+                             TIMEOUT 120
+                             ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+    endif()
+    add_test(NAME dop_inverted_type_admission
+        COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}"
+                bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/dop_inverted_negative_admission.sh")
+
     add_executable(oreslang-managed-ref-test tests/managed_ref_test.cpp)
     target_include_directories(oreslang-managed-ref-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
