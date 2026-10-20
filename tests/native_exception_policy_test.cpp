@@ -139,6 +139,37 @@ int main() {
     assert(chain->suppressed()[0].suppressed()[0].kind() == FailureKind::Throw);
     assert(chain->suppressed()[1].kind() == FailureKind::Throw);
 
+    // A hostile cascade of cleanup failures cannot grow CONTROL metadata
+    // without bound. We keep the dominant outcome, and account for omitted
+    // diagnostic subtrees without leaking or recursively copying payloads.
+    Failure broad = Failure::make(FailureKind::Throw, "first");
+    for (int index = 0; index < 200; ++index) {
+        broad = combine_failure(
+            std::move(broad), Failure::make(FailureKind::Throw, "cleanup"));
+    }
+    assert(broad.kind() == FailureKind::Throw);
+    assert(broad.suppressed_nodes() ==
+           oreslang::runtime::max_control_suppressed_nodes);
+    assert(broad.omitted_suppressed_subtrees() > 0);
+    assert(broad.suppressed_depth() <=
+           oreslang::runtime::max_control_suppression_depth);
+
+    Failure deep = Failure::make(FailureKind::Throw, "leaf");
+    for (int index = 0; index < 40; ++index) {
+        deep = combine_failure(
+            Failure::make(FailureKind::Throw, "parent"), std::move(deep));
+    }
+    assert(deep.suppressed_depth() <=
+           oreslang::runtime::max_control_suppression_depth);
+    assert(deep.omitted_suppressed_subtrees() > 0);
+
+    Failure panicking = combine_failure(
+        std::move(broad), Failure::make(FailureKind::Panic, "priority"));
+    assert(panicking.kind() == FailureKind::Panic);
+    assert(panicking.omitted_suppressed_subtrees() == 1);
+    assert(panicking.suppressed().empty());
+    assert(panicking.suppressed_nodes() == 1);
+
     std::optional<Failure> none;
     auto first = combine_failure(std::move(none), Failure::make(FailureKind::Throw, "first"));
     assert(first && first->diagnostic() == "first");
