@@ -3,6 +3,7 @@
 // authenticator. Callers must independently verify every remote receipt.
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -234,12 +235,20 @@ private:
         return true;
     }
     static void validate(const IpcReceiptEnvelope& message) {
+        constexpr auto java_long_max =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        const auto invalid_long = [java_long_max](std::uint64_t value) {
+            return value == 0 || value > java_long_max;
+        };
         if (!token(message.domain) || !token(message.sender) ||
             !token(message.destination) || !token(message.session) ||
-            !digest(message.payload_sha256) || !message.sender_incarnation ||
-            !message.destination_incarnation || !message.route_epoch ||
-            !message.capability_generation || !message.message_sequence ||
-            !message.frame_sequence)
+            !digest(message.payload_sha256) ||
+            invalid_long(message.sender_incarnation) ||
+            invalid_long(message.destination_incarnation) ||
+            invalid_long(message.route_epoch) ||
+            invalid_long(message.capability_generation) ||
+            invalid_long(message.message_sequence) ||
+            invalid_long(message.frame_sequence))
             throw std::invalid_argument("noncanonical IPC receipt identity");
     }
 
