@@ -65,3 +65,17 @@ replace its pointer or assign a different queued receipt after the two
 buffer fences have been admitted. The moved-from receipt's `queue()` accessor
 throws rather than dereference an empty owner. Source metadata is copied
 before admission; device/provider authentication remains a separate gate.
+
+## Constructor and ticket sealing
+
+Only `claim_gpu_for_queue(...)` is a friend of the queue-scoped receipt's
+private constructor. A host caller cannot fabricate a `QueueClaimedGpuBinding`
+by attaching an arbitrary queue descriptor to tickets produced by the
+queue-neutral API. The admitted `ClaimedGpuBinding` and its paired fence
+tickets are exposed read-only through `claim() const`, and queue selection
+through `queue() const`. A moved-from receipt rejects either accessor.
+
+This is a host-level compatibility invariant, **not** physical device
+attestation or proof of queue generation freshness: the GPU provider must
+still verify the actual device handle, tenant, generation and capacity before
+submission, and retain fences through authenticated completion.
