@@ -197,11 +197,48 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+struct ModelParameter {
+    std::string name;
+    bool has_default = false;
+    std::int64_t default_value = 0;
+};
+
+struct ModelStaticArg {
+    enum class Kind { Integer, Parameter };
+    Kind kind = Kind::Integer;
+    std::int64_t integer = 0;
+    std::string parameter;
+};
+
+struct ModelOperation {
+    std::string name;
+    std::vector<ModelStaticArg> static_arguments;
+    std::size_t offset = 0;
+};
+
+struct ModelDecl {
+    std::string name;
+    std::vector<ModelParameter> parameters;
+    std::vector<ModelOperation> operations;
+    std::string graph_digest;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
+struct ModelRunReceipt {
+    std::string model_name;
+    std::string blueprint_graph_digest;
+    std::string configured_graph_digest;
+    std::vector<std::int64_t> configuration;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
+    std::vector<ModelDecl> models;
+    std::vector<ModelRunReceipt> model_runs;
     std::vector<Function> functions;
 };
 
