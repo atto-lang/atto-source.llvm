@@ -86,15 +86,15 @@ inline RunLedger validate_and_commit(const ModelOwner& owner,
     if (owner.model_type_id != stamp.model_type_id)
         throw std::runtime_error("MODEL_INSTANCE_TYPE_MISMATCH");
     if (owner.graph_digest != stamp.graph_digest)
-        throw std::runtime_error("MODEL_STALE_GRAPH");
+        throw std::runtime_error("MODEL_INSTANCE_GRAPH_MISMATCH");
     if (owner.graph_generation != stamp.graph_generation)
-        throw std::runtime_error("MODEL_STALE_GRAPH_GENERATION");
+        throw std::runtime_error("MODEL_GRAPH_GENERATION_MISMATCH");
     if (owner.instance_id != stamp.instance_id)
-        throw std::runtime_error("MODEL_WRONG_INSTANCE");
+        throw std::runtime_error("MODEL_INSTANCE_ID_MISMATCH");
     if (owner.parameter_version != stamp.parameter_version)
-        throw std::runtime_error("MODEL_STALE_PARAMETER_VERSION");
+        throw std::runtime_error("MODEL_PARAMETER_VERSION_MISMATCH");
     if (owner.execution_profile_digest != stamp.execution_profile_digest)
-        throw std::runtime_error("MODEL_WRONG_EXECUTION_PROFILE");
+        throw std::runtime_error("MODEL_EXECUTION_PROFILE_MISMATCH");
     RunLedger next = ledger;
     next.committed_run_ids.insert(stamp.run_id);
     return next;
