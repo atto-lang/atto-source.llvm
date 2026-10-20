@@ -1,0 +1,54 @@
+name: FSM alternative layouts host reference
+on:
+  pull_request:
+    paths:
+      - 'docs/FSM_ALTERNATIVE_EXECUTION_LAYOUTS.md'
+      - 'src/main/cpp/oreslang/runtime/DopLayout.hpp'
+      - 'tests/fsm_layout_alternatives_test.cpp'
+      - 'scripts/verify-fsm-layout-alternatives.sh'
+      - '.github/workflows/fsm-layout-alternatives.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-fsm-layout-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cxx: g++
+            sanitizers: false
+          - cxx: clang++
+            sanitizers: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Record exact evaluated tree
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+      - name: Compile native header and finite FSM layout reference
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+          SANITIZERS: ${{ matrix.sanitizers }}
+        run: |
+          set -euo pipefail
+          flags=(-std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+          if [[ "$SANITIZERS" = true ]]; then
+            flags+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+          else
+            flags+=(-O2)
+          fi
+          "$CXX" "${flags[@]}" -I src/main/cpp \
+            tests/fsm_layout_alternatives_test.cpp -o /tmp/fsm-layout-proof
+      - name: Run bounded layouts and negative-admission model
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/fsm-layout-proof | grep -Fx \
+            'FSM_LAYOUT_HOST_PASS traces=1023 layouts=3 rows=5 depth=4 negative=guard,overflow,loans,stale-view,owner,generation,ecs'
