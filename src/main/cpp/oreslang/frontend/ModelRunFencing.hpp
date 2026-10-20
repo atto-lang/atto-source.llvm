@@ -49,7 +49,7 @@ inline void validate_owner(const ModelOwner& owner) {
     if (owner.graph_generation < 0) throw std::runtime_error("MODEL_INVALID_GRAPH_GENERATION");
     require_fence_id(owner.instance_id, "MODEL_INVALID_INSTANCE_ID");
     if (owner.parameter_version < 0) throw std::runtime_error("MODEL_INVALID_PARAMETER_VERSION");
-    require_fence_digest(owner.execution_profile_digest, "MODEL_INVALID_PROFILE_DIGEST");
+    require_fence_digest(owner.execution_profile_digest, "MODEL_INVALID_EXECUTION_PROFILE");
 }
 
 inline void validate_stamp(const RunStamp& stamp) {
@@ -84,7 +84,7 @@ inline RunLedger validate_and_commit(const ModelOwner& owner,
     if (ledger.committed_run_ids.count(stamp.run_id))
         throw std::runtime_error("MODEL_RUN_REPLAY");
     if (owner.model_type_id != stamp.model_type_id)
-        throw std::runtime_error("MODEL_WRONG_TYPE");
+        throw std::runtime_error("MODEL_INSTANCE_TYPE_MISMATCH");
     if (owner.graph_digest != stamp.graph_digest)
         throw std::runtime_error("MODEL_STALE_GRAPH");
     if (owner.graph_generation != stamp.graph_generation)
