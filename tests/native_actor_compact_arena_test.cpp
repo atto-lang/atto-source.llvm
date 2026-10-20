@@ -12,7 +12,7 @@
 #include <unistd.h>
 #endif
 
-#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "compact actor arena test failed at %d\\n", __LINE__); return 1; } } while (0)
+#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "compact actor arena test failed at %d\n", __LINE__); return 1; } } while (0)
 
 static_assert(sizeof(std::uint32_t) == 4, "compact stored representation must be 4 bytes");
 static_assert(std::is_standard_layout<OresArenaCompactHandle>::value,
