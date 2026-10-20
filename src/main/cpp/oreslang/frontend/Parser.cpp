@@ -64,7 +64,36 @@ bool refinement_annotation(std::string_view name) {
            name == "Min" || name == "Max" || name == "Range";
 }
 
-void reject_unsupported_refinement_surface(std::string_view source) {
+// Look ahead through source trivia without interpreting a contextual identifier
+// as a shape unless the following syntax genuinely opens a row schema.
+std::size_t skip_shape_trivia(std::string_view source, std::size_t at) {
+    for (;;) {
+        while (at < source.size() &&
+               std::isspace(static_cast<unsigned char>(source[at]))) ++at;
+        if (source.substr(at, 2) == "//") {
+            const auto end = source.find('\\n', at + 2);
+            at = end == std::string_view::npos ? source.size() : end;
+            continue;
+        }
+        if (source.substr(at, 2) == "/*") {
+            const auto start = at;
+            at += 2;
+            std::size_t depth = 1;
+            while (depth != 0) {
+                if (at == source.size())
+                    throw std::runtime_error("unterminated block comment at byte " +
+                                             std::to_string(start));
+                if (source.substr(at, 2) == "/*") { at += 2; ++depth; }
+                else if (source.substr(at, 2) == "*/") { at += 2; --depth; }
+                else ++at;
+            }
+            continue;
+        }
+        return at;
+    }
+}
+
+void reject_unsupported_type_surfaces(std::string_view source) {
     bool in_type = false;
     for (std::size_t at = 0; at < source.size();) {
         const unsigned char ch = static_cast<unsigned char>(source[at]);
@@ -123,6 +152,18 @@ void reject_unsupported_refinement_surface(std::string_view source) {
             const auto start = at++;
             while (at < source.size() && identifier_part(source[at])) ++at;
             const auto word = source.substr(start, at - start);
+            // The native scalar frontend has no typed record/struct row
+            // witness, read-only borrow proof or aggregate lowering. Reject
+            // before producing partial IR; retain 'record' as a contextual
+            // ordinary identifier when it is NOT followed by a row brace.
+            if (word == "structural" ||
+                    ((word == "record" || word == "struct") &&
+                     source.substr(skip_shape_trivia(source, at), 1) == "{")) {
+                throw std::runtime_error(
+                    "native structural shape boundary unsupported: typed readonly "
+                    "view/aggregate lowering required at byte " +
+                    std::to_string(start));
+            }
             if (word == "newtype") {
                 throw std::runtime_error(
                     "native refinement boundary unsupported: nominal newtype "
@@ -1974,7 +2015,7 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     // Compiler-owned fail-closed gate. Tests assert this diagnostic rather
     // than relying on incidental lexer/parser failure for refinement syntax.
-    reject_unsupported_refinement_surface(source);
+    reject_unsupported_type_surfaces(source);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     if (experimental_rt_scalar_loop &&
