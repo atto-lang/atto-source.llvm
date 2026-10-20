@@ -50,6 +50,27 @@ int main() {
               "nominal typed USD ports");
         check(hir.upper_bound_bytes == 32, "conservative buffer budget");
         check(!hir.nodes[0].vjp, "forward-only graph has no gradient requirement");
+
+        const auto cfg_a = oreslang::parse_model_declarations(
+            "define model X as Apply(1) end");
+        const auto cfg_b = oreslang::parse_model_declarations(
+            "define model X as Apply(2) end");
+        const oreslang::model::Registry cfg_registry = {
+            {"Apply", {"Apply", usd, usd, "pure", "v1", 0, false}}
+        };
+        const auto hir_a = oreslang::model::admit(cfg_a[0], cfg_registry);
+        const auto hir_b = oreslang::model::admit(cfg_b[0], cfg_registry);
+        check(hir_a.nodes[0].config != hir_b.nodes[0].config,
+              "literal op configuration must affect HIR identity");
+
+        const auto def_a = oreslang::parse_model_declarations(
+            "define model X(rate: float = 0.15) as Apply(rate) end");
+        const auto def_b = oreslang::parse_model_declarations(
+            "define model X(rate: float = 0.20) as Apply(rate) end");
+        const auto hdef_a = oreslang::model::admit(def_a[0], cfg_registry);
+        const auto hdef_b = oreslang::model::admit(def_b[0], cfg_registry);
+        check(hdef_a.formal_config != hdef_b.formal_config,
+              "formal defaults must affect graph identity");
         auto bad = trusted;
         bad.at("Apply").input = mass;
         try {
