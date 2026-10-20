@@ -376,5 +376,29 @@ int main() {
     over_budget.blocks[0].successors.resize(65537, 0);
     assert(rejected([&] { verify(over_budget); }));
 
+    // Concrete CFG refinement of the abstract NativeOwnershipLoans Suspend
+    // transition: every live loan, including a projected field, is forbidden.
+    Graph suspend;
+    suspend.entry = {{"x", cell(kOwned)}};
+    suspend.blocks = {{{op(Kind::BorrowShared, "x"),
+                        op(Kind::Suspend, ""),
+                        op(Kind::ReleaseShared, "x")}, {}}};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowShared, "x"),
+        op(Kind::ReleaseShared, "x"),
+        op(Kind::Suspend, "")};
+    verify(suspend);
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowExclusive, "x"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.entry = {{"x.field", cell(kOwned)}, {"x.other", cell(kOwned)}};
+    suspend.blocks[0].operations = {
+        op(Kind::BorrowShared, "x.field"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspend); }));
+    suspend.blocks[0].operations = {op(Kind::Suspend, ""),
+                                   op(Kind::Read, "x.other")};
+    verify(suspend);
+
     return 0;
 }
