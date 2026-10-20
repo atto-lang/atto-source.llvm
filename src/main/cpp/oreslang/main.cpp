@@ -66,13 +66,29 @@ int main(int argc, char** argv) {
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
+    enum class BuildProfile { Dev, Release, StrictAot, HardRt };
+    BuildProfile build_profile = BuildProfile::Dev;
+    bool build_profile_seen = false;
+    bool freestanding = false;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
     const char* envLevel = std::getenv("ORES_CORE_LOG_LEVEL");
     std::string coreLogLevel = envLevel ? envLevel : "off";
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg.rfind("--core-log-level=", 0) == 0) {
+        if (arg == "--release" || arg == "--strict-aot" || arg == "--hard-rt") {
+            if (build_profile_seen) {
+                std::cerr << "--release, --strict-aot and --hard-rt are mutually exclusive\n";
+                return 2;
+            }
+            build_profile_seen = true;
+            if (arg == "--release") build_profile = BuildProfile::Release;
+            else if (arg == "--strict-aot") build_profile = BuildProfile::StrictAot;
+            else build_profile = BuildProfile::HardRt;
+        } else if (arg == "--freestanding") {
+            if (freestanding) { std::cerr << "duplicate --freestanding\n"; return 2; }
+            freestanding = true;
+        } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
         } else if (arg == "--no-core-log") {
             coreLogLevel = "off";
@@ -109,6 +125,19 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (build_profile != BuildProfile::Dev) {
+        const char* requested =
+            build_profile == BuildProfile::Release ? "release" :
+            build_profile == BuildProfile::StrictAot ? "strict-aot" : "hard-rt";
+        std::cerr << requested
+                  << " profile requires semantic reachability/tree shaking and final-artifact evidence; "
+                  << "oreslang-llvmc currently emits IR only, so the profile is rejected rather than weakened\n";
+        return 2;
+    }
+    if (freestanding && !cortex_m_target) {
+        std::cerr << "--freestanding is currently admitted only with --target=thumbv7m-none-eabi\n";
+        return 2;
+    }
     oreslang::CoreLog::Level admittedLevel = oreslang::CoreLog::Level::Off;
     if (!oreslang::CoreLog::parse_level(coreLogLevel, admittedLevel)) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
@@ -120,7 +149,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--release|--strict-aot|--hard-rt] [--freestanding] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
