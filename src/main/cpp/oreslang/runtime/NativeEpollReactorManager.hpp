@@ -177,15 +177,42 @@ public:
         for (const auto& claim : claimed_fds_)
             if (claim.occupied && claim.fd == entry->fd) return false;
         const int fd = entry->fd;
-        entry->live = false; // stale handles may never authorize FD reuse
         const int result = ::close(fd);
-        if (result == 0) return true;
-        // Linux close(2) releases the descriptor even when interrupted by
-        // EINTR. Retrying would risk closing another thread's reused FD;
-        // keeping this logical slot pending would instead leak authority.
-        // Other errors (notably EBADF) fail closed for trusted-host review.
-        return errno == EINTR;
+        const int close_errno = result == 0 ? 0 : errno;
+        // A failed close may have invalidated the numeric FD already. Never
+        // retry it: another thread could have reused that integer meanwhile.
+        entry->live = false; // stale handles cannot act on a closed/uncertain FD
+        bool inject_uncertain_close = false;
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+        // Fault injection occurs AFTER a successful real close, so the test
+        // never leaks a descriptor or fabricates ownership of a live FD.
+        auto remaining = test_uncertain_close_.load(std::memory_order_relaxed);
+        while (remaining && !test_uncertain_close_.compare_exchange_weak(
+                remaining, remaining - 1, std::memory_order_relaxed)) {}
+        inject_uncertain_close = remaining != 0 && result == 0;
+#endif
+        // On Linux EINTR means the descriptor has been released. An unknown
+        // error (notably EBADF) is NOT a reclaim receipt. Quarantine this
+        // manager slot instead of making it available to a future mint:
+        // the logical authority remains pending for trusted-host escalation.
+        if (!inject_uncertain_close &&
+                (result == 0 || (result < 0 && close_errno == EINTR)))
+            return true;
+        entry->quarantined = true;
+        return false;
     }
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+    // Only source-local native test translation units compile these hooks.
+    void test_uncertain_next_owned_close(unsigned count = 1) noexcept {
+        test_uncertain_close_.store(count, std::memory_order_release);
+    }
+    std::size_t test_quarantined_owned_slots() const noexcept {
+        std::lock_guard<std::mutex> guard(mu_);
+        std::size_t count = 0;
+        for (const auto& e : owned_) if (e.quarantined) ++count;
+        return count;
+    }
+#endif
     // Typed host-only watch. No guest or raw C ABI can forge its owner ID.
     std::optional<Watch> try_watch(OwnedEventFd key, std::uint32_t events) noexcept {
         return try_watch_impl(-1, events, &key);
@@ -442,10 +469,12 @@ private:
         int fd = -1;
         std::uint64_t owner = 0;
         std::uint64_t generation = 0;
+        // Unknown close outcome: never reuse this slot or retry the fd.
+        bool quarantined = false;
     };
     std::size_t free_owned_slot() const noexcept {
         for (std::size_t i = 0; i < owned_capacity; ++i)
-            if (!owned_[i].live) return i;
+            if (!owned_[i].live && !owned_[i].quarantined) return i;
         return owned_capacity;
     }
     OwnedEntry* lookup_owned(OwnedEventFd key) noexcept {
@@ -489,5 +518,8 @@ private:
     mutable std::mutex mu_;
     bool stopped_ = false;
     bool owned_bootstrap_sealed_ = false; // guarded by mu_
+#if defined(ORESLANG_NIO_TEST_HOOKS)
+    std::atomic<unsigned> test_uncertain_close_{0};
+#endif
 };
 } // namespace oreslang::runtime
