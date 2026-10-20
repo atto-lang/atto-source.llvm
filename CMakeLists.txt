@@ -1907,6 +1907,22 @@ if(BUILD_TESTING)
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
 
+# Local C++ XDP effect admission matrix. This must execute even when the
+# LLVM BPF backend/verifier and kernel headers are unavailable. Do not treat
+# it as evidence of emitted eBPF object or host policy authorization.
+if(BUILD_TESTING)
+    add_executable(oreslang-bpf-effect-admission-test
+        tests/bpf_effect_admission_test.cpp)
+    target_include_directories(oreslang-bpf-effect-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-bpf-effect-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME bpf_xdp_effect_acknowledgement_matrix
+        COMMAND oreslang-bpf-effect-admission-test)
+    set_tests_properties(bpf_xdp_effect_acknowledgement_matrix
+        PROPERTIES TIMEOUT 10)
+endif()
+
 # Fail-closed eBPF XDP source/LLVM IR and real EM_BPF object gate.
 if(BUILD_TESTING)
     add_executable(oreslang-bpf-xdp-lowering-test
@@ -1929,4 +1945,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/bpf_xdp_source_object.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(bpf_xdp_source_object PROPERTIES TIMEOUT 120)
+    # Pure Python source-free bridge invariants run even if no BPF kernel
+    # verifier or external target-profile checkout is available.
+    add_test(NAME bpf_xdp_policy_bridge_failclosed_offline
+        COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            -p "test_bpf_xdp_policy_bridge.py" -v)
+    set_tests_properties(bpf_xdp_policy_bridge_failclosed_offline
+        PROPERTIES TIMEOUT 20)
 endif()

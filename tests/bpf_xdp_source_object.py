@@ -2,6 +2,7 @@
 """Experimental eBPF XDP: fail-closed .ores source to real BPF ELF object."""
 import argparse
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -69,6 +70,17 @@ def main():
             require(second.returncode == 0 and second.stdout == ir,
                     "same source did not produce deterministic LLVM IR")
             observed_ir[action] = ir
+            closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                           "--emit-target-closure", str(src)])
+            require(closure.returncode == 0, "constant XDP closure failure: " + closure.stderr)
+            require(json.loads(closure.stdout) == {
+                "schemaVersion": 1, "entry": "ores_xdp", "target": "ebpf",
+                "backend": "llvm", "grants": [],
+                "nodes": [{"id": "ores_xdp", "targets": ["ebpf"],
+                           "requires": [], "imports": []}]
+            }, "constant-only XDP falsely claimed packet authority")
+            require("target triple" not in closure.stdout,
+                    "effect closure leaked LLVM IR")
             require('target triple = "bpfel"' in ir, "wrong eBPF target triple")
             require('target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"' in ir,
                     "wrong eBPF data layout")
@@ -193,13 +205,106 @@ def main():
             "}\n"
         )
         src.write_text(packet_source, encoding="utf-8")
-        packet_result = run(cmd)
+        # IR issuance now requires explicit packet-read acknowledgement.
+        # This is not a substitute for an independent policy-approved build.
+        unacknowledged = run(cmd)
+        require(unacknowledged.returncode != 0 and unacknowledged.stdout == "" and
+                "bpf.packet.read" in unacknowledged.stderr,
+                "XDP packet access escaped without explicit effect acknowledgement")
+        packet_cmd = [args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                      "--bpf-grants=bpf.packet.read", str(src)]
+        packet_result = run(packet_cmd)
         require(packet_result.returncode == 0, packet_result.stderr)
+        duplicate_grants = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                                "--bpf-grants=bpf.packet.read", "--bpf-grants=bpf.packet.read", str(src)])
+        require(duplicate_grants.returncode == 2 and duplicate_grants.stdout == "",
+                "duplicate BPF grants option must fail before IR emission")
+        invalid_grants = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                              "--bpf-grants=heap", str(src)])
+        require(invalid_grants.returncode == 2 and invalid_grants.stdout == "",
+                "BPF must not accept arbitrary host authority")
+
         host_packet = run([args.compiler, str(src)])
         require(host_packet.returncode != 0 and not host_packet.stdout and
                 "unknown parameter class" in host_packet.stderr.lower(),
                 "host/native compilation must not admit XdpContext")
         packet_ir = packet_result.stdout
+        packet_closure = run([args.compiler, "--emit-target-closure",
+                              "--bpf-program=xdp", "--target=bpfel", str(src)])
+        require(packet_closure.returncode == 0, packet_closure.stderr)
+        packet_graph = json.loads(packet_closure.stdout)
+        forged_closure_grant = run([args.compiler, "--emit-target-closure",
+                                    "--bpf-grants=bpf.packet.read",
+                                    "--target=bpfel", "--bpf-program=xdp", str(src)])
+        require(forged_closure_grant.returncode == 2 and
+                forged_closure_grant.stdout == "",
+                "compiler-produced effect declaration must never self-grant authority")
+        require(packet_graph == {
+            "schemaVersion": 1, "entry": "ores_xdp", "target": "ebpf",
+            "backend": "llvm", "grants": [],
+            "nodes": [{"id": "ores_xdp", "targets": ["ebpf"],
+                       "requires": ["bpf.packet.read"], "imports": []}]
+        }, "checked packet access must infer effect but never self-grant it")
+        # The effect inference must not depend on a particular packet
+        # offset, comparison operand ordering, or a single guarded return.
+        # These are compiler/IR tests; kernel verifier admission is separate.
+        for index, offset in enumerate((0, 14, 255, 4095)):
+            equality = ("ctx.packet_u8(%d) == 8" % offset
+                        if index % 2 == 0
+                        else "8 == ctx.packet_u8(%d)" % offset)
+            variant = (
+                "pub fnc ores_xdp(borrow XdpContext ctx): int {\n"
+                "  if (%s) { return 1; } fi\n"
+                "  return 2;\n"
+                "}\n"
+            ) % equality
+            src.write_text(variant, encoding="utf-8")
+            denied = run(cmd)
+            require(denied.returncode != 0 and denied.stdout == "" and
+                    "bpf.packet.read" in denied.stderr,
+                    "packet effect inferred incorrectly for offset/order " + str(offset))
+            inferred = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--emit-target-closure", str(src)])
+            require(inferred.returncode == 0 and json.loads(inferred.stdout) == packet_graph,
+                    "packet closure drift at offset/order " + str(offset))
+            emitted = run(packet_cmd)
+            require(emitted.returncode == 0 and "load i8" in emitted.stdout,
+                    "checked byte access lost at offset/order " + str(offset))
+
+        # The grammar's eight-guard limit should remain an effect-preserving
+        # upper bound. A ninth guard must fail without partial IR/JSON.
+        eight_guards = (
+            "pub fnc ores_xdp(borrow XdpContext ctx): int {\n" +
+            "".join(
+                "  if (ctx.packet_u8(%d) == %d) { return 1; } fi\n" %
+                (offset, index) for index, offset in enumerate(
+                    (0, 1, 14, 16, 64, 255, 1023, 4095))
+            ) +
+            "  return 2;\n}\n"
+        )
+        src.write_text(eight_guards, encoding="utf-8")
+        eight = run(packet_cmd)
+        require(eight.returncode == 0 and
+                all("packet.load.%d" % i in eight.stdout for i in range(8)),
+                "eight bounded byte guards failed checked IR lowering")
+        eight_closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--emit-target-closure", str(src)])
+        require(eight_closure.returncode == 0 and
+                json.loads(eight_closure.stdout) == packet_graph,
+                "eight bounded packet reads must infer one exact ungranted effect")
+        nine_guards = eight_guards.replace("  return 2;\n",
+                                           "  if (ctx.packet_u8(2) == 0) { return 1; } fi\n"
+                                           "  return 2;\n")
+        src.write_text(nine_guards, encoding="utf-8")
+        ninth = run(packet_cmd)
+        require(ninth.returncode != 0 and ninth.stdout == "",
+                "ninth guarded XDP packet read bypassed bounded CFG admission")
+        ninth_closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                             "--emit-target-closure", str(src)])
+        require(ninth_closure.returncode != 0 and ninth_closure.stdout == "",
+                "invalid ninth guard emitted an apparently valid effect closure")
+        src.write_text(packet_source, encoding="utf-8")
+
         require("packet.load.0" in packet_ir and "packet.next.0" in packet_ir,
                 "packet_u8 lowering lacks explicit checked CFG")
         require("icmp ule" in packet_ir and "load i8" in packet_ir,
@@ -318,6 +423,11 @@ def main():
         reject("fnc ores_xdp(): int { return 2; }")
         reject("pub fnc ores_xdp(int ctx): int { return 2; }")
         reject("pub fnc ores_xdp(): int { return 2 + 0; }")
+        # Invalid programs must not obtain apparently usable effect closures.
+        invalid_closure = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                               "--emit-target-closure", str(src)])
+        require(invalid_closure.returncode != 0 and not invalid_closure.stdout,
+                "invalid BPF program emitted an authorization-looking closure")
         reject("pub fnc ores_xdp(): int { return 4; }")
         reject("pub fnc ores_xdp(): int { return 5; }")
         reject("pub fnc ores_xdp(): int { return -1; }")
@@ -343,6 +453,11 @@ def main():
         reject("pub fnc ores_xdp(): int { return 2; }\n" + ("// extra\n" * 2000),
                "source exceeds")
         src.write_text("pub fnc ores_xdp(): int { return 2; }\n", encoding="utf-8")
+        unused_grant = run([args.compiler, "--target=bpfel", "--bpf-program=xdp",
+                            "--bpf-grants=bpf.packet.read", str(src)])
+        require(unused_grant.returncode != 0 and unused_grant.stdout == "" and
+                "does not use bpf.packet.read" in unused_grant.stderr,
+                "constant-only XDP admitted unused privileged packet-read grant")
         for good_flags in (["--target=bpfel", "--bpf-program=xdp"],
                            ["--bpf-program=xdp", "--target=bpfel"],
                            ["--no-core-log", "--target=bpfel", "--bpf-program=xdp"],
@@ -361,6 +476,15 @@ def main():
             (["--target=bpfel", "--bpf-program="], 2),
             (["--target=bpfeb", "--bpf-program=xdp"], 2),
             (["--target=bpfel", "--bpf-program=xdp", "--cpu=v3"], 2),
+            (["--bpf-grants=bpf.packet.read"], 2),
+            (["--target=host", "--bpf-grants=bpf.packet.read"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants="], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants=threads"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--bpf-grants=bpf.packet.read,heap"], 2),
+            (["--emit-target-closure"], 2),
+            (["--target=host", "--emit-target-closure"], 2),
+            (["--target=bpfel", "--bpf-program=xdp", "--emit-target-closure",
+              "--emit-target-closure"], 2),
         )
         for flags, expected_code in cli_cases:
             proc = run([args.compiler, *flags, str(src)])

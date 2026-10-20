@@ -83,6 +83,131 @@ This is **focused exact-blob evidence, not full repository tree evidence**.
 It does not yet prove source-tree-wide CTest, multiple kernel versions, maps,
 helpers, BTF/CO-RE, live attachment, or network namespace behavior.
 
+## Compiler-inferred, ungranted target closure
+
+The experimental BPF compiler also accepts `--emit-target-closure`, but
+**only** together with `--target=bpfel --bpf-program=xdp`. This emits a
+version-1 resolved closure *instead of* LLVM IR, after the same parser and
+BPF lowering/IR verifier have admitted the whole function:
+
+```sh
+./build/oreslang-llvmc --target=bpfel --bpf-program=xdp \
+  --emit-target-closure examples/xdp_packet_u8.ores > /tmp/ores-xdp-closure.json
+# Independently review and grant bpf.packet.read for this build before
+# running a pinned version of oreslang-target-profiles' check-closure.
+```
+
+Constant-return XDP emits `requires: []`; checked packet-byte guards emit
+`requires: ["bpf.packet.read"]`. In *both* cases the compiler emits
+`grants: []`, not self-authorized authority. For the packet case an
+independent build policy must explicitly grant that capability and have its
+resolved graph checked. An invalid program emits neither a closure nor IR.
+
+## Explicit packet-read acknowledgement on IR emission
+
+The XDP compiler no longer silently issues packet-access LLVM IR: normal
+IR emission of a program with any checked `packet_u8` guard requires the
+explicit argument `--bpf-grants=bpf.packet.read`. Constant-action
+programs require no option, and reject this unused grant. Unknown,
+duplicate or compound grants are rejected. The option is invalid for
+host compilation and for `--emit-target-closure` mode.
+
+```sh
+./build/oreslang-llvmc --target=bpfel --bpf-program=xdp \
+  --bpf-grants=bpf.packet.read examples/xdp_packet_u8.ores > /tmp/packet.ll
+```
+
+**Security boundary:** This flag is a compile-time acknowledgement of a
+capability; it is not an authorization. A caller can set the flag, so
+a trusted build controller must separately check the compiler-produced
+closure against policy-pinned grant declarations and bind the approved
+source tree, IR and kernel object in a protected attestation. The
+compiler still emits `grants:[]` in closure mode, and kernel verifier
+admission + program attach permission remain separate release gates.
+
+The manifest is **not** an attestation, signed permission, kernel-verifier
+approval, compatible program-type/attach-ABI proof, or a certification that
+the emitted BPF object belongs to the same source; it is only the compiler's
+inferred effect declaration for the present narrow XDP slice. Kernel
+verifier, ELF and attachment evidence remain independent mandatory gates.
+Do not extend this shortcut to socket/TC, maps, helpers, imported functions,
+or broader XDP syntax without typed effect inference and cross-repo
+conformance tests. The closure schema's generic `ebpf` target deliberately
+does not establish XDP attachment permission.
+
+## Additional local effect-closure hardening (2026-10-19)
+
+The XDP compiler now serializes both inferred target-closure variants through
+the LLVM-independent `BpfEffectAdmission.hpp` helper. The emitted graph is
+still version 1 and **never** includes a build grant. The full wire shape is
+pinned by the registered C++ CTest; compiler-side tests also cover reordered
+packet-byte comparisons, edge offsets (0, 14, 255, 4095), eight guarded reads,
+and the forbidden ninth guard. The new compiler-side edge-case tests have
+**not** yet been run under the full LLVM toolchain.
+
+Local source-integrity-checked C++ tests passed with GCC and Clang at both
+`-O0` and `-O2`, and with Clang AddressSanitizer + UndefinedBehaviorSanitizer
+(8 effect-gate cases + 3 wire-contract assertions per run). A separate
+C++-emitted-manifest → Node JSON interoperability check passed for both
+constant and packet-read declarations. This is **not** a full repository build,
+LLVM IR verifier execution, kernel verifier acceptance, or policy authorization
+for that exact source head. Do not promote the staged XDP implementation until
+those tests execute on an authorized runner and source/object provenance is
+independently pinned.
+
+## Local compiler-to-policy bridge (source-local, no cross-org checkout)
+
+The source-local `tests/bpf_xdp_policy_bridge.py` runs an **end-to-end
+build gate** when a trusted LLVM compiler, an independently pinned checkout
+of `oreslang-target-profiles`, Clang with the BPF backend, Node 22, and
+`readelf` are present. It never mirrors source or requests GitHub tokens.
+
+Run for each **exact, externally reviewed source** after a trusted build
+controller has pinned the compiler and policy CLI:
+
+```sh
+SOURCE=examples/xdp_packet_u8.ores
+COMPILER=build/oreslang-llvmc
+POLICY=../oreslang-target-profiles/bin/oreslang-target.mjs
+
+python3 tests/bpf_xdp_policy_bridge.py \
+  --source "$SOURCE" --compiler "$COMPILER" --policy-cli "$POLICY" \
+  --expected-source-sha256 "$(sha256sum "$SOURCE" | cut -d' ' -f1)" \
+  --expected-compiler-sha256 "$(sha256sum "$COMPILER" | cut -d' ' -f1)" \
+  --expected-policy-cli-sha256 "$(sha256sum "$POLICY" | cut -d' ' -f1)" \
+  --expected-policy-bundle-sha256 "$APPROVED_POLICY_BUNDLE_SHA256" \
+  --grants=bpf.packet.read
+```
+
+For a constant-only source, omit `--grants`. SHA values in this example
+are computed locally for demonstration; **a protected build controller must
+supply independently reviewed expected hashes** for them to be a meaningful
+provenance control. **APPROVED_POLICY_BUNDLE_SHA256 is mandatory** and
+must be approved independently of the checkout being tested. The bridge
+computes a versioned SHA-256 digest of the exact CLI, all four current
+JavaScript policy modules, package metadata, and all 13 target profiles,
+rejecting missing/extra profiles and unexpected modules or symlinks.
+It verifies the complete bundle both before and after the build; a
+single CLI file hash is insufficient. It still does not replace Git
+provenance, immutable filesystem mounts or independently reviewed
+source/compiler commits; unobserved mid-build races remain outside this
+test script's security guarantee.
+
+The bridge snapshots up to 4096 source bytes through a regular, non-symlink
+descriptor and checks the expected SHA; compiles *that exact snapshot* to
+an ungranted closure; refuses duplicate/unknown JSON keys, self-granted
+privileges, unknown effects or targets; asks the external target-policy CLI
+to authorize the exact inferred effects; and **only after policy success**
+emits BPF IR and an EM_BPF ELF object. It checks sections, symbols and
+relocations and reports unsigned SHA256 evidence for source, compiler,
+policy CLI, full policy bundle, closure, IR and object. It does **not** attach to the kernel,
+verify on a running kernel, sign the receipt, or confer deployment authority.
+
+Compiler/readelf output is written into temporary files rather than\nfully captured into memory and rejected if either stream exceeds 256 KiB.\nThis is a post-execution memory/diagnostic bound, not a filesystem\nwrite quota.\n\nThe separate `bpf_xdp_policy_bridge_failclosed_offline` CTest exercises
+the bridge's fail-closed logic with source-free mocks. A passing mock test
+is never a replacement for the end-to-end test against real, pinned
+executables, Linux verifier, and `BPF_PROG_TEST_RUN`.
+
 ## Evidence boundary
 
 The focused CTests cover positive XDP actions, packet-bound admission,
