@@ -46,6 +46,14 @@ UNSUPPORTED = {
     "invalid-with": "type T = string with length gt 0 or length eq 10;\nfnc main(): int { return 42; }\n",
     "effective-hole": "type T = int with value gte 1 and value ne 2;\nfnc main(): int { return 42; }\n",
     "spaced-annotation": "@ Range(min=1,max=2) type R = int;\nfnc main(): int { return 42; }\n",
+    "comment-separated-annotation": (
+        "@/* first */ /* second /* nested */ */ Size(min=1,max=5)\n"
+        "type Name = string;\nfnc main(): int { return 42; }\n"
+    ),
+    "comment-separated-static-schema": (
+        "type Port = Zorde/*comment*/. /*second*/ infer<PortSchema>;\n"
+        "fnc main(): int { return 42; }\n"
+    ),
     "notempty-annotation": "@NotEmpty\ntype DisplayName = string;\nfnc main(): int { return 42; }\n",
     "length-annotation": "@Length(10)\ntype Username = string;\nfnc main(): int { return 42; }\n",
     "refinement-after-nested-comment": (
