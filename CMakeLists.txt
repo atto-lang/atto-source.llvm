@@ -1049,6 +1049,19 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-managed-slot-arena-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME actor_managed_slot_arena_compressed32_and_native64
         COMMAND oreslang-managed-slot-arena-test)
+
+    # Compiler IR primitive: verified i32 managed load, checked actor-local
+    # provenance/bounds branch, and no unsafe LLVM 'inbounds' claims.
+    # This is backend IR infrastructure, not source-level Ref<T> support.
+    add_executable(oreslang-managed-ref-llvm-lowering-test
+        tests/managed_ref_llvm_lowering_test.cpp)
+    target_include_directories(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-managed-ref-llvm-lowering-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-managed-ref-llvm-lowering-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_llvm_compressed32_checked_pointer_lowering
+        COMMAND oreslang-managed-ref-llvm-lowering-test)
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
