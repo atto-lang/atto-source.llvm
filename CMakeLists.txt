@@ -52,6 +52,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
     target_include_directories(oreslang-native-model-graph-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-model-graph-test PRIVATE
+        ORES_MODEL_CORPUS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/model-executable-v1-conformance.cases")
     target_compile_options(oreslang-native-model-graph-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_general_modelgraph_contract
