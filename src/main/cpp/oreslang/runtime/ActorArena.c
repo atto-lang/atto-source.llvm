@@ -255,7 +255,9 @@ void ores_actor_arena_compact_write(
 uint32_t ores_actor_arena_compact_publish_i32(
         OresActorArena* a, uint64_t domain, uint64_t epoch,
         uint64_t slot_index, uint64_t generation) {
+#if SIZE_MAX < UINT64_MAX
     if (slot_index > SIZE_MAX) deny();
+#endif
     const OresArenaTurn turn = {domain, epoch};
     const OresArenaHandle object = {domain, slot_index, generation};
     return ores_actor_arena_compact_encode(a, turn, object).bits;
@@ -263,7 +265,9 @@ uint32_t ores_actor_arena_compact_publish_i32(
 uint64_t ores_actor_arena_compact_load_i64(
         OresActorArena* a, uint64_t domain, uint64_t epoch,
         uint32_t bits, uint64_t byte_offset) {
+#if SIZE_MAX < UINT64_MAX
     if (byte_offset > SIZE_MAX) deny();
+#endif
     const OresArenaTurn turn = {domain, epoch};
     const OresArenaCompactHandle ref = {domain, bits};
     uint64_t out = 0;
@@ -274,7 +278,9 @@ uint64_t ores_actor_arena_compact_load_i64(
 void ores_actor_arena_compact_store_i64(
         OresActorArena* a, uint64_t domain, uint64_t epoch,
         uint32_t bits, uint64_t byte_offset, uint64_t value) {
+#if SIZE_MAX < UINT64_MAX
     if (byte_offset > SIZE_MAX) deny();
+#endif
     const OresArenaTurn turn = {domain, epoch};
     const OresArenaCompactHandle ref = {domain, bits};
     ores_actor_arena_compact_write(a, turn, ref,
