@@ -116,6 +116,9 @@ llvm::Value* lower(const Expression& expr,
             }
             return builder.CreateLoad(i64, field_storage.at(field_key(expr.left->name, expr.name)),
                                       expr.left->name + "." + expr.name + ".read");
+        case Expression::Kind::Index:
+            throw std::runtime_error(
+                "unverified native checked index reached LLVM lowering");
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 throw std::runtime_error("native Array<int> call has no owned receiver");
