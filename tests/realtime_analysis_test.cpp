@@ -121,5 +121,24 @@ int main() {
                 "external call diagnostic");
     }
 
+    {
+        Program program;
+        constexpr int chain = 65;
+        for (int i = 0; i < chain; ++i) {
+            const std::string name = "depth_" + std::to_string(i);
+            if (i + 1 == chain)
+                program.functions.push_back(pure(name, integer(1)));
+            else
+                program.functions.push_back(
+                    pure(name, call("depth_" + std::to_string(i + 1))));
+        }
+        program.functions.push_back(pure("main", call("depth_0")));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "call graph beyond qualification ceiling must reject");
+        require(report.diagnostic == "RT003_WCET_UNPROVEN",
+                "deep finite call graph diagnostic");
+    }
+
     return 0;
 }

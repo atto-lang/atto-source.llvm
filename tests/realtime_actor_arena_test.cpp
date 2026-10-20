@@ -155,5 +155,25 @@ int main() {
                 2, 2, 2, 1, 8, 8) == ORES_RT_ARENA_INVALID,
             "control object cannot overlap backing memory");
 
+    alignas(std::max_align_t) std::array<unsigned char, 4096> odd_slots{};
+    OresRealtimeActorArena aligned_arena{};
+    require(ores_rt_actor_arena_init(
+                &aligned_arena, odd_slots.data(), odd_slots.size(),
+                3, 3, 3, 3, 17, 64) == ORES_RT_ARENA_OK,
+            "odd logical slot size must use aligned physical stride");
+    require(aligned_arena.slot_stride >= aligned_arena.slot_bytes,
+            "slot stride must cover logical bytes");
+    require((aligned_arena.slot_stride % alignof(std::max_align_t)) == 0,
+            "slot stride must preserve max alignment");
+    for (std::size_t i = 0; i < aligned_arena.slot_count; ++i) {
+        const auto address = reinterpret_cast<std::uintptr_t>(
+            aligned_arena.slab + i * aligned_arena.slot_stride);
+        require((address % alignof(std::max_align_t)) == 0,
+                "every physical slot start must be max aligned");
+    }
+    require(ores_rt_actor_arena_seal(&aligned_arena, 1u << 20) ==
+                ORES_RT_ARENA_OK,
+            "prefault step larger than arena must terminate safely");
+
     return 0;
 }

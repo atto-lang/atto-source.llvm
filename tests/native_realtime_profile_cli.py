@@ -67,6 +67,24 @@ def main():
         require(report["diagnostic"] == "RT008_UNBOUNDED_LOOP",
                 "recursion diagnostic")
 
+        result = run([compiler, "--rt-entry=helper/0", str(pure)])
+        require(result.returncode == 2,
+                "rt-entry without an RT analysis mode must reject")
+
+        alias = root / "pure-report-alias.ores"
+        alias.symlink_to(pure)
+        original = pure.read_text()
+        result = run([
+            compiler,
+            "--rt-check",
+            f"--rt-report={alias}",
+            str(pure),
+        ])
+        require(result.returncode == 1,
+                "report symlink aliasing source must reject")
+        require(pure.read_text() == original,
+                "source must not be overwritten through report symlink")
+
     return 0
 
 if __name__ == "__main__":

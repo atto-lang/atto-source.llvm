@@ -32,7 +32,10 @@ It currently fails closed on:
 - source actors whose mailbox/scheduler bounds are not yet represented in the AST.
 
 Literal native scalar loops may be admitted because their iteration count is
-finite in the current grammar. This does **not** establish a time-based WCET.
+finite in the current grammar. The compiler also caps hard-RT qualification at
+64 transitive call frames and 4096 functions so a finite but impractically deep
+graph cannot be mistaken for qualified WCET evidence. This does **not**
+establish a time-based WCET.
 
 `using ...` is treated as a capability boundary. A function on the reachable
 hard-RT path is rejected if its declared capabilities permit an effect that the
@@ -76,10 +79,17 @@ After seal, the arena has:
 - no lock or atomic synchronization path;
 - no libc memcpy/memset dependency;
 - O(1) persistent slot admission through a fixed free stack;
+- a max_align_t-aligned physical slot stride even when logical slot sizes are odd;
 - generation-checked persistent handles;
 - bounded scratch bump allocation reset at turn leave;
 - bounded slot/scratch zeroization;
 - caller-owned backing that is never freed by the arena.
+
+Host buffers passed to arena read/write APIs are a trusted-runtime boundary and
+must not overlap the arena backing region. The current internal byte copy has
+memcpy-style rather than memmove-style alias semantics; compiler/runtime
+integration must preserve this non-overlap precondition until the implementation
+can enforce or support overlap directly.
 
 The implementation deliberately uses a thread-local carrier binding so a token
 cannot be replayed from another carrier. On ELF/GCC this can leave the special
