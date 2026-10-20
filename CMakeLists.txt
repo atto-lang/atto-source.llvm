@@ -56,6 +56,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-checked-index-ast-test)
     set_tests_properties(native_checked_index_ast_identity PROPERTIES TIMEOUT 15)
 
+    add_executable(oreslang-checked-index-admission-test
+        tests/checked_index_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-checked-index-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-checked-index-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_checked_index_ownership_fail_closed
+        COMMAND oreslang-checked-index-admission-test)
+    set_tests_properties(native_checked_index_ownership_fail_closed PROPERTIES TIMEOUT 15)
+
     # Strict hard-RT substrate: caller-backed, sealed/prefaulted, single-carrier
     # arena with no system allocator or lock path after initialization.
     add_executable(oreslang-realtime-actor-arena-test
