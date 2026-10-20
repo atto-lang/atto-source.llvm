@@ -87,6 +87,26 @@ int main() {
         unresolved_named.operations[1].arguments[0].label = "rate";
         deny_forged_ast(unresolved_named, "MODEL_NAMED_ARGUMENT_UNRESOLVED");
 
+        auto forged_name = non_ml[0];
+        forged_name.name = "bad model name";
+        deny_forged_ast(forged_name, "MODEL_NONCONSTANT_CONFIG");
+
+        auto forged_op = non_ml[0];
+        forged_op.operations.front().name = "Bad.Op";
+        deny_forged_ast(forged_op, "MODEL_INVALID_OP_ID");
+
+        auto forged_many = non_ml[0];
+        while (forged_many.operations.size() < 65)
+            forged_many.operations.push_back(forged_many.operations.front());
+        try {
+            (void)oreslang::model::admit(forged_many, trusted,
+                                         oreslang::model::Limits{1000, 1000, 100000});
+            throw std::runtime_error("native AST bypassed hard v1 node limit");
+        } catch (const std::exception& e) {
+            check(std::string_view(e.what()) == "MODEL_NODE_BUDGET",
+                  "wrong inflated-limits diagnostic");
+        }
+
         auto malformed_argument = non_ml[0];
         malformed_argument.operations[1].arguments[0].formal_reference = false;
         malformed_argument.operations[1].arguments[0].value = "3bogus";
