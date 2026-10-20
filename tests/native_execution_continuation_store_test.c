@@ -34,7 +34,8 @@ static void* resume_on_fresh_worker_stack(void* raw) {
     if (args->ok)
         args->ok = ores_native_await_trace_resume_finish(
             args->continuations, args->link);
-    return (void*)(uintptr_t)worker_stack_noise[0];
+    check(worker_stack_noise[31] == UINT64_C(0xa5a500000000001f));
+    return NULL;
 }
 
 static OresNativeExecutionHandle resume_on_new_thread(
