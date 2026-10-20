@@ -93,6 +93,19 @@ int main() {
             "reused read");
     require(observed == 0, "dropped storage must be zeroized");
 
+    require(ores_rt_actor_arena_drop(&arena, turn, reused) ==
+                ORES_RT_ARENA_OK,
+            "drop reused slot before exhaustion probe");
+    arena.slots[reused.index].generation =
+        std::numeric_limits<std::uint64_t>::max();
+    const std::size_t free_before_exhaustion = arena.free_count;
+    OresRtArenaHandle exhausted{};
+    require(ores_rt_actor_arena_alloc(&arena, turn, 8, &exhausted) ==
+                ORES_RT_ARENA_GENERATION_EXHAUSTED,
+            "generation exhaustion must fail closed");
+    require(arena.free_count == free_before_exhaustion,
+            "failed allocation must not consume free-list capacity");
+
     OresRtArenaScratch scratch{};
     require(ores_rt_actor_arena_scratch_alloc(
                 &arena, turn, 32, alignof(std::uint64_t), &scratch) ==
