@@ -219,12 +219,15 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
+                const bool public_model = accept("pub");
+                if (accept("model")) program.models.push_back(model_declaration(public_model));
+                else if (public_model) fail("expected contextual 'model' after 'define pub'");
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
+                } else fail("expected 'module', contextual 'model', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
@@ -234,12 +237,15 @@ public:
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                const bool public_model = accept("pub");
+                if (accept("model")) program.models.push_back(model_declaration(public_model));
+                else if (public_model) fail("expected contextual 'model' after 'define pub'");
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
+                } else fail("expected contextual 'model', 'class' or 'actor'");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
@@ -249,11 +255,12 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.models.empty() && program.cooperative_loops.empty())
+            fail("expected at least one function, actor or model");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.actors.empty() || !program.classes.empty() || !program.models.empty()
+                 || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         validate(program);
@@ -261,6 +268,77 @@ public:
     }
 
 private:
+    ModelDecl model_declaration(bool public_visibility) {
+        ModelDecl model;
+        model.offset = token_.offset;
+        model.public_visibility = public_visibility;
+        if (accept("pub")) {
+            if (model.public_visibility) fail("duplicate pub model visibility");
+            model.public_visibility = true;
+        }
+        model.name = identifier();
+
+        std::unordered_set<std::string> parameter_names;
+        if (accept("(")) {
+            if (!accept(")")) {
+                do {
+                    ModelParam parameter;
+                    parameter.name = identifier();
+                    if (!parameter_names.insert(parameter.name).second)
+                        fail("duplicate model parameter '" + parameter.name + "'");
+                    require(":");
+                    // The constrained native frontend currently has only a
+                    // proven scalar int source type. Rich ports belong to the
+                    // typed ModelGraph lowering slice, not syntax guessing.
+                    require("int");
+                    parameter.type = "int";
+                    if (accept("=")) parameter.default_value = expression();
+                    model.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+                require(")");
+            }
+        }
+
+        require("as");
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End) fail("expected 'end' to close model");
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("MODEL_NON_LAYER_EXPRESSION: model v1 body accepts only nominal operation calls");
+
+            ModelOpCall operation;
+            operation.name = identifier();
+            if (!accept("("))
+                fail("MODEL_NON_LAYER_EXPRESSION: model operation name must be followed by '('");
+
+            std::unordered_set<std::string> named_arguments;
+            bool saw_named = false;
+            if (!accept(")")) {
+                do {
+                    ModelArgument argument;
+                    if (named_argument_ahead()) {
+                        saw_named = true;
+                        argument.name = identifier();
+                        if (!named_arguments.insert(argument.name).second)
+                            fail("duplicate named model argument '" + argument.name + "'");
+                        require(":");
+                    } else if (saw_named) {
+                        fail("positional model arguments must precede named arguments");
+                    }
+                    argument.value = expression();
+                    operation.arguments.push_back(std::move(argument));
+                } while (accept(","));
+                require(")");
+            }
+            model.operations.push_back(std::move(operation));
+            accept(";");
+        }
+
+        if (model.operations.empty())
+            fail("MODEL_EMPTY_BODY: model body must contain at least one operation");
+        require("end");
+        return model;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1846,10 +1924,15 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
+    if (!program.models.empty()) {
+        throw std::runtime_error(
+            "MODEL_LOWERING_NOT_IMPLEMENTED: define model parsed successfully, "
+            "but typed native ModelGraph lowering is not enabled");
+    }
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
-             !program.module.empty()))
+             !program.models.empty() || !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     // LLVM lowering is prohibited unless the native subset has passed both
     // name/arity checking and flow-sensitive explicit ownership admission.
