@@ -118,7 +118,8 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
     backend::ActorRefOwnershipEvidence evidence(claims);
     (void)backend::verify_actor_compressed32(evidence);
     return SourceManagedRefAuthorization(
-        std::move(evidence), actor.name, ref_it->name, use.offset);
+        std::move(evidence), std::string(source),
+        actor.name, ref_it->name, use.offset);
 }
 
 } // namespace oreslang
