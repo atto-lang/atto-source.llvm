@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/SourceManagedRefLowering.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
@@ -7,6 +8,7 @@
 #include <stdexcept>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -271,13 +273,54 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target,
+                                  std::string_view source_text) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
+
+    const bool has_managed_ref_actors =
+        std::any_of(source.actors.begin(), source.actors.end(),
+            [](const ActorDecl& actor) {
+                return !actor.managed_ref_fields.empty();
+            });
+    if (has_managed_ref_actors) {
+        if (wasm32_target || cortex_m_target)
+            throw std::runtime_error(
+                "source managed Ref<int> lowering requires certified native64 host");
+        if (source_text.empty())
+            throw std::runtime_error(
+                "source managed Ref<int> lowering requires exact source identity");
+        const auto target = TargetAbi::host();
+        if (target.pointer_bits() != 64)
+            throw std::runtime_error(
+                "source managed Ref<int> lowering requires native64 target");
+
+        for (const auto& actor : source.actors) {
+            if (actor.managed_ref_fields.empty()) continue;
+            if (!actor.sealed_state || !actor.fields.empty())
+                throw std::runtime_error(
+                    "managed Ref actor cannot mix scalar state in first executable slice");
+        }
+        for (const auto& fn : source.functions) {
+            for (const auto& spawn : fn.actor_spawns) {
+                const auto actor = std::find_if(
+                    source.actors.begin(), source.actors.end(),
+                    [&](const ActorDecl& item) {
+                        return item.name == spawn.actor_type;
+                    });
+                if (actor != source.actors.end() &&
+                        !actor->managed_ref_fields.empty())
+                    throw std::runtime_error(
+                        "source spawn of managed Ref actor awaits scheduler context ABI");
+            }
+        }
+    }
+
     llvm::LLVMContext context;
     // A bounded, import-free Wasm guest may lower ONE synchronous actor.
     // Its state lives in private Wasm globals owned by exactly one Worker.
