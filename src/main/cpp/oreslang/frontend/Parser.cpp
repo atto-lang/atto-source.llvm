@@ -1275,18 +1275,31 @@ private:
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
+
+            // Canonical mutable borrow is `rt mut borrow value`.
+            // `mut` is an ownership modifier, not a suffix on borrow.
+            const bool mutable_borrow = token_.text == "mut";
+            if (mutable_borrow) advance();
             const auto operation = token_.text;
+
             if (operation == "cooperate") {
+                if (mutable_borrow)
+                    fail("'rt mut' may only modify borrow; use 'rt mut borrow value'");
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
+            }
+            if (mutable_borrow && operation != "borrow") {
+                fail("'rt mut' may only modify borrow; use 'rt mut borrow value'");
             }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            const bool mutable_borrow = operation == "borrow" && accept("mut");
+            if (!mutable_borrow && operation == "borrow" && token_.text == "mut") {
+                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
+            }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
