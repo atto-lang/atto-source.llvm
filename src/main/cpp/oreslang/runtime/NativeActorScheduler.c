@@ -15,6 +15,22 @@ void ores_native_actor_scheduler_test_fail_next_create(void) {
     atomic_store_explicit(&fail_next_carrier_create, 1, memory_order_relaxed);
 }
 #endif
+
+#ifdef ORESLANG_NATIVE_TEST_CALLOC_FAIL_ORDINAL
+static _Atomic unsigned scheduler_calloc_ordinal;
+static void* scheduler_calloc(size_t count, size_t size) {
+    const unsigned ordinal = atomic_fetch_add_explicit(
+        &scheduler_calloc_ordinal, 1u, memory_order_relaxed) + 1u;
+    if (ordinal == (unsigned)ORESLANG_NATIVE_TEST_CALLOC_FAIL_ORDINAL)
+        return NULL;
+    return calloc(count, size);
+}
+#else
+static void* scheduler_calloc(size_t count, size_t size) {
+    return calloc(count, size);
+}
+#endif
+
 static int create_carrier(pthread_t* tid, void* context);
 
 typedef struct {
@@ -334,19 +350,19 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         || actors > SIZE_MAX / capacity
         || (actors > 1024 && actors * capacity > ORES_LARGE_POOL_MAX_MAILBOX_CELLS))
         return NULL;
-    OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
+    OresNativeActorScheduler* s = (OresNativeActorScheduler*)scheduler_calloc(1, sizeof(*s));
     if (!s) return NULL;
     size_t initialized = 0;
-    s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
-    s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
-    s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
+    s->actors = (ActorLane*)scheduler_calloc(actors, sizeof(ActorLane));
+    s->slots = (uint64_t*)scheduler_calloc(actors * capacity, sizeof(uint64_t));
+    s->threads = (pthread_t*)scheduler_calloc(workers, sizeof(pthread_t));
     s->ready_word_count = (actors + ORES_READY_WORD_BITS - 1) / ORES_READY_WORD_BITS;
-    s->ready_control_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
-    s->ready_data_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    s->ready_control_bits = (uint64_t*)scheduler_calloc(s->ready_word_count, sizeof(uint64_t));
+    s->ready_data_bits = (uint64_t*)scheduler_calloc(s->ready_word_count, sizeof(uint64_t));
     s->summary_word_count = (s->ready_word_count + ORES_READY_WORD_BITS - 1)
         / ORES_READY_WORD_BITS;
-    s->summary_control_bits = (uint64_t*)calloc(s->summary_word_count, sizeof(uint64_t));
-    s->summary_data_bits = (uint64_t*)calloc(s->summary_word_count, sizeof(uint64_t));
+    s->summary_control_bits = (uint64_t*)scheduler_calloc(s->summary_word_count, sizeof(uint64_t));
+    s->summary_data_bits = (uint64_t*)scheduler_calloc(s->summary_word_count, sizeof(uint64_t));
     if (!s->actors || !s->slots || !s->threads
         || !s->ready_control_bits || !s->ready_data_bits
         || !s->summary_control_bits || !s->summary_data_bits)
