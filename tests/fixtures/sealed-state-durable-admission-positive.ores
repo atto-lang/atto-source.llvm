@@ -1,0 +1,26 @@
+define actor AdmissionDurableState as
+  state {
+    lease_current: int = 1;
+    revision: int = 8;
+    result: int = 0;
+  }
+
+  pub fnc on_message(int fd): int with state.read, state.write, io, block {
+    return self.handle_state(critical |s| -> {
+      if (s.lease_current eq 1) {
+        const wrote: int = rt file_write_i64_blocking(fd, 0, s.revision + 1);
+        const synced: int = rt file_sync_blocking(fd);
+        const durable: int = wrote * synced;
+        if (durable eq 1) {
+          s.revision = s.revision + 1;
+          s.result = 1;
+        } else {
+          s.result = -30;
+        } fi
+      } else {
+        s.result = -1;
+      } fi
+      return s.result;
+    });
+  }
+end
