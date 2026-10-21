@@ -494,9 +494,30 @@ private:
                     if (depth > 32)
                         fail("native actor state conditional nesting limit exceeded (32)");
                     std::vector<ActorStateStatement> statements;
+                    bool saw_non_local = false;
                     while (token_.text != "return" && token_.text != "}") {
                         if (token_.kind == Kind::End)
                             fail("state callback requires return");
+                        if (token_.text == "const" || token_.text == "val") {
+                            if (depth != 0)
+                                fail("native actor state locals are top-level callback scalars only");
+                            if (saw_non_local)
+                                fail("native actor state locals must precede conditionals and writes");
+                            ActorStateStatement local;
+                            local.kind = ActorStateStatement::Kind::Local;
+                            local.offset = token_.offset;
+                            local.local_mutable = accept("val");
+                            if (!local.local_mutable) require("const");
+                            local.local_name = identifier();
+                            require(":");
+                            require("int");
+                            require("=");
+                            local.expression = expression();
+                            require(";");
+                            statements.push_back(std::move(local));
+                            continue;
+                        }
+                        saw_non_local = true;
                         if (token_.text == "if") {
                             if (++state_branch_count > 32)
                                 fail("native actor state conditional CFG limit exceeded (32)");
