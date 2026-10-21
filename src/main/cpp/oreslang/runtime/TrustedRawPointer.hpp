@@ -134,9 +134,10 @@ private:
 };
 
 /**
- * Native proof object for the future source-level RawPointer<T> capability.
+ * Native proof object for trusted backend/core raw-address authority.
  *
- * It is deliberately distinct from the owning Pointer<T> contract. This value
+ * It is not an Oreslang source type and must never be constructible or nameable
+ * by guest code. This value
  * never owns or extends the pointee lifetime; a compiler-created raw lease must
  * remain rooted in the original owner/arena until all descendants are dead.
  *
