@@ -24,11 +24,12 @@ namespace oreslang::runtime {
  */
 template <typename T>
 class BoundedActorPort final {
-    static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "actor payload move construction must be noexcept for rollback-safe admission");
 
     struct Envelope {
-        std::uint64_t id;
-        std::size_t bytes;
+        std::uint64_t id = 0;
+        std::size_t bytes = 0;
         std::unique_ptr<T> payload;
     };
     struct State {
@@ -109,8 +110,21 @@ public:
         if (state_->used_frames >= state_->max_frames ||
             bytes > state_->max_bytes - state_->used_bytes)
             return false;
-        auto owned = std::make_unique<T>(std::move(payload));
-        state_->queue.push_back(Envelope{state_->next_id++, bytes, std::move(owned)});
+        // Reserve the deque node before touching caller ownership. Both the
+        // deque growth and payload allocation may throw; neither is allowed
+        // to consume a move-only sender value on failed admission.
+        state_->queue.emplace_back();
+        try {
+            auto owned = std::make_unique<T>(std::move(payload));
+            Envelope& admitted = state_->queue.back();
+            admitted.id = state_->next_id;
+            admitted.bytes = bytes;
+            admitted.payload = std::move(owned);
+        } catch (...) {
+            state_->queue.pop_back();
+            throw;
+        }
+        ++state_->next_id;
         ++state_->used_frames;
         state_->used_bytes += bytes;
         return true;
