@@ -1837,9 +1837,6 @@ private:
                     throw std::runtime_error("unknown function or wrong call arity '" +
                         expr.name + "' at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
-                if (signature.returns_void)
-                    throw std::runtime_error("void call cannot be used as a scalar expression at byte " +
-                        std::to_string(expr.offset));
                 std::vector<bool> bound(signature.parameters.size(), false);
                 std::size_t positional = 0;
                 bool named_seen = false;
@@ -1871,7 +1868,11 @@ private:
                             ", got " + scalar_type_name(actual) + " at byte " +
                             std::to_string(expr.arguments[i]->offset));
                 }
-                return signature.return_type;
+                // Ownership/expression-context admission separately rejects
+                // a void call where a scalar value is required. Returning the
+                // placeholder here lets statement-position void calls reuse the
+                // exact same typed argument binder.
+                return signature.returns_void ? ScalarType::I64 : signature.return_type;
             }
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
@@ -2238,6 +2239,102 @@ private:
                 validate_expression(*guard.result, params, functions);
             }
             if (fn.result) validate_expression(*fn.result, params, functions);
+
+            // Independent scalar type pass. Name/arity validation above must
+            // complete first so this pass never guesses through unresolved
+            // symbols or accidentally turns a typing failure into binding.
+            using TypeMap = std::unordered_map<std::string, ScalarType>;
+            TypeMap scalar_types;
+            for (const auto& param : fn.parameters)
+                scalar_types.emplace(param.name, param.scalar_type);
+
+            auto require_scalar = [&](const Expression& expr, ScalarType expected,
+                                      const char* where, const TypeMap& env) {
+                const ScalarType actual =
+                    validate_scalar_expression(expr, env, functions);
+                if (actual != expected)
+                    throw std::runtime_error(std::string(where) + " requires " +
+                        scalar_type_name(expected) + ", got " +
+                        scalar_type_name(actual) + " at byte " +
+                        std::to_string(expr.offset));
+            };
+
+            for (const auto& binding : fn.locals) {
+                if (binding.int_array || binding.new_class || binding.move_class) {
+                    scalar_types.emplace(binding.name, ScalarType::I64);
+                    if (binding.new_class) {
+                        for (const auto& arg : binding.constructor_arguments)
+                            require_scalar(*arg, ScalarType::I64,
+                                "native class constructor argument", scalar_types);
+                    }
+                    continue;
+                }
+                require_scalar(*binding.initializer, binding.scalar_type,
+                    "native scalar local initializer", scalar_types);
+                scalar_types.emplace(binding.name, binding.scalar_type);
+            }
+
+            std::function<void(const Statement&, TypeMap&)> check_statement_types;
+            check_statement_types = [&](const Statement& stmt, TypeMap& env) {
+                if (stmt.kind == Statement::Kind::Conditional) {
+                    require_scalar(*stmt.condition_lhs, ScalarType::I64,
+                        "native if equality left operand", env);
+                    require_scalar(*stmt.condition_rhs, ScalarType::I64,
+                        "native if equality right operand", env);
+                    TypeMap then_env = env;
+                    TypeMap else_env = env;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, then_env);
+                    for (const auto& action : stmt.else_statements)
+                        check_statement_types(action, else_env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    require_scalar(*stmt.array_commit_length, ScalarType::I64,
+                        "native array commit length", env);
+                    for (const auto& item : stmt.array_commit_values)
+                        require_scalar(*item, ScalarType::I64,
+                            "native array commit fill", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ScopedLocal) {
+                    const LocalBinding& local = *stmt.branch_local;
+                    require_scalar(*local.initializer, local.scalar_type,
+                        "native branch-local initializer", env);
+                    env.emplace(local.name, local.scalar_type);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::FieldWrite ||
+                        (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) {
+                    require_scalar(*stmt.expression, ScalarType::I64,
+                        "native class field write", env);
+                    return;
+                }
+                if (stmt.expression)
+                    (void)validate_scalar_expression(*stmt.expression, env, functions);
+            };
+            for (const auto& stmt : fn.statements)
+                check_statement_types(stmt, scalar_types);
+
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send)
+                    require_scalar(*fn.actor_sends.at(action.index).payload,
+                        ScalarType::I64, "native actor message payload", scalar_types);
+            }
+            if (fn.caught_throw_value)
+                require_scalar(*fn.caught_throw_value, ScalarType::I64,
+                    "native thrown scalar", scalar_types);
+            for (const auto& guard : fn.early_returns) {
+                require_scalar(*guard.lhs, ScalarType::I64,
+                    "native return guard left operand", scalar_types);
+                require_scalar(*guard.rhs, ScalarType::I64,
+                    "native return guard right operand", scalar_types);
+                require_scalar(*guard.result, fn.return_type,
+                    "native guarded return", scalar_types);
+            }
+            if (fn.result && !fn.returns_void)
+                require_scalar(*fn.result, fn.return_type,
+                    "native function return", scalar_types);
         }
     }
 
