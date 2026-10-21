@@ -1530,7 +1530,8 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
-        if (accept("<")) {
+        if (generic_call_type_arguments_ahead()) {
+            require("<");
             expr->type_arguments_present = true;
             if (!accept(">")) {
                 bool seen_named = false;
@@ -1603,6 +1604,22 @@ private:
             if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
+    }
+
+    bool generic_call_type_arguments_ahead() const {
+        if (token_.text != "<") return false;
+        Lexer probe = lexer_; // already positioned immediately after '<'
+        std::size_t budget = 0;
+        while (++budget <= 64) {
+            const Token next = probe.next();
+            if (next.kind == Kind::End) return false;
+            if (next.text == ">") return probe.next().text == "(";
+            if (next.text == "," || next.text == "=" || next.text == "_" ||
+                    next.text == "int" || next.kind == Kind::Identifier)
+                continue;
+            return false;
+        }
+        return false;
     }
 
     bool named_argument_ahead() const {
