@@ -17,6 +17,21 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Keyword-delimited callable parity boundary
+
+Java/Graal admits free/module callables with explicit `-> Type` return syntax
+and optional same-line `as` or `::` separators before an `end`-delimited
+body. The native frontend does not lower those forms yet. It tokenizes `->`
+atomically and emits a targeted fail-closed diagnostic before body lowering or
+LLVM IR. Contextual tuple returns are likewise rejected before scalar ABI
+selection. Dedicated contract fixtures cover separator-free and explicit
+separators, body-level lookalikes, the shared corpus, and tuple returns.
+
+Executable parity requires typed return parsing, keyword-delimited CFG
+lowering, all-path return proof, tuple ABI/ownership/drop rules, and
+differential Java/LLVM execution coverage. Until those exist, rejection is the
+native contract.
+
 ## Numeric division fail-closed parity boundary
 
 Java source revision `4fc9148` defines `int / int` with a `float`
