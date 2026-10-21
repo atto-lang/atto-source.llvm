@@ -70,13 +70,20 @@ public:
          * ownership/borrow fences have acknowledged quiescence. */
         bool acknowledge_released() {
             if (acknowledged_ || !state_) return false;
-            std::lock_guard<std::mutex> guard(state_->mutex);
-            if (!state_->used_frames || state_->used_bytes < bytes_)
-                throw std::logic_error("actor port accounting corrupted");
-            acknowledged_ = true;
-            --state_->used_frames;
-            state_->used_bytes -= bytes_;
-            payload_.reset();
+            std::unique_ptr<T> released;
+            {
+                std::lock_guard<std::mutex> guard(state_->mutex);
+                if (!state_->used_frames || state_->used_bytes < bytes_)
+                    throw std::logic_error("actor port accounting corrupted");
+                acknowledged_ = true;
+                --state_->used_frames;
+                state_->used_bytes -= bytes_;
+                released = std::move(payload_);
+            }
+            // User payload destruction is outside the admission/accounting
+            // mutex. Destructors may run arbitrary cleanup and must not be
+            // able to deadlock the port or stall unrelated producers.
+            released.reset();
             return true;
         }
 
