@@ -960,6 +960,60 @@ if(BUILD_TESTING)
         --ir "ret i64")
     oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
         --ir "oreslang_source_actor_spawn")
+    # Canonical current-main sealed actor state. These are real source compiler
+    # gates: the state binder is lexical, writes require exclusive authority,
+    # and no legacy persistent field may coexist with a state schema.
+    oreslang_contract_test(native_sealed_state_read sealed-state-read-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_sealed_state_write sealed-state-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_write_only sealed-state-write-only-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_using_read sealed-state-using-read-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
+        --diagnostic "actor effect declarations use with; using is lexical state acquisition")
+    oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
+        --diagnostic "using state.read cannot request a critical write loan")
+    oreslang_contract_test(native_sealed_state_write_downgrade_reject sealed-state-using-write-downgrade-reject.ores
+        --diagnostic "using state.write requires critical write callback")
+    oreslang_contract_test(native_sealed_state_missing_read_effect sealed-state-missing-read-reject.ores
+        --diagnostic "state callback reads state but with bound omits state.read")
+    oreslang_contract_test(native_sealed_state_read_mutation sealed-state-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(native_sealed_state_second_store sealed-state-second-store-reject.ores
+        --diagnostic "sealed actor state is the only guest-owned persistent instance storage")
+    oreslang_contract_test(native_sealed_state_call_escape sealed-state-call-escape-reject.ores
+        --diagnostic "state callback forbids calls, ownership operations, arrays and escaping references")
+    oreslang_contract_test(native_sealed_state_unknown_field sealed-state-unknown-field-reject.ores
+        --diagnostic "unknown actor state field")
+    oreslang_contract_test(wasm32_sealed_state_failclosed sealed-state-read-positive.ores
+        --target wasm32-unknown-unknown
+        --diagnostic "wasm32 sealed actor state awaits scoped state-loan lowering")
+    add_test(NAME native_sealed_state_ir_effect_contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_state_ir_contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    set_tests_properties(native_sealed_state_ir_effect_contract PROPERTIES TIMEOUT 60)
+    # Direct compiler-AST callers cannot manufacture state authority by
+    # setting effect bits or malformed schema metadata after parsing.
+    add_executable(oreslang-sealed-state-codegen-authority-test
+        tests/sealed_state_codegen_authority_test.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-sealed-state-codegen-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-sealed-state-codegen-authority-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-sealed-state-codegen-authority-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_sealed_state_codegen_authority
+        COMMAND oreslang-sealed-state-codegen-authority-test)
+    set_tests_properties(native_sealed_state_codegen_authority PROPERTIES TIMEOUT 30)
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
