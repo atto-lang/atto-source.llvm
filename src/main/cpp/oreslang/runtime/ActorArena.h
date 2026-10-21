@@ -50,6 +50,10 @@ void ores_actor_arena_compact_write(
  * These are trusted runtime symbols, not Oreslang user-callable functions.
  * LLVM must NEVER pass an untyped guest integer here as a reference.
  * No C aggregate-by-value or raw pointer-return ABI is exposed. */
+/* Source compiler initialization bridge: allocate one actor-private i64,
+ * initialize it, publish its compact reference, and return only the i32 bits. */
+uint32_t ores_actor_arena_compact_new_i64(
+    OresActorArena*, uint64_t domain, uint64_t epoch, uint64_t initial_value);
 uint32_t ores_actor_arena_compact_publish_i32(
     OresActorArena*, uint64_t domain, uint64_t epoch,
     uint64_t slot_index, uint64_t generation);
