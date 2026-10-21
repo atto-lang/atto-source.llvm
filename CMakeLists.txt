@@ -29,6 +29,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
+    src/main/cpp/oreslang/types/SourceOwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
@@ -979,6 +980,18 @@ if(BUILD_TESTING)
         --diagnostic "using state.read cannot request a critical write loan")
     oreslang_contract_test(native_sealed_state_write_downgrade_reject sealed-state-using-write-downgrade-reject.ores
         --diagnostic "using state.write requires critical write callback")
+    # Source Ref<int> is now parsed and ownership-authorized, but normal LLVM
+    # emission stays closed until the evidence is wired into compact32 codegen.
+    oreslang_contract_test(native_managed_ref_source_codegen_gate managed-ref-source-read-positive.ores
+        --diagnostic "source managed Ref<int> awaits SourceOwnershipChecker compressed32 lowering")
+    oreslang_contract_test(native_managed_ref_source_write_codegen_gate managed-ref-source-write-positive.ores
+        --diagnostic "source managed Ref<int> awaits SourceOwnershipChecker compressed32 lowering")
+    oreslang_contract_test(native_managed_ref_write_readloan_reject managed-ref-source-write-readloan-reject.ores
+        --diagnostic "managed Ref write requires exclusive state loan")
+    oreslang_contract_test(native_managed_ref_write_missing_read_reject managed-ref-source-write-missing-read-reject.ores
+        --diagnostic "state callback reads state but with bound omits state.read")
+    oreslang_contract_test(native_managed_ref_scalar_forge_reject managed-ref-source-scalar-forge-reject.ores
+        --diagnostic "unknown actor managed Ref field")
     oreslang_contract_test(native_sealed_state_missing_read_effect sealed-state-missing-read-reject.ores
         --diagnostic "state callback reads state but with bound omits state.read")
     oreslang_contract_test(native_sealed_state_read_mutation sealed-state-read-mutate-reject.ores
@@ -1286,6 +1299,23 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_compressed32_compiler_ownership_policy
         COMMAND oreslang-actor-ref-ownership-verifier-test)
+
+    # Production source authority: reparses real Oreslang source, derives the
+    # sealed state loan and managed-ref use internally, and is the sole friend
+    # allowed to construct ActorRefOwnershipEvidence.
+    add_executable(oreslang-source-ownership-managed-ref-test
+        tests/source_ownership_checker_managed_ref_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp
+        src/main/cpp/oreslang/types/SourceOwnershipChecker.cpp)
+    target_include_directories(oreslang-source-ownership-managed-ref-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-ownership-managed-ref-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_compressed32_source_ownership_issuer
+        COMMAND oreslang-source-ownership-managed-ref-test)
+    set_tests_properties(native_compressed32_source_ownership_issuer
+        PROPERTIES TIMEOUT 30)
 
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
     # actor reference in i32 and use native ActorArena.c checked accessors.
