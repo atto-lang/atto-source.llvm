@@ -1,6 +1,9 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+
+/* Shared compiler/runtime compact actor arena admission ceiling. */
+#define ORES_ACTOR_ARENA_MAX_BYTES (64u * 1024u * 1024u)
 #ifdef __cplusplus
 extern "C" {
 #endif
