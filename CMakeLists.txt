@@ -678,6 +678,17 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_entry_nominal_value_substrate
         COMMAND oreslang-native-entry-value-test)
+    add_executable(oreslang-native-entry-llvm-type-test
+        tests/native_entry_llvm_type_test.cpp)
+    target_include_directories(oreslang-native-entry-llvm-type-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-entry-llvm-type-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-entry-llvm-type-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_entry_nominal_llvm_type
+        COMMAND oreslang-native-entry-llvm-type-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
