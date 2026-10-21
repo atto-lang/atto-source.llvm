@@ -1,15 +1,14 @@
-# Native Core JSON status
+# Native alloc/json substrate status
 
 Status: **core substrate implemented; guest-source lowering intentionally unavailable**
 
-The native LLVM backend now carries an OS-independent JSON text/tree substrate in
-`src/main/cpp/oreslang/runtime/CoreJson.hpp`. This is the native companion to
-the Java/Graal core JSON work in `oreslang-source.java` PR #1785.
+The native LLVM backend now carries an OS-independent but allocation-dependent JSON text/tree substrate in
+`src/main/cpp/oreslang/runtime/CoreJson.hpp`. The filename/class name are temporary implementation names on this draft branch and do **not** establish an allocator-free `core` API. This work is backend machinery for the canonical `alloc/json` contract in `oreslang-common-source#111`.
 
 ## What is implemented
 
-`CoreJson` owns JSON text and dynamic tree mechanics without an OS API or a
-third-party JSON dependency. It provides:
+`CoreJson` currently owns JSON text and dynamic tree mechanics without an OS API or a
+third-party JSON dependency. Because the implementation owns growable strings/arrays/objects, it requires allocation and must remain outside the allocator-free `core` closure. It provides:
 
 - strict JSON parsing and deterministic encoding;
 - insertion-ordered object values;
@@ -69,3 +68,10 @@ invalid encoded UTF-8 and depth limits.
 This test is registered in CTest with strict warnings. A complete source-level
 JSON conformance suite belongs only after the missing native value/lowering
 layers above are implemented.
+
+
+## Placement gate before merge
+
+Before this draft is promoted, the backend-facing/public naming should be moved away from `CoreJson` (for example to an internal `AllocJson`/codec namespace) unless the symbol is proven to be strictly private implementation detail. No public or guest-visible API may imply that an owned dynamic JSON tree is available in allocator-free `core`.
+
+A separate future `core` JSON surface may support borrowed tokenization/parsing and caller-provided fixed buffers/sinks with zero allocation; that surface must not return this owned tree type.
