@@ -6,7 +6,7 @@ enum Value {
     Bool(bool),
     Number(String),
     String(String),
-    Array(Vec<Value>),
+    Array,
     Object(BTreeMap<String, Value>),
 }
 
@@ -70,14 +70,13 @@ impl<'a> Parser<'a> {
     fn array(&mut self) -> Result<Value, String> {
         self.pos += 1;
         self.ws();
-        let mut values = Vec::new();
         if self.bytes.get(self.pos) == Some(&b']') {
             self.pos += 1;
-            return Ok(Value::Array(values));
+            return Ok(Value::Array);
         }
         loop {
             self.ws();
-            values.push(self.value()?);
+            self.value()?;
             self.ws();
             match self.bytes.get(self.pos).copied() {
                 Some(b',') => { self.pos += 1; }
@@ -85,7 +84,7 @@ impl<'a> Parser<'a> {
                 _ => return Err("invalid JSON array".into()),
             }
         }
-        Ok(Value::Array(values))
+        Ok(Value::Array)
     }
 
     fn object(&mut self) -> Result<Value, String> {
@@ -127,13 +126,13 @@ impl<'a> Parser<'a> {
         match self.bytes.get(self.pos).copied() {
             Some(b'0') => {
                 self.pos += 1;
-                if matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                if matches!(self.bytes.get(self.pos).copied(), Some(b'0'..=b'9')) {
                     return Err("leading zero in JSON number".into());
                 }
             }
             Some(b'1'..=b'9') => {
                 self.pos += 1;
-                while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                while matches!(self.bytes.get(self.pos).copied(), Some(b'0'..=b'9')) {
                     self.pos += 1;
                 }
             }
@@ -142,20 +141,20 @@ impl<'a> Parser<'a> {
         if self.bytes.get(self.pos) == Some(&b'.') {
             self.pos += 1;
             let first = self.pos;
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+            while matches!(self.bytes.get(self.pos).copied(), Some(b'0'..=b'9')) {
                 self.pos += 1;
             }
             if self.pos == first {
                 return Err("invalid JSON fraction".into());
             }
         }
-        if matches!(self.bytes.get(self.pos), Some(b'e' | b'E')) {
+        if matches!(self.bytes.get(self.pos).copied(), Some(b'e' | b'E')) {
             self.pos += 1;
-            if matches!(self.bytes.get(self.pos), Some(b'+' | b'-')) {
+            if matches!(self.bytes.get(self.pos).copied(), Some(b'+' | b'-')) {
                 self.pos += 1;
             }
             let first = self.pos;
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+            while matches!(self.bytes.get(self.pos).copied(), Some(b'0'..=b'9')) {
                 self.pos += 1;
             }
             if self.pos == first {
