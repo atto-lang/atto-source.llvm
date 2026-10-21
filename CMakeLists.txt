@@ -1256,9 +1256,20 @@ if(BUILD_TESTING)
     # offsets, verify slot quarantine and distinct actor-domain addressing.
     # Does NOT claim source-language Ref<T> parser/ownership support.
     if(ORE_CLANG)
+        find_program(ORE_RUSTC NAMES rustc REQUIRED)
+        set(ORE_COMPRESSED32_AOT_RUNNER
+            "${CMAKE_CURRENT_BINARY_DIR}/native_actor_compressed32_llvm_aot")
+        add_custom_command(
+            OUTPUT "${ORE_COMPRESSED32_AOT_RUNNER}"
+            COMMAND "${ORE_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compressed32_llvm_aot.rs"
+                -o "${ORE_COMPRESSED32_AOT_RUNNER}"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compressed32_llvm_aot.rs"
+            VERBATIM)
+        add_custom_target(oreslang-compressed32-aot-rust ALL
+            DEPENDS "${ORE_COMPRESSED32_AOT_RUNNER}")
         add_test(NAME native_actor_compressed32_backend_llvm_aot_runtime
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_compressed32_llvm_aot.py"
+            COMMAND "${ORE_COMPRESSED32_AOT_RUNNER}"
                 --producer "$<TARGET_FILE:oreslang-managed-ref-mir-llvm-test>"
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
