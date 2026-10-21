@@ -153,6 +153,27 @@ int main() {
     }
 
     {
+        Function entry = pure("entry", integer(0));
+        Statement conditional_statement;
+        conditional_statement.kind = Statement::Kind::Conditional;
+        conditional_statement.condition = call("statement_condition_only");
+        entry.statements.push_back(std::move(conditional_statement));
+
+        GuardedReturn guarded;
+        guarded.condition = call("guard_condition_only");
+        guarded.result = integer(1);
+        entry.early_returns.push_back(std::move(guarded));
+
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(facts.calls.size() == 2,
+                "bool statement/guard condition calls must enter realtime call graph");
+        require(facts.calls[0] == native_function_slot("statement_condition_only", 0),
+                "statement bool condition call identity");
+        require(facts.calls[1] == native_function_slot("guard_condition_only", 0),
+                "guard bool condition call identity");
+    }
+
+    {
         Program program;
         program.functions.push_back(pure("main", call("external")));
         const auto report = analyze_native_hard_rt(program);
