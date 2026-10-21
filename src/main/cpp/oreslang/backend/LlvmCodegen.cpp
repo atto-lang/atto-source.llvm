@@ -1337,7 +1337,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Value* currentDomain = &*args++;
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
-        std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        std::unordered_map<std::string, llvm::Value*> values, stateFields, emptyFields;
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
@@ -1349,18 +1349,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 field.name + ".read");
             llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
             builder.CreateStore(value, slot);
-            values.emplace(field.name, slot);
+            if (actor.state_declared)
+                stateFields.emplace(field_key("state", field.name), slot);
+            else
+                values.emplace(field.name, slot);
         }
-        for (const auto& write : actor.on_message.actor_field_writes) {
-            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                [&](const LocalBinding& f) { return f.name == write.field; });
-            if (field == actor.fields.end() || !field->field_mutable)
-                throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
-            const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
-            builder.CreateStore(value, values.at(write.field));
+        if (actor.state_declared) {
+            const auto& loan = *actor.on_message.actor_state_loan;
+            for (const auto& write : loan.writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end())
+                    throw std::runtime_error("invalid actor state write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64, values,
+                    stateFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, stateFields.at(field_key("state", write.field)));
+            }
+            llvm::Value* loanResult = lower(*loan.result, builder, i64, values,
+                stateFields, declarations);
+            llvm::Value* resultSlot = builder.CreateAlloca(i64, nullptr,
+                loan.result_binding + ".state.loan.result");
+            builder.CreateStore(loanResult, resultSlot);
+            values.emplace(loan.result_binding, resultSlot);
+        } else {
+            for (const auto& write : actor.on_message.actor_field_writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() || !field->field_mutable)
+                    throw std::runtime_error("invalid actor field write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, values.at(write.field));
+            }
         }
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
             emptyFields, declarations);
