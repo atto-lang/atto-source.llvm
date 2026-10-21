@@ -455,7 +455,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
-    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
+    llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite, fieldCommit;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -468,6 +468,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
         fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        fieldCommit = module.getOrInsertFunction("ores_actor_i64_heap_state_commit",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, i64, i64, native_ptr, i64}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -1534,11 +1537,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 collectExpressionReads, *loan.result, definitelyWritten);
 
             std::unordered_map<std::string, llvm::Value*> stateFields;
+            auto* stateVectorType = llvm::ArrayType::get(i64, actor.fields.size());
+            llvm::Value* stateVector = builder.CreateAlloca(
+                stateVectorType, nullptr, "state.transaction.values");
+            llvm::Value* dirtyMaskSlot = builder.CreateAlloca(
+                i64, nullptr, "state.transaction.dirty");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), dirtyMaskSlot);
             for (std::size_t i = 0; i < actor.fields.size(); ++i) {
                 const auto& field = actor.fields[i];
                 const std::string key = field_key(loan.binder, field.name);
-                llvm::Value* slot = builder.CreateAlloca(
-                    i64, nullptr, "state." + field.name + ".slot");
+                llvm::Value* slot = builder.CreateInBoundsGEP(
+                    stateVectorType, stateVector,
+                    {llvm::ConstantInt::get(i64, 0),
+                     llvm::ConstantInt::get(i64, i)},
+                    "state." + field.name + ".slot");
                 if (initialReadKeys.count(key)) {
                     llvm::Value* snapshot = builder.CreateCall(fieldRead, {
                         actorHeap, currentDomain, currentEpoch,
@@ -1566,11 +1578,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 builder, i64, values, stateFields, declarations);
                             const std::size_t index =
                                 std::distance(actor.fields.begin(), field);
-                            builder.CreateCall(fieldWrite, {
-                                actorHeap, currentDomain, currentEpoch,
-                                llvm::ConstantInt::get(i64, index), value});
                             builder.CreateStore(value, stateFields.at(
                                 field_key(loan.binder, statement.field)));
+                            llvm::Value* dirtyMask = builder.CreateLoad(
+                                i64, dirtyMaskSlot, "state.transaction.dirty.load");
+                            dirtyMask = builder.CreateOr(
+                                dirtyMask,
+                                llvm::ConstantInt::get(
+                                    i64, UINT64_C(1) << index),
+                                "state.transaction.dirty.set");
+                            builder.CreateStore(dirtyMask, dirtyMaskSlot);
                             continue;
                         }
                         llvm::Value* lhs = lower(*statement.condition_lhs,
@@ -1629,6 +1646,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             lowerStateStatements(loan.statements);
             llvm::Value* result = lower(*loan.result, builder, i64,
                 values, stateFields, declarations);
+            if (loan.mode == ActorStateLoan::Mode::Write) {
+                llvm::Value* dirtyMask = builder.CreateLoad(
+                    i64, dirtyMaskSlot, "state.transaction.dirty.commit");
+                llvm::Value* stateValues = builder.CreateInBoundsGEP(
+                    stateVectorType, stateVector,
+                    {llvm::ConstantInt::get(i64, 0),
+                     llvm::ConstantInt::get(i64, 0)},
+                    "state.transaction.values.ptr");
+                builder.CreateCall(fieldCommit, {
+                    actorHeap, currentDomain, currentEpoch, dirtyMask,
+                    stateValues,
+                    llvm::ConstantInt::get(i64, actor.fields.size())});
+            }
             builder.CreateRet(result);
         } else {
             for (std::size_t i=0; i<actor.fields.size(); ++i) {
