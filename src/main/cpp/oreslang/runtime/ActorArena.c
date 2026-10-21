@@ -250,10 +250,20 @@ void ores_actor_arena_compact_write(
 /*
  * LLVM codegen uses this scalar ABI instead of manually reproducing C
  * struct-by-value lowering (which differs across native target ABIs).
- * Source-level Ref<T,Domain> is still compiler-rejected until a verified
- * ownership/provenance producer can mint the typed MIR; these are not an
- * integer-to-pointer escape hatch for guest source.
+ * Source-level managed refs may reach these entrypoints only through the
+ * site-bound SourceOwnershipChecker/SourceManagedRefLowering path; these are
+ * not an integer-to-pointer escape hatch for guest source.
  */
+uint32_t ores_actor_arena_compact_new_i64(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint64_t initial_value) {
+    const OresArenaTurn turn = {domain, epoch};
+    const OresArenaHandle object =
+        ores_actor_arena_alloc(a, turn, sizeof(initial_value));
+    ores_actor_arena_write(a, turn, object, 0,
+                           &initial_value, sizeof(initial_value));
+    return ores_actor_arena_compact_encode(a, turn, object).bits;
+}
 uint32_t ores_actor_arena_compact_publish_i32(
         OresActorArena* a, uint64_t domain, uint64_t epoch,
         uint64_t slot_index, uint64_t generation) {
