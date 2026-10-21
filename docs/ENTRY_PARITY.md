@@ -9,9 +9,25 @@ a real nominal representation and matching ownership/runtime semantics, native
 source must fail closed instead of flattening Entry to i64, treating it as a
 user class, or accepting a lookalike declaration.
 
+## Native substrate now present
+
+The runtime/type substrate may exist before guest syntax is admitted. In
+particular, the native tree now has:
+
+- a factory-only, immutable `NativeEntry<K,V>` carrier with readonly key/value
+  projections and no host `operator==`;
+- deterministic key-then-value child visitation for graph walkers;
+- a fixed two-i64 ABI record for the first scalar product lowering target;
+- `Entry`-specific Send/Sync/Share composition from exactly two component
+  types, matching the Java/Graal immutable-product rule.
+
+Those pieces are **not** permission to accept `Entry` source yet. They exist so
+the parser, ownership checker, LLVM lowerer and actor transport can converge on
+one nominal contract instead of independently inventing representations.
+
 ## Required parity before admission
 
-Native support must land as one coherent slice covering:
+Native source support must still land as one coherent slice covering:
 
 - exactly two typed slots, `key` and `value`, with immutable projections;
 - factory-only construction through direct `Entry.of(K,V)`;
