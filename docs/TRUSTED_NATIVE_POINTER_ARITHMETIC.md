@@ -5,41 +5,27 @@ TrustedPointerWindow.hpp is not an Oreslang guest type, does not enable source
 unsafe operations, and does not implement rt ref/unref/deref. The LLVM source
 parser must continue to fail closed on unlowered pointer intrinsics.
 
-## Two distinct types
+## Source-language boundary
 
-- Pointer<T> (safe, affine owner): rt ref moves owned reference-backed T into a
-  handle; rt deref lends a tracked immutable view; rt unref consumes the owner
-  and returns owned T once, invalidating its handle. There is no pointer math,
-  free-standing address, implicit copy/share, or cross-actor transport.
-  This is Java #1021 candidate behavior, not LLVM source feature support.
-- NativePointer<T> (proposed unsafe, non-owning source capability):
-  explicit, privileged view into supervisor-authorized native memory, an FFI
-  buffer, or mapped MMIO. Never silently convert between Pointer<T> and
-  NativePointer<T>. The C++ TrustedPointerWindow in this branch is an internal
-  runtime/grant substrate, not a second guest-visible pointer type.
+This branch defines **no Oreslang pointer type or pointer operation**. Guest
+source remains pointerless and may use only the checked ownership surface:
+`rt copy`, `rt share`, `rt take`, `rt borrow`, and `rt mut borrow`
+(with `borrow T` / `borrow mut T` in type positions).
 
-SHARED/PRIVATE trusted actors can be eligible, but trusted status is
-**not sufficient**: compiler unsafe-effect admission and a broker-minted native
-grant must both exist. Grants bind runtime identity, actor identity, epoch,
-region bounds, address space, and read/write permission. UNTRUSTED actors and
-normal guest code must reject pointer mapping/math through any direct or
-indirect path (generics, callbacks, FFI, reflection, messages or channels).
+`Pointer<T>`, `NativePointer<T>`, `RawPointer<T>`, `rt ref`,
+`rt deref`, `rt unref`, `rt raw`, source pointer arithmetic, address
+formation, integer/address casts, and guest MMIO pointer APIs are not part of
+Oreslang source. TrustedPointerWindow and NativeRegionRegistry are host/runtime
+TCB objects only. They may support compiler/core/runtime implementation work,
+but they must never be surfaced as guest values, serialized, captured by user
+code, or smuggled through generics/callbacks/messages/channels.
 
-## Proposed source language design (not yet compiling)
+Trusted actor/runtime status is not by itself authority to create a native
+memory window. Host admission still requires a broker/runtime-minted grant
+binding runtime identity, actor identity, epoch, region bounds, address space,
+and read/write permission.
 
-    unsafe {
-        const NativePointer<u32> gpio = rt map_mmio<u32>(grant, base, bytes);
-        const NativePointer<u32> register3 = rt offset(gpio, 3);
-        rt store_volatile(register3, 1);
-        const u32 status = rt load_volatile(register3);
-    }
-
-The example is schematic; unsigned primitive spelling and unsafe-block syntax
-remain to be settled across backends. rt offset is ELEMENT based; a separate
-rt byte_offset would be BYTE based. A possible rt from_addr would require a
-matching grant and must not authorize a free-standing numeric address.
-
-Compiler/runtime admission rules:
+## Host/runtime admission rules
 
 1. Mapping requires a supervisor/platform-approved region; physical vs virtual
    mapping, device pages and memory ordering are platform responsibilities.
@@ -105,10 +91,10 @@ Known limitations:
   cannot make unrestricted native C++ memory-safe.
 - No integration yet with ActorOwnedGraphHeap generation/loan retirement,
   native actor permission policy, async FFI/DMA pins or Java/Graal FFM.
-- Actual source-level rt ref, rt deref and rt unref are still unimplemented in
-  LLVM. The separate LLVM #526 draft defines the unsafe.memory/raw-provenance
-  compiler/runtime contract and must be reconciled with this runtime window
-  rather than exposing two competing guest pointer types.
+- Source-level `rt ref`, `rt deref`, `rt unref`, `rt raw`, and public
+  pointer types are intentionally unsupported and must remain rejected. LLVM
+  #526 is relevant only as host/runtime provenance machinery; it must not
+  create a guest pointer surface.
 
 CTest trusted_native_pointer_window_host_only tests arithmetic bounds,
 one-past, signed extreme offsets, alignment, read-only denial, actor and epoch
@@ -143,9 +129,9 @@ failed with no recorded steps; it provides no executed test evidence.
 
 Shared Java/LLVM source contracts and exact positive/negative Oreslang fixtures;
 supervisor-minted region grant; real LLVM generated IR and guest execution;
-Java Pointer ownership parity; full CMake/CTest; ASan/UBSan/TSan, fuzzing,
+Java/Graal host-memory parity without source pointer types; full CMake/CTest; ASan/UBSan/TSan, fuzzing,
 ABA and lifetime/cancellation stress; platform MMIO target tests; exact-head
 CI receipts. Zero-step jobs are NOT executions. Do not copy private source
 between organizations without explicit independently reviewed authorization.
 
-Related: Java #1021, Java #1022, LLVM #415, LLVM #416.
+Related historical pointer-design branches Java #1021/#1022 must not be used as source-language precedent. Host/runtime hardening references: LLVM #415 and LLVM #416.
