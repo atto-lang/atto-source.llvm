@@ -878,6 +878,23 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_conditional_cfg
             native_source_conditional_cfg_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
+    # Canonical value-producing conditional expression. The native subset
+    # admits only statically proven bool conditions (true/false or equality),
+    # lowers exactly one value arm, and requires affine state agreement at PHI.
+    if(ORE_CLANG)
+        add_test(NAME native_source_ternary_expression
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/ternary_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        add_test(NAME native_source_ternary_expression_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/ternary_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_source_ternary_expression
+            native_source_ternary_expression_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
     # Synchronous branch-scoped i64 lifetimes cannot escape the owning arm.
     if(ORE_CLANG)
         add_test(NAME native_branch_local_scope_source_execution
