@@ -113,6 +113,18 @@ struct ActorFieldWrite {
     std::size_t offset = 0;
 };
 
+// A compiler-sealed lexical loan over the single actor state object.
+// This node is produced only from self.handle_state(...); ordinary actor
+// field syntax never acquires state authority.
+struct ActorStateLoan {
+    enum class Mode { Read, Write };
+    Mode mode = Mode::Read;
+    std::string result_binding;
+    std::vector<ActorFieldWrite> writes;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+};
+
 struct Statement {
     enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
     Kind kind;
@@ -168,6 +180,7 @@ struct Function {
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
+    std::unique_ptr<ActorStateLoan> actor_state_loan;
     bool returns_void = false;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
@@ -182,7 +195,10 @@ struct Function {
 
 struct ActorDecl {
     std::string name;
-    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    bool state_declared = false;
+    // Physical slots backing the single source-level state object. For
+    // state_declared actors these are never addressable as ordinary fields.
+    std::vector<LocalBinding> fields;
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
 };
