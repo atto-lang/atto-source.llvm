@@ -1457,6 +1457,11 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
             }
+            if (operation == "ref" || operation == "deref" ||
+                operation == "unref" || operation == "raw") {
+                fail("pointer-style rt operation is not valid Oreslang source; "
+                     "use rt copy/share/take/borrow or rt mut borrow");
+            }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
