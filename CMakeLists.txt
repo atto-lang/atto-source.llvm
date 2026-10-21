@@ -1211,6 +1211,16 @@ if(BUILD_TESTING)
     add_test(NAME actor_compressed32_typed_mir_authorization
         COMMAND oreslang-managed-ref-mir-test)
 
+    # Production build MUST compile without the synthetic proof issuer.
+    add_executable(oreslang-managed-ref-provenance-gate-test
+        tests/managed_ref_mir_production_gate_test.cpp)
+    target_include_directories(oreslang-managed-ref-provenance-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-managed-ref-provenance-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compressed32_provenance_gate
+        COMMAND oreslang-managed-ref-provenance-gate-test)
+
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
     # actor reference in i32 and use native ActorArena.c checked accessors.
     # Not yet full source-level Ref<T> lowering.
