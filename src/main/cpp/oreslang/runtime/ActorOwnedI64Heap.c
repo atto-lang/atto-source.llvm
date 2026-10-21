@@ -256,6 +256,37 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
     unlock_heap(heap);
 }
 
+void ores_actor_i64_heap_state_commit(OresActorI64Heap* heap,
+                                      uint64_t domain, uint64_t epoch,
+                                      uint64_t dirty_mask,
+                                      const int64_t* values,
+                                      uint64_t field_count) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (field_count > 32 || field_count > heap->capacity
+        || (dirty_mask >> field_count) != 0
+        || (dirty_mask != 0 && values == NULL)) {
+        rejected();
+    }
+
+    /* Validation is complete before the first write. This is the native
+     * in-memory transaction boundary that durable publication will wrap. */
+    for (uint64_t index = 0; index < field_count; ++index) {
+        if ((dirty_mask & (UINT64_C(1) << index)) == 0) continue;
+        ActorSlot* field = &heap->slots[index];
+        if (!field->live || !field->fixed_field || !field->field_mutable
+            || field->loans != 0) {
+            rejected();
+        }
+    }
+    for (uint64_t index = 0; index < field_count; ++index) {
+        if ((dirty_mask & (UINT64_C(1) << index)) != 0)
+            heap->slots[index].value = values[index];
+    }
+    unlock_heap(heap);
+}
+
 int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
                                        uint64_t domain, uint64_t epoch,
                                        uint64_t index) {
