@@ -1313,6 +1313,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.
     if (!wasm32_target) for (const auto& actor : source.actors) {
+        if (actor.state_declared) {
+            if (!actor.on_message.actor_state_loan)
+                throw std::runtime_error("sealed actor state lowering requires verified handle_state loan");
+            const auto required = actor.on_message.actor_state_loan->mode == ActorStateLoan::Mode::Write
+                ? FunctionEffect::StateWrite : FunctionEffect::StateRead;
+            if (!actor.on_message.has_declared_effects ||
+                    !actor.on_message.declared_effects.has(required))
+                throw std::runtime_error("sealed actor state lowering requires matching declared effect");
+            if (!actor.on_message.actor_field_writes.empty())
+                throw std::runtime_error("sealed actor state lowering rejects legacy field writes");
+        }
         auto* ctor = actorInits.at(actor.name);
         llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
         llvm::IRBuilder<> init(initial);
