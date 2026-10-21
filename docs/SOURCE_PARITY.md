@@ -8,7 +8,7 @@ LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-sourc
 - Zero or one `define module M [as] ... end` wrapper.
 - Multiple zero- or multi-argument `[pub] fnc`/`routine` declarations,
   with `int` parameters and the legacy native `: int` return annotation.
-  Java/Graal's `-> Type ... end` free/module body form is recognized only
+  Java/Graal's `-> Type ... end` free/module body form (including `as` and `::` separators) is recognized only
   far enough to emit a targeted fail-closed diagnostic; it is not native
   lowering parity.
 - Exactly one `return <expr>;` statement per function.
@@ -25,7 +25,7 @@ The LLVM verifier runs before IR is emitted.
 Java/Graal admits ordinary free/module callables of the form:
 
 ```ores
-fnc classify(int x) -> int
+fnc classify(int x) -> int ::
     if x > 0 then
         return 1
     else
@@ -38,7 +38,7 @@ and contextual finite tuple return types such as
 `tuple (int, int, string)`. The native frontend remains a braced scalar
 compiler and therefore intentionally provides rejection parity only.
 
-The lexer treats contiguous `->` as one token so the declaration cannot be
+Both Java/Graal body separators, `as` and `::`, have native rejection coverage. The lexer treats contiguous `->` as one token so the declaration cannot be
 misread as arithmetic. The function parser rejects that syntax before body
 lowering. A `tuple` return type is rejected before scalar ABI selection.
 Dedicated contract fixtures require a nonzero compiler exit and no partial
