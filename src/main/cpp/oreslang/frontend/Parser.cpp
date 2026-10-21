@@ -1858,8 +1858,23 @@ private:
                 return found == variables.end() ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field:
-            case Expression::Kind::ArrayCall:
                 return ScalarType::I64;
+            case Expression::Kind::ArrayCall: {
+                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                    ? 1 : expr.name == "set" ? 2 : 0;
+                if (expected == 0 || expr.arguments.size() != expected)
+                    throw std::runtime_error("unsupported native Array<int> scalar operation at byte " +
+                        std::to_string(expr.offset));
+                for (const auto& argument : expr.arguments) {
+                    const ScalarType actual = validate_scalar_expression(
+                        *argument, variables, functions, depth + 1);
+                    if (actual != ScalarType::I64)
+                        throw std::runtime_error("native Array<int> arguments require int, got " +
+                            std::string(scalar_type_name(actual)) + " at byte " +
+                            std::to_string(argument->offset));
+                }
+                return ScalarType::I64;
+            }
             case Expression::Kind::Call: {
                 const auto family = functions.find(expr.name);
                 if (family == functions.end() ||
