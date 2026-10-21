@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/backend/ManagedRefMir.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/CriticalHandleStateContract.hpp"
 
@@ -9,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace oreslang {
 
