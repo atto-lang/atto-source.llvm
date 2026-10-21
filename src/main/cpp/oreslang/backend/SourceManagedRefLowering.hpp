@@ -73,25 +73,68 @@ class SourceManagedRefLowering final {
                 "managed Ref source initialization requires native64 target");
     }
 
-    static llvm::Value* ref_slot(
+    static void require_storage_index(std::size_t index) {
+        if (index >= 16)
+            throw std::invalid_argument(
+                "managed Ref state slot index exceeds source bound");
+    }
+
+    static void initialize_ref_bits(
+            llvm::IRBuilder<>& ir,
+            const SourceManagedRefRuntimeContext& runtime,
+            std::size_t index,
+            llvm::Value* bits) {
+        require_storage_index(index);
+        llvm::Module* module =
+            validate_actor_compact_context(ir, runtime.compact_);
+        auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
+        auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+        if (!bits || bits->getType() != i32)
+            throw std::invalid_argument(
+                "managed Ref initialization requires i32 compact bits");
+        auto* ptr = runtime.compact_.actor_arena->getType();
+        const auto callee = actor_checked_runtime_decl(
+            module, "ores_actor_managed_ref_state_init_i32",
+            llvm::FunctionType::get(
+                llvm::Type::getVoidTy(ir.getContext()),
+                {ptr, i64, i64, i32}, false));
+        ir.CreateCall(
+            callee,
+            {runtime.ref_state_,
+             runtime.compact_.actor_domain,
+             llvm::ConstantInt::get(
+                 i64, static_cast<std::uint64_t>(index)),
+             bits});
+    }
+
+    static llvm::Value* load_ref_bits(
             llvm::IRBuilder<>& ir,
             const SourceManagedRefRuntimeContext& runtime,
             std::size_t index) {
-        if (index >= 16)
-            throw std::invalid_argument("managed Ref state slot index exceeds source bound");
-        auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+        require_storage_index(index);
+        llvm::Module* module =
+            validate_actor_compact_context(ir, runtime.compact_);
         auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
-        return ir.CreateGEP(
-            i32, runtime.ref_state_,
-            llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(index)),
-            "actor.managed.ref.slot");
+        auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+        auto* ptr = runtime.compact_.actor_arena->getType();
+        const auto callee = actor_checked_runtime_decl(
+            module, "ores_actor_managed_ref_state_load_i32",
+            llvm::FunctionType::get(
+                i32, {ptr, i64, i64}, false));
+        return ir.CreateCall(
+            callee,
+            {runtime.ref_state_,
+             runtime.compact_.actor_domain,
+             llvm::ConstantInt::get(
+                 i64, static_cast<std::uint64_t>(index))},
+            "actor.managed.ref.bits");
     }
 
 public:
     /*
      * Bind only compiler-generated managed-actor entrypoint arguments.
      * init and on_message both reserve argument positions:
-     *   0 arena*, 1 i32 ref-state*, 2 domain i64, 3 epoch i64.
+     *   0 arena*, 1 opaque domain-bound ref-state*, 2 domain i64, 3 epoch i64.
      */
     static SourceManagedRefRuntimeContext bind_actor_context(
             llvm::IRBuilder<>& ir,
@@ -158,8 +201,8 @@ public:
              llvm::ConstantInt::getSigned(
                  i64, authorization.initial_value_)},
             "actor.managed.ref.initial");
-        ir.CreateStore(
-            bits, ref_slot(ir, runtime, authorization.storage_index_));
+        initialize_ref_bits(
+            ir, runtime, authorization.storage_index_, bits);
     }
 
     static llvm::Value* lower_read(
@@ -178,10 +221,8 @@ public:
         if (verified.access() != ManagedRefAccess::Read)
             throw std::invalid_argument(
                 "managed Ref read requires read source authorization");
-        auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
-        llvm::Value* bits = ir.CreateLoad(
-            i32, ref_slot(ir, runtime, authorization.storage_index_),
-            "actor.managed.ref.bits");
+        llvm::Value* bits =
+            load_ref_bits(ir, runtime, authorization.storage_index_);
         return lower_actor_compact_i64_read(
             ir, verified, runtime.compact_, bits, 0);
     }
@@ -203,10 +244,8 @@ public:
         if (verified.access() != ManagedRefAccess::Write)
             throw std::invalid_argument(
                 "managed Ref write requires write source authorization");
-        auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
-        llvm::Value* bits = ir.CreateLoad(
-            i32, ref_slot(ir, runtime, authorization.storage_index_),
-            "actor.managed.ref.bits");
+        llvm::Value* bits =
+            load_ref_bits(ir, runtime, authorization.storage_index_);
         lower_actor_compact_i64_write(
             ir, verified, runtime.compact_, bits, 0, new_value);
         return new_value;
