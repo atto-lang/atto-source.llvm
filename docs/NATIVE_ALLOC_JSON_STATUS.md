@@ -59,7 +59,7 @@ but is **not evidence of Java/LLVM source-language parity**.
 
 ## Verification scope
 
-`tests/native_core_json_test.cpp` exercises the native substrate directly,
+`tests/native_alloc_json_test.cpp` exercises the native substrate directly,
 including large exact-number round-trip, duplicate-key rejection, malformed
 number rejection, Unicode surrogate handling, invalid UTF-8 rejection,
 signed-i64 overflow, number-length bounds, encode-time duplicate-key rejection,
