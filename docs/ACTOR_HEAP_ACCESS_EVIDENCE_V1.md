@@ -15,7 +15,10 @@ slot index, slot generation and operation kind.
 
 `ores_actor_i64_heap_trace_snapshot` refuses partial buffers, missing
 recorder activation and active turns. An overflow increments a sticky dropped
-counter; dropped events always make trace coverage incomplete. The recorder
+counter; dropped events force `trace_snapshot` to return 0 even when it
+supplies a diagnostic summary and stored events. This failure is sticky.
+A successful snapshot certifies only that the observed buffer was not
+truncated, never that all source-language accesses were observed. The recorder
 is cleared at physical heap reclamation.
 
 ## Explicit limitations
@@ -29,5 +32,7 @@ is cleared at physical heap reclamation.
 - This changes no Oreslang compiler lowering outside existing scalar helpers.
 
 The new `native_actor_i64_access_evidence_host_only` CTest checks event
-identities, operation kinds, two turns, activation refusal, and overflow.
+identities, operation kinds, multiple turns, slot-generation reuse,
+activation refusal, invalid output capacity, empty buffers, sticky overflow,
+and rejection of overflowed snapshots.
 Exact-head authorized CI plus sanitizer runs remain required for promotion.
