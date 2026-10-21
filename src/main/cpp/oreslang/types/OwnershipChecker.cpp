@@ -317,6 +317,11 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             return;
         }
         case Expression::Kind::Call:
+            if (native_blocking_file_intrinsic(expr.name)) {
+                for (const auto& arg : expr.arguments)
+                    check_value(*arg, locals, functions);
+                return;
+            }
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
             check_call(expr, locals, functions);
@@ -610,7 +615,12 @@ void validate_i64_ownership(const Program& program) {
                         reject(call, "native Array<int> effect supports only add(value) or set(index,value)");
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
-                    check_call(call, state, functions);
+                    if (native_blocking_file_intrinsic(call.name)) {
+                        for (const auto& arg : call.arguments)
+                            check_value(*arg, state, functions);
+                    } else {
+                        check_call(call, state, functions);
+                    }
                 } else {
                     throw std::runtime_error("invalid native call statement");
                 }
