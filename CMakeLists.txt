@@ -156,18 +156,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_core_log_severity_capacity_and_concurrency
         PROPERTIES TIMEOUT 20)
 
-    # OS-independent native CoreJson text/tree substrate. This does not expose
-    # guest-source Json/Map/record syntax until the native frontend has checked
-    # string and structural value lowering.
-    add_executable(oreslang-native-core-json-test
-        tests/native_core_json_test.cpp)
-    target_include_directories(oreslang-native-core-json-test PRIVATE
+    # OS-independent allocator-backed AllocJson text/tree substrate. This does
+    # not expose guest-source Json/Map/record syntax until the native frontend
+    # has checked string and structural value lowering.
+    add_executable(oreslang-native-alloc-json-test
+        tests/native_alloc_json_test.cpp)
+    target_include_directories(oreslang-native-alloc-json-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_options(oreslang-native-core-json-test PRIVATE
+    target_compile_options(oreslang-native-alloc-json-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
-    add_test(NAME native_core_json_strict_text_tree_substrate
-        COMMAND oreslang-native-core-json-test)
-    set_tests_properties(native_core_json_strict_text_tree_substrate
+    add_test(NAME native_alloc_json_strict_text_tree_substrate
+        COMMAND oreslang-native-alloc-json-test)
+    set_tests_properties(native_alloc_json_strict_text_tree_substrate
         PROPERTIES TIMEOUT 20)
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
