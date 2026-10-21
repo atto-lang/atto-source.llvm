@@ -635,18 +635,24 @@ def _gh_ref_request(repository, ref_name, method):
     encoded = ref_name.replace("/", "%2F")
     family = "ref" if method == "GET" else "refs"
     argv = [
-        "gh", "api", "--method", method,
+        trusted_github_cli(), "api", "--method", method,
         f"repos/{repository}/git/{family}/heads/{encoded}",
         "--header", "Accept: application/vnd.github+json",
     ]
-    env = dict(os.environ, GH_HOST="github.com", GH_PROMPT_DISABLED="1")
-    try:
-        return subprocess.run(
-            argv, capture_output=True, text=True, env=env,
-            timeout=30, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise Denied("carrier ref rollback is unavailable") from exc
+    return run_bounded_gh(
+        argv,
+        env=github_api_environment(),
+        timeout=30,
+    )
+
+
+def _is_http_status(stderr, status):
+    if not isinstance(stderr, str):
+        return False
+    first_line = stderr.split("\n", 1)[0]
+    return re.fullmatch(
+        rf"gh: [^\r\n]{{1,4096}} \(HTTP {status}\)", first_line
+    ) is not None
 
 
 def live_ref_sha(repository, ref_name, expected_repository_id):
@@ -660,7 +666,7 @@ def live_ref_sha(repository, ref_name, expected_repository_id):
         raise Denied("carrier repository identity changed during ref verification")
     result = _gh_ref_request(repository, ref_name, "GET")
     if result.returncode != 0:
-        if "HTTP 404" in result.stderr:
+        if _is_http_status(result.stderr, 404):
             return None
         raise Denied("carrier ref lookup failed")
     try:
@@ -693,7 +699,7 @@ def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id)
     if actual != expected_sha:
         raise Denied("carrier ref moved; refusing rollback")
     result = _gh_ref_request(repository, ref_name, "DELETE")
-    if result.returncode != 0 and "HTTP 404" not in result.stderr:
+    if result.returncode != 0 and not _is_http_status(result.stderr, 404):
         raise Denied("carrier ref rollback failed")
     if live_ref_sha(repository, ref_name, expected_repository_id) is not None:
         raise Denied("carrier ref still exists after rollback")
