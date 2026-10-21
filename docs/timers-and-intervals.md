@@ -146,6 +146,22 @@ both backend select lowering paths are supported.
 - **Revocation is not quiescence:** Calling `OresTimers.close()` or `NativeTimerQueue.close()` revokes admissions and outstanding unclaimed timer deliveries. It does **not** prove that a callback already running, a scheduler turn, or an actor-owned continuation frame has physically quiesced. Actor teardown must wait for the corresponding scheduler/producer exit acknowledgement before reclaiming heaps.
 - **Evidence scope:** An isolated native C++17 test harness passed with GCC, Clang, and Clang ASan/UBSan. An isolated Java 21 harness also passed 500 interval-next vs owner-close races; it used a minimal stand-in `OresFuture`, so it does **not** validate the production OresFuture or the GraalVM interpreter. Full repository CI could not be validated: GitHub Actions reported failure with no steps/logs available. Source-level timer syntax is still an unimplemented proposal.
 
+## October 21 LLVM callback revocation substrate (experimental)
+
+`NativeTimerQueue::revoke_before_dispatch(handle)` revokes either a scheduled
+deadline or a polled-but-unclaimed ready token atomically against
+`claim_delivery()`. This is an opt-in low-level operation for callback handles;
+the older `cancel()` retains its existing pending-only semantics. A successful
+scheduler `claim_delivery()` consumes the ready ticket; full cancellation up
+to actual guest callback RUNNING requires a separate actor-owned callback state
+machine and execution-lease fencing. Actor guest callback lowering does **not**
+exist yet.
+
+Native strict GCC, strict Clang, and GCC ASan/UBSan passed on the verified
+current header blob in an isolated harness, including 3,000 claim/revoke races,
+1,000 poll/close races, and owner-domain/overflow/ordering checks. This is
+**not** a full-repository CI, native actor callback, or source-language proof.
+
 ## Verification gates
 
 Java: source lambda syntax/closure-capture effect checks, callback scheduling through actor single-writer turn (never clock executor), callback error propagation, callback cancellation after expiry but before dispatch, callback-from-serial-self deadlock detection, completion-on-scheduler, fresh dispatch for ready timers, cancellation
