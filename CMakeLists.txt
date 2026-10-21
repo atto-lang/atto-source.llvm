@@ -2135,6 +2135,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-carrier-create-failure-test)
     set_tests_properties(native_actor_lazy_carrier_creation_failure_fence PROPERTIES TIMEOUT 30)
 
+    # Deterministic partial-allocation failure: the fifth allocation
+    # (ready_control_bits) succeeds and the sixth (ready_data_bits) fails.
+    # The cleanup path must release each readiness allocation exactly once.
+    add_executable(oreslang-native-allocation-failure-test
+        tests/native_actor_allocation_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-allocation-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-allocation-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_CALLOC_FAIL_ORDINAL=6)
+    target_link_libraries(oreslang-native-allocation-failure-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-allocation-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_readiness_allocation_failure_cleanup
+        COMMAND oreslang-native-allocation-failure-test)
+    set_tests_properties(native_actor_readiness_allocation_failure_cleanup PROPERTIES TIMEOUT 30)
+
     # Send and stop contend on one linearizable actor admission authority.
     add_executable(oreslang-native-send-stop-race-test
         tests/native_actor_send_stop_race_test.c
