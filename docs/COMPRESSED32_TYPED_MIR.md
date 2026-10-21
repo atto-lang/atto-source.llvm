@@ -92,9 +92,10 @@ CTest, Clang AOT runtime, and sanitizers execute.
 
 ## Remaining native source/compiler work
 
-1. Introduce a logical `Ref<T, Domain>` or existing `Pointer<T>` owner in
-   HIR with sealed actor-domain and single-`state {}` semantics; the compiler
-   owns physical storage choice, not the source programmer.
+1. Introduce an **internal HIR-only** typed reference/capability node with sealed
+   actor-domain and single-`state {}` semantics. It must not be exposed as
+   source `Ref<T>` / `Pointer<T>` syntax; the compiler owns physical storage
+   choice, not the source programmer.
 2. Lower verified `critical handle_state(callback)` loans to actor runtime
    admission. Capture the active actor context after each continuation resume,
    not a permanent OS-thread-local heap base.
