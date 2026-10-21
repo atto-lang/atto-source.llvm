@@ -1008,6 +1008,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_sealed_state_durable_read_output_field
         sealed-state-durable-read-output-field.ores
         --diagnostic "checked state file read output requires prior mutable scalar local")
+    oreslang_contract_test(native_sealed_state_durable_admission
+        sealed-state-durable-admission-positive.ores
+        --ir "oreslang_file_write_i64_blocking")
+    oreslang_contract_test(native_sealed_state_durable_branch_local_escape
+        sealed-state-durable-branch-local-escape-reject.ores
+        --diagnostic "state callback may capture only its message parameter or lexical scalar local")
+    oreslang_contract_test(native_sealed_state_durable_branch_local_order
+        sealed-state-durable-branch-local-order-reject.ores
+        --diagnostic "native actor state locals must precede conditionals and writes within their lexical arm")
     oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
         --diagnostic "actor effect declarations use with; using is lexical state acquisition")
     oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
