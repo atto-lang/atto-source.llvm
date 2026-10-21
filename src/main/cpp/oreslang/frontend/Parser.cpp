@@ -1478,7 +1478,7 @@ private:
                             " at byte " + std::to_string(token_.offset));
             }
 
-            const std::string file_intrinsic = "$rt." + operation;
+            const std::string file_intrinsic = "__oreslang_rt_" + operation;
             if (native_blocking_file_intrinsic(file_intrinsic)) {
                 advance();
                 auto result = make_expression(Expression::Kind::Call, offset);
@@ -1980,6 +1980,8 @@ private:
             // collide at the ELF/Wasm symbol boundary.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (fn.name.rfind("__oreslang_rt_", 0) == 0)
+                throw std::runtime_error("reserved compiler intrinsic namespace");
             if (fn.name.rfind("oreslang_file_", 0) == 0 ||
                     fn.name.rfind("oreslang_dir_", 0) == 0)
                 throw std::runtime_error("reserved native blocking file ABI symbol");
