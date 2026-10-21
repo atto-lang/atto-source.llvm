@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "kernel", "over", "structural", "int", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -1904,6 +1904,12 @@ private:
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
+        if (token_.text == "kernel") {
+            throw std::runtime_error(
+                "native HAT kernel boundary unsupported: typed kernel IR, "
+                "validated effects/ownership and explicit backend lowering required; "
+                "no implicit CPU fallback at byte " + std::to_string(token_.offset));
+        }
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             const char* domain = token_.text == "cpu"
                     ? "native cpu execution block boundary unsupported: "
