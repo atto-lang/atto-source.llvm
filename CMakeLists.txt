@@ -690,9 +690,39 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_typed_effects using-pure-constant.ores --ir "ret i64 42")
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
+    oreslang_contract_test(native_blocking_file_ir native-blocking-file-positive.ores
+        --ir "oreslang_file_write_u63_blocking")
+    oreslang_contract_test(native_blocking_file_requires_effects
+        native-blocking-file-missing-effects-reject.ores
+        --diagnostic "native blocking file I/O requires using io, block")
+    oreslang_contract_test(native_blocking_file_requires_block
+        native-blocking-file-missing-block-reject.ores
+        --diagnostic "native blocking file I/O requires using io, block")
+    oreslang_contract_test(native_blocking_file_path_traversal_reject
+        native-blocking-file-path-reject.ores
+        --diagnostic "native file path must be a nonempty basename without separators")
+    oreslang_contract_test(native_blocking_file_wasm_reject native-blocking-file-positive.ores
+        --target wasm32-unknown-unknown
+        --diagnostic "native blocking file I/O is host-only")
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
+
+    # Runtime substrate for checked host-native blocking file I/O. This is
+    # compiler-owned capability plumbing, not a generic guest FFI surface.
+    add_executable(oreslang-native-blocking-file-test
+        tests/native_blocking_file_test.c
+        src/main/cpp/oreslang/runtime/NativeBlockingFile.c)
+    set_target_properties(oreslang-native-blocking-file-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-blocking-file-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-blocking-file-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_blocking_file_durability_and_path_security
+        COMMAND oreslang-native-blocking-file-test)
+    set_tests_properties(native_blocking_file_durability_and_path_security
+        PROPERTIES TIMEOUT 20)
 
     # Native OS ABI is i32 even though Oreslang int is represented as i64.
     oreslang_contract_test(native_exit_reject_main_arguments exit-invalid-main-args.ores
