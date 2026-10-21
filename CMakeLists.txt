@@ -676,6 +676,28 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_portable_compute_opencl_g2_contract
         COMMAND oreslang-portable-compute-opencl-g2-test)
+    add_executable(oreslang-opencl-provider-g3-test
+        tests/opencl_provider_g3_test.cpp)
+    target_include_directories(oreslang-opencl-provider-g3-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-opencl-provider-g3-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-opencl-provider-g3-test PRIVATE Threads::Threads)
+    add_test(NAME native_opencl_provider_g3_state_machine
+        COMMAND oreslang-opencl-provider-g3-test)
+    set_tests_properties(native_opencl_provider_g3_state_machine PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-opencl-system-gpu-probe
+        tests/opencl_system_gpu_probe.cpp)
+    target_include_directories(oreslang-opencl-system-gpu-probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-opencl-system-gpu-probe PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-opencl-system-gpu-probe PRIVATE
+        Threads::Threads ${CMAKE_DL_LIBS})
+    add_test(NAME native_opencl_real_gpu_probe_conditional
+        COMMAND oreslang-opencl-system-gpu-probe)
+    set_tests_properties(native_opencl_real_gpu_probe_conditional PROPERTIES TIMEOUT 30)
     add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
     target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
