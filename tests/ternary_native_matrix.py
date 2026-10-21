@@ -138,7 +138,9 @@ def execute(cmd):
 def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     src = root / (name + ".ores")
     src.write_text(source)
-    produced = execute([compiler, str(src)])
+    # Tree shaking is part of the semantic gate: callees referenced only
+    # from ternary arms must remain reachable even though runtime executes one arm.
+    produced = execute([compiler, "--tree-shake", str(src)])
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
     assert "ternary.true" in produced.stdout, name
     assert "ternary.false" in produced.stdout, name
