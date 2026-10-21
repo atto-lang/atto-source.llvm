@@ -1,0 +1,8 @@
+define actor RefReader as
+  state {
+    root: int = 41;
+  }
+  pub fnc on_message(int n): int with state.read {
+    return self.handle_state(|s| -> rt ref_read(s.root));
+  }
+end
