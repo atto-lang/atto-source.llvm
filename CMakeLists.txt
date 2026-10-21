@@ -577,6 +577,22 @@ if(BUILD_TESTING)
     set_tests_properties(native_ctest_manifest_harness_adversarial
         PROPERTIES TIMEOUT 30)
 
+    # Java/Graal admits slim-arrow keyword-delimited free/module callables
+    # and contextual tuple return types. Native remains scalar/braced for now:
+    # reject these forms explicitly before any LLVM IR is emitted.
+    oreslang_contract_test(native_end_delimited_callable_failclosed
+        end-delimited-fnc-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+    oreslang_contract_test(native_end_delimited_double_colon_failclosed
+        end-delimited-double-colon-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+    oreslang_contract_test(native_tuple_return_type_failclosed
+        tuple-return-type-reject.ores
+        --diagnostic "native tuple return types require typed tuple ABI and lowering")
+    oreslang_contract_test(native_end_delimited_shared_corpus_failclosed
+        end-delimited-roundtrip-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
