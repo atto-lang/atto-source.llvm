@@ -18,8 +18,7 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
         std::string_view source,
         std::string_view actor_name,
         std::string_view ref_field,
-        std::uint64_t actor_region_capacity_bytes,
-        bool native64_target) {
+        const TargetAbi& target) {
     // Source text is the trust root for this milestone. Do not accept a
     // caller-constructed Program, CFG or ActorManagedRefMir at this boundary.
     Program program = parse_program(source);
@@ -107,10 +106,17 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
     callback.one_state_parameter = true;
     callback.inferred = inferred;
 
+    // ActorArena.c currently enforces a fixed 64 MiB production slab
+    // budget. Do not accept a caller-authored capacity claim at this authority
+    // boundary; layout facts come from compiler/runtime policy and TargetAbi.
+    constexpr std::uint64_t kActorRegionCapacity =
+        UINT64_C(64) * 1024 * 1024;
+    const bool native64_target = target.pointer_bits() == 64;
+
     backend::ActorManagedRefMir claims =
         backend::ActorRefOwnershipVerifier::derive_verified_state_loan_claims(
             graph, 1, place, callback, method.declared_effects, access,
-            actor_region_capacity_bytes, native64_target);
+            kActorRegionCapacity, native64_target);
 
     // This constructor is private and SourceOwnershipChecker is its sole
     // production friend. Validate again after authority is wrapped so future
@@ -118,7 +124,7 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
     backend::ActorRefOwnershipEvidence evidence(claims);
     (void)backend::verify_actor_compressed32(evidence);
     return SourceManagedRefAuthorization(
-        std::move(evidence), std::string(source),
+        std::move(evidence), std::string(source), std::string(target.triple()),
         actor.name, ref_it->name, use.offset);
 }
 
