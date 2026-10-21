@@ -35,23 +35,23 @@ int main() {
         admit("total = (rt take total) + n; return total;");
         admit("total = rt take total; total = total + 1; return total;");
         admit("return read(rt borrow total) + read(rt borrow base);", read);
-        admit("return inspect(rt borrow mut n);", mut);
+        admit("return inspect(rt mut borrow n);", mut);
         admit("return pair(rt borrow n, n);", pair);
-        admit("return pair(rt borrow mut n, total);", exclusive);
-        admit("return pair(x: rt borrow mut n, y: total);", exclusive);
+        admit("return pair(rt mut borrow n, total);", exclusive);
+        admit("return pair(x: rt mut borrow n, y: total);", exclusive);
         deny("return (rt take n) + n;", "use of explicitly moved int");
         deny("total = rt take n; return n;", "use of explicitly moved int");
         deny("total = rt take n; total = n; return total;", "use of explicitly moved int");
         deny("total = (rt take total) + total; return total;", "use of explicitly moved int");
         deny("return rt take total;", "left moved at handler return");
         deny("total = rt take base; return total;", "cannot take immutable actor field");
-        deny("return inspect(rt borrow mut total);", "actor field mutable borrow", mut);
-        deny("return inspect(rt borrow mut base);", "actor field mutable borrow", mut);
+        deny("return inspect(rt mut borrow total);", "actor field mutable borrow", mut);
+        deny("return inspect(rt mut borrow base);", "actor field mutable borrow", mut);
         deny("return rt borrow total;", "borrowed reference may only be passed");
-        deny("return rt borrow mut n;", "borrowed reference may only be passed");
-        deny("return pair(rt borrow mut n, n);", "read conflicts with active mutable borrow", exclusive);
+        deny("return rt mut borrow n;", "borrowed reference may only be passed");
+        deny("return pair(rt mut borrow n, n);", "read conflicts with active mutable borrow", exclusive);
         deny("return pair(rt borrow n, rt take n);", "cannot move int while borrow is active", pair);
-        deny("return pair(x: rt borrow mut n, y: n);", "read conflicts with active mutable borrow", exclusive);
+        deny("return pair(x: rt mut borrow n, y: n);", "read conflicts with active mutable borrow", exclusive);
         deny("return pair(y: rt take n, x: rt borrow n);", "borrow of explicitly moved int", pair);
         deny("return pair(rt borrow n, 1);", "borrow mode does not match", exclusive);
         deny("return read(rt borrow (n + 1));", "addressable named int", read);
@@ -68,11 +68,11 @@ int main() {
         // Nested calls must retain earlier outer-argument loans until the
         // outer call returns; their own lexical scope is not permission to
         // reacquire an incompatible alias of the same actor/message place.
-        deny("return pair(rt borrow n, inspect(rt borrow mut n));",
+        deny("return pair(rt borrow n, inspect(rt mut borrow n));",
              "conflicting active native borrow", pair + mut);
-        deny("return pair(rt borrow mut n, read(rt borrow n));",
+        deny("return pair(rt mut borrow n, read(rt borrow n));",
              "conflicting active native borrow", exclusive + read);
-        deny("return twice(rt borrow mut n, rt borrow mut n);",
+        deny("return twice(rt mut borrow n, rt mut borrow n);",
              "conflicting active native borrow",
              "fnc twice(borrow mut int x, borrow mut int y): int { return x + y; }");
         deny("return pair(rt borrow total, rt take total);", "cannot move int while borrow is active", pair);
