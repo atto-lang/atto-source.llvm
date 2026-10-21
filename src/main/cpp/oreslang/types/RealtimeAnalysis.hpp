@@ -189,6 +189,7 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
 inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(statement.expression.get(), facts);
+    scan_expression(statement.condition.get(), facts);
     scan_expression(statement.condition_lhs.get(), facts);
     scan_expression(statement.condition_rhs.get(), facts);
     scan_expression(statement.array_commit_length.get(), facts);
@@ -230,6 +231,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
         if (facts.call_budget_exceeded) return facts;
     }
     for (const auto& guard : function.early_returns) {
+        scan_expression(guard.condition.get(), facts);
         scan_expression(guard.lhs.get(), facts);
         scan_expression(guard.rhs.get(), facts);
         scan_expression(guard.result.get(), facts);
