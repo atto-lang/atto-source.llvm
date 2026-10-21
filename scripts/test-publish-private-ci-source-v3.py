@@ -318,6 +318,26 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "commit/tree changed"):
                 v3.recheck_source_snapshot(669, "9" * 40, SOURCE_TREE)
 
+    def test_recheck_source_snapshot_rejects_malformed_commit_tree(self):
+        def api(route, method="GET", payload=None):
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if route.endswith("/git/commits/" + "9" * 40):
+                return {"sha": "9" * 40, "tree": []}
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "commit/tree changed"):
+                v3.recheck_source_snapshot(669, "9" * 40, SOURCE_TREE)
+
     def test_publish_binds_receipt_tree_branch_and_authorization(self):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
