@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 
@@ -51,6 +52,12 @@ int main() {
     expect_throw([&] {
         (void)Authority::begin_upload(buffer, gpu, "actor:42", 0, 0);
     });
+    expect_throw([&] {
+        (void)Authority::begin_upload(buffer, gpu, "actor:42", -1, 4);
+    });
+    expect_throw([&] {
+        (void)Authority::begin_upload(buffer, gpu, "actor:42", 0, -1);
+    });
 
     auto first = Authority::begin_upload(buffer, gpu, "actor:42", 0, 64);
     check(first.direction() == TransferDirection::Upload);
@@ -72,6 +79,7 @@ int main() {
     Authority::acknowledge_cancelled(buffer, cancelled);
     Authority::retire(buffer, gpu, "actor:42");
     check(buffer.status() == oreslang::gpu::Status::Closed);
+    expect_throw([&] { Authority::retire(buffer, gpu, "actor:42"); });
 
     expect_throw([] {
         (void)Authority::issue_device("vulkan", "gpu0", 0, "tenant-a");
@@ -83,6 +91,12 @@ int main() {
     expect_throw([&] {
         (void)Authority::bind_buffer<unsigned char>(
             gpu, 1, 64, 3, "u8", "actor:1");
+    });
+    expect_throw([&] {
+        (void)Authority::bind_buffer<unsigned char>(
+            gpu, 1,
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) + 1ULL,
+            8, "u8", "actor:1");
     });
 
     std::cout << "portable compute authority tests passed\n";
