@@ -28,6 +28,9 @@ particular, the native tree now has:
 - field-sensitive native drop planning for `entry.key` and `entry.value`,
   with reverse-initialization-order exact-once teardown and double-drop
   rejection.
+- projection-sensitive ownership proof: `entry.key` and `entry.value` are
+  disjoint sibling places, while a partial move or incompatible projection
+  loan correctly blocks whole-Entry use.
 
 Those pieces are **not** permission to accept `Entry` source yet. They exist so
 the parser, ownership checker, LLVM lowerer and actor transport can converge on
