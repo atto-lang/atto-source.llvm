@@ -2043,14 +2043,17 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements) {
+        std::function<void(const Statement&)> validate_statement_effects;
+        validate_statement_effects = [&](const Statement& stmt) {
             if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()) ||
                     contains_callable_invocation(stmt.condition.get()) ||
                     contains_callable_invocation(stmt.condition_lhs.get()) ||
-                    contains_callable_invocation(stmt.condition_rhs.get()))
+                    contains_callable_invocation(stmt.condition_rhs.get()) ||
+                    (stmt.branch_local &&
+                        contains_callable_invocation(stmt.branch_local->initializer.get())))
                 throw std::runtime_error("using effects require transitive call summaries");
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
                 if (contains_callable_invocation(stmt.array_commit_length.get()))
@@ -2059,7 +2062,13 @@ private:
                     if (contains_callable_invocation(item.get()))
                         throw std::runtime_error("filled array commit requires pure scalar fills");
             }
-        }
+            for (const auto& nested : stmt.then_statements)
+                validate_statement_effects(nested);
+            for (const auto& nested : stmt.else_statements)
+                validate_statement_effects(nested);
+        };
+        for (const auto& stmt : fn.statements)
+            validate_statement_effects(stmt);
         for (const auto& guard : fn.early_returns)
             if (contains_callable_invocation(guard.condition.get()) ||
                 contains_callable_invocation(guard.lhs.get()) ||
