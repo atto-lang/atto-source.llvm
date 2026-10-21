@@ -149,6 +149,9 @@ int main(int argc, char** argv) {
         (void) actor_checked_runtime_decl(&correct, symbol, signature);
         (void) actor_checked_runtime_decl(&correct, symbol, signature);
         auto* marked = correct.getFunction(symbol);
+        marked->addFnAttr(llvm::Attribute::NoUnwind);
+        rejects([&] { (void) actor_checked_runtime_decl(&correct, symbol, signature); }, "extra function attribute permitted");
+        marked->removeFnAttr(llvm::Attribute::NoUnwind);
         auto* body = llvm::BasicBlock::Create(context, "entry", marked);
         llvm::IRBuilder<> define(body);
         define.CreateRet(llvm::ConstantInt::get(i32, 0));
