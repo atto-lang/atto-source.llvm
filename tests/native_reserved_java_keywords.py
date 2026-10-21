@@ -99,6 +99,22 @@ CASES = {
         "pub fnc main(int value): int { return structural; }",
         "expected int expression",
     ),
+    # Independent Task admission must reject at the TASK boundary before any
+    # borrowed owner or continuation can reach LLVM IR. This is not evidence
+    # that the native borrow checker can lower borrowed Tasks yet.
+    "task-captured-shared-loan": (
+        "pub fnc main(int x): int { return task { return rt borrow x; }; }",
+        "native execution task lowering unsupported",
+    ),
+    "task-captured-exclusive-loan": (
+        "pub fnc main(int x): int { return task { return rt borrow mut x; }; }",
+        "native execution task lowering unsupported",
+    ),
+    "task-borrowed-call-result": (
+        "fnc read(borrow int x): int { return x; } "
+        "pub fnc main(int x): int { return task { return read(rt borrow x); }; }",
+        "native execution task lowering unsupported",
+    ),
     # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
