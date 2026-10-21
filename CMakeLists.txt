@@ -577,6 +577,10 @@ if(BUILD_TESTING)
     set_tests_properties(native_ctest_manifest_harness_adversarial
         PROPERTIES TIMEOUT 30)
 
+    oreslang_contract_test(native_end_delimited_callable_failclosed
+        end-delimited-fnc-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
     oreslang_contract_test(native_rt_while_loop_failclosed
