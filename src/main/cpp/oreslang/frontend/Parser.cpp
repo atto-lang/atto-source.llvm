@@ -1848,12 +1848,65 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
-            for (const auto& write : method.actor_field_writes) {
-                if (!mutables.count(write.field))
-                    throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
-                validate_expression(*write.expression, fields, functions);
+            if (actor.state_declared) {
+                if (!method.actor_state_loan)
+                    throw std::runtime_error("state actor requires sealed handle_state loan");
+                const auto& loan = *method.actor_state_loan;
+                const FunctionEffect required = loan.mode == ActorStateLoan::Mode::Write
+                    ? FunctionEffect::StateWrite : FunctionEffect::StateRead;
+                if (!method.has_declared_effects || !method.declared_effects.has(required))
+                    throw std::runtime_error(loan.mode == ActorStateLoan::Mode::Write
+                        ? "with clause omits state.write effect"
+                        : "with clause omits state.read effect");
+                std::unordered_set<std::string> state_fields;
+                for (const auto& field : actor.fields) state_fields.insert(field.name);
+                const auto validate_state_expr = [&](const Expression& root) {
+                    std::function<void(const Expression&)> visit;
+                    visit = [&](const Expression& expr) {
+                        if (expr.kind == Expression::Kind::Field) {
+                            if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                                    expr.left->name != "state" ||
+                                    !state_fields.count(expr.name))
+                                throw std::runtime_error("state loan may access only declared state fields");
+                            return;
+                        }
+                        if (expr.kind == Expression::Kind::Call ||
+                                expr.kind == Expression::Kind::ArrayCall ||
+                                expr.kind == Expression::Kind::Copy ||
+                                expr.kind == Expression::Kind::Take ||
+                                expr.kind == Expression::Kind::Share ||
+                                expr.kind == Expression::Kind::Borrow ||
+                                expr.kind == Expression::Kind::BorrowMut)
+                            throw std::runtime_error("state loan cannot call, transfer, or borrow");
+                        if (expr.kind == Expression::Kind::Variable &&
+                                expr.name != parameter)
+                            throw std::runtime_error("state loan references unavailable value '" + expr.name + "'");
+                        if (expr.left) visit(*expr.left);
+                        if (expr.right) visit(*expr.right);
+                        for (const auto& arg : expr.arguments) visit(*arg);
+                    };
+                    visit(root);
+                };
+                for (const auto& write : loan.writes) {
+                    if (loan.mode != ActorStateLoan::Mode::Write)
+                        throw std::runtime_error("read state loan contains write");
+                    if (!state_fields.count(write.field))
+                        throw std::runtime_error("unknown actor state field '" + write.field + "'");
+                    validate_state_expr(*write.expression);
+                }
+                validate_state_expr(*loan.result);
+                std::unordered_set<std::string> result_names{loan.result_binding, parameter};
+                validate_expression(*method.result, result_names, functions);
+                if (!method.actor_field_writes.empty())
+                    throw std::runtime_error("state actor cannot contain legacy field writes");
+            } else {
+                for (const auto& write : method.actor_field_writes) {
+                    if (!mutables.count(write.field))
+                        throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
+                    validate_expression(*write.expression, fields, functions);
+                }
+                validate_expression(*method.result, fields, functions);
             }
-            validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
