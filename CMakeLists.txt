@@ -953,13 +953,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_sealed_state_read sealed-state-read-positive.ores
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_write sealed-state-write-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_state_commit")
     oreslang_contract_test(native_sealed_state_write_only sealed-state-write-only-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_state_commit")
     oreslang_contract_test(native_sealed_state_using_read sealed-state-using-read-positive.ores
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
-        --ir "call void @ores_actor_i64_heap_field_write")
+        --ir "call void @ores_actor_i64_heap_state_commit")
     oreslang_contract_test(native_sealed_state_schema_20 sealed-state-schema-20-positive.ores
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_schema_33_reject sealed-state-schema-33-reject.ores
