@@ -586,6 +586,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tuple_return_type_failclosed
         tuple-return-type-reject.ores
         --diagnostic "native tuple return types require typed tuple ABI and lowering")
+    oreslang_contract_test(native_end_delimited_shared_corpus_failclosed
+        end-delimited-roundtrip-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
 
     # Reject all unsupported source-level scheduler suspension until verified
     # heap-owned continuations exist. The harness rejects any partial LLVM IR.
