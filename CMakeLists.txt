@@ -1202,6 +1202,8 @@ if(BUILD_TESTING)
     # layout choice and strict FFI/mailbox/suspension rejection.
     add_executable(oreslang-managed-ref-mir-test
         tests/managed_ref_mir_test.cpp)
+    target_compile_definitions(oreslang-managed-ref-mir-test PRIVATE
+        ORESLANG_COMPRESSED32_TEST_PROVENANCE=1)
     target_include_directories(oreslang-managed-ref-mir-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-managed-ref-mir-test PRIVATE
@@ -1214,6 +1216,8 @@ if(BUILD_TESTING)
     # Not yet full source-level Ref<T> lowering.
     add_executable(oreslang-managed-ref-mir-llvm-test
         tests/managed_ref_mir_llvm_test.cpp)
+    target_compile_definitions(oreslang-managed-ref-mir-llvm-test PRIVATE
+        ORESLANG_COMPRESSED32_TEST_PROVENANCE=1)
     target_include_directories(oreslang-managed-ref-mir-llvm-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-managed-ref-mir-llvm-test PRIVATE ${ORE_LLVM_LIBS})
