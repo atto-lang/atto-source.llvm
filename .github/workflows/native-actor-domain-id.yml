@@ -1,0 +1,31 @@
+name: Native actor domain ID no-wrap (source-free)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorDomainId.h'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
+      - 'tests/native_actor_domain_id_test.c'
+      - '.github/workflows/native-actor-domain-id.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  c11-exhaustion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Exercise C11 allocator terminal failure with GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in cc clang; do
+            "$compiler" -std=c11 -Wall -Wextra -Werror -O2 -pthread \
+              -I src/main/cpp tests/native_actor_domain_id_test.c -o "/tmp/domain-${compiler}"
+            "/tmp/domain-${compiler}"
+          done
