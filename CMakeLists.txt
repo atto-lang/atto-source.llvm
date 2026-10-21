@@ -960,6 +960,14 @@ if(BUILD_TESTING)
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
         --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_conditional sealed-state-conditional-positive.ores
+        --ir "state.if.then")
+    oreslang_contract_test(native_sealed_state_conditional_readonly_reject
+        sealed-state-conditional-readonly-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(native_sealed_state_conditional_missing_read_reject
+        sealed-state-conditional-missing-read-reject.ores
+        --diagnostic "state callback reads state but with bound omits state.read")
     oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
         --diagnostic "actor effect declarations use with; using is lexical state acquisition")
     oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
