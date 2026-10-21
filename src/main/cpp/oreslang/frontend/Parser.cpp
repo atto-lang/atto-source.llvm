@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "pure", "Ref",
         "using", "with", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -324,22 +324,47 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End)
                     fail("unterminated native actor state schema");
-                if (actor.fields.size() == 16)
+                if (actor.fields.size() + actor.managed_ref_fields.size() == 16)
                     fail("native actor state field limit exceeded (16)");
-                LocalBinding field;
-                field.offset = token_.offset;
-                field.field_mutable = true; // mutation still requires a write loan
-                field.name = identifier();
-                if (field.name == "state")
+                const std::size_t field_offset = token_.offset;
+                std::string field_name = identifier();
+                if (field_name == "state")
                     fail("actor state field cannot shadow sealed state capability");
-                if (!names.insert(field.name).second)
-                    fail("duplicate actor state field '" + field.name + "'");
+                if (!names.insert(field_name).second)
+                    fail("duplicate actor state field '" + field_name + "'");
                 require(":");
-                require("int");
-                require("=");
-                field.initializer = expression();
-                require(";");
-                actor.fields.push_back(std::move(field));
+                if (accept("Ref")) {
+                    // First source/HIR managed-reference slice is deliberately
+                    // narrow: an actor-private Ref<int> owns one initial scalar.
+                    // Source never chooses compressed32/native64.
+                    require("<");
+                    require("int");
+                    require(">");
+                    require("=");
+                    require("new");
+                    require("Ref");
+                    require("<");
+                    require("int");
+                    require(">");
+                    require("(");
+                    ActorManagedRefField ref;
+                    ref.offset = field_offset;
+                    ref.name = std::move(field_name);
+                    ref.initial = integer_literal();
+                    require(")");
+                    require(";");
+                    actor.managed_ref_fields.push_back(std::move(ref));
+                } else {
+                    LocalBinding field;
+                    field.offset = field_offset;
+                    field.field_mutable = true; // mutation still requires a write loan
+                    field.name = std::move(field_name);
+                    require("int");
+                    require("=");
+                    field.initializer = expression();
+                    require(";");
+                    actor.fields.push_back(std::move(field));
+                }
             }
             require("}");
             if (token_.text == "state")
