@@ -216,6 +216,42 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Conditional: {
+            // Ownership/type admission has already proven a side-effect-free
+            // boolean equality condition and compatible affine branch states.
+            // Evaluate only the selected value arm and merge the i64 result.
+            llvm::Value* lhs = lower(*expr.condition_lhs, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "ternary.eq");
+            llvm::Function* parent = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* whenTrue = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.true", parent);
+            llvm::BasicBlock* whenFalse = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.false", parent);
+            llvm::BasicBlock* merge = llvm::BasicBlock::Create(
+                builder.getContext(), "ternary.merge", parent);
+            builder.CreateCondBr(condition, whenTrue, whenFalse);
+
+            builder.SetInsertPoint(whenTrue);
+            llvm::Value* trueValue = lower(*expr.when_true, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::BasicBlock* trueExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(whenFalse);
+            llvm::Value* falseValue = lower(*expr.when_false, builder, i64,
+                storage, field_storage, functions, moves);
+            llvm::BasicBlock* falseExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(merge);
+            auto* value = builder.CreatePHI(i64, 2, "ternary.value");
+            value->addIncoming(trueValue, trueExit);
+            value->addIncoming(falseValue, falseExit);
+            return value;
+        }
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
             if (callee->arg_size() != expr.arguments.size()) {
