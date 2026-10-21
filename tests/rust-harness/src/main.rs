@@ -349,6 +349,65 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     Ok(())
 }
 
+
+fn named_call_source_order(compiler: &Path, fixture: &Path) -> Result<(), String> {
+    let out = run(compiler, [fixture.as_os_str()])?;
+    require(out.status.success(), format!("compile named-call fixture: {}", stderr(&out)))?;
+    let ir = stdout(&out);
+    require(ir.starts_with("; ModuleID"), "expected native LLVM module header")?;
+    let second = ir.find("call i64 @read_second(")
+        .ok_or_else(|| "missing call to read_second".to_string())?;
+    let first = ir.find("call i64 @read_first(")
+        .ok_or_else(|| "missing call to read_first".to_string())?;
+    require(second < first, "named arguments evaluated in formal rather than source order")?;
+    require(stderr(&out).is_empty(), format!("unexpected compiler stderr: {}", stderr(&out)))?;
+    println!("named-call source-order IR: PASS");
+    Ok(())
+}
+
+fn actor_persistent_fields(compiler: &Path, clang: &Path, root: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-actor-fields-").map_err(|e| e.to_string())?;
+    let fixture = root.join("tests/fixtures/actor-owned-fields.ores");
+    let compiled = run(compiler, [fixture.as_os_str()])?;
+    require(compiled.status.success(), format!("compile actor fields: {}", stderr(&compiled)))?;
+    require(!compiled.stdout.is_empty(), "compiler returned no actor LLVM IR")?;
+    let ir = temp.path.join("actor.ll");
+    let binary = temp.path.join("actor");
+    fs::write(&ir, &compiled.stdout).map_err(|e| e.to_string())?;
+    let linked = Command::new(clang)
+        .arg(&ir)
+        .arg(root.join("tests/native_actor_source_harness.c"))
+        .arg(root.join("src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"))
+        .arg(format!("-I{}", root.join("src/main/cpp").display()))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .map_err(|e| format!("run clang: {e}"))?;
+    require(linked.status.success(), format!("link actor fields: {}", stderr(&linked)))?;
+    let executed = run(&binary, std::iter::empty::<&OsStr>())?;
+    require(executed.status.success(),
+        format!("actor owned-field executable exited {:?}: {}", executed.status.code(), stderr(&executed)))?;
+    println!("actor persistent fields: PASS");
+    Ok(())
+}
+
+fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
+    let contents = fs::read_to_string(vectors)
+        .map_err(|e| format!("read {}: {e}", vectors.display()))?;
+    require(json_string(&contents, "schema").as_deref() == Some("oreslang.tagged.message.v2"),
+        "tagged-message vector schema mismatch")?;
+    let expected = json_string(&contents, "hex")
+        .ok_or_else(|| "missing hex field in tagged-message vector".to_string())?;
+    require(!expected.is_empty() && expected.bytes().all(|b| b.is_ascii_hexdigit()) && expected.len() % 2 == 0,
+        "tagged-message vector hex must be nonempty even-length hexadecimal")?;
+    let actual = run(binary, std::iter::empty::<&OsStr>())?;
+    require(actual.status.success(), format!("tagged-message executable failed: {}", stderr(&actual)))?;
+    require(stdout(&actual).trim() == expected,
+        format!("native enum message bytes differ from Java fixture: {} != {expected}", stdout(&actual).trim()))?;
+    println!("PASS exact enum tag/identity typed MessagePack v2 vector");
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -366,6 +425,22 @@ fn real_main() -> Result<(), String> {
             let compiler = path_arg(&args, 2, "usage: callable-nominal <compiler>")?;
             callable_nominal(&compiler)
         }
+        Some("named-call-order") => {
+            let compiler = path_arg(&args, 2, "usage: named-call-order <compiler> <fixture>")?;
+            let fixture = path_arg(&args, 3, "usage: named-call-order <compiler> <fixture>")?;
+            named_call_source_order(&compiler, &fixture)
+        }
+        Some("actor-persistent-fields") => {
+            let compiler = path_arg(&args, 2, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
+            let clang = path_arg(&args, 3, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
+            let root = path_arg(&args, 4, "usage: actor-persistent-fields <compiler> <clang> <root>")?;
+            actor_persistent_fields(&compiler, &clang, &root)
+        }
+        Some("tagged-message-wire") => {
+            let binary = path_arg(&args, 2, "usage: tagged-message-wire <binary> <vectors>")?;
+            let vectors = path_arg(&args, 3, "usage: tagged-message-wire <binary> <vectors>")?;
+            tagged_message_wire(&binary, &vectors)
+        }
         Some("aot-driver") => {
             let driver = path_arg(&args, 2, "usage: aot-driver <driver> <compiler> <clang>")?;
             let compiler = path_arg(&args, 3, "usage: aot-driver <driver> <compiler> <clang>")?;
@@ -373,7 +448,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire> ..."
                 .to_string(),
         ),
     }

@@ -470,10 +470,9 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-tagged-message-wire-v2-test PRIVATE
             -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_tagged_enum_message_java_wire_parity
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/tagged_message_wire_v2_matrix.py"
-                --binary "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
-                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" tagged-message-wire
+                "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
         set_tests_properties(native_tagged_enum_message_java_wire_parity PROPERTIES TIMEOUT 30)
     else()
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
@@ -778,8 +777,7 @@ if(BUILD_TESTING)
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order
-        COMMAND "${Python3_EXECUTABLE}"
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-call-order
           "$<TARGET_FILE:oreslang-llvmc>"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
     set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
@@ -2395,7 +2393,7 @@ endif()
 
 if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME refreshed_actor_persistent_fields
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_persistent_fields_refresh.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" actor-persistent-fields
         "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
