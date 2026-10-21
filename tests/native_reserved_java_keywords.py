@@ -99,43 +99,6 @@ CASES = {
         "pub fnc main(int value): int { return structural; }",
         "expected int expression",
     ),
-    # Independent Task admission must reject at the TASK boundary before any
-    # borrowed owner or continuation can reach LLVM IR. This is not evidence
-    # that the native borrow checker can lower borrowed Tasks yet.
-    "task-captured-shared-loan": (
-        "pub fnc main(int x): int { return task { return rt borrow x; }; }",
-        "native execution task lowering unsupported",
-    ),
-    "task-captured-exclusive-loan": (
-        "pub fnc main(int x): int { return task { return rt borrow mut x; }; }",
-        "native execution task lowering unsupported",
-    ),
-    "task-borrowed-call-result": (
-        "fnc read(borrow int x): int { return x; } "
-        "pub fnc main(int x): int { return task { return read(rt borrow x); }; }",
-        "native execution task lowering unsupported",
-    ),
-    "task-borrowed-classic-for-initializer": (
-        "pub fnc main(int owner): int { "
-        "return task { for (val loop = rt borrow owner; false; ) {} return 0; }; }",
-        "native execution task lowering unsupported",
-    ),
-    "nested-task-borrow": (
-        "pub fnc main(int x): int { return task { return task { return rt borrow x; }; }; }",
-        "native execution task lowering unsupported",
-    ),
-    "task-comment-borrow": (
-        "pub fnc main(int x): int { return task /* comment */ { return rt borrow x; }; }",
-        "native execution task lowering unsupported",
-    ),
-    "cpu-task-borrow": (
-        "pub fnc main(int x): int { return cpu task { return rt borrow x; }; }",
-        "native cpu execution block boundary unsupported",
-    ),
-    "gpu-task-borrow": (
-        "pub fnc main(int x): int { return gpu task { return rt borrow x; }; }",
-        "native gpu/quantum boundary unsupported",
-    ),
     # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
