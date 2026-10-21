@@ -485,21 +485,58 @@ private:
             require(">");
 
             if (accept("{")) {
-                while (token_.text != "return") {
-                    if (token_.kind == Kind::End || token_.text == "}")
-                        fail("state callback requires return");
-                    ActorFieldWrite write;
-                    write.offset = token_.offset;
-                    const std::string receiver = identifier();
-                    if (receiver != loan->binder)
-                        fail("actor state mutation requires the lexical state callback binding");
-                    require(".");
-                    write.field = identifier();
-                    require("=");
-                    write.expression = expression();
-                    require(";");
-                    loan->writes.push_back(std::move(write));
-                }
+                std::size_t state_branch_count = 0;
+                std::function<std::vector<ActorStateStatement>(std::size_t)> parse_state_arm;
+                parse_state_arm = [&](std::size_t depth) {
+                    if (depth > 8)
+                        fail("native actor state conditional nesting limit exceeded (8)");
+                    std::vector<ActorStateStatement> statements;
+                    while (token_.text != "return" && token_.text != "}") {
+                        if (token_.kind == Kind::End)
+                            fail("state callback requires return");
+                        if (token_.text == "if") {
+                            if (++state_branch_count > 8)
+                                fail("native actor state conditional CFG limit exceeded (8)");
+                            ActorStateStatement conditional;
+                            conditional.kind = ActorStateStatement::Kind::Conditional;
+                            conditional.offset = token_.offset;
+                            require("if");
+                            require("(");
+                            conditional.condition_lhs = expression();
+                            if (!accept("eq")) require("==");
+                            conditional.condition_rhs = expression();
+                            require(")");
+                            require("{");
+                            conditional.then_statements = parse_state_arm(depth + 1);
+                            if (token_.text == "return")
+                                fail("state conditional arms cannot return; use the terminal callback return");
+                            require("}");
+                            require("else");
+                            require("{");
+                            conditional.else_statements = parse_state_arm(depth + 1);
+                            if (token_.text == "return")
+                                fail("state conditional arms cannot return; use the terminal callback return");
+                            require("}");
+                            require("fi");
+                            statements.push_back(std::move(conditional));
+                            continue;
+                        }
+                        ActorStateStatement write;
+                        write.kind = ActorStateStatement::Kind::Write;
+                        write.offset = token_.offset;
+                        const std::string receiver = identifier();
+                        if (receiver != loan->binder)
+                            fail("actor state mutation requires the lexical state callback binding");
+                        require(".");
+                        write.field = identifier();
+                        require("=");
+                        write.expression = expression();
+                        require(";");
+                        statements.push_back(std::move(write));
+                    }
+                    return statements;
+                };
+                loan->statements = parse_state_arm(0);
                 require("return");
                 loan->result = expression();
                 require(";");
