@@ -37,6 +37,20 @@ struct LocalOwnership {
 };
 using Locals = std::unordered_map<std::string, LocalOwnership>;
 
+bool same_affine_state(const Locals& left, const Locals& right) {
+    if (left.size() != right.size()) return false;
+    for (const auto& item : left) {
+        const auto found = right.find(item.first);
+        if (found == right.end()) return false;
+        if (item.second.moved != found->second.moved ||
+                item.second.moved_fields != found->second.moved_fields ||
+                item.second.shared_loans != found->second.shared_loans ||
+                item.second.exclusive_loan != found->second.exclusive_loan)
+            return false;
+    }
+    return true;
+}
+
 [[noreturn]] void reject(const Expression& expr, const std::string& reason) {
     throw std::runtime_error(reason + " at byte " + std::to_string(expr.offset));
 }
@@ -222,6 +236,7 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
             return;
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
@@ -266,6 +281,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
         case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
@@ -305,30 +321,40 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalXor:
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr: {
+            check_value(*expr.left, locals, functions);
+            Locals skipped = locals;
+            Locals evaluated = locals;
+            check_value(*expr.right, evaluated, functions);
+            if (!same_affine_state(skipped, evaluated))
+                reject(expr, "ownership violation: short-circuit CFG predecessor ownership mismatch");
+            locals = std::move(skipped);
+            return;
+        }
         case Expression::Kind::Conditional: {
-            // The condition is evaluated before the branch and may not move,
-            // borrow or call. Each lazy arm starts from the same ownership
-            // snapshot; only a join with identical affine state is admitted.
-            check_pure_guard(*expr.condition_lhs, locals, functions);
-            check_pure_guard(*expr.condition_rhs, locals, functions);
+            if (expr.condition)
+                check_value(*expr.condition, locals, functions);
+            else {
+                check_pure_guard(*expr.condition_lhs, locals, functions);
+                check_pure_guard(*expr.condition_rhs, locals, functions);
+            }
             Locals when_true = locals;
             Locals when_false = locals;
             check_value(*expr.when_true, when_true, functions);
             check_value(*expr.when_false, when_false, functions);
-            if (when_true.size() != when_false.size())
+            if (!same_affine_state(when_true, when_false))
                 reject(expr, "ownership violation: ternary CFG predecessor ownership mismatch");
-            for (const auto& item : when_true) {
-                const auto found = when_false.find(item.first);
-                if (found == when_false.end() ||
-                        item.second.moved != found->second.moved ||
-                        item.second.moved_fields != found->second.moved_fields ||
-                        item.second.shared_loans != found->second.shared_loans ||
-                        item.second.exclusive_loan != found->second.exclusive_loan)
-                    reject(expr, "ownership violation: ternary CFG predecessor ownership mismatch");
-            }
             locals = std::move(when_true);
             return;
         }
@@ -359,11 +385,13 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
         case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
         case Expression::Kind::Variable:
         case Expression::Kind::Field:
             check_value(expr, locals, functions);
             return;
         case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             check_pure_guard(*expr.left, locals, functions);
@@ -371,12 +399,24 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
             check_pure_guard(*expr.left, locals, functions);
             check_pure_guard(*expr.right, locals, functions);
             return;
         case Expression::Kind::Conditional:
-            check_pure_guard(*expr.condition_lhs, locals, functions);
-            check_pure_guard(*expr.condition_rhs, locals, functions);
+            if (expr.condition) check_pure_guard(*expr.condition, locals, functions);
+            else {
+                check_pure_guard(*expr.condition_lhs, locals, functions);
+                check_pure_guard(*expr.condition_rhs, locals, functions);
+            }
             check_pure_guard(*expr.when_true, locals, functions);
             check_pure_guard(*expr.when_false, locals, functions);
             return;
