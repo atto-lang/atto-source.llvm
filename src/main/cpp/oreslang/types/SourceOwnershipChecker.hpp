@@ -2,10 +2,54 @@
 
 #include "oreslang/backend/ManagedRefMir.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace oreslang {
+
+namespace backend {
+class SourceManagedRefLowering;
+}
+
+/*
+ * Site-bound production authorization. Ordinary compiler callers can inspect
+ * the derived claims and source identity, but cannot extract/replay the raw
+ * ActorRefOwnershipEvidence. The future source LLVM lowering is the only
+ * backend friend allowed to consume that inner capability, after matching the
+ * authorization to the exact HIR use site.
+ */
+class SourceManagedRefAuthorization final {
+    backend::ActorRefOwnershipEvidence evidence_;
+    std::string actor_name_;
+    std::string ref_field_;
+    std::size_t use_offset_ = 0;
+
+    SourceManagedRefAuthorization(
+            backend::ActorRefOwnershipEvidence evidence,
+            std::string actor_name,
+            std::string ref_field,
+            std::size_t use_offset)
+        : evidence_(std::move(evidence)),
+          actor_name_(std::move(actor_name)),
+          ref_field_(std::move(ref_field)),
+          use_offset_(use_offset) {}
+
+    friend class SourceOwnershipChecker;
+    friend class backend::SourceManagedRefLowering;
+
+public:
+    SourceManagedRefAuthorization() = delete;
+
+    backend::ActorManagedRefMir claims() const noexcept {
+        return evidence_.claims();
+    }
+    std::string_view actor_name() const noexcept { return actor_name_; }
+    std::string_view ref_field() const noexcept { return ref_field_; }
+    std::size_t use_offset() const noexcept { return use_offset_; }
+};
 
 /*
  * Sole production source authority for ActorRefOwnershipEvidence.
@@ -20,7 +64,7 @@ namespace oreslang {
  */
 class SourceOwnershipChecker final {
 public:
-    static backend::ActorRefOwnershipEvidence issue_actor_managed_ref_evidence(
+    static SourceManagedRefAuthorization authorize_actor_managed_ref(
         std::string_view source,
         std::string_view actor_name,
         std::string_view ref_field,
