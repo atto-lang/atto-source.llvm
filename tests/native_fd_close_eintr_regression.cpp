@@ -2,17 +2,45 @@
 // descriptor has been released. Never retry the numeric FD: it may have
 // been reassigned to another thread. The trusted host ledger must not leak
 // a slot on EINTR, and must fail closed on EBADF/unexpected close failures.
-// Requires -Wl,--wrap=close; the wrapper executes the REAL kernel close
-// first, then alters its userspace result for deterministic fault injection.
+// Requires -Wl,--wrap=close,--wrap=read,--wrap=write. close executes the REAL
+// kernel operation first before altering its userspace result; read/write
+// inject EINTR before the real syscall so retry semantics are deterministic.
 #include "oreslang/runtime/NativeFdAuthorityBroker.hpp"
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
+#include <unistd.h>
 
 static std::atomic<int> injected_errno{0};
 static std::atomic<unsigned> injected_calls{0};
+static std::atomic<int> injected_read_errno{0};
+static std::atomic<int> injected_write_errno{0};
+static std::atomic<unsigned> injected_read_calls{0};
+static std::atomic<unsigned> injected_write_calls{0};
+
+extern "C" ssize_t __real_read(int fd, void* buffer, size_t count);
+extern "C" ssize_t __wrap_read(int fd, void* buffer, size_t count) {
+    const int artificial = injected_read_errno.exchange(0, std::memory_order_acq_rel);
+    if (artificial != 0) {
+        injected_read_calls.fetch_add(1, std::memory_order_relaxed);
+        errno = artificial;
+        return -1;
+    }
+    return __real_read(fd, buffer, count);
+}
+extern "C" ssize_t __real_write(int fd, const void* buffer, size_t count);
+extern "C" ssize_t __wrap_write(int fd, const void* buffer, size_t count) {
+    const int artificial = injected_write_errno.exchange(0, std::memory_order_acq_rel);
+    if (artificial != 0) {
+        injected_write_calls.fetch_add(1, std::memory_order_relaxed);
+        errno = artificial;
+        return -1;
+    }
+    return __real_write(fd, buffer, count);
+}
+
 extern "C" int __real_close(int fd);
 extern "C" int __wrap_close(int fd) {
     const int real_result = __real_close(fd);
@@ -66,7 +94,32 @@ int main() {
         check(healthy && broker.revoke(*healthy, 82));
         check(broker.confirm_reclaimed(*healthy, 82));
     }
+    // eventfd read/write EINTR means the operation did not complete.
+    // Retry the same live descriptor exactly once through the ordinary loop;
+    // do not surface a false capability denial or leave a dirty counter.
+    {
+        using Manager = oreslang::runtime::NativeEpollReactorManager;
+        Manager manager(1);
+        auto token = manager.open_owned_eventfd();
+        check(token.has_value());
+
+        injected_write_errno.store(EINTR, std::memory_order_release);
+        check(manager.signal_owned_eventfd(*token));
+        check(injected_write_calls.load(std::memory_order_acquire) == 1);
+
+        injected_read_errno.store(EINTR, std::memory_order_release);
+        check(manager.drain_owned_eventfd(*token));
+        check(injected_read_calls.load(std::memory_order_acquire) == 1);
+
+        check(manager.close_owned_eventfd(*token));
+    }
+
     check(injected_errno.load() == 0);
-    std::printf("NATIVE_FD_CLOSE_EINTR_PASS injected=%u\n", expected_calls);
+    check(injected_read_errno.load() == 0);
+    check(injected_write_errno.load() == 0);
+    std::printf("NATIVE_FD_EINTR_PASS close=%u read=%u write=%u\n",
+                expected_calls,
+                injected_read_calls.load(std::memory_order_relaxed),
+                injected_write_calls.load(std::memory_order_relaxed));
     return 0;
 }
