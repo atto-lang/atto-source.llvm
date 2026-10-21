@@ -1502,16 +1502,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (const auto& field : actor.fields) stateNames.insert(field.name);
             bool readsState = false;
             bool usesBlockingIo = false;
-            std::unordered_set<std::string> stateLocalNames;
-            std::unordered_set<std::string> mutableStateLocalNames;
+            using StateLocalNames = std::unordered_set<std::string>;
+            StateLocalNames stateLocalNames;
+            StateLocalNames mutableStateLocalNames;
+
             const auto verifyStateExpression =
                 [&](const auto& self, const Expression& expr,
-                    bool allowBlockingIo) -> void {
+                    bool allowBlockingIo,
+                    const StateLocalNames& locals,
+                    const StateLocalNames& mutableLocals) -> void {
                     switch (expr.kind) {
                         case Expression::Kind::Integer:
                             return;
                         case Expression::Kind::Variable:
-                            if (expr.name != param && !stateLocalNames.count(expr.name))
+                            if (expr.name != param && !locals.count(expr.name))
                                 throw std::runtime_error(
                                     "state codegen rejected non-message/non-local capture");
                             return;
@@ -1526,15 +1530,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                             return;
                         case Expression::Kind::Negate:
                             if (!expr.left) throw std::runtime_error("malformed state unary");
-                            self(self, *expr.left, false);
+                            self(self, *expr.left, false, locals, mutableLocals);
                             return;
                         case Expression::Kind::Add:
                         case Expression::Kind::Subtract:
                         case Expression::Kind::Multiply:
                             if (!expr.left || !expr.right)
                                 throw std::runtime_error("malformed state binary");
-                            self(self, *expr.left, false);
-                            self(self, *expr.right, false);
+                            self(self, *expr.left, false, locals, mutableLocals);
+                            self(self, *expr.right, false, locals, mutableLocals);
                             return;
                         case Expression::Kind::Call: {
                             if (!allowBlockingIo ||
@@ -1560,18 +1564,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                     "state codegen blocking I/O forbids generic/named arguments");
                             usesBlockingIo = true;
                             if (expr.name == "__oreslang_rt_file_read_i64_blocking") {
-                                self(self, *expr.arguments[0], false);
-                                self(self, *expr.arguments[1], false);
+                                self(self, *expr.arguments[0], false, locals, mutableLocals);
+                                self(self, *expr.arguments[1], false, locals, mutableLocals);
                                 const auto& out = *expr.arguments[2];
                                 if (out.kind != Expression::Kind::BorrowMut || !out.left ||
                                         out.left->kind != Expression::Kind::Variable ||
-                                        !mutableStateLocalNames.count(out.left->name))
+                                        !mutableLocals.count(out.left->name))
                                     throw std::runtime_error(
                                         "state codegen checked read requires prior mutable scalar local");
                                 return;
                             }
                             for (const auto& argument : expr.arguments)
-                                self(self, *argument, false);
+                                self(self, *argument, false, locals, mutableLocals);
                             return;
                         }
                         case Expression::Kind::Borrow:
@@ -1585,27 +1589,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     }
                     throw std::runtime_error("invalid state codegen expression");
                 };
-            std::function<void(const std::vector<ActorStateStatement>&, std::size_t)>
+
+            std::function<void(const std::vector<ActorStateStatement>&,
+                               StateLocalNames&, StateLocalNames&)>
                 verifyStateStatements;
             verifyStateStatements =
                 [&](const std::vector<ActorStateStatement>& statements,
-                    std::size_t depth) {
+                    StateLocalNames& locals,
+                    StateLocalNames& mutableLocals) {
                     bool sawNonLocal = false;
                     for (const auto& statement : statements) {
                         if (statement.kind == ActorStateStatement::Kind::Local) {
-                            if (depth != 0 || sawNonLocal || statement.local_name.empty() ||
+                            if (sawNonLocal || statement.local_name.empty() ||
                                     !statement.expression ||
                                     statement.local_name == param ||
                                     statement.local_name == loan.binder ||
                                     stateNames.count(statement.local_name) ||
-                                    stateLocalNames.count(statement.local_name))
+                                    locals.count(statement.local_name))
                                 throw std::runtime_error(
                                     "state codegen rejected malformed scalar local");
                             verifyStateExpression(
-                                verifyStateExpression, *statement.expression, true);
-                            stateLocalNames.insert(statement.local_name);
+                                verifyStateExpression, *statement.expression, true,
+                                locals, mutableLocals);
+                            locals.insert(statement.local_name);
                             if (statement.local_mutable)
-                                mutableStateLocalNames.insert(statement.local_name);
+                                mutableLocals.insert(statement.local_name);
                             continue;
                         }
                         sawNonLocal = true;
@@ -1615,7 +1623,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 throw std::runtime_error(
                                     "invalid sealed actor state write");
                             verifyStateExpression(
-                                verifyStateExpression, *statement.expression, false);
+                                verifyStateExpression, *statement.expression, false,
+                                locals, mutableLocals);
                             continue;
                         }
                         if (statement.kind != ActorStateStatement::Kind::Conditional ||
@@ -1623,15 +1632,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                             throw std::runtime_error(
                                 "invalid sealed actor state conditional");
                         verifyStateExpression(
-                            verifyStateExpression, *statement.condition_lhs, false);
+                            verifyStateExpression, *statement.condition_lhs, false,
+                            locals, mutableLocals);
                         verifyStateExpression(
-                            verifyStateExpression, *statement.condition_rhs, false);
-                        verifyStateStatements(statement.then_statements, depth + 1);
-                        verifyStateStatements(statement.else_statements, depth + 1);
+                            verifyStateExpression, *statement.condition_rhs, false,
+                            locals, mutableLocals);
+                        auto thenLocals = locals;
+                        auto thenMutable = mutableLocals;
+                        auto elseLocals = locals;
+                        auto elseMutable = mutableLocals;
+                        verifyStateStatements(
+                            statement.then_statements, thenLocals, thenMutable);
+                        verifyStateStatements(
+                            statement.else_statements, elseLocals, elseMutable);
                     }
                 };
-            verifyStateStatements(loan.statements, 0);
-            verifyStateExpression(verifyStateExpression, *loan.result, false);
+            verifyStateStatements(
+                loan.statements, stateLocalNames, mutableStateLocalNames);
+            verifyStateExpression(
+                verifyStateExpression, *loan.result, false,
+                stateLocalNames, mutableStateLocalNames);
             if (readsState &&
                     !actor.on_message.declared_effects.has(FunctionEffect::StateRead))
                 throw std::runtime_error(
