@@ -50,6 +50,38 @@ class FSMNativeHarnessContract(unittest.TestCase):
         with self.assertRaises(AssertionError):
             gate.load_trace_oracle(ROOT / "tests/missing-contract-does-not-exist.py")
 
+    def test_trace_oracle_admission_rejects_forged_outcomes(self):
+        class Bogus:
+            LIMIT = (1 << 32) - 1
+
+            @staticmethod
+            def snap(state, version, ticks):
+                return {"state": state, "version": version, "ticks": ticks}
+
+            def __init__(self, outcome):
+                self.outcome = outcome
+
+            def step(self, before, event):
+                return self.outcome
+
+        valid = {"state": 1, "version": 1, "ticks": 0}
+        for result in (
+            (True, "none", valid, []),  # missing successful effect
+            (True, "guard", valid, [1]),  # invalid acceptance reason
+            (True, "none", {"state": 1, "version": True, "ticks": 0}, [1]),
+            (True, "none", {"state": 1, "version": 0, "ticks": 0}, [1]),
+            (False, "unhandled", valid, []),  # rejected transition changed state
+            (False, "none", {"state": 0, "version": 0, "ticks": 0}, []),
+            (False, "unhandled", {"state": 0, "version": 0, "ticks": 0}, [2]),
+            (True, "none", {"state": 1, "version": 1}, [1]),
+            (True, "none", valid, [True]),
+            [True, "none", valid, [1]],
+        ):
+            with self.subTest(result=result), self.assertRaises(AssertionError):
+                gate.oracle_expected(Bogus(result), 0, 0, 0)
+        with self.assertRaises(AssertionError):
+            gate.oracle_expected(Bogus((True, "none", valid, [1])), True, 0, 0)
+
     def test_guest_fixture_does_not_pack_untrusted_coordinates(self):
         source = (ROOT / "tests/fixtures/fsm-scalar-reducer.ores").read_text(encoding="utf-8")
         self.assertNotIn("state * 10 + event", source)
