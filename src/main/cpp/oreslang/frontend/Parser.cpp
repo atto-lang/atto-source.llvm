@@ -859,7 +859,7 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires ': int'");
+                if (!explicit_type) fail("scalar local requires an explicit ': int' or ': bool' type");
                 binding.initializer = expression();
             }
             require(";");
@@ -2047,7 +2047,10 @@ private:
             if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error("filled array commit violates using signature without alloc");
-            if (contains_callable_invocation(stmt.expression.get()))
+            if (contains_callable_invocation(stmt.expression.get()) ||
+                    contains_callable_invocation(stmt.condition.get()) ||
+                    contains_callable_invocation(stmt.condition_lhs.get()) ||
+                    contains_callable_invocation(stmt.condition_rhs.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
                 if (contains_callable_invocation(stmt.array_commit_length.get()))
