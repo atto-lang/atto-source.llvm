@@ -117,6 +117,14 @@ public:
     ActorOwnedHeap(ActorOwnedHeap&&) = delete;
     ActorOwnedHeap& operator=(ActorOwnedHeap&&) = delete;
 
+    ~ActorOwnedHeap() noexcept {
+        // Defense in depth for host teardown paths that destroy a heap object
+        // after scheduler quiescence but before explicit retire_quiesced().
+        // This does not replace the retirement proof; it only prevents guest
+        // payload bytes from remaining in reclaimed host storage.
+        std::fill(memory_.begin(), memory_.end(), std::byte{0});
+    }
+
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     OresNativeAllocationDomainRef allocation_domain() const noexcept {
         return allocation_domain_;
