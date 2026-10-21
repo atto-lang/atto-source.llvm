@@ -1,0 +1,12 @@
+define actor DurableState as
+  state {
+    revision: int = 9;
+  }
+
+  pub fnc on_message(int fd): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      const wrote: int = rt file_write_i64_blocking(fd, 0, s.revision + 1);
+      return wrote;
+    });
+  }
+end
