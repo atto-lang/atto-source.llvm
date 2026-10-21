@@ -560,6 +560,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_end_delimited_fnc_as_failclosed
         end-delimited-fnc-as-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
+    oreslang_contract_test(native_end_delimited_fnc_double_colon_failclosed
+        end-delimited-fnc-double-colon-reject.ores
+        --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
     oreslang_contract_test(native_end_delimited_retired_do_spelling_failclosed
         end-delimited-fnc-do-reject.ores
         --diagnostic "native slim-arrow/end-delimited callable syntax requires typed return/body parity")
