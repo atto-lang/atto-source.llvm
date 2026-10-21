@@ -164,6 +164,119 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 b"/.github/CODEOWNERS @the1mills\n"
             )
 
+    def test_source_codeowners_require_terminal_security_owner_rules(self):
+        source_codeowners = (
+            b"/.github/ @ORESoftware\n"
+            b"/scripts/ @ORESoftware\n"
+            b"/CMakeLists.txt @ORESoftware\n"
+            b"/.github/CODEOWNERS @ORESoftware\n"
+            b"/.github/workflows/* @ORESoftware\n"
+            b"/.github/private-ci-approved-repositories.txt @ORESoftware\n"
+            b"/.github/private-ci-carrier-contracts.json @ORESoftware\n"
+            b"/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware\n"
+            b"/scripts/run-in-private-ci-destination.sh @ORESoftware\n"
+            b"/scripts/publish-private-ci-source.py @ORESoftware\n"
+            b"/scripts/publish-private-ci-source-v3.py @ORESoftware\n"
+            b"/scripts/test-publish-private-ci-source-v3.py @ORESoftware\n"
+            b"/scripts/test-private-ci-destination.sh @ORESoftware\n"
+            b"/scripts/test-publish-private-ci-source.py @ORESoftware\n"
+            b"/scripts/audit-private-ci-governance.py @ORESoftware\n"
+            b"/scripts/test-audit-private-ci-governance.py @ORESoftware\n"
+        )
+        v3.require_source_security_codeowners(source_codeowners)
+        with self.assertRaisesRegex(v3.Denied, "terminal security-owner"):
+            v3.require_source_security_codeowners(
+                source_codeowners + b"/scripts/publish-private-ci-source-v3.py @other\n"
+            )
+
+    def test_decode_contents_authenticates_blob_digest(self):
+        raw = b"reviewed bytes\n"
+        good = {
+            "path": "x",
+            "type": "file",
+            "encoding": "base64",
+            "content": base64.b64encode(raw).decode(),
+            "sha": v3.git_blob_sha(raw),
+        }
+        self.assertEqual(v3.decode_contents(good, "x", 1024), raw)
+        bad = dict(good, sha="0" * 40)
+        with self.assertRaisesRegex(v3.Denied, "blob digest"):
+            v3.decode_contents(bad, "x", 1024)
+
+    def test_published_git_objects_are_read_back_exactly(self):
+        receipt = "4" * 40
+        root = "5" * 40
+        source = "6" * 40
+        commit = "7" * 40
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/git/commits/" + commit:
+                return {
+                    "sha": commit,
+                    "tree": {"sha": root},
+                    "parents": [{"sha": BASE}],
+                }
+            if route == "repos/trusted/ci/git/trees/" + root + "?recursive=1":
+                return {
+                    "sha": root,
+                    "truncated": False,
+                    "tree": [
+                        {
+                            "path": v3.PREFIX,
+                            "mode": "040000",
+                            "type": "tree",
+                            "sha": source,
+                        },
+                        {
+                            "path": v3.RECEIPT_PATH,
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": receipt,
+                        },
+                    ],
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            v3.verify_published_root_and_commit(
+                "trusted/ci", BASE, source, receipt, root, commit
+            )
+
+    def test_handoff_requires_both_refs_absent(self):
+        with patch.object(v3, "live_ref_sha", side_effect=[None, None]):
+            v3.require_handoff_refs_absent(
+                "trusted/ci",
+                "ci/oreslang-" + SOURCE_TREE,
+                "ci/authorized-" + CARRIER_COMMIT,
+                1323598177,
+            )
+        with patch.object(v3, "live_ref_sha", return_value=CARRIER_COMMIT):
+            with self.assertRaisesRegex(v3.Denied, "already exists"):
+                v3.require_handoff_refs_absent(
+                    "trusted/ci",
+                    "ci/oreslang-" + SOURCE_TREE,
+                    "ci/authorized-" + CARRIER_COMMIT,
+                    1323598177,
+                )
+
+    def test_http_status_match_is_first_line_and_exact(self):
+        self.assertTrue(v3._is_http_status("gh: Not Found (HTTP 404)\nbody", 404))
+        self.assertFalse(v3._is_http_status("body mentions HTTP 404", 404))
+        self.assertFalse(v3._is_http_status("gh: Not Found (HTTP 403)", 404))
+
+    def test_bounded_gh_rejects_output_at_limit(self):
+        def fake_run(argv, **kwargs):
+            kwargs["stdout"].write(b"x" * 8)
+            kwargs["stderr"].write(b"")
+            return v3.subprocess.CompletedProcess(argv, 0)
+
+        with (
+            patch.object(v3, "MAX_GH_API_RESPONSE_BYTES", 8),
+            patch.object(v3.subprocess, "run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "exceeds size limit"):
+                v3.run_bounded_gh(["/usr/bin/gh"], env={}, timeout=1)
+
     def test_carrier_main_requires_protection_and_codeowner_review(self):
         good_protection = {
             "required_pull_request_reviews": {
