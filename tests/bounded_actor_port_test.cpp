@@ -28,6 +28,27 @@ struct MoveOnly {
     MoveOnly& operator=(const MoveOnly&) = delete;
 };
 bool MoveOnly::fail_next_allocation = false;
+
+struct ReentrantCleanup {
+    static BoundedActorPort<ReentrantCleanup>* port;
+    static std::size_t observed_frames;
+    bool armed = false;
+
+    ReentrantCleanup() = default;
+    explicit ReentrantCleanup(bool enable) : armed(enable) {}
+    ReentrantCleanup(const ReentrantCleanup&) = delete;
+    ReentrantCleanup& operator=(const ReentrantCleanup&) = delete;
+    ReentrantCleanup(ReentrantCleanup&& other) noexcept : armed(other.armed) {
+        other.armed = false;
+    }
+    ReentrantCleanup& operator=(ReentrantCleanup&&) = delete;
+    ~ReentrantCleanup() noexcept {
+        if (armed && port) observed_frames = port->used_frames();
+    }
+};
+BoundedActorPort<ReentrantCleanup>* ReentrantCleanup::port = nullptr;
+std::size_t ReentrantCleanup::observed_frames = static_cast<std::size_t>(-1);
+
 static void check(bool ok) { if (!ok) throw std::runtime_error("port invariant broken"); }
 template<class F> void rejected(F f) {
     try { f(); } catch (const std::exception&) { return; }
@@ -97,4 +118,19 @@ int main() {
     check(x->id() != y->id());
     check(x->acknowledge_released() && y->acknowledge_released());
     clean.close();
+
+    // Payload cleanup must run after the port mutex is released. A destructor
+    // is allowed to perform runtime cleanup that re-enters read-only port
+    // accounting; destroying under the lock would self-deadlock here.
+    BoundedActorPort<ReentrantCleanup> reentrant(1, 8);
+    ReentrantCleanup::port = &reentrant;
+    ReentrantCleanup::observed_frames = static_cast<std::size_t>(-1);
+    ReentrantCleanup cleanup(true);
+    check(reentrant.offer(std::move(cleanup), 8));
+    auto cleanup_delivery = reentrant.try_receive();
+    check(cleanup_delivery.has_value());
+    check(cleanup_delivery->acknowledge_released());
+    check(ReentrantCleanup::observed_frames == 0);
+    reentrant.close();
+    ReentrantCleanup::port = nullptr;
 }
