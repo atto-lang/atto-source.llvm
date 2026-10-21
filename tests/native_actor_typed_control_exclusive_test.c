@@ -10,8 +10,9 @@ typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef parent, child;
     atomic_int data_active, parent_peak, failures;
-    atomic_int parent_started, release_parent, panic_count, child_count;
-    atomic_int child_during_parent, panic_during_parent;
+    atomic_int parent_started, release_parent, control_count, child_count;
+    atomic_int child_during_parent, control_during_parent;
+    atomic_int panic_seen, throw_seen, raise_seen;
 } State;
 static void require(int cond) { if (!cond) abort(); }
 static void tick(void) {
@@ -55,23 +56,31 @@ static void on_future(void* opaque, size_t actor, uint64_t payload) {
     (void)opaque; (void)actor; (void)payload;
     abort(); /* test only publishes typed panic, never ordinary CONTROL */
 }
-static void on_panic(void* opaque, size_t actor, OresNativeActorTerminalFailure event) {
+static void on_supervisor(void* opaque, size_t actor, OresNativeActorTerminalFailure event) {
     State* s = (State*)opaque;
     require(actor == 0);
-    require(event.kind == ORES_NATIVE_CONTROL_PANIC);
     require(event.child.scheduler_domain == s->child.scheduler_domain);
     require(event.child.actor_slot == s->child.actor_slot);
     require(event.child.generation == s->child.generation);
-    require(event.failure_code == 92 && event.correlation == 104);
     check_actor(s, s->parent, s->child);
     if (atomic_load(&s->data_active) != 0)
-        atomic_store(&s->panic_during_parent, 1);
-    atomic_fetch_add(&s->panic_count, 1);
+        atomic_store(&s->control_during_parent, 1);
+    if (event.kind == ORES_NATIVE_CONTROL_PANIC) {
+        require(event.failure_code == 92 && event.correlation == 104);
+        atomic_fetch_add(&s->panic_seen, 1);
+    } else if (event.kind == ORES_NATIVE_CONTROL_THROW) {
+        require(event.failure_code == 93 && event.correlation == 105);
+        atomic_fetch_add(&s->throw_seen, 1);
+    } else if (event.kind == ORES_NATIVE_CONTROL_RAISE) {
+        require(event.failure_code == 94 && event.correlation == 106);
+        atomic_fetch_add(&s->raise_seen, 1);
+    } else abort();
+    atomic_fetch_add(&s->control_count, 1);
 }
 int main(void) {
     State s = {0};
     s.scheduler = ores_native_actor_scheduler_open_typed_control(
-        2, 4, 2, on_data, on_future, on_panic, &s);
+        2, 4, 2, on_data, on_future, on_supervisor, &s);
     require(s.scheduler != NULL);
     s.parent = ores_native_actor_scheduler_spawn(s.scheduler, 0);
     s.child = ores_native_actor_scheduler_spawn(s.scheduler, 1);
@@ -88,16 +97,33 @@ int main(void) {
     require(ores_native_actor_scheduler_send(s.scheduler, s.child, 21));
     until(&s.child_count);
     require(atomic_load(&s.child_during_parent) == 1);
-    require(atomic_load(&s.panic_count) == 0);
+    require(atomic_load(&s.control_count) == 0);
     require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.parent));
 
     atomic_store(&s.release_parent, 1);
     require(ores_native_actor_scheduler_drain(s.scheduler));
-    require(atomic_load(&s.panic_count) == 1);
-    require(atomic_load(&s.panic_during_parent) == 0);
+    require(atomic_load(&s.control_count) == 1);
+    require(atomic_load(&s.control_during_parent) == 0);
+    require(atomic_load(&s.panic_seen) == 1);
+
+    OresNativeActorTerminalFailure thrown = {
+        ORES_NATIVE_CONTROL_THROW, s.child, 93, 105
+    };
+    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, thrown));
+    until(&s.throw_seen);
+
+    OresNativeActorTerminalFailure raised = {
+        ORES_NATIVE_CONTROL_RAISE, s.child, 94, 106
+    };
+    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, raised));
+    until(&s.raise_seen);
+
+    OresNativeActorTerminalFailure forged = {99, s.child, 1, 1};
+    require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, forged));
+    require(atomic_load(&s.control_count) == 3);
     require(atomic_load(&s.parent_peak) == 1);
     require(atomic_load(&s.failures) == 0);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 1);
+    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 3);
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(ores_native_actor_scheduler_stop(s.scheduler, s.child));
     ores_native_actor_scheduler_retire(s.scheduler);
