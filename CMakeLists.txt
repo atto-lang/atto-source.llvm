@@ -668,6 +668,14 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_portable_compute_kernel_g2_contract
         COMMAND oreslang-portable-compute-kernel-g2-test)
+    add_executable(oreslang-portable-compute-opencl-g2-test
+        tests/portable_compute_opencl_g2_test.cpp)
+    target_include_directories(oreslang-portable-compute-opencl-g2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-portable-compute-opencl-g2-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_portable_compute_opencl_g2_contract
+        COMMAND oreslang-portable-compute-opencl-g2-test)
     add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
     target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
