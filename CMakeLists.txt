@@ -640,6 +640,18 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-dop-gpu-admission-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-dop-gpu-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_gpu_exact_layout_fence_admission COMMAND oreslang-dop-gpu-admission-test)
+
+    # Host-only parity for the source-visible std/compute descriptor contract.
+    # These values are metadata only; they carry no device/buffer/fence authority
+    # and do not imply source-module linking or physical GPU execution.
+    add_executable(oreslang-portable-compute-descriptor-test
+        tests/portable_compute_descriptor_test.cpp)
+    target_include_directories(oreslang-portable-compute-descriptor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-portable-compute-descriptor-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_portable_compute_descriptor_contract
+        COMMAND oreslang-portable-compute-descriptor-test)
     add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
     target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
