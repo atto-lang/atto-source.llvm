@@ -47,7 +47,7 @@ int main() {
             "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"}) {
         llvm::DataLayout layout(layout_text);
         const auto* struct_layout = layout.getStructLayout(entry);
-        REQUIRE(layout.getTypeAllocSize(entry) == 16);
+        REQUIRE(layout.getTypeAllocSize(entry).getFixedValue() == 16);
         REQUIRE(layout.getABITypeAlign(entry).value() == 8);
         REQUIRE(struct_layout->getElementOffset(
                     oreslang::backend::native_entry_key_index()) == 0);
