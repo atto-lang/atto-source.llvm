@@ -1512,7 +1512,7 @@ private:
                     advance();
                     if (path.empty() || path.size() > 255 || path == "." || path == ".." ||
                             path.find('/') != std::string::npos ||
-                            path.find('\\\\') != std::string::npos)
+                            path.find('\\') != std::string::npos)
                         fail("native file path must be a nonempty basename without separators");
                     for (const unsigned char ch : path) {
                         if (!(std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-'))
