@@ -33,6 +33,11 @@ pub fnc main(): int {
   return 0 == 1 ? 1 : 2 == 2 ? 42 : 3;
 }
 """, 42),
+    "parenthesized-condition": ("""
+pub fnc main(): int {
+  return ((20 + 1 == 21)) ? 42 : 7;
+}
+""", 42),
     "local-initializer": ("""
 pub fnc main(): int {
   const answer = 7 == 7 ? 40 : 1;
@@ -93,6 +98,14 @@ pub fnc main(): int {
   return choose(42);
 }
 """, "native optional type '?' requires versioned Option/default ABI lowering"),
+    "reject-optional-presence-still-gated": ("""
+fnc choose(int value?): int {
+  return value;
+}
+pub fnc main(): int {
+  return choose(42);
+}
+""", "native optional parameter presence '?' requires versioned default/presence ABI lowering"),
     "reject-effectful-condition": ("""
 fnc one(): int {
   return 1;
