@@ -1,0 +1,2 @@
+fnc identity(int x) -> int as return x; end
+fnc identity_colon(int x) -> int :: return x; end
