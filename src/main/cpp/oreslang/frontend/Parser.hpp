@@ -154,7 +154,8 @@ struct Statement {
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
-    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> condition_lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
@@ -164,7 +165,8 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
-    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
