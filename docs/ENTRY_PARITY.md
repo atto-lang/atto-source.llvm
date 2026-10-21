@@ -31,10 +31,10 @@ particular, the native tree now has:
 - projection-sensitive ownership proof: `entry.key` and `entry.value` are
   disjoint sibling places, while a partial move or incompatible projection
   loan correctly blocks whole-Entry use.
-- compiler-owned `Entry` declaration namespace parity: modules, functions,
-  generic parameters, ordinary parameters, locals and fields cannot shadow
-  the builtin nominal product name; type-position `Entry<K,V>` still fails
-  with the dedicated native-parity diagnostic until source lowering lands.
+- compiler-owned `Entry` namespace parity at module/top-level and generic
+  declaration scope, while ordinary lexical bindings remain legal shadowing
+  names just as on Java/Graal; type-position `Entry<K,V>` still fails with
+  the dedicated native-parity diagnostic until source lowering lands.
 
 Those pieces are **not** permission to accept `Entry` source yet. They exist so
 the parser, ownership checker, LLVM lowerer and actor transport can converge on
