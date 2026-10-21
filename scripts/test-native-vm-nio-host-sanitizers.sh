@@ -152,11 +152,11 @@ for toolchain in gcc clang; do
     UBSAN_OPTIONS=halt_on_error=1 \
       timeout 90s "$dest/fd-broker-state-machine"
   done
-  # Exercise Linux post-close EINTR vs EBADF/EIO without retrying a reused FD.
+  # Exercise Linux eventfd read/write EINTR plus post-close EINTR vs EBADF/EIO without retrying a reused FD.
   # Linker wrapping changes only the userspace return from real close(2).
   "$cxx" -std=c++17 "${shared[@]}" \
     tests/native_fd_close_eintr_regression.cpp \
-    -Wl,--wrap=close -o "$dest/fd-close-eintr"
+    -Wl,--wrap=close -Wl,--wrap=read -Wl,--wrap=write -o "$dest/fd-close-eintr"
   for attempt in {1..3}; do
     printf 'NIO_FD_CLOSE_EINTR_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
