@@ -15,9 +15,11 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import resource
 import stat
 import subprocess
 import sys
+import tempfile
 
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
@@ -39,6 +41,7 @@ MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
 MAX_POLICY = 64 * 1024
 MAX_PLAN = 64 * 1024
+MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 TTL = dt.timedelta(hours=24)
 
 
@@ -98,33 +101,104 @@ def strict_json_loads(text, label):
         raise Denied(label) from exc
 
 
+def trusted_github_cli():
+    """Resolve GitHub API access only through a root-controlled OS binary."""
+    target = "/usr/bin/gh"
+    for directory in ("/", "/usr", "/usr/bin"):
+        try:
+            info = os.lstat(directory)
+        except OSError as exc:
+            raise Denied("trusted GitHub CLI directory is unavailable") from exc
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022):
+            raise Denied("trusted GitHub CLI directory is not root-controlled")
+    try:
+        info = os.lstat(target)
+    except OSError as exc:
+        raise Denied("trusted GitHub CLI is unavailable") from exc
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o6022 or not info.st_mode & 0o111):
+        raise Denied("trusted GitHub CLI executable is not root-controlled")
+    return target
+
+
+def github_api_environment():
+    """Use only one explicit token and a minimal deterministic environment."""
+    provided = [
+        name for name in ("GH_TOKEN", "GITHUB_TOKEN")
+        if os.environ.get(name)
+    ]
+    if len(provided) != 1:
+        raise Denied("exactly one explicit GitHub API token is required")
+    return {
+        provided[0]: os.environ[provided[0]],
+        "GH_HOST": "github.com",
+        "GH_PROMPT_DISABLED": "1",
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/",
+        "XDG_CONFIG_HOME": "/nonexistent",
+        "LC_ALL": "C.UTF-8",
+    }
+
+
+def run_bounded_gh(argv, *, input=None, env=None, timeout=60):
+    """Run gh with an OS-enforced per-stream byte cap."""
+    limit = MAX_GH_API_RESPONSE_BYTES
+    if (not hasattr(resource, "RLIMIT_FSIZE")
+            or type(limit) is not int or limit < 2):
+        raise Denied("OS cannot safely bound GitHub CLI output")
+
+    def limit_child_files():
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file, \
+                tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            proc = subprocess.run(
+                argv,
+                input=input,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                env=env,
+                timeout=timeout,
+                check=False,
+                start_new_session=True,
+                preexec_fn=limit_child_files,
+            )
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout_bytes = stdout_file.read(limit + 1)
+            stderr_bytes = stderr_file.read(limit + 1)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Denied("authenticated GitHub CLI bounded execution unavailable") from exc
+    if len(stdout_bytes) >= limit or len(stderr_bytes) >= limit:
+        raise Denied("authenticated GitHub API response exceeds size limit")
+    try:
+        stdout = stdout_bytes.decode("utf-8")
+        stderr = stderr_bytes.decode("utf-8")
+    except UnicodeError as exc:
+        raise Denied("authenticated GitHub API response is not UTF-8") from exc
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
 def gh_api(route, method="GET", payload=None):
     argv = [
-        "gh", "api", "--method", method, route,
+        trusted_github_cli(), "api", "--method", method, route,
         "--header", "Accept: application/vnd.github+json",
     ]
     if payload is not None:
         argv.extend(["--input", "-"])
-    env = dict(os.environ, GH_HOST="github.com", GH_PROMPT_DISABLED="1")
-    try:
-        proc = subprocess.run(
-            argv,
-            input=json.dumps(payload) if payload is not None else None,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-            env=env,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise Denied("authenticated GitHub API unavailable") from exc
+    proc = run_bounded_gh(
+        argv,
+        input=json.dumps(payload) if payload is not None else None,
+        env=github_api_environment(),
+        timeout=60,
+    )
     if proc.returncode != 0:
-        # Never echo gh stderr; API failures can include private context.
+        # Never echo stderr: API failures can include private context.
         raise Denied("authenticated GitHub API request failed")
-    try:
-        result = strict_json_loads(proc.stdout, "invalid GitHub API response")
-    except json.JSONDecodeError as exc:
-        raise Denied("invalid GitHub API response") from exc
+    result = strict_json_loads(proc.stdout, "invalid GitHub API response")
     if not isinstance(result, dict):
         raise Denied("unexpected GitHub API response shape")
     return result
