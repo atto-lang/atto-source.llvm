@@ -1,0 +1,3 @@
+fnc echo(int Entry): int {
+  return 0;
+}
