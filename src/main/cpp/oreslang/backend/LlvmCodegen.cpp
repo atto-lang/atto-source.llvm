@@ -1320,7 +1320,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         // boundary and must remain safe even after parser-bypassing AST
         // transforms performed by compiler passes or native test callers.
         if (actor.sealed_state) {
-            if (actor.fields.size() > 16)
+            if (!actor.managed_ref_fields.empty() ||
+                    (actor.on_message.actor_state_loan &&
+                     actor.on_message.actor_state_loan->managed_ref_result))
+                throw std::runtime_error(
+                    "source managed Ref<int> awaits SourceOwnershipChecker compressed32 lowering");
+            if (actor.fields.size() + actor.managed_ref_fields.size() > 16)
                 throw std::runtime_error("sealed actor state exceeds field bound");
             for (const auto& field : actor.fields) {
                 if (!field.initializer || !field.field_mutable)
