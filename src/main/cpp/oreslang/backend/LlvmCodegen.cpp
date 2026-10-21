@@ -531,15 +531,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 signature, llvm::Function::ExternalLinkage, abi_name, module);
             declarations.emplace(native_function_slot(guest_name, arity), declaration);
         };
-        add_file_intrinsic("$rt.file_write_i64_blocking",
+        add_file_intrinsic("__oreslang_rt_file_write_i64_blocking",
                            "oreslang_file_write_i64_blocking", 3);
-        add_file_intrinsic("$rt.file_size_blocking",
+        add_file_intrinsic("__oreslang_rt_file_size_blocking",
                            "oreslang_file_size_blocking", 1);
-        add_file_intrinsic("$rt.file_truncate_blocking",
+        add_file_intrinsic("__oreslang_rt_file_truncate_blocking",
                            "oreslang_file_truncate_blocking", 2);
-        add_file_intrinsic("$rt.file_sync_blocking",
+        add_file_intrinsic("__oreslang_rt_file_sync_blocking",
                            "oreslang_file_sync_blocking", 1);
-        add_file_intrinsic("$rt.dir_sync_blocking",
+        add_file_intrinsic("__oreslang_rt_dir_sync_blocking",
                            "oreslang_dir_sync_blocking", 1);
     }
     std::unordered_map<std::string, llvm::StructType*> class_types;
