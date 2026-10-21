@@ -665,6 +665,8 @@ private:
                 if (token_.text == "?")
                     fail("native optional type '?' requires versioned Option/default ABI lowering");
                 parameter.name = identifier();
+                if (token_.text == "?")
+                    fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
@@ -1230,6 +1232,43 @@ private:
 
     std::unique_ptr<Expression> expression() { return conditional(); }
 
+    bool parenthesized_ternary_condition_ahead() const {
+        if (token_.text != "(") return false;
+        Lexer probe = lexer_;
+        std::size_t depth = 1;
+        while (depth != 0) {
+            const Token next = probe.next();
+            if (next.kind == Kind::End) return false;
+            if (next.text == "(") ++depth;
+            else if (next.text == ")") --depth;
+        }
+        return probe.next().text == "?";
+    }
+
+    std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>>
+    ternary_boolean_condition() {
+        if (accept("(")) {
+            auto condition = ternary_boolean_condition();
+            require(")");
+            return condition;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            const bool value = token_.text == "true";
+            auto lhs = make_expression(Expression::Kind::Integer, token_.offset);
+            lhs->integer = value ? 1 : 0;
+            auto rhs = make_expression(Expression::Kind::Integer, token_.offset);
+            rhs->integer = 1;
+            advance();
+            return {std::move(lhs), std::move(rhs)};
+        }
+        auto lhs = additive();
+        if (token_.text != "eq" && token_.text != "==")
+            fail("native ternary condition requires bool; use true/false or scalar equality");
+        advance();
+        auto rhs = additive();
+        return {std::move(lhs), std::move(rhs)};
+    }
+
     std::unique_ptr<Expression> conditional() {
         if (++conditional_depth_ > kMaxNativeExpressionDepth) {
             --conditional_depth_;
@@ -1246,18 +1285,15 @@ private:
 
         // Native bool values are not general first-class scalars yet. Admit
         // only conditions whose boolean nature is explicit and statically
-        // proven: bool literals, or scalar equality.
-        if (token_.text == "true" || token_.text == "false") {
-            const bool value = token_.text == "true";
-            auto lhs = make_expression(Expression::Kind::Integer, token_.offset);
-            lhs->integer = value ? 1 : 0;
-            auto rhs = make_expression(Expression::Kind::Integer, token_.offset);
-            rhs->integer = 1;
-            advance();
-            if (!accept("?"))
-                fail("native bool literal is currently only admitted as a ternary condition");
-            condition_lhs = std::move(lhs);
-            condition_rhs = std::move(rhs);
+        // proven: bool literals, or scalar equality. Parentheses may fence
+        // the complete boolean condition without turning equality into an
+        // ordinary value expression.
+        if (token_.text == "true" || token_.text == "false" ||
+                parenthesized_ternary_condition_ahead()) {
+            auto condition = ternary_boolean_condition();
+            require("?");
+            condition_lhs = std::move(condition.first);
+            condition_rhs = std::move(condition.second);
         } else {
             auto lhs = additive();
             if (token_.text != "eq" && token_.text != "==") {
