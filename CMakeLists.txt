@@ -960,6 +960,10 @@ if(BUILD_TESTING)
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
         --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_schema_20 sealed-state-schema-20-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_sealed_state_schema_33_reject sealed-state-schema-33-reject.ores
+        --diagnostic "native actor state field limit exceeded (32)")
     oreslang_contract_test(native_sealed_state_conditional sealed-state-conditional-positive.ores
         --ir "state.if.then")
     oreslang_contract_test(native_sealed_state_relational sealed-state-relational-positive.ores
