@@ -314,29 +314,53 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
-        }
         std::unordered_set<std::string> names;
-        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
-            if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
-            LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
-            if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
-            require(";");
-            actor.fields.push_back(std::move(field));
+        if (accept("state")) {
+            actor.state_declared = true;
+            require("{");
+            while (!accept("}")) {
+                if (token_.kind == Kind::End)
+                    fail("actor state requires closing '}'");
+                if (actor.fields.size() == 16)
+                    fail("native actor state field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                if (!names.insert(field.name).second)
+                    fail("duplicate actor state field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                field.field_mutable = true;
+                actor.fields.push_back(std::move(field));
+            }
+            accept(";");
+            if (token_.text == "state" || token_.text == "let" ||
+                    token_.text == "const" || token_.text == "val" ||
+                    token_.text == "final")
+                fail("actor instance data must be declared in one state map");
+        } else {
+            while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+                if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.field_mutable = token_.text == "let";
+                advance();
+                field.name = identifier();
+                if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                actor.fields.push_back(std::move(field));
+            }
+            if (token_.text == "final")
+                fail("native final actor fields require typed field initialization and ownership lowering");
+            if (actor.fields.empty()) fail("actor requires at least one scalar field");
         }
-        if (token_.text == "final") {
-            fail("native final actor fields require typed field initialization and ownership lowering");
-        }
-        if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
