@@ -18,6 +18,17 @@ public:
     std::string_view abi() const noexcept { return abi_; }
     std::string_view emission() const noexcept { return emission_; }
 
+    static TargetAbi host() {
+#if defined(__x86_64__) && defined(__linux__)
+        return parse("x86_64-unknown-linux-gnu");
+#elif defined(__aarch64__) && defined(__linux__)
+        return parse("aarch64-unknown-linux-gnu");
+#else
+        throw std::invalid_argument(
+            "host target has no certified native managed-reference ABI");
+#endif
+    }
+
     static TargetAbi parse(std::string_view triple) {
         if (triple == "x86_64-unknown-linux-gnu")
             return {"x86_64-unknown-linux-gnu", 64, "little", "sysv", "unimplemented"};
