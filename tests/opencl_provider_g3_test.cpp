@@ -40,6 +40,9 @@ struct FakeApi final : oreslang::opencl::Api {
     bool fail_release_buffer_once = false;
     bool fail_release_event_once = false;
     bool fail_release_program_once = false;
+    bool reject_artifact = false;
+    bool device_loss_quiescent = false;
+    mutable int validated_artifacts = 0;
 
     int released_programs = 0;
     int released_buffers = 0;
@@ -47,6 +50,21 @@ struct FakeApi final : oreslang::opencl::Api {
 
     std::deque<oreslang::opencl::EventStatus> statuses;
     Event* last_event = nullptr;
+
+    void validate_artifact(
+            const oreslang::dop::OpenClArtifact& artifact) const override {
+        ++validated_artifacts;
+        if (reject_artifact
+                || artifact.artifact_abi_version != 1
+                || artifact.required_address_bits != 64
+                || !artifact.required_float32
+                || !artifact.required_little_endian
+                || artifact.required_bytes == 0
+                || artifact.global_rows == 0
+                || artifact.global_fields == 0) {
+            throw std::invalid_argument("fake physical artifact rejected");
+        }
+    }
 
     Handle prepare(const oreslang::dop::OpenClArtifact&) override {
         if (fail_prepare) throw std::runtime_error("prepare failed");
@@ -125,6 +143,10 @@ struct FakeApi final : oreslang::opencl::Api {
         }
         delete static_cast<Event*>(event);
         ++released_events;
+    }
+
+    bool prove_device_loss_quiescence() override {
+        return device_loss_quiescent;
     }
 
     Event* next_event() {
