@@ -1078,24 +1078,19 @@ private:
                 const auto offset = token_.offset;
                 require("if");
                 require("(");
-                auto lhs = additive();
-                if (!accept("eq")) require("==");
-                auto rhs = additive();
-                if (terminal_try_finally &&
-                        (!nonthrowing_protected_read(*lhs) ||
-                         !nonthrowing_protected_read(*rhs)))
-                    fail("native protected try guard requires nonthrowing scalar/field reads");
+                auto condition = expression();
+                if (terminal_try_finally && !native_pure_scalar_tree(*condition))
+                    fail("native protected try guard requires a pure nonthrowing bool expression");
                 require(")");
                 require("{");
                 if (accept("return")) {
                     if (value.returns_void)
-                        fail("guarded early return requires int result");
+                        fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
                     guard.offset = offset;
-                    guard.lhs = std::move(lhs);
-                    guard.rhs = std::move(rhs);
+                    guard.condition = std::move(condition);
                     guard.result = expression();
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
@@ -1114,8 +1109,7 @@ private:
                     Statement conditional;
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
-                    conditional.condition_lhs = std::move(lhs);
-                    conditional.condition_rhs = std::move(rhs);
+                    conditional.condition = std::move(condition);
                     conditional.then_statements = branch_arm();
                     require("}");
                     require("else");
