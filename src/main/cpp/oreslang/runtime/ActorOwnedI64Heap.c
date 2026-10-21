@@ -51,6 +51,13 @@ static _Atomic(uint64_t) next_domain = 1;
 
 static void rejected(void) { abort(); }
 
+/* Explicit wipe for diagnostic buffers before free. Volatile stores prevent
+ * the compiler from deleting the clearing pass as a dead write. */
+static void zeroize_bytes(void* memory, size_t bytes) {
+    volatile unsigned char* cursor = (volatile unsigned char*)memory;
+    while (bytes-- != 0) *cursor++ = 0;
+}
+
 /* Short critical sections; bounded spinning fails rather than blocking an
  * uncooperative carrier forever. Production actor scheduling must not allow
  * guest code to execute while this lock is held. */
@@ -363,7 +370,7 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     memset(heap->slots, 0, (size_t) heap->capacity * sizeof(ActorSlot));
     memset(heap->loan_entries, 0, sizeof(heap->loan_entries));
     if (heap->trace) {
-        memset(heap->trace, 0, (size_t)heap->trace_capacity * sizeof(*heap->trace));
+        zeroize_bytes(heap->trace, (size_t)heap->trace_capacity * sizeof(*heap->trace));
         free(heap->trace);
         heap->trace = NULL;
     }
