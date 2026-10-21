@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "kernel", "over", "structural", "int", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -252,6 +252,13 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
+            if (accept("pub") || accept("private")) {
+                if (accept("kernel"))
+                    fail("native HAT kernel boundary unsupported: typed device effects, ownership/fence lifetimes and backend lowering required");
+                fail("native visibility after 'define' is currently supported only for HAT kernel syntax");
+            }
+            if (accept("kernel"))
+                fail("native HAT kernel boundary unsupported: typed device effects, ownership/fence lifetimes and backend lowering required");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -272,6 +279,13 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
+                if (accept("pub") || accept("private")) {
+                    if (accept("kernel"))
+                        fail("native HAT kernel boundary unsupported: typed device effects, ownership/fence lifetimes and backend lowering required");
+                    fail("native visibility after 'define' is currently supported only for HAT kernel syntax");
+                }
+                if (accept("kernel"))
+                    fail("native HAT kernel boundary unsupported: typed device effects, ownership/fence lifetimes and backend lowering required");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
