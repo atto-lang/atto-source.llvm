@@ -56,8 +56,11 @@ static void test_bounded_successful_accesses(void) {
     REQUIRE(second.epoch != first.epoch);
     REQUIRE(ores_actor_i64_heap_field_read(heap, second.domain, second.epoch, 3) == 57);
     ores_actor_i64_heap_leave(heap, second);
-    REQUIRE(ores_actor_i64_heap_trace_snapshot(heap, records, 7, &summary));
+    /* Overflow invalidates certification even though the host still receives
+     * diagnostic events and the sticky dropped counter. */
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, records, 7, &summary));
     REQUIRE(summary.stored == 7 && summary.dropped == 1);
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, records, 7, &summary));
     ores_actor_i64_heap_retire(heap);
     REQUIRE(ores_actor_i64_heap_try_destroy(heap));
 }
@@ -72,7 +75,7 @@ static void test_overflow_and_different_actor_identities(void) {
     ores_actor_i64_heap_leave(heap, turn);
     OresActorHeapAccessEvent event;
     OresActorHeapAccessSummary summary;
-    REQUIRE(ores_actor_i64_heap_trace_snapshot(heap, &event, 1, &summary));
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, &event, 1, &summary));
     REQUIRE(summary.stored == 1 && summary.dropped == 2);
     REQUIRE(event.actor_id == 9001 && event.incarnation == 22);
     REQUIRE(event.kind == ORES_ACTOR_HEAP_ACCESS_ALLOC);
