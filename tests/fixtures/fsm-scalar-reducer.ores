@@ -20,22 +20,28 @@ fnc bounded_ticks(int ticks): int {
     if (ticks eq 3) { return 1; } fi
     return 0;
 }
+// Native frontend permits a sequence of guarded early returns followed by
+// one terminal return. Dispatch through named helpers rather than placing
+// nested conditional branches after the first return guard.
+fnc idle_transition(int event): int {
+    if (event eq 0) { return 1; } fi
+    return -1;
+}
+fnc running_transition(int event, int ticks): int {
+    if (event eq 1) { return tick_state(ticks); } fi
+    if (event eq 2) { return finish_state(ticks); } fi
+    return -1;
+}
+fnc done_transition(int event): int {
+    if (event eq 3) { return 0; } fi
+    return -1;
+}
 fnc step_state(int state, int event, int ticks): int {
     if (bounded_ticks(ticks) eq 0) { return -1; } fi
     // Match both coordinates separately. Packing with state*10+event
     // aliases out-of-domain inputs (e.g. state 0, event 11 -> 1,1).
-    if (state eq 0) {
-        if (event eq 0) { return 1; } fi
-        return -1;
-    } fi
-    if (state eq 1) {
-        if (event eq 1) { return tick_state(ticks); } fi
-        if (event eq 2) { return finish_state(ticks); } fi
-        return -1;
-    } fi
-    if (state eq 2) {
-        if (event eq 3) { return 0; } fi
-        return -1;
-    } fi
+    if (state eq 0) { return idle_transition(event); } fi
+    if (state eq 1) { return running_transition(event, ticks); } fi
+    if (state eq 2) { return done_transition(event); } fi
     return -1;
 }
