@@ -49,7 +49,7 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "task-captured-exclusive-loan",
-        source: "pub fnc main(int x): int { return task { return rt borrow mut x; }; }",
+        source: "pub fnc main(int x): int { return task { return rt mut borrow x; }; }",
         diagnostic: "native execution task lowering unsupported",
     },
     Case {
