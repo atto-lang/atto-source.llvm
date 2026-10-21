@@ -1315,6 +1315,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.
     if (!wasm32_target) for (const auto& actor : source.actors) {
+        // Revalidate the sealed-state AST before dereferencing any initializer
+        // or emitting actor IR. emit_verified_llvm_ir is a public compiler
+        // boundary and must remain safe even after parser-bypassing AST
+        // transforms performed by compiler passes or native test callers.
+        if (actor.sealed_state) {
+            if (actor.fields.size() > 16)
+                throw std::runtime_error("sealed actor state exceeds field bound");
+            for (const auto& field : actor.fields) {
+                if (!field.initializer || !field.field_mutable)
+                    throw std::runtime_error(
+                        "sealed actor state codegen rejected malformed state schema");
+            }
+            if (actor.on_message.parameters.size() != 1 ||
+                    !actor.on_message.actor_state_loan ||
+                    actor.on_message.result ||
+                    !actor.on_message.actor_field_writes.empty())
+                throw std::runtime_error(
+                    "sealed actor state reached codegen without one scoped loan");
+            if (!actor.on_message.has_declared_effects)
+                throw std::runtime_error(
+                    "sealed actor state codegen lacks declared effect bound");
+        }
+
         auto* ctor = actorInits.at(actor.name);
         llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
         llvm::IRBuilder<> init(initial);
