@@ -49,6 +49,7 @@ LocalOwnership& local(const Expression& expr, Locals& locals) {
 }
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions);
+void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions);
 
 LocalOwnership& checked_field(const std::string& receiver, const std::string& field,
                                std::size_t offset, Locals& locals) {
@@ -307,6 +308,30 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::Conditional: {
+            // The condition is evaluated before the branch and may not move,
+            // borrow or call. Each lazy arm starts from the same ownership
+            // snapshot; only a join with identical affine state is admitted.
+            check_pure_guard(*expr.condition_lhs, locals, functions);
+            check_pure_guard(*expr.condition_rhs, locals, functions);
+            Locals when_true = locals;
+            Locals when_false = locals;
+            check_value(*expr.when_true, when_true, functions);
+            check_value(*expr.when_false, when_false, functions);
+            if (when_true.size() != when_false.size())
+                reject(expr, "ownership violation: ternary CFG predecessor ownership mismatch");
+            for (const auto& item : when_true) {
+                const auto found = when_false.find(item.first);
+                if (found == when_false.end() ||
+                        item.second.moved != found->second.moved ||
+                        item.second.moved_fields != found->second.moved_fields ||
+                        item.second.shared_loans != found->second.shared_loans ||
+                        item.second.exclusive_loan != found->second.exclusive_loan)
+                    reject(expr, "ownership violation: ternary CFG predecessor ownership mismatch");
+            }
+            locals = std::move(when_true);
+            return;
+        }
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
@@ -348,6 +373,12 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Multiply:
             check_pure_guard(*expr.left, locals, functions);
             check_pure_guard(*expr.right, locals, functions);
+            return;
+        case Expression::Kind::Conditional:
+            check_pure_guard(*expr.condition_lhs, locals, functions);
+            check_pure_guard(*expr.condition_rhs, locals, functions);
+            check_pure_guard(*expr.when_true, locals, functions);
+            check_pure_guard(*expr.when_false, locals, functions);
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
@@ -392,6 +423,12 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         case Expression::Kind::Multiply:
             check_caught_throw_scalar_read(*expr.left, locals, functions);
             check_caught_throw_scalar_read(*expr.right, locals, functions);
+            return;
+        case Expression::Kind::Conditional:
+            check_caught_throw_scalar_read(*expr.condition_lhs, locals, functions);
+            check_caught_throw_scalar_read(*expr.condition_rhs, locals, functions);
+            check_caught_throw_scalar_read(*expr.when_true, locals, functions);
+            check_caught_throw_scalar_read(*expr.when_false, locals, functions);
             return;
         default:
             reject(expr, "native caught throw scalar read cannot call, move or borrow");
@@ -480,6 +517,14 @@ void validate_i64_ownership(const Program& program) {
                             expr.kind == K::Multiply) && expr.left && expr.right) {
                         validate_scalar(*expr.left);
                         validate_scalar(*expr.right);
+                        return;
+                    }
+                    if (expr.kind == K::Conditional && expr.condition_lhs &&
+                            expr.condition_rhs && expr.when_true && expr.when_false) {
+                        validate_scalar(*expr.condition_lhs);
+                        validate_scalar(*expr.condition_rhs);
+                        validate_scalar(*expr.when_true);
+                        validate_scalar(*expr.when_false);
                         return;
                     }
                     reject(expr, "native scalar constructor argument requires pure integer expression");
