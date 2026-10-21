@@ -23,16 +23,22 @@ class SourceManagedRefLowering;
  */
 class SourceManagedRefAuthorization final {
     backend::ActorRefOwnershipEvidence evidence_;
+    // Exact source text is retained privately so the future lowering friend
+    // can match authorization to the same compilation unit without relying on
+    // a collision-prone ad-hoc hash.
+    std::string source_;
     std::string actor_name_;
     std::string ref_field_;
     std::size_t use_offset_ = 0;
 
     SourceManagedRefAuthorization(
             backend::ActorRefOwnershipEvidence evidence,
+            std::string source,
             std::string actor_name,
             std::string ref_field,
             std::size_t use_offset)
         : evidence_(std::move(evidence)),
+          source_(std::move(source)),
           actor_name_(std::move(actor_name)),
           ref_field_(std::move(ref_field)),
           use_offset_(use_offset) {}
