@@ -499,10 +499,8 @@ private:
                         if (token_.kind == Kind::End)
                             fail("state callback requires return");
                         if (token_.text == "const" || token_.text == "val") {
-                            if (depth != 0)
-                                fail("native actor state locals are top-level callback scalars only");
                             if (saw_non_local)
-                                fail("native actor state locals must precede conditionals and writes");
+                                fail("native actor state locals must precede conditionals and writes within their lexical arm");
                             ActorStateStatement local;
                             local.kind = ActorStateStatement::Kind::Local;
                             local.offset = token_.offset;
