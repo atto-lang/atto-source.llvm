@@ -180,6 +180,13 @@ struct Function {
     bool has_declared_effects = false;
 };
 
+struct HatKernelDecl {
+    std::string name;
+    bool exported = false;
+    Function entry;
+    std::size_t offset = 0;
+};
+
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
@@ -202,6 +209,7 @@ struct Program {
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
+    std::vector<HatKernelDecl> kernels;
     std::vector<Function> functions;
 };
 
