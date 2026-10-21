@@ -1206,13 +1206,13 @@ private:
             // become integer/address operations.
             if (operation == "ref" || operation == "unref" || operation == "deref") {
                 throw std::runtime_error(std::string("native rt ") + std::string(operation) +
-                    " requires provenance-checked Pointer<T> and lifetime/drop lowering at byte " +
+                    " is not valid Oreslang source; use rt copy/share/take/borrow or rt mut borrow at byte " +
                     std::to_string(token_.offset));
             }
             if (operation == "raw") {
                 throw std::runtime_error(
-                    "native rt raw requires trusted unsafe.memory effect, stable owner provenance, "
-                    "and RawPointer<T> lowering at byte " + std::to_string(token_.offset));
+                    "native rt raw is not valid Oreslang source; raw-address authority is internal to "
+                    "the trusted backend/core runtime at byte " + std::to_string(token_.offset));
             }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
