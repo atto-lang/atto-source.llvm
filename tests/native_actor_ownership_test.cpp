@@ -56,13 +56,28 @@ int main() {
         deny("return pair(rt borrow n, 1);", "borrow mode does not match", exclusive);
         deny("return read(rt borrow (n + 1));", "addressable named int", read);
         deny("total = rt take n; return read(rt borrow n);", "borrow of explicitly moved int", read);
-        // The skipped-handler bug applied to every field name, independent
-        // of declaration order. Exercise distinct places and writeback paths.
-        for (int i = 0; i < 32; ++i) {
-            const auto constant = std::to_string(i);
-            admit("total = (rt take total) + " + constant + "; return total;");
-            deny("total = (rt take n) + " + constant + "; return n;", "use of explicitly moved int");
-        }
+        // Distinct ownership paths: Copy/Share retain scalar ownership,
+        // multiple shared loans coexist, and a taken field may be restored
+        // by the return value of a checked synchronous call.
+        admit("return (rt copy n) + n;");
+        admit("return (rt share n) + n;");
+        admit("return twice(rt borrow n, rt borrow n);",
+              "fnc twice(borrow int x, borrow int y): int { return x + y; }");
+        admit("total = pair(rt borrow n, rt take total); return total;", pair);
+        admit("total = rt take n; return base;");
+        // Nested calls must retain earlier outer-argument loans until the
+        // outer call returns; their own lexical scope is not permission to
+        // reacquire an incompatible alias of the same actor/message place.
+        deny("return pair(rt borrow n, inspect(rt borrow mut n));",
+             "conflicting active native borrow", pair + mut);
+        deny("return pair(rt borrow mut n, read(rt borrow n));",
+             "conflicting active native borrow", exclusive + read);
+        deny("return twice(rt borrow mut n, rt borrow mut n);",
+             "conflicting active native borrow",
+             "fnc twice(borrow mut int x, borrow mut int y): int { return x + y; }");
+        deny("return pair(rt borrow total, rt take total);", "cannot move int while borrow is active", pair);
+        deny("total = (rt take n) + (rt take n); return total;", "use of explicitly moved int");
+        deny("return rt take base;", "cannot take immutable actor field");
         std::printf("native actor ownership: %u accepted, %u rejected source programs\n", accepted, rejected);
         return 0;
     } catch (const std::exception& e) {

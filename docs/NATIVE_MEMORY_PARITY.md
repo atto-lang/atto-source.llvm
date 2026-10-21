@@ -116,7 +116,7 @@ loans; it rejects unresolved heap holders rather than freeing live storage.
 This is trusted-host callback integration, not Forge guest actor compilation,
 actor suspension, Erlang-style supervision, or untrusted execution isolation.
 
-Executed optimized checks include 42 admitted + 49 rejected source programs,
+Executed optimized checks include 15 admitted + 23 rejected source programs,
 11 actor AOT reachability checks, 29 scalar-heap misuse rejections per backend,
 full 4096-slot occupancy with reserved fields, and 16384 scalar slot/loan reuse
 cycles. The actual OresVM/source bootstrap runs 1600 host-callback messages
