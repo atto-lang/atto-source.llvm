@@ -432,6 +432,7 @@ private:
                 require("self"); require("."); require("handle_state"); require("(");
                 loan->mode = ActorStateLoan::Mode::Read;
                 if (accept("critical")) {
+                    loan->critical = true;
                     loan->mode = ActorStateLoan::Mode::Write;
                     if (accept("read")) loan->mode = ActorStateLoan::Mode::Read;
                     else (void)accept("write");
