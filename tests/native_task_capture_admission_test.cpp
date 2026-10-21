@@ -104,6 +104,17 @@ int main() {
         },
         "unknown");
 
+    AutoType opaque_nominal;
+    opaque_nominal.kind = AutoTypeKind::Nominal;
+    rejects(
+        [&] {
+            TaskCaptureAdmission::admit(
+                &boundary_a, 9, TaskExecutionDomain::Cpu,
+                {{"opaque_nominal", TaskCaptureSource::OwnedValue,
+                    opaque_nominal}});
+        },
+        "Send proof");
+
     rejects(
         [&] {
             TaskCaptureAdmission::admit(
