@@ -4,6 +4,7 @@
 #include <string>
 
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -37,6 +38,22 @@ int main() {
     auto* structural_pair = llvm::StructType::get(context, {i64, i64}, false);
     REQUIRE(structural_pair->isLiteral());
     REQUIRE(structural_pair != entry);
+
+    // The nominal tag must not change the physical two-slot ABI. Validate the
+    // supported native layouts directly in LLVM, not only through the C++ host
+    // mirror struct.
+    for (const char* layout_text : {
+            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128",
+            "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"}) {
+        llvm::DataLayout layout(layout_text);
+        const auto* struct_layout = layout.getStructLayout(entry);
+        REQUIRE(layout.getTypeAllocSize(entry) == 16);
+        REQUIRE(layout.getABITypeAlign(entry).value() == 8);
+        REQUIRE(struct_layout->getElementOffset(
+                    oreslang::backend::native_entry_key_index()) == 0);
+        REQUIRE(struct_layout->getElementOffset(
+                    oreslang::backend::native_entry_value_index()) == 8);
+    }
 
     llvm::LLVMContext forged_context;
     auto* forged = llvm::StructType::create(
