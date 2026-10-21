@@ -135,16 +135,18 @@ struct ActorFieldWrite {
 };
 
 // Restricted statements inside one sealed actor-state loan. They are
-// deliberately separate from ordinary Function statements: only lexical
-// state writes and bounded scalar-comparison conditionals are representable here.
-// Calls, suspension, locals, ownership operations and state-capability escape
-// remain impossible in this AST.
+// deliberately separate from ordinary Function statements. The durable-state
+// slice admits top-level scalar locals whose initializer is either a pure scalar
+// expression or a compiler-owned blocking file intrinsic. No arbitrary call,
+// suspension, object ownership or state-capability reference may escape.
 struct ActorStateStatement {
-    enum class Kind { Write, Conditional };
+    enum class Kind { Local, Write, Conditional };
     enum class Compare { Eq, Ne, Lt, Le, Gt, Ge };
     Kind kind = Kind::Write;
     Compare compare = Compare::Eq;
     std::string field;
+    std::string local_name;
+    bool local_mutable = false;
     std::unique_ptr<Expression> expression;
     std::unique_ptr<Expression> condition_lhs;
     std::unique_ptr<Expression> condition_rhs;
