@@ -115,7 +115,7 @@ struct ActorFieldWrite {
 
 // Restricted statements inside one sealed actor-state loan. They are
 // deliberately separate from ordinary Function statements: only lexical
-// state writes and bounded equality conditionals are representable here.
+// state writes and bounded scalar-comparison conditionals are representable here.
 // Calls, suspension, locals, ownership operations and state-capability escape
 // remain impossible in this AST.
 struct ActorStateStatement {
