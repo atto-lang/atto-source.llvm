@@ -285,6 +285,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (actor.state_declared)
+                throw std::runtime_error("wasm32 sealed actor state loans require dedicated lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
