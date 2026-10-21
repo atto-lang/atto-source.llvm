@@ -1962,7 +1962,18 @@ private:
                     if (!method.declared_effects.has(FunctionEffect::StateRead))
                         throw std::runtime_error(
                             "actor state read loan requires state.read effect");
-                    if (!loan.writes.empty())
+                    std::function<bool(const std::vector<ActorStateStatement>&)> has_state_write;
+                    has_state_write = [&](const std::vector<ActorStateStatement>& statements) {
+                        for (const auto& statement : statements) {
+                            if (statement.kind == ActorStateStatement::Kind::Write)
+                                return true;
+                            if (has_state_write(statement.then_statements) ||
+                                    has_state_write(statement.else_statements))
+                                return true;
+                        }
+                        return false;
+                    };
+                    if (has_state_write(loan.statements))
                         throw std::runtime_error(
                             "read-only actor state loan cannot mutate state");
                 } else if (!method.declared_effects.has(FunctionEffect::StateWrite)) {
@@ -2011,14 +2022,31 @@ private:
                     }
                 };
 
-                for (const auto& write : loan.writes) {
-                    if (!fields.count(write.field))
-                        throw std::runtime_error(
-                            "cannot assign unknown actor state field '" + write.field + "'");
-                    if (!write.expression)
-                        throw std::runtime_error("actor state write requires expression");
-                    validate_state_expression(*write.expression);
-                }
+                std::function<void(const std::vector<ActorStateStatement>&)> validate_state_statements;
+                validate_state_statements =
+                    [&](const std::vector<ActorStateStatement>& statements) {
+                        for (const auto& statement : statements) {
+                            if (statement.kind == ActorStateStatement::Kind::Write) {
+                                if (!fields.count(statement.field))
+                                    throw std::runtime_error(
+                                        "cannot assign unknown actor state field '" +
+                                        statement.field + "'");
+                                if (!statement.expression)
+                                    throw std::runtime_error(
+                                        "actor state write requires expression");
+                                validate_state_expression(*statement.expression);
+                                continue;
+                            }
+                            if (!statement.condition_lhs || !statement.condition_rhs)
+                                throw std::runtime_error(
+                                    "actor state conditional requires equality operands");
+                            validate_state_expression(*statement.condition_lhs);
+                            validate_state_expression(*statement.condition_rhs);
+                            validate_state_statements(statement.then_statements);
+                            validate_state_statements(statement.else_statements);
+                        }
+                    };
+                validate_state_statements(loan.statements);
                 validate_state_expression(*loan.result);
                 if (reads_state &&
                         !method.declared_effects.has(FunctionEffect::StateRead))
