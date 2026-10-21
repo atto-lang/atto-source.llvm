@@ -1577,8 +1577,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                             builder, i64, values, stateFields, declarations);
                         llvm::Value* rhs = lower(*statement.condition_rhs,
                             builder, i64, values, stateFields, declarations);
+                        llvm::CmpInst::Predicate predicate;
+                        const char* predicateName;
+                        switch (statement.compare) {
+                            case ActorStateStatement::Compare::Eq:
+                                predicate = llvm::CmpInst::ICMP_EQ;
+                                predicateName = "state.if.eq";
+                                break;
+                            case ActorStateStatement::Compare::Ne:
+                                predicate = llvm::CmpInst::ICMP_NE;
+                                predicateName = "state.if.ne";
+                                break;
+                            case ActorStateStatement::Compare::Lt:
+                                predicate = llvm::CmpInst::ICMP_SLT;
+                                predicateName = "state.if.lt";
+                                break;
+                            case ActorStateStatement::Compare::Le:
+                                predicate = llvm::CmpInst::ICMP_SLE;
+                                predicateName = "state.if.le";
+                                break;
+                            case ActorStateStatement::Compare::Gt:
+                                predicate = llvm::CmpInst::ICMP_SGT;
+                                predicateName = "state.if.gt";
+                                break;
+                            case ActorStateStatement::Compare::Ge:
+                                predicate = llvm::CmpInst::ICMP_SGE;
+                                predicateName = "state.if.ge";
+                                break;
+                            default:
+                                throw std::runtime_error(
+                                    "invalid sealed actor state comparison");
+                        }
                         llvm::Value* condition =
-                            builder.CreateICmpEQ(lhs, rhs, "state.if.eq");
+                            builder.CreateICmp(predicate, lhs, rhs, predicateName);
                         llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
                             context, "state.if.then", handler);
                         llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
