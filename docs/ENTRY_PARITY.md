@@ -18,6 +18,9 @@ particular, the native tree now has:
   projections and no host `operator==`;
 - deterministic key-then-value child visitation for graph walkers;
 - a fixed two-i64 ABI record for the first scalar product lowering target;
+- a compiler-owned identified LLVM struct type, `%ores.entry.i64.i64`,
+  so the native IR cannot confuse Entry with a structural `{ i64, i64 }`
+  tuple/record despite matching field layout;
 - `Entry`-specific Send/Sync/Share composition from exactly two component
   types, matching the Java/Graal immutable-product rule.
 - field-sensitive native drop planning for `entry.key` and `entry.value`,
