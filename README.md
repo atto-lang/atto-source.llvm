@@ -49,7 +49,7 @@ Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
 
 ## Build and test
 
-Requires LLVM development libraries 14+, CMake 3.20+, C++17, Python3 and ideally Clang.
+Requires LLVM development libraries 14+, CMake 3.20+, C++17 and ideally Clang. Python is prohibited; legacy Python scripts/tests are migration blockers and must be ported to Rust before this repository satisfies the policy.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
