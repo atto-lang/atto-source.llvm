@@ -236,9 +236,18 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
     for (std::uint64_t row = 0; row < kernel.layout.rows(); ++row) {
         for (std::uint32_t field = 0; field < kernel.layout.fields(); ++field) {
             const auto v = loan.read(row, field);
-            const auto result = kernel.operation == Op::Scale ? v * kernel.scale
-                : kernel.operation == Op::Bias ? v + kernel.bias
-                : (v * kernel.scale) + kernel.bias;
+            float result = 0.0f;
+            if (kernel.operation == Op::Scale) {
+                result = v * kernel.scale;
+            } else if (kernel.operation == Op::Bias) {
+                result = v + kernel.bias;
+            } else {
+                // The portable CPU reference semantics require a rounded f32
+                // multiply followed by a rounded f32 add. Do not let a host
+                // compiler contract this into FMA and diverge from Java/OpenCL.
+                volatile float product = v * kernel.scale;
+                result = product + kernel.bias;
+            }
             output.write(row, field, result);
         }
     }
