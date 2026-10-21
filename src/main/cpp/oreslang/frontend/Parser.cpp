@@ -1363,11 +1363,25 @@ private:
             }
         }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
-        // named task, but fail closed when it opens a task block.
+        // named task. Stage-one native Task parsing admits only one scalar
+        // return expression; ownership admission runs after parsing and LLVM
+        // codegen still rejects the Task until scheduler/Future lowering exists.
         if (token_.text == "task") {
             Lexer lookahead = lexer_;
-            if (lookahead.next().text == "{")
-                fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
+            if (lookahead.next().text == "{") {
+                advance(); // contextual task
+                require("{");
+                if (!accept("return")) {
+                    fail("native Task v1 body requires exactly one return expression");
+                }
+                auto task = make_expression(Expression::Kind::Task, offset);
+                task->left = expression();
+                require(";");
+                if (!accept("}")) {
+                    fail("native Task v1 body requires exactly one return expression");
+                }
+                return task;
+            }
         }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
