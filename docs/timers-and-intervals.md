@@ -11,16 +11,74 @@ These snippets are **target syntax**, not evidence that both compilers accept th
 | `time.sleep(duration) -> Future<void>` | Alias for `after` for `await` composition. |
 | `time.sleep_blocking(duration) -> void` | Legal only in a `suspends`-capable frame. The logical task waits but the carrier **never parks**. |
 | `time.interval(period) -> Interval` | Owned demand-driven recurring timer; `await interval.next()` returns an increasing tick index. |
-| `time.set_timeout(duration, callback) -> TimerHandle` | Schedules a one-shot guest callback on the **owning scheduler**, never on the host clock thread. |
+| `time.set_timer(duration, callback) -> TimerHandle` | Canonical one-shot callback timer. Enqueues callback on its owning task/actor scheduler, never executes guest code on clock thread. |
+| `time.set_timeout(duration, callback) -> TimerHandle` | Compatibility alias for `time.set_timer` (do not expose conflicting semantics). |
 | `time.set_interval(period, callback) -> TimerHandle` | Repeats after the previous callback is finished (fixed delay, never overlaps itself). |
 | `time.timeout(duration, future) -> Future<T>` | Races a monotonic deadline against an awaited operation, settles exactly once. |
-| `timer.cancel() -> bool` | Idempotently revokes a still-pending timer; returns whether this call won. |
+| `timer.cancel() -> bool` | Idempotently revokes a timer callback that has not started; returns whether this call won. |
+| `timer.get_done() -> Future<void>` | Observe callback completion, cancellation, or propagated callback failure without blocking a carrier. |
 
 The lexical `250ms` and `1s` literals below are a proposed `Duration` surface;
 implement their parser/type checker and canonical formatter consistently before
 advertising these examples as runnable. Negative durations are invalid; an
 interval period must be strictly positive. Zero-delay one-shot timers are
 allowed and still resume on a **later** scheduler turn.
+
+## Canonical one-shot callback timer
+
+```oreslang
+let to = time.set_timer(2s, || -> {
+    print("two seconds elapsed");
+});
+
+// Optional: cancel before the callback is admitted to run.
+to.cancel();
+```
+
+`|| -> { ... }` is the existing pipe-lambda spelling (including zero
+parameters). `set_timer` does not create an actor or a task for each timer.
+It registers a resource-owned callback and returns immediately. `set_timeout`
+is an alias, not a separate facility. The lexical `Duration` literals,
+`set_timer` source binding, and callback lowering are **not implemented yet**.
+
+The callback is ordinary synchronous Oreslang source with a `void` result.
+It must not contain a directly suspending call or `await`; asynchronous work
+is explicitly launched as an owned `nb { ... }` task when allowed by the
+execution context. No callback executes on a timer/broker thread. Completion
+and errors are observable through `await to.get_done()` (outside its own
+serial actor's current handler), and otherwise follow owner/supervisor failure
+policy. A caller may discard the handle without preventing the timer from
+firing; owner/context teardown still revokes registrations.
+
+**Cancellation contract:** a timer callback follows
+`ARMED -> READY -> RUNNING -> DONE`, with `ARMED` or `READY` also able
+to transition to `CANCELLED`. `cancel()` returns `true` exactly if it wins
+before callback start; it returns `false` after RUNNING, DONE or an earlier
+cancel. A lower-level native queue's poll/expiry can win its own cancellation
+race before guest callback admission, but a queued callback must remain
+revocable by its `TimerHandle` until the owning scheduler claims execution.
+The scheduler must atomically check owner generation, callback cancellation,
+single-writer authority, and live heap/continuation lease before RUNNING;
+no stale queued expiry may invoke a replacement actor. Cancellation does not
+interrupt a running callback. `get_done()` is cancelled if cancellation won.
+
+**Actor ownership:** callbacks created in an actor are queued as serialized
+mailbox/CONTROL turns of that same actor, never as an independent scheduler
+task bypassing the actor-state lease. If a serial actor handler awaits its own
+timer callback's `get_done()` while retaining the serial handler lock, the
+callback cannot run: reject that await as a self-dependency or report a typed
+deadlock instead of parking a carrier. Use `await time.after(2s)` for waiting
+inside an existing actor handler. Ordinary owned non-Copy captures move into
+the detached callback; a live borrow, mutable alias, FFI loan, or guard must
+not escape its lexical lifetime. Captured `self` is only permitted with
+compiler-enforced actor-local re-entry.
+
+**Interval callback:** `time.set_interval(period, callback)` uses the same
+owner-bound callback admission and failure rules; it rearms fixed-delay only
+after the preceding callback completes and never overlaps that timer's callback.
+It supports `cancel()`, `get_done()`, explicit period bounds and teardown
+reclamation. Its cancellation may prevent subsequent callbacks but cannot
+interrupt a callback already RUNNING.
 
 ## Async / await, recursion, iteration, and suspends
 
@@ -78,7 +136,7 @@ both backend select lowering paths are supported.
 
 - **Java/GraalVM:** `OresTimers.afterNanos/sleepNanos` create cancellable `OresFuture<Void>` values. `Interval.next()` provides demand-driven ticks and a cancellable, single-consumer contract. Timer admissions are bounded per owner (4,096) and globally (16,384); live intervals are also bounded (4,096 per owner). Explicit owner `close()` revokes both pending timers and idle/pending interval capabilities. Existing `OresScheduler` turns can await the futures. **The OresVM/context and actor lifecycle do not automatically own/close this helper yet**. This is a runtime foundation, **not the exported `time.*` language module**.
 - **LLVM:** `NativeTimerQueue` provides bounded monotonic deadline registration, deterministic due polling, cancellation and owner-domain fencing. A poll atomically moves a timer into an in-flight, still-capacity-charged delivery registry; a scheduler must exactly-once `claim_delivery` or `discard_delivery`, checking actor generation and executor authority before dispatch. Owner close revokes both scheduled and unclaimed-polled tokens. A successful claim is **not** a guest-continuation or lifetime lease. General typed Future/await lowering remains incomplete.
-- **Not complete:** source-level Duration literals, builtins/stdlib bindings, compiler effect checking for `sleep_blocking`, LLVM `Future<T>`/await continuation frames, `set_timeout` / `set_interval` guest callback admission, unified `select` timeout lowering, and compiler-generated lifecycle deregistration.
+- **Not complete:** source-level Duration literals, builtins/stdlib bindings, compiler effect checking for `sleep_blocking`, LLVM `Future<T>`/await continuation frames, `set_timer` / `set_timeout` / `set_interval` guest callback admission, `TimerHandle` callback-completion/cancellation arbitration, unified `select` timeout lowering, and compiler-generated lifecycle deregistration.
 
 ## Hardening notes (October 14, 2026)
 
@@ -90,7 +148,7 @@ both backend select lowering paths are supported.
 
 ## Verification gates
 
-Java: completion-on-scheduler, fresh dispatch for ready timers, cancellation
+Java: source lambda syntax/closure-capture effect checks, callback scheduling through actor single-writer turn (never clock executor), callback error propagation, callback cancellation after expiry but before dispatch, callback-from-serial-self deadlock detection, completion-on-scheduler, fresh dispatch for ready timers, cancellation
 before/after expiry, owner shutdown, interval backpressure, timer admission
 limits, and actor teardown/borrow scope. LLVM: deterministic virtual monotonic
 timestamps, deadline ordering, cancel/poll race (exactly one winner), token
