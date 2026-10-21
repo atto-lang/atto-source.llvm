@@ -27,15 +27,20 @@ def expected(oracle, state, event, ticks, version):
     base.require(type(accepted) is bool and type(reason) is str
                  and type(after) is dict and type(effects) is list,
                  "bad independent oracle projection")
-    base.require(oracle.validate({
-        "contract": oracle.CONTRACT, "machine": "flat-fixture-v0",
-        "entity_count": 1,
-        "transitions": [{
-            "seq": 0, "entity": 0, "event": event,
-            "accepted": accepted, "reason": reason,
-            "before": before, "after": after, "effects": effects,
-        }],
-    }) is True, "shared oracle does not validate its own transition")
+    # These are independently seeded probes, not an ordered event stream.
+    # Full stream order belongs to the separate 2040-event Java witness.
+    base.require(set(after) == {"state", "version", "ticks"} and
+                 all(type(v) is int and 0 <= v <= oracle.LIMIT for v in after.values()),
+                 "malformed shared oracle after snapshot")
+    if accepted:
+        base.require(reason == "none" and after["version"] == before["version"] + 1
+                     and len(effects) == 1 and type(effects[0]) is int
+                     and 1 <= effects[0] <= 4, "malformed accepted oracle projection")
+    else:
+        base.require(reason in ("invalid-state", "invalid-ticks",
+                     "version-exhausted", "guard", "unhandled")
+                     and after == before and effects == [],
+                     "malformed rejected oracle projection")
     result = (
         after["state"], after["version"] % 256,
         after["ticks"], effects[0] if effects else 0,
