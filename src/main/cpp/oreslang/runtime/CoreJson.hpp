@@ -75,15 +75,105 @@ public:
 
     static std::int64_t exact_i64(const Value& value, std::string_view where = "JSON value") {
         const auto* number = std::get_if<Number>(&value.value);
-        if (!number || number->lexeme.find_first_of(".eE") != std::string::npos)
+        if (!number)
             throw std::runtime_error(std::string(where) + " must be an integral JSON number");
-        std::int64_t result = 0;
-        const char* begin = number->lexeme.data();
-        const char* end = begin + number->lexeme.size();
-        const auto parsed = std::from_chars(begin, end, result, 10);
-        if (parsed.ec == std::errc::result_out_of_range)
+
+        // Programmatic Number values are not trusted to contain parser-produced
+        // lexemes. Re-validate the complete JSON-number grammar and length
+        // bound before target conversion.
+        const Value validated = parse(number->lexeme);
+        const auto* parsed_number = std::get_if<Number>(&validated.value);
+        if (!parsed_number)
+            throw std::runtime_error(std::string(where) + " must be an integral JSON number");
+        const std::string_view text(parsed_number->lexeme);
+
+        std::size_t at = 0;
+        bool negative = false;
+        if (text[at] == '-') {
+            negative = true;
+            ++at;
+        }
+
+        const std::size_t exponent_at = text.find_first_of("eE", at);
+        const std::size_t mantissa_end =
+            exponent_at == std::string_view::npos ? text.size() : exponent_at;
+        const std::size_t dot_at = text.find('.', at);
+        const std::size_t fraction_digits =
+            dot_at == std::string_view::npos || dot_at >= mantissa_end
+                ? 0u
+                : mantissa_end - dot_at - 1u;
+
+        std::string digits;
+        digits.reserve(mantissa_end - at);
+        for (std::size_t i = at; i < mantissa_end; ++i) {
+            if (text[i] != '.') digits.push_back(text[i]);
+        }
+
+        // The JSON grammar permits an exponent much larger than any native
+        // integer. Saturate it beyond the only range that can affect an i64
+        // decision instead of overflowing a host integer while parsing it.
+        std::int64_t exponent = 0;
+        if (exponent_at != std::string_view::npos) {
+            std::size_t exp_at = exponent_at + 1u;
+            bool exponent_negative = false;
+            if (text[exp_at] == '+' || text[exp_at] == '-') {
+                exponent_negative = text[exp_at] == '-';
+                ++exp_at;
+            }
+            constexpr std::int64_t exponent_cap =
+                static_cast<std::int64_t>(max_number_chars) + 32;
+            for (; exp_at < text.size(); ++exp_at) {
+                const int digit_value = text[exp_at] - '0';
+                if (exponent <= exponent_cap) {
+                    exponent = exponent * 10 + digit_value;
+                    if (exponent > exponent_cap) exponent = exponent_cap + 1;
+                }
+            }
+            if (exponent_negative) exponent = -exponent;
+        }
+
+        std::size_t first_nonzero = 0;
+        while (first_nonzero < digits.size() && digits[first_nonzero] == '0')
+            ++first_nonzero;
+        if (first_nonzero == digits.size()) return 0;
+        digits.erase(0, first_nonzero);
+
+        const std::int64_t scale =
+            static_cast<std::int64_t>(fraction_digits) - exponent;
+        if (scale > 0) {
+            const auto fractional = static_cast<std::uint64_t>(scale);
+            if (fractional > digits.size())
+                throw std::runtime_error(std::string(where) + " must be an integral JSON number");
+            const std::size_t cut = digits.size() - static_cast<std::size_t>(fractional);
+            for (std::size_t i = cut; i < digits.size(); ++i) {
+                if (digits[i] != '0')
+                    throw std::runtime_error(std::string(where) + " must be an integral JSON number");
+            }
+            digits.resize(cut);
+            if (digits.empty()) return 0;
+        } else if (scale < 0) {
+            const auto zeros = static_cast<std::uint64_t>(-scale);
+            // A non-zero signed i64 never needs more than 19 decimal digits.
+            if (zeros > 19u || digits.size() > 19u - static_cast<std::size_t>(zeros))
+                throw std::runtime_error(std::string(where) + " is outside signed 64-bit integer range");
+            digits.append(static_cast<std::size_t>(zeros), '0');
+        }
+
+        if (digits.size() > 19u)
             throw std::runtime_error(std::string(where) + " is outside signed 64-bit integer range");
-        if (parsed.ec != std::errc{} || parsed.ptr != end)
+
+        std::string integer;
+        integer.reserve(digits.size() + (negative ? 1u : 0u));
+        if (negative) integer.push_back('-');
+        integer.append(digits);
+
+        std::int64_t result = 0;
+        const char* begin = integer.data();
+        const char* end = begin + integer.size();
+        const auto converted = std::from_chars(begin, end, result, 10);
+        if (converted.ec == std::errc::result_out_of_range)
+            throw std::runtime_error(std::string(where) + " is outside signed 64-bit integer range");
+        if (converted.ec != std::errc{} || converted.ptr != end)
             throw std::runtime_error(std::string(where) + " is not a valid signed integer");
         return result;
     }
