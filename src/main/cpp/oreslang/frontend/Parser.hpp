@@ -125,6 +125,7 @@ struct ActorFieldWrite {
 struct ActorStateLoan {
     enum class Mode { Read, Write };
     Mode mode = Mode::Read;
+    bool critical = false;
     std::string result_binding;
     std::vector<ActorFieldWrite> writes;
     std::unique_ptr<Expression> result;
