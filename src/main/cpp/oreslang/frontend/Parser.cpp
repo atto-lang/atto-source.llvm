@@ -52,7 +52,8 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "using", "with", "requires", "serial", "state", "read", "write",
+        "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -116,8 +117,8 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        // Contiguous multi-character operators are single tokens.
+        if (source_.substr(at_, 2) == "==" || source_.substr(at_, 2) == "->") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -136,7 +137,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
