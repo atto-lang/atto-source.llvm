@@ -12,6 +12,8 @@ static void check(int ok) { if (!ok) abort(); }
 typedef struct {
     atomic_int active[ACTORS], peak[ACTORS], next[ACTORS], total, errors;
     atomic_uint_fast64_t last_execution[ACTORS];
+    atomic_uint_fast64_t allocation_domain[ACTORS];
+    atomic_uint_fast64_t allocation_generation[ACTORS];
     atomic_int hold;
     OresNativeActorScheduler* scheduler;
 } State;
@@ -27,13 +29,29 @@ static void run(void* raw, size_t actor, uint64_t msg) {
             || execution.allocation.domain != execution.id.runtime_domain
             || execution.allocation.owner != actor
             || execution.allocation.generation == 0
-            || execution.parent_execution != 0
-            || execution.continuation != 0) {
+            || ores_native_store_handle_valid(execution.parent_execution)
+            || ores_native_store_handle_valid(execution.continuation)) {
         atomic_fetch_add(&s->errors, 1);
     } else {
         uint64_t previous = atomic_exchange(
                 &s->last_execution[actor], execution.id.execution);
         if (previous && execution.id.execution <= previous)
+            atomic_fetch_add(&s->errors, 1);
+
+        uint64_t expected_domain = 0;
+        if (!atomic_compare_exchange_strong(
+                &s->allocation_domain[actor],
+                &expected_domain,
+                execution.allocation.domain)
+                && expected_domain != execution.allocation.domain)
+            atomic_fetch_add(&s->errors, 1);
+
+        uint64_t expected_generation = 0;
+        if (!atomic_compare_exchange_strong(
+                &s->allocation_generation[actor],
+                &expected_generation,
+                execution.allocation.generation)
+                && expected_generation != execution.allocation.generation)
             atomic_fetch_add(&s->errors, 1);
     }
     int current = atomic_fetch_add(&s->active[actor], 1) + 1;
