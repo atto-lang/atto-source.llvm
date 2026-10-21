@@ -19,9 +19,10 @@ namespace oreslang::backend {
  * it cannot reinterpret a guest i64, ActorRef, FFI pointer or serializable
  * message as a compact actor reference.
  *
- * IMPORTANT: The current LLVM frontend does not yet mint this MIR from
- * source-level Ref<T>. Until that pass exists, this is an internal, guarded
- * codegen contract, NOT guest Ref<T> support.
+ * IMPORTANT: SourceOwnershipChecker now has one deliberately narrow source
+ * authority path for sealed actor-private Ref<int>, but ordinary LLVM emission
+ * still rejects that source operation until evidence is threaded into the
+ * compact runtime lowering. General Ref<T> remains unsupported.
  */
 enum class ManagedRefOrigin : std::uint8_t {
     ActorOwned, FrozenShared, ForeignActor, ActorCapability, NativePointer,
@@ -61,9 +62,10 @@ struct ActorManagedRefMir final {
  * ActorRefOwnershipVerifier policy helper deliberately cannot mint evidence.
  * Synthetic evidence remains test-only behind an isolated compile definition.
  *
- * The native source grammar still lacks general Ref<T> -> MIR lowering, so
- * production source-to-compact32 authority remains disabled until that real
- * frontend path exists.
+ * The native source grammar now admits a narrow sealed-state Ref<int> proof
+ * slice. SourceOwnershipChecker may mint this evidence only by reparsing that
+ * source and deriving the exact loan/use internally. General Ref<T> and the
+ * evidence-to-LLVM codegen connection remain fail-closed.
  */
 class ActorRefOwnershipEvidence final {
     ActorManagedRefMir claims_;
