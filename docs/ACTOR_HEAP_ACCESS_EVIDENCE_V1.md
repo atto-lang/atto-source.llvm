@@ -19,7 +19,7 @@ counter; dropped events force `trace_snapshot` to return 0 even when it
 supplies a diagnostic summary and stored events. This failure is sticky.
 A successful snapshot certifies only that the observed buffer was not
 truncated, never that all source-language accesses were observed. The recorder
-is cleared at physical heap reclamation.
+is explicitly overwritten through volatile stores before its allocation is freed at physical heap reclamation.
 
 ## Explicit limitations
 
@@ -33,6 +33,6 @@ is cleared at physical heap reclamation.
 
 The new `native_actor_i64_access_evidence_host_only` CTest checks event
 identities, operation kinds, multiple turns, slot-generation reuse,
-activation refusal, invalid output capacity, empty buffers, sticky overflow,
+activation refusal before/during/after execution begins, invalid output capacity, empty buffers, sticky overflow,
 and rejection of overflowed snapshots.
 Exact-head authorized CI plus sanitizer runs remain required for promotion.
