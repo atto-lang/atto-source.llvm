@@ -43,7 +43,9 @@ typedef struct {
 /* Enable before first turn; bounded 1..65536 events. Never allocates while
  * a turn executes. Returns 0 if unavailable/rejected; 1 only on admission.
  * Snapshot must be taken while no turn executes; refuses partial buffers.
- * Overflow is sticky (dropped>0) and disqualifies complete-trace claims.
+ * Overflow is sticky (dropped>0); snapshots then return 0 (inconclusive)
+ * while filling summary and any adequately sized diagnostic output buffer.
+ * A return value of 1 confirms only buffer completeness, NOT program coverage.
  * Neither function exposes a native/guest address or recorded data value.
  */
 int ores_actor_i64_heap_trace_enable(OresActorI64Heap* heap, uint32_t capacity);
