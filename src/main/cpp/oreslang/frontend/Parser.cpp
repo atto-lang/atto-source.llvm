@@ -118,7 +118,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"==", "!=", "<=", ">=", "&&", "||", "^^", "->"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -703,7 +703,13 @@ private:
             } while (accept(","));
             require(")");
         }
+        if (accept("->")) {
+            fail("native slim-arrow/end-delimited callable syntax requires typed return/body parity; use the Java/Graal frontend until native lowering is implemented");
+        }
         require(":");
+        if (token_.text == "tuple") {
+            fail("native tuple return types require typed tuple ABI and lowering; current native return lowering is scalar-only");
+        }
         value.returns_void = accept("void");
         if (!value.returns_void) {
             if (accept("int")) {
