@@ -84,6 +84,11 @@ fn should_scan_text(path: &Path) -> bool {
     {
         return true;
     }
+    /* Extensionless tracked scripts are a common interpreter entry point.
+     * They must not bypass the policy just because they omit ".py". */
+    if path.extension().is_none() {
+        return true;
+    }
     matches!(
         path.extension().and_then(|s| s.to_str()).map(|s| s.to_ascii_lowercase()).as_deref(),
         Some(
@@ -101,7 +106,7 @@ fn command_tokens(line: &str) -> Vec<String> {
         c.is_whitespace()
             || matches!(
                 c,
-                '|' | '&' | ';' | '(' | ')' | '{' | '}' | '[' | ']' | '=' | ':' | ',' | '"' | '\''
+                '|' | '&' | ';' | '(' | ')' | '{' | '}' | '[' | ']' | ':' | ',' | '"' | '\''
             )
     })
     .filter(|s| !s.is_empty())
@@ -192,16 +197,34 @@ fn python_invocation_reason(line: &str) -> Option<&'static str> {
     let wrapper = |s: &str| {
         matches!(
             s,
-            "run" | "shell" | "command" | "exec" | "spawn" | "env" | "sudo" | "time" | "xargs"
+            "run" | "shell" | "command" | "exec" | "spawn" | "env" | "sudo" | "time"
+                | "xargs" | "sh" | "bash" | "dash" | "zsh"
         )
+    };
+    let env_assignment = |s: &str| {
+        let Some((name, _value)) = s.split_once('=') else {
+            return false;
+        };
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
     };
 
     for (i, token) in tokens.iter().enumerate() {
         let base = executable_basename(token);
+        let mut command_start = i;
+        while command_start > 0 {
+            let prior = &tokens[command_start - 1];
+            if env_assignment(prior) || prior.starts_with('-') {
+                command_start -= 1;
+            } else {
+                break;
+            }
+        }
         let command_position = i == 0
-            || tokens
-                .get(i.wrapping_sub(1))
-                .is_some_and(|prev| wrapper(executable_basename(prev)));
+            || (command_start > 0
+                && wrapper(executable_basename(&tokens[command_start - 1])));
 
         if command_position && is_python_exec_name(base) {
             return Some("Python interpreter invocation/reference");
@@ -404,6 +427,33 @@ mod tests {
         ] {
             assert!(python_invocation_reason(line).is_some(), "{line}");
         }
+    }
+
+    #[test]
+    fn rejects_wrapped_python_execution_paths() {
+        for line in [
+            "env MODE=test python3 tools/check.py",
+            "run: MODE=test python3 tools/check.py",
+            "bash -c python3 tools/check.py",
+        ] {
+            assert!(python_invocation_reason(line).is_some(), "{line}");
+        }
+    }
+
+    #[test]
+    fn full_scan_finds_extensionless_python_shebang() {
+        let root = std::env::temp_dir().join(format!(
+            "check-no-python-extensionless-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("runner"), "#!/usr/bin/env python3\nprint('legacy')\n").unwrap();
+        let findings = run(&root).unwrap();
+        assert!(findings.iter().any(|f| {
+            f.path == Path::new("runner") && f.kind == "python-invocation"
+        }));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
