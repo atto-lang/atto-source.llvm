@@ -443,6 +443,27 @@ def exact_source_tree(source_pr, source_commit):
     return root_tree, files, rows, hashlib.sha256(canonical_bytes(rows)).hexdigest()
 
 
+def recheck_source_snapshot(source_pr, source_commit, expected_tree):
+    """Require the tested commit to remain the exact open PR head."""
+    pr = gh_api(f"repos/{SOURCE_REPO}/pulls/{source_pr}")
+    head = pr.get("head")
+    base = pr.get("base")
+    if (pr.get("number") != source_pr
+            or pr.get("state") != "open"
+            or not isinstance(head, dict)
+            or head.get("sha") != source_commit
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("full_name") != SOURCE_REPO
+            or not isinstance(base, dict)
+            or base.get("ref") != SOURCE_BRANCH):
+        raise Denied("source PR head changed during transfer")
+
+    commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{source_commit}")
+    if (commit.get("sha") != source_commit
+            or commit.get("tree", {}).get("sha") != expected_tree):
+        raise Denied("source commit/tree changed during transfer")
+
+
 def recheck_destination_identity(repository, contract):
     repo = gh_api(f"repos/{repository}")
     if (repo.get("id") != contract["repository_id"]
@@ -576,6 +597,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if again_sha != protected_sha or again_contract != contract:
         raise Denied("protected source authority changed during transfer")
     checked_destination(repository, contract)
+    recheck_source_snapshot(source_pr, source_commit, source_tree)
 
     branch_ref = gh_api(
         f"repos/{repository}/git/refs",
@@ -587,6 +609,11 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     if branch_ref.get("ref") != "refs/heads/" + branch:
         raise Denied("carrier did not confirm exact-tree branch")
+
+    # The source-bearing ref starts a workflow that cannot execute tests
+    # without the authorization ref below. Re-read the live PR immediately
+    # before authorization so a head move in this narrow window fails closed.
+    recheck_source_snapshot(source_pr, source_commit, source_tree)
 
     authorization = "ci/authorized-" + carrier_commit
     auth_ref = gh_api(
