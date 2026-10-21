@@ -1768,6 +1768,41 @@ if(BUILD_TESTING)
         message(WARNING "Clang unavailable: native executable tests are disabled")
     endif()
 
+    # Compiler-owned hosted POSIX blocking file-descriptor capability.
+    # Guest code cannot declare/import the runtime ABI directly; source must use
+    # rt file_*_blocking / rt dir_sync_blocking with explicit io, block effects.
+    oreslang_contract_test(native_blocking_file_io_ir
+        native-blocking-file-io-positive.ores
+        --ir "oreslang_file_write_i64_blocking")
+    oreslang_contract_test(native_blocking_file_io_missing_effects
+        native-blocking-file-io-missing-effects.ores
+        --diagnostic "native blocking file intrinsic requires using io, block")
+    oreslang_contract_test(native_blocking_file_io_missing_block
+        native-blocking-file-io-missing-block.ores
+        --diagnostic "native blocking file intrinsic requires using io, block")
+    oreslang_contract_test(native_blocking_file_io_bad_arity
+        native-blocking-file-io-bad-arity.ores
+        --diagnostic "wrong arity for native blocking file intrinsic")
+    oreslang_contract_test(native_blocking_file_io_reserved_abi
+        native-blocking-file-io-reserved-symbol.ores
+        --diagnostic "reserved native blocking file ABI symbol")
+    oreslang_contract_test(wasm32_blocking_file_io_failclosed
+        native-blocking-file-io-positive.ores
+        --target wasm32-unknown-unknown
+        --diagnostic "native blocking file intrinsics require a hosted POSIX LLVM target")
+
+    if(UNIX)
+        add_executable(oreslang-native-blocking-file-io-test
+            tests/native_blocking_file_io_test.c
+            src/main/cpp/oreslang/runtime/NativeBlockingFileIo.c)
+        target_include_directories(oreslang-native-blocking-file-io-test PRIVATE
+            "\${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-blocking-file-io-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_blocking_file_io_runtime
+            COMMAND oreslang-native-blocking-file-io-test)
+    endif()
+
     # Inert native POD allocator: deterministic ownership without tracing GC.
     # The test does not establish compiler-enforced object lifetime parity.
     # Bounded native region with provenance-checked deterministic scalar drops.
