@@ -64,12 +64,32 @@ def load_trace_oracle(path):
 def oracle_expected(oracle, state, event, ticks):
     # Shared contract models *unsigned* snapshots and events.
     # Negative out-of-domain guest probes are checked by expected() only.
+    require(all(type(v) is int for v in (state, event, ticks)),
+            "guest FSM oracle inputs must be integers, not bool/coerced values")
     if any(v < 0 or v > oracle.LIMIT for v in (state, event, ticks)):
         return None
-    accepted, reason, after, effects = oracle.step(
-        oracle.snap(state, 0, ticks), event)
-    require(type(accepted) is bool and type(after) is dict and type(effects) is list,
+    before = oracle.snap(state, 0, ticks)
+    outcome = oracle.step(before, event)
+    require(type(outcome) is tuple and len(outcome) == 4,
+            "malformed shared trace oracle tuple")
+    accepted, reason, after, effects = outcome
+    require(type(accepted) is bool and type(reason) is str
+            and type(after) is dict and type(effects) is list,
             "malformed shared trace oracle outcome")
+    require(set(after) == {"state", "version", "ticks"}
+            and all(type(v) is int and 0 <= v <= oracle.LIMIT for v in after.values()),
+            "malformed shared trace oracle snapshot")
+    require(reason in ("none", "invalid-state", "invalid-ticks",
+                       "version-exhausted", "guard", "unhandled"),
+            "unknown shared trace oracle rejection reason")
+    if accepted:
+        require(reason == "none" and after["version"] == 1
+                and len(effects) == 1
+                and type(effects[0]) is int and 1 <= effects[0] <= 4,
+                "malformed accepted shared trace oracle effect/version")
+    else:
+        require(reason != "none" and after == before and effects == [],
+                "rejected shared trace oracle transition mutated state or emitted effects")
     return after["state"] if accepted else -1
 
 
