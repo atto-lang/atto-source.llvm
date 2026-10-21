@@ -113,6 +113,22 @@ struct ActorFieldWrite {
     std::size_t offset = 0;
 };
 
+// Logical actor-private managed reference. Source/HIR deliberately carries no
+// physical width: compressed32 vs native64 is selected only after ownership.
+struct ActorManagedRefField {
+    std::string name;
+    std::int64_t initial = 0; // first vertical slice: actor-private Ref<int>
+    std::size_t offset = 0;
+};
+
+struct ActorManagedRefUse {
+    enum class Access { Read, Write };
+    Access access = Access::Read;
+    std::string field;
+    std::unique_ptr<Expression> value; // write value; null for read
+    std::size_t offset = 0;
+};
+
 // Canonical sealed actor-state loan. State storage is not an ordinary actor
 // field namespace: the binder exists only while this synchronous callback is
 // being checked/lowered, and no reference/capability may escape it.
@@ -122,6 +138,9 @@ struct ActorStateLoan {
     std::string binder;
     std::vector<ActorFieldWrite> writes;
     std::unique_ptr<Expression> result;
+    // Experimental source-authority vertical slice. A managed-ref operation
+    // is terminal in the callback until full typed HIR sequencing is wired.
+    std::unique_ptr<ActorManagedRefUse> managed_ref_result;
     std::size_t offset = 0;
 };
 
@@ -202,6 +221,7 @@ struct ActorDecl {
     // sealed_state is false.
     bool sealed_state = false;
     std::vector<LocalBinding> fields; // bounded actor-owned integer state slots
+    std::vector<ActorManagedRefField> managed_ref_fields; // logical Ref<int>, width-independent
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
 };
