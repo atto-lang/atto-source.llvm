@@ -1478,7 +1478,7 @@ private:
                             " at byte " + std::to_string(token_.offset));
             }
 
-            const std::string file_intrinsic = "__oreslang_rt_" + operation;
+            const std::string file_intrinsic = std::string("__oreslang_rt_") + std::string(operation);
             if (native_blocking_file_intrinsic(file_intrinsic)) {
                 advance();
                 auto result = make_expression(Expression::Kind::Call, offset);
