@@ -1378,16 +1378,102 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.
     if (!wasm32_target) for (const auto& actor : source.actors) {
+        if (!actor.managed_ref_fields.empty()) {
+            // First executable source managed-ref slice: the actor has only
+            // Ref<int> state and one terminal ref_read/ref_write callback.
+            // Scalar actor state remains a separate proven ABI until mixed
+            // state layout receives an explicit schema/layout proof.
+            if (!actor.sealed_state || !actor.fields.empty() ||
+                    actor.managed_ref_fields.size() > 16 ||
+                    actor.on_message.parameters.size() != 1 ||
+                    !actor.on_message.actor_state_loan ||
+                    actor.on_message.result ||
+                    !actor.on_message.actor_field_writes.empty() ||
+                    !actor.on_message.has_declared_effects)
+                throw std::runtime_error(
+                    "managed Ref actor reached codegen with invalid source shape");
+            const auto& loan = *actor.on_message.actor_state_loan;
+            if (!loan.managed_ref_result || loan.result || !loan.writes.empty())
+                throw std::runtime_error(
+                    "managed Ref actor requires one terminal managed-ref result");
+
+            const auto target = TargetAbi::host();
+
+            auto* ctor = actorInits.at(actor.name);
+            llvm::BasicBlock* initial =
+                llvm::BasicBlock::Create(context, "entry", ctor);
+            llvm::IRBuilder<> init(initial);
+            auto ctor_args = ctor->arg_begin();
+            llvm::Value* actorArena = &*ctor_args++;
+            llvm::Value* refState = &*ctor_args++;
+            llvm::Value* domain = &*ctor_args++;
+            llvm::Value* epoch = &*ctor_args++;
+            auto initRuntime =
+                backend::SourceManagedRefLowering::bind_actor_context(
+                    init, actorArena, refState, domain, epoch);
+            for (const auto& ref : actor.managed_ref_fields) {
+                auto authorization =
+                    SourceOwnershipChecker::authorize_actor_managed_ref_init(
+                        source_text, actor.name, ref.name, target);
+                backend::SourceManagedRefLowering::lower_init(
+                    init, std::move(authorization), source_text, target,
+                    actor.name, ref.name, ref.offset, initRuntime);
+            }
+            init.CreateRetVoid();
+
+            auto* handler = actorHandlers.at(actor.name);
+            llvm::BasicBlock* entry =
+                llvm::BasicBlock::Create(context, "entry", handler);
+            llvm::IRBuilder<> builder(entry);
+            auto handler_args = handler->arg_begin();
+            llvm::Value* handlerArena = &*handler_args++;
+            llvm::Value* handlerRefState = &*handler_args++;
+            llvm::Value* currentDomain = &*handler_args++;
+            llvm::Value* currentEpoch = &*handler_args++;
+            llvm::Value* incoming = &*handler_args++;
+            auto runtime =
+                backend::SourceManagedRefLowering::bind_actor_context(
+                    builder, handlerArena, handlerRefState,
+                    currentDomain, currentEpoch);
+
+            std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+            const std::string param = actor.on_message.parameters[0].name;
+            llvm::Value* pslot =
+                builder.CreateAlloca(i64, nullptr, param + ".slot");
+            builder.CreateStore(incoming, pslot);
+            values.emplace(param, pslot);
+
+            const auto& use = *loan.managed_ref_result;
+            auto authorization =
+                SourceOwnershipChecker::authorize_actor_managed_ref(
+                    source_text, actor.name, use.field, target);
+            if (use.access == ActorManagedRefUse::Access::Read) {
+                llvm::Value* result =
+                    backend::SourceManagedRefLowering::lower_read(
+                        builder, std::move(authorization), source_text, target,
+                        actor.name, use.field, use.offset, runtime);
+                builder.CreateRet(result);
+            } else {
+                if (!use.value)
+                    throw std::runtime_error(
+                        "managed Ref write reached codegen without value");
+                llvm::Value* newValue = lower(
+                    *use.value, builder, i64, values, emptyFields,
+                    declarations);
+                llvm::Value* result =
+                    backend::SourceManagedRefLowering::lower_write(
+                        builder, std::move(authorization), source_text, target,
+                        actor.name, use.field, use.offset, runtime, newValue);
+                builder.CreateRet(result);
+            }
+            continue;
+        }
+
         // Revalidate the sealed-state AST before dereferencing any initializer
         // or emitting actor IR. emit_verified_llvm_ir is a public compiler
         // boundary and must remain safe even after parser-bypassing AST
         // transforms performed by compiler passes or native test callers.
         if (actor.sealed_state) {
-            if (!actor.managed_ref_fields.empty() ||
-                    (actor.on_message.actor_state_loan &&
-                     actor.on_message.actor_state_loan->managed_ref_result))
-                throw std::runtime_error(
-                    "source managed Ref<int> awaits SourceOwnershipChecker compressed32 lowering");
             if (actor.fields.size() + actor.managed_ref_fields.size() > 16)
                 throw std::runtime_error("sealed actor state exceeds field bound");
             for (const auto& field : actor.fields) {
