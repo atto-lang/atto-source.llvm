@@ -52,6 +52,15 @@ public:
     }
 
     /**
+     * Host-only physical retirement observation. If get_done() is ready, this
+     * must already be true; DONE is never allowed to outrun owner-registry
+     * retirement or physical resource quiescence.
+     */
+    bool physically_done() const noexcept {
+        return ticket_->physically_done.load(std::memory_order_acquire);
+    }
+
+    /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
      * code inline from the acknowledging or subscribing host thread.
@@ -417,11 +426,14 @@ public:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            // Settle done ONLY on acknowledged physical finalization.
-            done_callbacks = settle_done(ref, failure);
+            // Publish physical retirement and release logical ownership before
+            // making DONE observable. adopt() takes owners.mutex, so a waiter
+            // released by get_done() can immediately re-admit only a newer
+            // generation and can never race a stale live-owner entry.
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
+            done_callbacks = settle_done(ref, failure);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
@@ -604,9 +616,11 @@ private:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            done_callbacks = settle_done(ref, failure);
+            // Same ordering as live-group finalization: resource retirement
+            // and owner-registry release happen before DONE becomes observable.
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             owners.live.erase(it);
+            done_callbacks = settle_done(ref, failure);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);

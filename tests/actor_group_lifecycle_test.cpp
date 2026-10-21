@@ -672,6 +672,49 @@ int main() {
         check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
     }
     {
+        // DONE is the reincarnation barrier: once it becomes observable, the
+        // old physical ticket is already retired and a strictly newer
+        // generation can be admitted immediately under the same logical id.
+        NativeActorGroup group(8500, 1);
+        auto old = group.adopt(8500, 55, 7, [] {});
+        check(group.mark_ready(old), "DONE-order actor not ready");
+
+        std::promise<void> waiter_started;
+        std::promise<void> waiter_finished;
+        std::atomic<bool> physical_seen{false};
+        std::atomic<bool> replacement_admitted{false};
+        NativeActorGroup successor(8500, 1);
+
+        std::thread waiter([&] {
+            waiter_started.set_value();
+            old.get_done().get();
+            physical_seen.store(old.physically_done(), std::memory_order_release);
+            try {
+                auto replacement = successor.adopt(8500, 55, 8, [] {});
+                replacement_admitted.store(true, std::memory_order_release);
+                check(successor.mark_ready(replacement),
+                      "DONE-order replacement not ready");
+                check(successor.finalized(replacement),
+                      "DONE-order replacement not finalized");
+                replacement.get_done().get();
+            } catch (...) {
+                replacement_admitted.store(false, std::memory_order_release);
+            }
+            waiter_finished.set_value();
+        });
+
+        waiter_started.get_future().wait();
+        check(group.finalized(old), "DONE-order physical ack rejected");
+        waiter_finished.get_future().wait();
+        waiter.join();
+
+        check(physical_seen.load(std::memory_order_acquire),
+              "get_done became observable before physical retirement");
+        check(replacement_admitted.load(std::memory_order_acquire),
+              "same-id newer generation could not admit immediately after DONE");
+    }
+
+    {
         // Wire identity is (runtime, actor, generation), not the private
         // shared ticket pointer. Once an incarnation physically retires, the
         // registry must remember its generation forever so the same or an
