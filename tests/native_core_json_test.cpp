@@ -59,6 +59,17 @@ int main() {
         forged_overflow = true;
     }
     assert(forged_overflow);
+
+    for (const std::string& bad_number_token : {" 1", "1 ", "\t1"}) {
+        CoreJsonValue bad_number(CoreJsonNumber{bad_number_token});
+        bool rejected_bad_number = false;
+        try {
+            (void)CoreJson::encode(bad_number);
+        } catch (const std::runtime_error&) {
+            rejected_bad_number = true;
+        }
+        assert(rejected_bad_number);
+    }
     bool overflow = false;
     try {
         (void)CoreJson::exact_i64(CoreJson::parse("9223372036854775808"));
