@@ -467,6 +467,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             ),
             patch.object(v3, "recheck_destination_identity"),
             patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+            patch.object(v3, "verify_published_root_and_commit"),
+            patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "require_exact_ref"),
             patch.object(v3, "gh_api", side_effect=api),
         ):
@@ -522,12 +524,17 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             "Result", (), {"returncode": 0, "stderr": "", "stdout": "{}"}
         )()
         ref_name = "ci/authorized-" + CARRIER_COMMIT
-        with patch.object(v3.subprocess, "run", return_value=response) as run:
+        with (
+            patch.object(v3, "trusted_github_cli", return_value="/usr/bin/gh"),
+            patch.object(v3, "github_api_environment", return_value={"GH_TOKEN": "x"}),
+            patch.object(v3, "run_bounded_gh", return_value=response) as run,
+        ):
             self.assertIs(v3._gh_ref_request("trusted/ci", ref_name, "GET"), response)
         self.assertIn(
             "repos/trusted/ci/git/ref/heads/ci%2Fauthorized-" + CARRIER_COMMIT,
             run.call_args.args[0],
         )
+        self.assertEqual(run.call_args.kwargs["env"], {"GH_TOKEN": "x"})
         with self.assertRaisesRegex(v3.Denied, "target is invalid"):
             v3._gh_ref_request("trusted/ci", "ci/unrelated", "GET")
 
@@ -582,6 +589,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 ),
             ),
             patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "verify_published_root_and_commit"),
+            patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "gh_api", side_effect=api),
         ]
         if verify_source_pr is not None:
@@ -622,7 +631,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             ],
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "PR head moved"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -655,7 +664,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or False,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "ambiguous ref transport failure"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -690,7 +699,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
             with self.assertRaisesRegex(v3.Denied, "authorization ref"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
