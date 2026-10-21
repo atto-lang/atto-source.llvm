@@ -1442,7 +1442,16 @@ private:
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
-            const auto operation = token_.text;
+
+            bool mutable_borrow = false;
+            std::string operation = token_.text;
+            if (operation == "mut") {
+                advance();
+                if (token_.text != "borrow")
+                    fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
+                operation = "borrow";
+                mutable_borrow = true;
+            }
             if (operation == "cooperate") {
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
@@ -1453,7 +1462,8 @@ private:
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            const bool mutable_borrow = operation == "borrow" && accept("mut");
+            if (operation == "borrow" && token_.text == "mut")
+                fail("legacy 'rt borrow mut' is not valid Oreslang; use 'rt mut borrow value'");
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
