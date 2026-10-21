@@ -89,6 +89,8 @@ static void collect_tree_shake_expression_calls(
         collect_tree_shake_expression_calls(*expression.left, calls);
     if (expression.right)
         collect_tree_shake_expression_calls(*expression.right, calls);
+    if (expression.condition)
+        collect_tree_shake_expression_calls(*expression.condition, calls);
     if (expression.condition_lhs)
         collect_tree_shake_expression_calls(*expression.condition_lhs, calls);
     if (expression.condition_rhs)
@@ -117,6 +119,8 @@ static void collect_tree_shake_statement_calls(
         collect_tree_shake_expression_calls(*statement.array_commit_length, calls);
     for (const auto& value : statement.array_commit_values)
         if (value) collect_tree_shake_expression_calls(*value, calls);
+    if (statement.condition)
+        collect_tree_shake_expression_calls(*statement.condition, calls);
     if (statement.condition_lhs)
         collect_tree_shake_expression_calls(*statement.condition_lhs, calls);
     if (statement.condition_rhs)
@@ -139,6 +143,7 @@ static std::unordered_set<std::string> tree_shake_function_calls(
     for (const auto& statement : function.statements)
         collect_tree_shake_statement_calls(statement, calls);
     for (const auto& guarded : function.early_returns) {
+        if (guarded.condition) collect_tree_shake_expression_calls(*guarded.condition, calls);
         if (guarded.lhs) collect_tree_shake_expression_calls(*guarded.lhs, calls);
         if (guarded.rhs) collect_tree_shake_expression_calls(*guarded.rhs, calls);
         if (guarded.result) collect_tree_shake_expression_calls(*guarded.result, calls);
