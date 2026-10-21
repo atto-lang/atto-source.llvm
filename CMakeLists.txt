@@ -43,6 +43,53 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # These execute the real parser/ownership/reachability passes without
+    # linking LLVM. The ordinary compiler uses exactly the same code.
+    foreach(ores_actor_pass IN ITEMS ownership reachability)
+        add_executable(oreslang-actor-${ores_actor_pass}-source-test
+            tests/native_actor_${ores_actor_pass}_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-actor-${ores_actor_pass}-source-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-actor-${ores_actor_pass}-source-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_actor_source_${ores_actor_pass}
+            COMMAND oreslang-actor-${ores_actor_pass}-source-test)
+        set_tests_properties(native_actor_source_${ores_actor_pass} PROPERTIES TIMEOUT 30)
+    endforeach()
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-actor-scalar-heap-safety-test
+        tests/native_actor_scalar_heap_safety_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-actor-scalar-heap-safety-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-actor-scalar-heap-safety-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-actor-scalar-heap-safety-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-actor-scalar-heap-safety-test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(oreslang-actor-scalar-heap-safety-test PRIVATE ORES_ARENA_TEST_ALLOCATIONS=1)
+        target_link_options(oreslang-actor-scalar-heap-safety-test PRIVATE
+            -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free)
+    endif()
+    add_test(NAME native_actor_scalar_heap_safety COMMAND oreslang-actor-scalar-heap-safety-test)
+    set_tests_properties(native_actor_scalar_heap_safety PROPERTIES TIMEOUT 30)
+    add_executable(oreslang-source-actor-heap-host-bridge-test
+        tests/source_actor_heap_host_bridge_test.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c)
+    target_include_directories(oreslang-source-actor-heap-host-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-heap-host-bridge-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-source-actor-heap-host-bridge-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    add_test(NAME native_source_actor_heap_host_bridge COMMAND oreslang-source-actor-heap-host-bridge-test)
+    set_tests_properties(native_source_actor_heap_host_bridge PROPERTIES TIMEOUT 30)
+endif()
+if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     # Host-only generational reply slab proof; not source-level actor RPC.
     add_executable(oreslang-native-generational-reply-test

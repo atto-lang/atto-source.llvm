@@ -30,6 +30,8 @@ def main():
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-take-restore.ores", 1, 2, 3),
+        ("source-actor-aot-callback-roots.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
@@ -38,6 +40,10 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-message-take-reuse-reject.ores": "use of explicitly moved int",
+        "source-actor-state-take-return-reject.ores": "left moved at handler return",
+        "source-actor-state-mut-loan-reject.ores": "actor field mutable borrow needs handle-aware writeback",
+        "source-actor-exclusive-argument-alias-reject.ores": "read conflicts with active mutable borrow",
         "source-actor-static-method-reject.ores": "static method is invalid",
         "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
@@ -73,7 +79,10 @@ def main():
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
-            guest = run([args.compiler, str(fixtures / name)])
+            compiler_args = [args.compiler]
+            if name == "source-actor-aot-callback-roots.ores":
+                compiler_args.append("--tree-shake")
+            guest = run([*compiler_args, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name

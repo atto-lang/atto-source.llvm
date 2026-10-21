@@ -1,6 +1,6 @@
 # Native actor memory parity: first executable slice
 
-Status: host-runtime implementation, not whole-language certification.
+Status: LLVM source-ownership and reachability fixes plus native actor runtime integration; not whole-language certification.
 
 ## Separate promises
 
@@ -25,7 +25,7 @@ matrix. Open feature branches may provide additional behavior.
 | --- | --- | --- |
 | Java | a80dedb5776b8762eccfb753eda30543075f19bd | Host AOT mode permits interpreted guest execution; managed generational graph helper explicitly does not establish zero GC. Existing static ownership checker must remain authoritative. |
 | LLVM | 5cd61d63f97cc3963fae3afee14fb1043d0659e3 | Native guest subset and bounded C actor arena; host-only arena tests do not establish guest aggregate or async lowering. |
-| Forge | eadfdc44b9dc51610b09103ed28879403b768abf | Scalar native emission and byte mailbox; this change adds the bounded native arena library. Guest actors and ownership lowering remain unsupported. |
+| Forge | eadfdc44b9dc51610b09103ed28879403b768abf | Scalar native emission and byte mailbox; this change adds bounded arenas and an explicitly scheduled host scalar-actor runtime. Forge guest actor parsing/lowering remains unsupported. |
 | .NET | 74204676ed620b6aceea22574953c34de8583823 | Native AOT subset; managed runtime GC and mailbox are not per-actor private heaps. |
 | WASM | 641c3cc08b44376c5a4ab30882482c1efc0749f8 | LLVM compiler bridge and separate AOT-host tooling; worker/linear-memory isolation is not guest actor/borrow-checker parity. |
 | Rust | 01b7d9ef33ed425d6f2f59dc37eaf96ed7a434e3 | Narrow Cranelift native-object subset; no claim of guest actor ownership support. |
@@ -40,8 +40,9 @@ the tests in this change.
 ## Implemented native memory slice
 
 LLVM and Forge now use byte-identical C arena source/header implementations.
-Forge exposes a separate `oresforge_actor_arena` library; its mailbox does not
-automatically allocate an arena, and no compiler emits calls to this new API yet.
+Forge exposes `oresforge_actor_arena` and `oresforge_scalar_actor` libraries.
+The latter binds the compiler scalar-heap ABI to one private heap and bounded
+preallocated FIFO per host actor. Forge guest actor syntax is not yet lowered.
 
 - Preallocate bounded persistent slots, scratch bytes and loan metadata at open.
 - Enforce domain, actor identity/incarnation, current turn and physical carrier.
@@ -77,10 +78,61 @@ disabled because the execution environment prevents LeakSanitizer's /proc
 thread inspection. Hosted exact-head CI and CMake integration remain separate
 checks; a local pass is not their result.
 
+## Deeper compiler and runtime integration
+
+LLVM source ownership previously skipped ActorDecl.on_message entirely. The
+checker now analyzes handler argument order, explicit moves and call loans,
+rejects reuse of moved message values, and requires actor fields to be restored
+before returning if explicitly taken. Immutable state cannot be taken. Actor
+field mutable borrows still fail until handle-aware writeback lowering exists;
+shared call-scoped reads and mutable borrows of the message parameter are
+checked using the ordinary function rules.
+
+A second compiler fix preserves all emitted actor callbacks as implicit AOT
+reachability roots. Previously a helper referenced only by on_message could be
+removed by --tree-shake. Its direct/transitive name+arity dependencies now stay
+in the closure. Unused ordinary functions are still removable. Actor declaration
+pruning is not implemented, so all emitted actor callbacks must be retained.
+
+The real compiler scalar field ABI, ActorOwnedI64Heap, now checks physical
+carrier ownership, supports shared/exclusive host loans and requires first-turn
+fixed-field initialization. A preallocated free list makes dynamic slot
+allocation/drop O(1); fixed-field reservation can scan during construction.
+This is the heap used by SourceActorBootstrap, independently of the generic
+byte-slab arena introduced in the first slice.
+
+Forge ScalarActor binds that same scalar heap ABI to a preallocated int64 FIFO.
+try_send returns Accepted/Full/Closed/Foreign without allocating. run_one admits
+one callback at a time and returns Busy to concurrent carriers. Callbacks run
+without holding the mailbox/lifecycle mutex, so send and stop stay responsive.
+stop closes ingress and drains accepted messages; callback failure seals the
+actor and wipes queued values. References carry per-instance identity, including
+when a numeric actor id is reused. Construction reserves one heap without executing actor code. The first admitted
+worker turn runs initialization before its first message; an external pool
+schedules all turns. Stop before startup can cancel without running initialization.
+The runtime creates no threads and performs no interpretation/JIT compilation.
+Destruction requires external callers to be fenced and callbacks to release all
+loans; it rejects unresolved heap holders rather than freeing live storage.
+This is trusted-host callback integration, not Forge guest actor compilation,
+actor suspension, Erlang-style supervision, or untrusted execution isolation.
+
+Executed optimized checks include 42 admitted + 49 rejected source programs,
+11 actor AOT reachability checks, 29 scalar-heap misuse rejections per backend,
+full 4096-slot occupancy with reserved fields, and 16384 scalar slot/loan reuse
+cycles. The actual OresVM/source bootstrap runs 1600 host-callback messages
+across 16 distinct heaps and reclaims each heap. Forge tests exercise 512
+messages contended across four producers/four workers, stop during an active
+callback, FIFO/carrier migration, failure cleanup, stale-reference rejection,
+and 16384 turns guarded against C allocator and ordinary C++ new/delete calls.
+No-LLVM scripts execute the actual frontend/ownership sources and native runtime
+in optimized and ASan/UBSan modes. They do not build LlvmCodegen or execute
+new .ores-derived machine code; that still needs the full LLVM toolchain.
+
 ## Next implementation priorities
 
-1. Wire compiler-resolved actor state into these arenas, including one owned
-   arena per actor incarnation and explicit teardown/cancellation paths.
+1. Extend the existing LLVM scalar actor-owned state path to aggregates, and
+   connect Forge source actor syntax to its new host runtime without weakening
+   ownership, lifecycle or actor-incarnation checks.
 2. Emit the same immutable/exclusive borrow policy from typed IR on each
    backend. Check branch joins, projected fields, use after move and call
    arguments; reject borrowed actor messages and unsupported loan escapes.

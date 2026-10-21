@@ -25,6 +25,7 @@ struct LocalOwnership {
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
+    bool actor_field = false; // persistent scalar actor state, not a stack owner
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -132,6 +133,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     // into a mutable one. Its new loan ends at that nested call's return.
     if (source.heap_owned && exclusive)
         reject(expr, "ownership violation: native owned int mutable borrow needs handle-aware writeback");
+    if (source.actor_field && exclusive)
+        reject(expr, "ownership violation: native actor field mutable borrow needs handle-aware writeback");
     if (source.mode == Mode::Borrow && exclusive)
         reject(expr, "cannot mutably reborrow shared parameter '" + expr.left->name + "'");
     if (exclusive && source.mode == Mode::Value && !source.mutable_owner)
@@ -276,6 +279,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 LocalOwnership& source = local(*expr.left, locals);
                 if (source.mode != Mode::Value)
                     reject(expr, "cannot rt take through a borrowed parameter");
+                if (source.actor_field && !source.mutable_owner)
+                    reject(expr, "ownership violation: cannot take immutable actor field");
                 // Experimental native owned-i64 values transfer the scalar,
                 // drop their old heap slot immediately and disarm the
                 // generated exit-time drop flag. The emitted native backend
@@ -404,6 +409,47 @@ void validate_i64_ownership(const Program& program) {
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
+    // Actor handlers are separate generated functions and must pass the same
+    // argument-order, move and loan checks as ordinary source functions.
+    // Fields are persistent owned places. A scalar field take is admissible
+    // only if a subsequent checked write restores it before handler return.
+    for (const auto& actor : program.actors) {
+        Locals state;
+        for (const auto& field : actor.fields) {
+            Locals empty;
+            check_value(*field.initializer, empty, {});
+            LocalOwnership owner;
+            owner.actor_field = true;
+            owner.mutable_owner = field.field_mutable;
+            if (!state.emplace(field.name, std::move(owner)).second)
+                throw std::runtime_error("ownership violation: duplicate actor state field");
+        }
+        const auto& handler = actor.on_message;
+        for (const auto& parameter : handler.parameters) {
+            LocalOwnership owner;
+            owner.mode = parameter.mode;
+            owner.mutable_owner = parameter.mode == Mode::Value;
+            if (!state.emplace(parameter.name, std::move(owner)).second)
+                throw std::runtime_error("ownership violation: actor parameter shadows state field");
+        }
+        for (const auto& write : handler.actor_field_writes) {
+            const auto target = state.find(write.field);
+            if (target == state.end() || !target->second.actor_field ||
+                    !target->second.mutable_owner)
+                throw std::runtime_error("ownership violation: actor field write requires mutable state");
+            // Evaluate the complete RHS before restoring the target place.
+            // This permits total = (rt take total) + n but rejects a second
+            // read/move of total within that same RHS.
+            check_value(*write.expression, state, functions);
+            target->second.moved = false;
+        }
+        if (handler.result) check_value(*handler.result, state, functions);
+        for (const auto& place : state) {
+            if (place.second.actor_field && place.second.moved)
+                throw std::runtime_error("ownership violation: actor state field '" +
+                    place.first + "' left moved at handler return");
+        }
+    }
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;

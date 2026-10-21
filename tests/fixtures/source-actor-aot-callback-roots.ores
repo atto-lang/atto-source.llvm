@@ -1,0 +1,17 @@
+fnc leaf(int n): int { return n; }
+fnc helper(int n): int { return leaf(n); }
+fnc unused(): int { return 99; }
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + helper(n);
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  worker.send(2);
+  stop worker;
+  return 43;
+}
