@@ -30,6 +30,8 @@ namespace oreslang {
  */
 class SourceOwnershipChecker final {
 public:
+    SourceOwnershipChecker() = delete;
+
     static backend::ActorManagedRefMir derive_actor_state_ref_claims(
             const Program& program,
             std::string_view actor_name,
