@@ -50,7 +50,10 @@ public:
         Delivery(const Delivery&) = delete;
         Delivery& operator=(const Delivery&) = delete;
         Delivery(Delivery&&) noexcept = default;
-        Delivery& operator=(Delivery&&) noexcept = default;
+        // Replacing a live delivery would destroy its payload while leaving
+        // the original frame/byte credits charged forever. A delivery lease
+        // may move only by construction; assignment is deliberately sealed.
+        Delivery& operator=(Delivery&&) = delete;
         T& value() {
             if (acknowledged_ || !payload_) throw std::logic_error("stale owned actor payload");
             return *payload_;
