@@ -192,6 +192,22 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
             native_pure_scalar_tree(*expr.right, depth + 1);
     return false;
 }
+bool hat_scalar_tree(const Expression& expr,
+                     const std::unordered_set<std::string>& parameters,
+                     std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer) return true;
+    if (expr.kind == K::Variable) return parameters.count(expr.name) != 0;
+    if (expr.kind == K::Negate)
+        return expr.left && hat_scalar_tree(*expr.left, parameters, depth + 1);
+    if (expr.kind == K::Add || expr.kind == K::Subtract || expr.kind == K::Multiply)
+        return expr.left && expr.right
+            && hat_scalar_tree(*expr.left, parameters, depth + 1)
+            && hat_scalar_tree(*expr.right, parameters, depth + 1);
+    return false;
+}
+
 
 struct NativeCallSignature {
     std::vector<std::string> parameters;
@@ -252,7 +268,10 @@ public:
         Program program;
         bool wrapped_module = false;
         if (accept("define")) {
-            if (accept("serial")) {
+            if (accept("pub")) {
+                require("kernel");
+                program.kernels.push_back(hat_kernel_declaration(true));
+            } else if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
@@ -260,8 +279,9 @@ public:
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
-            } else {
-                if (accept("class")) program.classes.push_back(class_declaration());
+            } else if (token_.text != "pub") {
+                if (accept("kernel")) program.kernels.push_back(hat_kernel_declaration(false));
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -272,11 +292,15 @@ public:
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
             if (accept("define")) {
-                if (accept("serial")) {
+                if (accept("pub")) {
+                    require("kernel");
+                    program.kernels.push_back(hat_kernel_declaration(true));
+                } else if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("kernel")) program.kernels.push_back(hat_kernel_declaration(false));
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -291,11 +315,12 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.kernels.empty() && program.cooperative_loops.empty())
+            fail("expected at least one function, actor or kernel");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
-                 !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
+                 !program.actors.empty() || !program.kernels.empty() ||
+                 !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         validate(program);
@@ -303,6 +328,51 @@ public:
     }
 
 private:
+    HatKernelDecl hat_kernel_declaration(bool exported) {
+        HatKernelDecl kernel;
+        kernel.offset = token_.offset;
+        kernel.exported = exported;
+        kernel.name = identifier();
+        require("as");
+        if (token_.text == "end")
+            fail("HAT v1 kernel requires exactly one fnc main entry");
+
+        kernel.entry = function();
+        if (token_.text != "end")
+            fail("HAT v1 kernel admits exactly one fnc main entry");
+        require("end");
+
+        const Function& entry = kernel.entry;
+        if (entry.name != "main")
+            fail("HAT v1 kernel entry must be named main");
+        if (entry.returns_void)
+            fail("HAT v1 kernel main must return int");
+        if (!entry.generic_parameters.empty())
+            fail("HAT v1 kernel entries cannot be generic");
+        if (entry.has_declared_effects)
+            fail("HAT v1 kernel entry cannot declare host/runtime effects");
+        if (!entry.locals.empty() || !entry.statements.empty() || !entry.early_returns.empty()
+                || !entry.actor_spawns.empty() || !entry.actor_sends.empty()
+                || !entry.actor_stops.empty() || !entry.actor_actions.empty()
+                || !entry.actor_field_writes.empty() || entry.scalar_while
+                || entry.caught_throw_value || !entry.caught_throw_defers.empty())
+            fail("HAT v1 kernel main must contain exactly one scalar return expression");
+        if (!entry.result)
+            fail("HAT v1 kernel main requires a return value");
+
+        std::unordered_set<std::string> parameters;
+        for (const auto& parameter : entry.parameters) {
+            if (parameter.mode != Parameter::Mode::Value
+                    || !parameter.class_name.empty() || !parameter.generic_type.empty())
+                fail("HAT v1 kernel parameters must be immutable int values");
+            if (!parameters.insert(parameter.name).second)
+                fail("duplicate HAT v1 kernel parameter");
+        }
+        if (!hat_scalar_tree(*entry.result, parameters))
+            fail("HAT v1 kernel expression supports only parameters, int literals, unary -, +, - and *");
+        return kernel;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
