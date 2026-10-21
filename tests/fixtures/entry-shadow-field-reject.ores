@@ -1,7 +1,0 @@
-define class Box as
-  pub int Entry = 1;
-end
-
-fnc main(): int {
-  return 0;
-}
