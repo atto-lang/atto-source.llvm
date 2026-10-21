@@ -50,16 +50,16 @@ The provider must keep an independent, non-guest-accessible operation record.
 | CANCEL_EVENT_DONE | CANCEL_ACKNOWLEDGED | Atomic paired cancellation acknowledgment; then handle retirement |
 | QUOTA_HELD / FENCES_CLAIMED | ABORT_BEFORE_ENQUEUE | Only with a provider-proved no-enqueue witness, never by pretending completion |
 
-**Known missing primitive:** after `claimPair` / `claim_pair`, the existing
-fence ledger has no separately authenticated *pre-enqueue abort* operation.
-Fence admission now distinguishes RESERVED from SUBMITTED. If physical
-enqueue fails before any command reached hardware, the provider must invoke
+**Implemented host-ledger primitive:** after `claimPair` / `claim_pair`,
+fence admission distinguishes RESERVED from SUBMITTED and exposes an exact
+ticket *pre-enqueue abort* operation. If physical enqueue fails before any
+command reached hardware, the provider must invoke
 the exact-ticket pre-enqueue abort and atomically restore both allocations to
 idle. After enqueue succeeds it must mark the exact pair submitted before
 completion or cancellation is legal. A submitted command can never use the
 pre-enqueue abort path.
 
-This closes the host-ledger ambiguity, but provider dispatch remains disabled
+This closes the host-ledger ambiguity. Provider dispatch remains disabled
 until a real backend also authenticates physical allocation provenance, queue
 authority, quotas and device completion events. OpenCL source emission alone
 is still not execution evidence.
