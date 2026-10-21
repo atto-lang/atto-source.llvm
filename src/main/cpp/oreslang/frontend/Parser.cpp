@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -116,10 +116,13 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
-            at_ += 2;
-            return {Kind::Symbol, source_.substr(start, 2), start};
+        // Contiguous comparison/logical operators are single tokens, matching
+        // the Java/Graal precedence grammar.
+        for (std::string_view op : {"==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+            if (source_.substr(at_, 2) == op) {
+                at_ += 2;
+                return {Kind::Symbol, source_.substr(start, 2), start};
+            }
         }
         if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
             throw std::runtime_error("native @DefaultArgVals declaration requires "
@@ -129,7 +132,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -652,7 +655,13 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (!accept("int")) {
+                if (accept("int")) {
+                    parameter.scalar_type = ScalarType::I64;
+                } else if (accept("bool")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native bool borrow ABI is not yet admitted; pass bool by value");
+                    parameter.scalar_type = ScalarType::Bool;
+                } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = identifier();
                     if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
@@ -673,14 +682,21 @@ private:
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void && !accept("int")) {
-            const std::size_t type_offset = token_.offset;
-            const std::string type = identifier();
-            if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
-            const bool generic = std::any_of(value.generic_parameters.begin(),
-                value.generic_parameters.end(),
-                [&](const GenericParameter& p) { return p.name == type; });
-            if (!generic) fail("native return type requires int or scalar generic slot");
+        if (!value.returns_void) {
+            if (accept("int")) {
+                value.return_type = ScalarType::I64;
+            } else if (accept("bool")) {
+                value.return_type = ScalarType::Bool;
+            } else {
+                const std::size_t type_offset = token_.offset;
+                const std::string type = identifier();
+                if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
+                const bool generic = std::any_of(value.generic_parameters.begin(),
+                    value.generic_parameters.end(),
+                    [&](const GenericParameter& p) { return p.name == type; });
+                if (!generic) fail("native return type requires int, bool or scalar generic slot");
+                value.return_type = ScalarType::I64;
+            }
         }
         if (token_.text == "?")
             fail("native optional return type '?' requires versioned Option/default ABI lowering");
@@ -789,7 +805,15 @@ private:
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
-                        require("int");
+                        if (accept("int")) {
+                            binding.scalar_type = ScalarType::I64;
+                        } else if (accept("bool")) {
+                            if (binding.heap_owned)
+                                fail("native owned bool region lowering is not admitted");
+                            binding.scalar_type = ScalarType::Bool;
+                        } else {
+                            fail("native scalar local requires int or bool");
+                        }
                     }
                 }
                 require("=");
@@ -855,7 +879,9 @@ private:
                     statement.branch_local->offset = statement.offset;
                     statement.branch_local->name = identifier();
                     require(":");
-                    require("int");
+                    if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
+                    else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
+                    else fail("native branch-local scalar requires int or bool");
                     require("=");
                     statement.branch_local->initializer = expression();
                     require(";");
@@ -1232,43 +1258,6 @@ private:
 
     std::unique_ptr<Expression> expression() { return conditional(); }
 
-    bool parenthesized_ternary_condition_ahead() const {
-        if (token_.text != "(") return false;
-        Lexer probe = lexer_;
-        std::size_t depth = 1;
-        while (depth != 0) {
-            const Token next = probe.next();
-            if (next.kind == Kind::End) return false;
-            if (next.text == "(") ++depth;
-            else if (next.text == ")") --depth;
-        }
-        return probe.next().text == "?";
-    }
-
-    std::pair<std::unique_ptr<Expression>, std::unique_ptr<Expression>>
-    ternary_boolean_condition() {
-        if (accept("(")) {
-            auto condition = ternary_boolean_condition();
-            require(")");
-            return condition;
-        }
-        if (token_.text == "true" || token_.text == "false") {
-            const bool value = token_.text == "true";
-            auto lhs = make_expression(Expression::Kind::Integer, token_.offset);
-            lhs->integer = value ? 1 : 0;
-            auto rhs = make_expression(Expression::Kind::Integer, token_.offset);
-            rhs->integer = 1;
-            advance();
-            return {std::move(lhs), std::move(rhs)};
-        }
-        auto lhs = additive();
-        if (token_.text != "eq" && token_.text != "==")
-            fail("native ternary condition requires bool; use true/false or scalar equality");
-        advance();
-        auto rhs = additive();
-        return {std::move(lhs), std::move(rhs)};
-    }
-
     std::unique_ptr<Expression> conditional() {
         if (++conditional_depth_ > kMaxNativeExpressionDepth) {
             --conditional_depth_;
@@ -1279,43 +1268,89 @@ private:
             ~ConditionalDepthGuard() { --depth; }
         } depth_guard{conditional_depth_};
 
-        const auto offset = token_.offset;
-        std::unique_ptr<Expression> condition_lhs;
-        std::unique_ptr<Expression> condition_rhs;
+        auto condition = logical_or();
+        if (!accept("?")) return condition;
 
-        // Native bool values are not general first-class scalars yet. Admit
-        // only conditions whose boolean nature is explicit and statically
-        // proven: bool literals, or scalar equality. Parentheses may fence
-        // the complete boolean condition without turning equality into an
-        // ordinary value expression.
-        if (token_.text == "true" || token_.text == "false" ||
-                parenthesized_ternary_condition_ahead()) {
-            auto condition = ternary_boolean_condition();
-            require("?");
-            condition_lhs = std::move(condition.first);
-            condition_rhs = std::move(condition.second);
-        } else {
-            auto lhs = additive();
-            if (token_.text != "eq" && token_.text != "==") {
-                if (token_.text == "?")
-                    fail("native ternary condition requires bool; use true/false or scalar equality");
-                return lhs;
-            }
-            advance();
-            auto rhs = additive();
-            if (!accept("?"))
-                fail("native scalar equality is currently only admitted as a ternary condition");
-            condition_lhs = std::move(lhs);
-            condition_rhs = std::move(rhs);
-        }
-
-        auto result = make_expression(Expression::Kind::Conditional, offset);
-        result->condition_lhs = std::move(condition_lhs);
-        result->condition_rhs = std::move(condition_rhs);
+        auto result = make_expression(Expression::Kind::Conditional, condition->offset);
+        result->condition = std::move(condition);
         result->when_true = conditional();
         require(":");
         result->when_false = conditional();
         return result;
+    }
+
+    std::unique_ptr<Expression> logical_or() {
+        auto left = logical_xor();
+        while (token_.text == "||") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalOr, offset);
+            expr->left = std::move(left);
+            expr->right = logical_xor();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_xor() {
+        auto left = logical_and();
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = equality();
+        while (token_.text == "&&") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
+            expr->left = std::move(left);
+            expr->right = equality();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> equality() {
+        auto left = comparison();
+        while (token_.text == "==" || token_.text == "eq" ||
+                token_.text == "!=" || token_.text == "neq") {
+            const auto offset = token_.offset;
+            const bool equal = token_.text == "==" || token_.text == "eq";
+            advance();
+            auto expr = make_expression(
+                equal ? Expression::Kind::Equal : Expression::Kind::NotEqual, offset);
+            expr->left = std::move(left);
+            expr->right = comparison();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> comparison() {
+        auto left = additive();
+        while (token_.text == "<" || token_.text == "<=" ||
+                token_.text == ">" || token_.text == ">=") {
+            const auto offset = token_.offset;
+            const auto op = token_.text;
+            advance();
+            auto kind = op == "<" ? Expression::Kind::Less
+                : op == "<=" ? Expression::Kind::LessEqual
+                : op == ">" ? Expression::Kind::Greater
+                : Expression::Kind::GreaterEqual;
+            auto expr = make_expression(kind, offset);
+            expr->left = std::move(left);
+            expr->right = additive();
+            left = std::move(expr);
+        }
+        return left;
     }
 
     std::unique_ptr<Expression> additive() {
@@ -1407,6 +1442,13 @@ private:
             expr->left = unary();
             return expr;
         }
+        if (token_.text == "!") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalNot, offset);
+            expr->left = unary();
+            return expr;
+        }
         return primary();
     }
 
@@ -1428,6 +1470,12 @@ private:
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
             expr->integer = integer_literal();
+            return expr;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Boolean, offset);
+            expr->boolean = token_.text == "true";
+            advance();
             return expr;
         }
         // Explicit brace tuples and nominal Entry values have no LLVM native
