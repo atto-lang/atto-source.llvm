@@ -545,14 +545,25 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
+        const bool has_managed_ref_actor =
+            std::any_of(ast.actors.begin(), ast.actors.end(),
+                [](const oreslang::ActorDecl& actor) {
+                    return !actor.managed_ref_fields.empty();
+                });
+        if (tree_shake && has_managed_ref_actor)
+            throw std::runtime_error(
+                "tree shaking managed Ref source awaits site-remap proof");
+
         if (tree_shake) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
             // so unsupported target features cannot hide in unreachable code.
-            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target, text);
             tree_shake_functions(ast, tree_shake_roots);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(
+            ast, wasm32_target, cortex_m_target, text);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
