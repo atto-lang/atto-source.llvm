@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fail-closed Java keyword parity: unsupported syntax must never emit LLVM IR."""
+import json
 import pathlib
 import subprocess
 import sys
@@ -170,6 +171,28 @@ def main():
                     f"{name}: expected rejection without LLVM IR, "
                     f"returncode={result.returncode}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
+
+        contract = pathlib.Path(__file__).resolve().parents[1] / (
+            "contracts/v2/cpu-gpu-task-unsupported-v2.json")
+        shared = json.loads(contract.read_text(encoding="utf-8"))
+        if len(shared) != 10:
+            raise AssertionError("CPU/GPU task v2 corpus must contain exactly 10 cases")
+        for name, source in shared.items():
+            fixture = pathlib.Path(tmp) / ("v2-" + name + ".ores")
+            fixture.write_text(source + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.argv[1], str(fixture)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
+            if result.returncode == 0 or result.stdout.strip():
+                raise AssertionError(
+                    f"{name}: v2 execution form admitted or emitted LLVM IR, "
+                    f"returncode={result.returncode}, stdout={result.stdout!r}, "
+                    f"stderr={result.stderr!r}"
                 )
 
 
