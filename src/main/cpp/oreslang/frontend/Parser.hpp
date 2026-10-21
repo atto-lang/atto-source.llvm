@@ -22,7 +22,7 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, FileIo, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -30,6 +30,9 @@ struct Expression {
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     std::vector<std::unique_ptr<Expression>> arguments;
+    // Compiler-owned native file intrinsics accept only bounded compile-time
+    // basename literals. They are never general guest string values.
+    std::vector<std::string> string_arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
