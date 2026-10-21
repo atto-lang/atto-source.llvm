@@ -58,8 +58,10 @@ int main() {
     static_assert(!std::is_constructible<SourceManagedRefAuthorization,
                                          ActorRefOwnershipEvidence,
                                          std::string, std::string,
-                                         std::size_t>::value,
+                                         std::string, std::size_t>::value,
                   "ordinary callers cannot wrap/replay raw evidence");
+    static_assert(!std::is_copy_constructible<SourceManagedRefAuthorization>::value,
+                  "source authorization must not be replayable by copy");
 
     {
         const auto authorization =
