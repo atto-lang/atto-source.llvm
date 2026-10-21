@@ -1751,7 +1751,10 @@ private:
                 return;
             case Expression::Kind::Call: {
                 if (native_blocking_file_intrinsic(expr.name)) {
-                    if (expr.type_arguments_present || !expr.argument_names.empty())
+                    const bool has_named_argument = std::any_of(
+                        expr.argument_names.begin(), expr.argument_names.end(),
+                        [](const std::string& label) { return !label.empty(); });
+                    if (expr.type_arguments_present || has_named_argument)
                         throw std::runtime_error(
                             "native blocking file intrinsic forbids generic/named arguments");
                     if (expr.arguments.size() !=
