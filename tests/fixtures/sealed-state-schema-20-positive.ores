@@ -1,0 +1,27 @@
+define actor WiderState as
+  state {
+    f0: int = 0;
+    f1: int = 1;
+    f2: int = 2;
+    f3: int = 3;
+    f4: int = 4;
+    f5: int = 5;
+    f6: int = 6;
+    f7: int = 7;
+    f8: int = 8;
+    f9: int = 9;
+    f10: int = 10;
+    f11: int = 11;
+    f12: int = 12;
+    f13: int = 13;
+    f14: int = 14;
+    f15: int = 15;
+    f16: int = 16;
+    f17: int = 17;
+    f18: int = 18;
+    f19: int = 19;
+  }
+  pub fnc on_message(int n): int with state.read {
+    return self.handle_state(|s| -> s.f19 + n);
+  }
+end
