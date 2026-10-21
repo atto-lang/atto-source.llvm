@@ -13,18 +13,25 @@ fnc finish_state(int ticks): int {
     if (ticks eq 3) { return 2; } fi
     return -1;
 }
-fnc bounded_ticks(int ticks): int {
+fnc start_state(int ticks): int {
     if (ticks eq 0) { return 1; } fi
     if (ticks eq 1) { return 1; } fi
     if (ticks eq 2) { return 1; } fi
     if (ticks eq 3) { return 1; } fi
-    return 0;
+    return -1;
+}
+fnc reset_state(int ticks): int {
+    if (ticks eq 0) { return 0; } fi
+    if (ticks eq 1) { return 0; } fi
+    if (ticks eq 2) { return 0; } fi
+    if (ticks eq 3) { return 0; } fi
+    return -1;
 }
 // Native frontend permits a sequence of guarded early returns followed by
 // one terminal return. Dispatch through named helpers rather than placing
 // nested conditional branches after the first return guard.
-fnc idle_transition(int event): int {
-    if (event eq 0) { return 1; } fi
+fnc idle_transition(int event, int ticks): int {
+    if (event eq 0) { return start_state(ticks); } fi
     return -1;
 }
 fnc running_transition(int event, int ticks): int {
@@ -32,16 +39,15 @@ fnc running_transition(int event, int ticks): int {
     if (event eq 2) { return finish_state(ticks); } fi
     return -1;
 }
-fnc done_transition(int event): int {
-    if (event eq 3) { return 0; } fi
+fnc done_transition(int event, int ticks): int {
+    if (event eq 3) { return reset_state(ticks); } fi
     return -1;
 }
 fnc step_state(int state, int event, int ticks): int {
-    if (bounded_ticks(ticks) eq 0) { return -1; } fi
-    // Match both coordinates separately. Packing with state*10+event
+     // Match both coordinates separately. Packing with state*10+event
     // aliases out-of-domain inputs (e.g. state 0, event 11 -> 1,1).
-    if (state eq 0) { return idle_transition(event); } fi
+    if (state eq 0) { return idle_transition(event, ticks); } fi
     if (state eq 1) { return running_transition(event, ticks); } fi
-    if (state eq 2) { return done_transition(event); } fi
+    if (state eq 2) { return done_transition(event, ticks); } fi
     return -1;
 }
