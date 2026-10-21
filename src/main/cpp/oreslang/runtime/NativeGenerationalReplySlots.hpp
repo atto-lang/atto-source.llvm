@@ -63,7 +63,7 @@ private:
         explicit Core(std::size_t capacity)
             : slots(capacity), generations(capacity, 0), next(capacity),
               free(capacity ? 0 : invalid_index_) {
-            if (capacity == 0 || capacity >= invalid_index_) {
+            if (capacity == 0 || capacity > 65'536) {
                 throw std::invalid_argument("invalid reply capacity");
             }
             for (std::size_t i = 0; i < capacity; ++i) {
