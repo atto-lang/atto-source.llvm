@@ -36,6 +36,37 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
+bool expression_uses_blocking_file_intrinsic(const Expression* expr) {
+    if (!expr) return false;
+    if (expr->kind == Expression::Kind::Call &&
+            native_blocking_file_intrinsic(expr->name))
+        return true;
+    if (expression_uses_blocking_file_intrinsic(expr->left.get()) ||
+            expression_uses_blocking_file_intrinsic(expr->right.get()))
+        return true;
+    for (const auto& arg : expr->arguments)
+        if (expression_uses_blocking_file_intrinsic(arg.get())) return true;
+    return false;
+}
+
+bool function_uses_blocking_file_intrinsic(const Function& fn) {
+    for (const auto& local : fn.locals)
+        if (expression_uses_blocking_file_intrinsic(local.initializer.get())) return true;
+    for (const auto& stmt : fn.statements) {
+        if (expression_uses_blocking_file_intrinsic(stmt.expression.get()) ||
+                expression_uses_blocking_file_intrinsic(stmt.array_commit_length.get()))
+            return true;
+        for (const auto& value : stmt.array_commit_values)
+            if (expression_uses_blocking_file_intrinsic(value.get())) return true;
+    }
+    for (const auto& guard : fn.early_returns)
+        if (expression_uses_blocking_file_intrinsic(guard.lhs.get()) ||
+                expression_uses_blocking_file_intrinsic(guard.rhs.get()) ||
+                expression_uses_blocking_file_intrinsic(guard.result.get()))
+            return true;
+    return expression_uses_blocking_file_intrinsic(fn.result.get());
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -485,6 +516,32 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
+    const bool has_blocking_file_intrinsics = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return function_uses_blocking_file_intrinsic(fn); });
+    if (has_blocking_file_intrinsics) {
+        if (wasm32_target || cortex_m_target)
+            throw std::runtime_error(
+                "native blocking file intrinsics require a hosted POSIX LLVM target");
+        auto add_file_intrinsic = [&](const char* guest_name, const char* abi_name,
+                                      std::size_t arity) {
+            std::vector<llvm::Type*> args(arity, i64);
+            auto* signature = llvm::FunctionType::get(i64, args, false);
+            auto* declaration = llvm::Function::Create(
+                signature, llvm::Function::ExternalLinkage, abi_name, module);
+            declarations.emplace(native_function_slot(guest_name, arity), declaration);
+        };
+        add_file_intrinsic("$rt.file_write_i64_blocking",
+                           "oreslang_file_write_i64_blocking", 3);
+        add_file_intrinsic("$rt.file_size_blocking",
+                           "oreslang_file_size_blocking", 1);
+        add_file_intrinsic("$rt.file_truncate_blocking",
+                           "oreslang_file_truncate_blocking", 2);
+        add_file_intrinsic("$rt.file_sync_blocking",
+                           "oreslang_file_sync_blocking", 1);
+        add_file_intrinsic("$rt.dir_sync_blocking",
+                           "oreslang_dir_sync_blocking", 1);
+    }
     std::unordered_map<std::string, llvm::StructType*> class_types;
     std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
     for (const auto& cls : source.classes) {
