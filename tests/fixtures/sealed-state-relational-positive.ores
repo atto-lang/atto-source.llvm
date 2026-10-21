@@ -1,0 +1,22 @@
+define actor ReservationCapacity as
+  state {
+    cpu_capacity: int = 1000;
+    cpu_reserved: int = 400;
+    result: int = 0;
+  }
+  pub fnc on_message(int requested): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      if (requested > 0) {
+        if (s.cpu_reserved + requested <= s.cpu_capacity) {
+          s.cpu_reserved = s.cpu_reserved + requested;
+          s.result = 1;
+        } else {
+          s.result = -2;
+        } fi
+      } else {
+        s.result = -1;
+      } fi
+      return s.result;
+    });
+  }
+end
