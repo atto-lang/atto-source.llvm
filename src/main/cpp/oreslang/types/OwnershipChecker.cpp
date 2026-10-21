@@ -316,6 +316,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
+        case Expression::Kind::FileIo:
+            for (const auto& arg : expr.arguments)
+                check_value(*arg, locals, functions);
+            return;
         case Expression::Kind::Call:
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
@@ -351,6 +355,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::FileIo:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
