@@ -11,6 +11,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -71,9 +72,30 @@ def unique_object(pairs):
     out = {}
     for key, value in pairs:
         if key in out:
-            raise Denied("duplicate JSON key")
+            raise Denied("duplicate JSON key: " + key)
         out[key] = value
     return out
+
+
+def strict_json_loads(text, label):
+    def reject_constant(_value):
+        raise Denied(label + " contains nonfinite JSON constant")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise Denied(label + " contains nonfinite JSON number")
+        return number
+
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
+    except (json.JSONDecodeError, RecursionError, OverflowError) as exc:
+        raise Denied(label) from exc
 
 
 def gh_api(route, method="GET", payload=None):
@@ -100,7 +122,7 @@ def gh_api(route, method="GET", payload=None):
         # Never echo gh stderr; API failures can include private context.
         raise Denied("authenticated GitHub API request failed")
     try:
-        result = json.loads(proc.stdout)
+        result = strict_json_loads(proc.stdout, "invalid GitHub API response")
     except json.JSONDecodeError as exc:
         raise Denied("invalid GitHub API response") from exc
     if not isinstance(result, dict):
@@ -204,16 +226,19 @@ def safe_path(value, prefix, suffix):
     if not isinstance(value, str):
         raise Denied("invalid protected carrier path")
     parts = PurePosixPath(value).parts
-    if (not value.startswith(prefix) or not value.endswith(suffix)
-            or not parts or value.startswith("/") or ".." in parts
-            or ".git" in parts or "\\" in value):
+    if (not re.fullmatch(r"[A-Za-z0-9._/-]+", value)
+            or PurePosixPath(value).as_posix() != value
+            or not value.startswith(prefix) or not value.endswith(suffix)
+            or not parts or value.startswith("/")
+            or any(part in (".", "..") for part in parts)
+            or any(part.casefold() == ".git" for part in parts)):
         raise Denied("invalid protected carrier path")
     return value
 
 
 def parse_contract(raw, repository, source_pr, test_plan):
     try:
-        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+        doc = strict_json_loads(raw.decode("utf-8"), "invalid carrier contract JSON")
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Denied("invalid carrier contract JSON") from exc
     if not isinstance(doc, dict) or doc.get("schema") != 1:
@@ -365,9 +390,11 @@ def checked_destination(repository, contract):
             or plan.get("sha") != contract["test_plan_blob_sha"]):
         raise Denied("carrier test plan differs from protected contract")
     plan_bytes = decode_contents(plan, contract["test_plan_path"], MAX_PLAN)
+    if git_blob_sha(plan_bytes) != contract["test_plan_blob_sha"]:
+        raise Denied("carrier test plan blob digest mismatch")
     try:
-        plan_doc = json.loads(
-            plan_bytes.decode("utf-8"), object_pairs_hook=unique_object
+        plan_doc = strict_json_loads(
+            plan_bytes.decode("utf-8"), "invalid reviewed carrier test plan"
         )
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Denied("invalid reviewed carrier test plan") from exc
@@ -511,7 +538,9 @@ def live_ref_sha(repository, ref_name, expected_repository_id):
             return None
         raise Denied("carrier ref lookup failed")
     try:
-        payload = json.loads(result.stdout)
+        payload = strict_json_loads(
+            result.stdout, "carrier ref lookup returned invalid JSON"
+        )
     except json.JSONDecodeError as exc:
         raise Denied("carrier ref lookup returned invalid JSON") from exc
     if (not isinstance(payload, dict)
