@@ -36,6 +36,29 @@ int main() {
 
     assert(CoreJson::exact_i64(CoreJson::parse("-9223372036854775808")) ==
            std::numeric_limits<std::int64_t>::min());
+    assert(CoreJson::exact_i64(CoreJson::parse("1.0")) == 1);
+    assert(CoreJson::exact_i64(CoreJson::parse("1e0")) == 1);
+    assert(CoreJson::exact_i64(CoreJson::parse("100e-2")) == 1);
+    assert(CoreJson::exact_i64(CoreJson::parse("-1200.00e-2")) == -12);
+
+    for (const std::string& non_integral : {"1.5", "1e-1", "0.001e2"}) {
+        bool rejected_non_integral = false;
+        try {
+            (void)CoreJson::exact_i64(CoreJson::parse(non_integral));
+        } catch (const std::runtime_error&) {
+            rejected_non_integral = true;
+        }
+        assert(rejected_non_integral);
+    }
+
+    CoreJsonValue forged_number(CoreJsonNumber{"1e999999999999999999999999"});
+    bool forged_overflow = false;
+    try {
+        (void)CoreJson::exact_i64(forged_number);
+    } catch (const std::runtime_error&) {
+        forged_overflow = true;
+    }
+    assert(forged_overflow);
     bool overflow = false;
     try {
         (void)CoreJson::exact_i64(CoreJson::parse("9223372036854775808"));
