@@ -286,5 +286,74 @@ int main() {
         check(a.status() == oreslang::gpu::Status::Idle);
         check(b.status() == oreslang::gpu::Status::Idle);
     }
+    // Trusted host queue-targeted GPU preflight must fail BEFORE mutation.
+    // This verifies metadata compatibility, not actual device execution.
+    {
+        const Plan shape(Layout::SoA, 7, 2, 4, 16, 1);
+        const Kernel operation(shape, Element::F32, Op::Scale, 2.0f, 0.0f);
+        const GpuTarget profile{64, 8192, 100, true};
+        BufferFence source(Identity{"tenant-A", "gpu-0", 1001}, shape.byte_length());
+        BufferFence result(Identity{"tenant-A", "gpu-0", 1002}, shape.byte_length());
+        const DeviceBuffer input(shape, source), output(shape, result);
+        const auto plan = preflight_gpu(operation, profile, input, output);
+        const GpuQueueLocation valid{"tenant-A", "gpu-0", 9, 21, 4};
+        validate_gpu_queue(plan, valid);
+        for (const auto& foreign : {
+                GpuQueueLocation{"tenant-B", "gpu-0", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-1", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 0, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 0, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 21, 0},
+                GpuQueueLocation{"", "gpu-0", 9, 21, 4}}) {
+            expect<std::invalid_argument>([&] {
+                (void)claim_gpu_for_queue(operation, profile, input, output, foreign);
+            });
+            check(source.status() == oreslang::gpu::Status::Idle);
+            check(result.status() == oreslang::gpu::Status::Idle);
+        }
+        GpuQueueLocation mutableSelected = valid;
+        auto claimed = claim_gpu_for_queue(
+                operation, profile, input, output, mutableSelected);
+        // Mutating the original selection cannot change the admitted receipt.
+        mutableSelected.tenant = "attacker";
+        mutableSelected.device = "gpu-elsewhere";
+        mutableSelected.queue_id = 999;
+        mutableSelected.generation = 999;
+        check(claimed.claim().binding.input.tenant == valid.tenant);
+        check(claimed.claim().binding.output.device == valid.device);
+        check(claimed.queue().queue_id == valid.queue_id);
+        check(claimed.queue().generation == valid.generation);
+        check(claimed.queue().maximum_in_flight == valid.maximum_in_flight);
+        // Later mutation of the caller-owned descriptor cannot silently
+        // retarget an admitted operation.
+        check(claimed.queue().tenant == "tenant-A");
+        check(claimed.queue().device == "gpu-0");
+        static_assert(!std::is_copy_constructible_v<QueueClaimedGpuBinding>);
+        static_assert(!std::is_constructible_v<
+                QueueClaimedGpuBinding, ClaimedGpuBinding&&,
+                std::unique_ptr<const GpuQueueLocation>>,
+                "host code must not fabricate a queue claim without validation");
+        static_assert(!std::is_move_assignable_v<QueueClaimedGpuBinding>,
+                "an admitted queue receipt must not be retargeted by assignment");
+        static_assert(std::is_same_v<
+                decltype(claimed.claim()), const ClaimedGpuBinding&>,
+                "a caller must not replace the admitted fence tokens or binding");
+        static_assert(std::is_same_v<
+                decltype(claimed.queue()), const GpuQueueLocation&>,
+                "the selected queue must only be exposed as a const reference");
+        check(source.status() == oreslang::gpu::Status::InFlight);
+        check(result.status() == oreslang::gpu::Status::InFlight);
+        expect<std::logic_error>([&] {
+            (void)claim_gpu_for_queue(operation, profile, input, output, valid);
+        });
+        auto transferred = std::move(claimed);
+        expect<std::logic_error>([&] { (void)claimed.queue(); });
+        expect<std::logic_error>([&] { (void)claimed.claim(); });
+        check(transferred.queue().queue_id == valid.queue_id);
+        BufferFence::complete_pair(source, result, transferred.claim().tickets, true);
+        check(source.status() == oreslang::gpu::Status::Idle);
+        check(result.status() == oreslang::gpu::Status::Idle);
+    }
+
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }

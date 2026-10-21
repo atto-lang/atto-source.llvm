@@ -24,9 +24,7 @@ int main() {
         pool.emplace_back([&] {
             for (int i = 0; i < per_thread; i++) {
                 constexpr std::uint64_t bytes = 512;
-                if (!process.try_reserve(bytes)) continue;
-                if (!actor.try_reserve(bytes)) {
-                    process.release(bytes);
+                if (!ActorShardBudget::try_reserve_pair(actor, process, bytes)) {
                     continue;
                 }
                 ++successes;
@@ -35,8 +33,7 @@ int main() {
                     ++errors;
                 }
                 if ((i & 15) == 0) std::this_thread::yield();
-                actor.release(bytes);
-                process.release(bytes);
+                ActorShardBudget::release_pair(actor, process, bytes);
             }
         });
     }
@@ -44,7 +41,28 @@ int main() {
     assert(errors == 0 && successes > 0);
     assert(process.used_bytes() == 0 && actor.used_bytes() == 0);
 
-    // Retirement and reservation contend on one 64-bit atomic word.
+    // Pair admission is all-or-nothing regardless of which ledger is tight.
+    ActorShardBudget tight_actor(256);
+    ActorShardBudget roomy_vm(4096);
+    assert(!ActorShardBudget::try_reserve_pair(tight_actor, roomy_vm, 512));
+    assert(tight_actor.used_bytes() == 0);
+    assert(roomy_vm.used_bytes() == 0);
+
+    ActorShardBudget roomy_actor(4096);
+    ActorShardBudget tight_vm(256);
+    assert(!ActorShardBudget::try_reserve_pair(roomy_actor, tight_vm, 512));
+    assert(roomy_actor.used_bytes() == 0);
+    assert(tight_vm.used_bytes() == 0);
+
+    ActorShardBudget retired_pair_actor(4096);
+    ActorShardBudget retired_pair_vm(4096);
+    retired_pair_actor.mark_retired_after_done();
+    assert(!ActorShardBudget::try_reserve_pair(
+            retired_pair_actor, retired_pair_vm, 512));
+    assert(retired_pair_actor.used_bytes() == 0);
+    assert(retired_pair_vm.used_bytes() == 0);
+
+    // Retirement and reservation contend on the same ledger lock.
     // Once retirement has completed, no new reserve may report success.
     ActorShardBudget racing(8192);
     std::atomic<bool> start{false}, retired{false};
@@ -74,6 +92,43 @@ int main() {
     assert(racing.retired() && racing.used_bytes() == 0);
     assert(post_retire_success.load() == 0);
     assert(!racing.try_reserve(1));
+
+    // Pair admission must serialize with actor retirement too. Once the
+    // retirement operation has completed, no paired actor/VM reservation may
+    // commit and the VM ledger must never retain a partial charge.
+    ActorShardBudget paired_actor(8192);
+    ActorShardBudget paired_vm(65536);
+    std::atomic<bool> paired_start{false}, paired_retired{false};
+    std::atomic<std::uint64_t> paired_post_retire_success{0};
+    pool.clear();
+    for (int t = 0; t < threads; ++t) {
+        pool.emplace_back([&] {
+            while (!paired_start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int i = 0; i < per_thread; ++i) {
+                const bool after =
+                        paired_retired.load(std::memory_order_acquire);
+                if (ActorShardBudget::try_reserve_pair(
+                        paired_actor, paired_vm, 16)) {
+                    if (after) paired_post_retire_success.fetch_add(1);
+                    ActorShardBudget::release_pair(
+                            paired_actor, paired_vm, 16);
+                }
+            }
+        });
+    }
+    paired_start.store(true, std::memory_order_release);
+    for (int n = 0; n < 3000; ++n) std::this_thread::yield();
+    paired_actor.mark_retired_after_done();
+    paired_retired.store(true, std::memory_order_release);
+    for (auto& t : pool) t.join();
+    assert(paired_actor.retired());
+    assert(paired_actor.used_bytes() == 0);
+    assert(paired_vm.used_bytes() == 0);
+    assert(paired_post_retire_success.load() == 0);
+    assert(!ActorShardBudget::try_reserve_pair(
+            paired_actor, paired_vm, 16));
+    assert(paired_vm.used_bytes() == 0);
 
     // Retire with an outstanding charge; the tombstone must survive refund.
     ActorShardBudget outstanding(4096);

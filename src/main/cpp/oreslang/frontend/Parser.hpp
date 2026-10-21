@@ -10,7 +10,11 @@
 
 namespace oreslang {
 
-// Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+// Deliberately restricted native scalar expression AST. The source type system
+// distinguishes int and bool even though the initial same-module ABI canonicalizes
+// both into i64 slots/results; bool values are always normalized to 0 or 1.
+enum class ScalarType { I64, Bool };
+
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -22,13 +26,31 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind {
+        Integer, Boolean, Variable,
+        Negate, LogicalNot,
+        Add, Subtract, Multiply,
+        Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+        LogicalAnd, LogicalOr, LogicalXor,
+        Conditional,
+        Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field
+    };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    bool boolean = false;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
+    // Conditional is the native scalar form of Oreslang's lazy `? :`.
+    // condition is a first-class bool expression. condition_lhs/condition_rhs
+    // remain only as compatibility fields for the immediately preceding
+    // equality-only ternary branch while stacked PRs are reviewed.
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition_rhs;
+    std::unique_ptr<Expression> when_true;
+    std::unique_ptr<Expression> when_false;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
@@ -40,6 +62,7 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means primitive i64
     std::string generic_type; // stage-one i64 generic slot
+    ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
 };
 
@@ -58,6 +81,7 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
+    ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
 };
 
@@ -130,7 +154,8 @@ struct Statement {
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
-    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> condition_lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
@@ -140,7 +165,8 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
-    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
@@ -169,6 +195,7 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
+    ScalarType return_type = ScalarType::I64;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
