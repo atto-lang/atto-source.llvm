@@ -1246,6 +1246,9 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_compressed32_source_ownership_authority
         COMMAND oreslang-source-ownership-checker-test)
+    oreslang_contract_test(native_managed_ref_codegen_fails_closed
+        source-managed-ref-codegen-failclosed.ores
+        --diagnostic "logical Ref<T> passed source ownership checking boundary but compact allocation/publication lowering is not wired")
 
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
     # actor reference in i32 and use native ActorArena.c checked accessors.
