@@ -225,6 +225,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                             "type": "blob",
                             "mode": "100644",
                             "sha": BLOB,
+                            "size": len(DATA),
                         }
                     ],
                 }
@@ -244,6 +245,77 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
+
+    def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
+        seen = []
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": "huge.bin",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": "2" * 40,
+                        "size": v3.MAX_FILE + 1,
+                    }],
+                }
+            raise AssertionError(route)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "file exceeds mirror limit"):
+                v3.exact_source_tree(669, "9" * 40)
+        self.assertFalse(any("/git/blobs/" in route for route in seen))
+
+    def test_source_tree_rejects_blob_size_mismatch(self):
+        def api(route, method="GET", payload=None):
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": "src/synthetic.cpp",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": len(DATA) + 1,
+                    }],
+                }
+            if route.endswith("/git/blobs/" + BLOB):
+                return {
+                    "sha": BLOB,
+                    "encoding": "base64",
+                    "content": base64.b64encode(DATA).decode(),
+                }
+            raise AssertionError(route)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "size differs"):
+                v3.exact_source_tree(669, "9" * 40)
 
     def test_source_tree_rejects_symlink_mode_before_blob_read(self):
         seen = []
