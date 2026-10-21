@@ -661,7 +661,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 }
             } else if (param.mode == Parameter::Mode::Value) {
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
-                builder.CreateStore(&arg, slot);
+                llvm::Value* incoming = &arg;
+                if (param.scalar_type == ScalarType::Bool) {
+                    // Public/native callers are not trusted to preserve the
+                    // source-level canonical bool representation. Normalize
+                    // every nonzero ABI value to exactly 1 at function entry.
+                    incoming = builder.CreateZExt(
+                        builder.CreateICmpNE(&arg, llvm::ConstantInt::get(i64, 0),
+                            param.name + ".bool.abi.i1"),
+                        i64, param.name + ".bool.abi");
+                }
+                builder.CreateStore(incoming, slot);
                 storage.emplace(param.name, slot);
             } else {
                 storage.emplace(param.name, &arg);
