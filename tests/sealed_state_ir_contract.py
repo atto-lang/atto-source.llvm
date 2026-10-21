@@ -57,6 +57,13 @@ def main():
     require("call i64 @ores_actor_i64_heap_field_read" not in write_only_ir,
             "write-only callback emitted a hidden state read")
 
+    lexical_write_ir = compile_fixture(
+        args.compiler, root / "sealed-state-using-write-positive.ores")
+    require("call void @ores_actor_i64_heap_field_write" in lexical_write_ir,
+            "lexical using state.write emitted no state write")
+    require("call i64 @ores_actor_i64_heap_field_read" not in lexical_write_ir,
+            "lexical write-only using acquired a hidden state read")
+
     return 0
 
 
