@@ -1,5 +1,7 @@
 #include "oreslang/runtime/ActorOwnedHeap.hpp"
 #include <array>
+#include <atomic>
+#include <limits>
 #include <cstdint>
 #include <iostream>
 #include <new>
@@ -186,8 +188,40 @@ static void test_compact_actor_local_refs() {
           "sub-8-byte-aligned object must not silently truncate its offset");
 }
 
+static void test_heap_identity_terminal_exhaustion() {
+    // Regression: fetch_add previously wrapped the counter from UINT64_MAX
+    // to zero and eventually issued identity 1 again after two exceptions.
+    std::atomic<std::uint64_t> nearly_exhausted{
+        std::numeric_limits<std::uint64_t>::max() - 1};
+    const auto last = detail::reserve_actor_owned_heap_id(nearly_exhausted);
+    check(last == std::numeric_limits<std::uint64_t>::max() - 1,
+          "last actor heap identity must be unique");
+    check(nearly_exhausted.load() == std::numeric_limits<std::uint64_t>::max(),
+          "counter must stay terminal at exhaustion");
+
+    for (int i = 0; i < 8; ++i) {
+        bool rejected = false;
+        try {
+            (void)detail::reserve_actor_owned_heap_id(nearly_exhausted);
+        } catch (const std::overflow_error&) {
+            rejected = true;
+        }
+        check(rejected && nearly_exhausted.load() ==
+                std::numeric_limits<std::uint64_t>::max(),
+              "identity exhaustion must fail closed without counter wrap");
+    }
+
+    std::atomic<std::uint64_t> invalid_zero{0};
+    bool rejected = false;
+    try { (void)detail::reserve_actor_owned_heap_id(invalid_zero); }
+    catch (const std::overflow_error&) { rejected = true; }
+    check(rejected && invalid_zero.load() == 0,
+          "invalid terminal identity zero must never be issued");
+}
+
 int main() {
     try {
+        test_heap_identity_terminal_exhaustion();
         test_independent_actor_storage_and_cycles();
         test_compact_actor_local_refs();
         test_bounded_storage_and_invalid_accesses();
