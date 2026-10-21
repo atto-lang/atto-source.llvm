@@ -97,10 +97,14 @@ public:
             thread_.join(); // host teardown only, never actor/CONTROL turn
         }
         std::lock_guard<std::mutex> lock(mu_);
+        // STOPPED is externally terminal only after the kernel authority that
+        // owns every remaining watch has been retired. Closing the epoll
+        // instance is the fail-closed teardown barrier even if an individual
+        // EPOLL_CTL_DEL would fail.
+        close_kernel_authority_locked();
         for (std::size_t i = 0; i < capacity; ++i) {
             auto& item = slots_[i];
             if (item.state != State::active) continue;
-            (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item.fd, nullptr);
             item.state = State::completed;
             emit_locked({Ticket{encode(i, item.generation)}, item.fd, 0, Outcome::stopped});
         }
@@ -145,7 +149,10 @@ public:
         if (!guard.owns_lock() || closed_.load(std::memory_order_relaxed)) return false;
         Slot* item = lookup_active(ticket);
         if (!item) return false;
-        (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item->fd, nullptr);
+        // Cancellation is not a usable terminal state until the kernel watch
+        // authority is gone. A failed detach leaves the ticket ACTIVE so a
+        // retry, readiness, or reactor shutdown can settle it safely.
+        if (!detach_interest_locked(item->fd)) return false;
         item->state = State::completed;
         emit_locked({ticket, item->fd, 0, Outcome::cancelled});
         return true;
@@ -185,6 +192,15 @@ public:
     std::size_t pending() const noexcept { return pending_.load(std::memory_order_relaxed); }
     std::uint64_t events_processed() const noexcept { return events_processed_.load(std::memory_order_relaxed); }
     bool is_started() const noexcept { return started_; } // inspect at bootstrap/after join only
+#ifdef ORESLANG_NATIVE_TEST_EPOLL_CTL_FAILURE
+    void test_fail_next_delete() noexcept {
+        test_fail_next_delete_.store(1, std::memory_order_release);
+    }
+    bool test_kernel_authority_open() const noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        return epoll_ >= 0;
+    }
+#endif
 
 private:
     enum class State : std::uint8_t { free, active, completed };
@@ -211,6 +227,26 @@ private:
         if (item.generation != decode_generation(ticket.value) || item.state != State::active)
             return nullptr;
         return &item;
+    }
+    bool detach_interest_locked(int fd) noexcept {
+#ifdef ORESLANG_NATIVE_TEST_EPOLL_CTL_FAILURE
+        if (test_fail_next_delete_.exchange(0, std::memory_order_acq_rel) != 0) {
+            errno = EIO;
+            return false;
+        }
+#endif
+        int result;
+        do { result = ::epoll_ctl(epoll_, EPOLL_CTL_DEL, fd, nullptr); }
+        while (result != 0 && errno == EINTR);
+        // ENOENT is already-detached authority. Other failures are not safe
+        // to expose as CANCELLED while the reactor remains live.
+        return result == 0 || (result == -1 && errno == ENOENT);
+    }
+    void close_kernel_authority_locked() noexcept {
+        if (epoll_ < 0) return;
+        const int fd = epoll_;
+        epoll_ = -1;
+        (void)::close(fd); // Linux retires the epoll authority; never retry close().
     }
     static void signal(int fd) noexcept {
         if (fd < 0) return;
@@ -255,7 +291,14 @@ private:
                 if (closed_.load(std::memory_order_relaxed)) break;
                 Slot* item = lookup_active(Ticket{token});
                 if (!item) continue; // stale event, cancelled slot or FD reuse
-                (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item->fd, nullptr);
+                if (!detach_interest_locked(item->fd)) {
+                    // Readiness cannot become externally terminal while its
+                    // kernel watch remains live. Poison this reactor instance;
+                    // terminal cleanup closes the epoll authority first and
+                    // settles all ACTIVE tickets as STOPPED.
+                    closed_.store(true, std::memory_order_release);
+                    break;
+                }
                 item->state = State::completed;
                 emit_locked({Ticket{token}, item->fd,
                     ready[static_cast<std::size_t>(i)].events, Outcome::ready});
@@ -270,10 +313,12 @@ private:
         // as explicit stop(). No late cancellation can win after this state
         // transition is published.
         closed_.store(true, std::memory_order_release);
+        // Close the kernel watch authority before publishing STOPPED. This is
+        // the native equivalent of the Future cancellation-revocation barrier.
+        close_kernel_authority_locked();
         for (std::size_t i = 0; i < capacity; ++i) {
             auto& item = slots_[i];
             if (item.state != State::active) continue;
-            (void)::epoll_ctl(epoll_, EPOLL_CTL_DEL, item.fd, nullptr);
             item.state = State::completed;
             emit_locked({Ticket{encode(i, item.generation)}, item.fd, 0, Outcome::stopped});
         }
@@ -301,5 +346,8 @@ private:
     std::atomic<std::size_t> completion_pending_{0};
     std::atomic<std::size_t> pending_{0};
     std::atomic<std::uint64_t> events_processed_{0};
+#ifdef ORESLANG_NATIVE_TEST_EPOLL_CTL_FAILURE
+    std::atomic<int> test_fail_next_delete_{0};
+#endif
 };
 } // namespace oreslang::runtime

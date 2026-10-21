@@ -98,6 +98,75 @@ int main() {
                && received == byte, "repeat nonblocking receive");
         expect(reactor.pending() == 0, "one-shot readiness slot released");
     }
+    // A cancellation terminal may not escape before the kernel watch is
+    // actually detached. Inject one DEL failure: cancellation must report
+    // failure, retain the ticket, and publish no terminal record.
+    {
+        NativeEpollReactor detach_barrier;
+        expect(detach_barrier.start(), "start detach-barrier reactor");
+        int ends[2]{-1, -1};
+        expect(::pipe(ends) == 0, "create detach-barrier pipe");
+        const int flags = ::fcntl(ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make detach-barrier pipe nonblocking");
+        const auto ticket = detach_barrier.try_watch(ends[0], EPOLLIN);
+        expect(ticket.has_value(), "register detach-barrier watch");
+        detach_barrier.test_fail_next_delete();
+        expect(!detach_barrier.try_cancel(*ticket),
+               "failed kernel detach cannot publish cancellation");
+        expect(detach_barrier.pending() == 1,
+               "failed cancellation must retain active ticket");
+        expect(!detach_barrier.try_pop().has_value(),
+               "failed cancellation must not publish terminal record");
+        expect(detach_barrier.try_cancel(*ticket),
+               "retry cancellation after detach failure");
+        auto terminal = until_completion(detach_barrier);
+        expect(terminal.has_value()
+               && terminal->ticket.value == ticket->value
+               && terminal->outcome == NativeEpollReactor::Outcome::cancelled,
+               "cancellation publishes only after successful detach");
+        expect(detach_barrier.pending() == 0,
+               "successful cancellation reclaims ticket on pop");
+        detach_barrier.stop();
+        expect(!detach_barrier.test_kernel_authority_open(),
+               "stop must retire epoll authority before returning");
+        ::close(ends[0]);
+        ::close(ends[1]);
+    }
+
+    // The same detach failure on a readiness path must fail closed: never
+    // publish READY while the kernel authority remains live. Reactor teardown
+    // closes epoll first and then emits STOPPED for the still-active ticket.
+    {
+        NativeEpollReactor ready_barrier;
+        expect(ready_barrier.start(), "start readiness detach-barrier reactor");
+        int ends[2]{-1, -1};
+        expect(::pipe(ends) == 0, "create readiness detach-barrier pipe");
+        const int flags = ::fcntl(ends[0], F_GETFL);
+        expect(flags >= 0
+               && ::fcntl(ends[0], F_SETFL, flags | O_NONBLOCK) == 0,
+               "make readiness detach-barrier pipe nonblocking");
+        const auto ticket = ready_barrier.try_watch(ends[0], EPOLLIN);
+        expect(ticket.has_value(), "register readiness detach-barrier watch");
+        ready_barrier.test_fail_next_delete();
+        expect(::write(ends[1], "x", 1) == 1, "trigger readiness detach failure");
+        auto terminal = until_completion(ready_barrier);
+        expect(terminal.has_value()
+               && terminal->ticket.value == ticket->value
+               && terminal->outcome == NativeEpollReactor::Outcome::stopped,
+               "detach failure must poison reactor instead of publishing ready");
+        expect(!ready_barrier.test_kernel_authority_open(),
+               "STOPPED must follow kernel authority retirement");
+        expect(ready_barrier.pending() == 0,
+               "poisoned readiness ticket reclaimed after pop");
+        expect(!ready_barrier.try_watch(ends[0], EPOLLIN).has_value(),
+               "poisoned reactor rejects later admission");
+        ready_barrier.stop();
+        ::close(ends[0]);
+        ::close(ends[1]);
+    }
+
     auto cancelled = reactor.try_watch(accepted, EPOLLIN);
     expect(cancelled.has_value(), "register cancel target");
     expect(reactor.try_cancel(*cancelled), "cancel should win");

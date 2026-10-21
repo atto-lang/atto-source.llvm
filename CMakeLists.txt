@@ -2382,6 +2382,8 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(oreslang-native-epoll-reactor-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-epoll-reactor-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_compile_definitions(oreslang-native-epoll-reactor-test PRIVATE
+        ORESLANG_NATIVE_TEST_EPOLL_CTL_FAILURE=1)
     add_test(NAME native_epoll_reactor_generation_completion
         COMMAND oreslang-native-epoll-reactor-test)
     set_tests_properties(native_epoll_reactor_generation_completion PROPERTIES TIMEOUT 20)
