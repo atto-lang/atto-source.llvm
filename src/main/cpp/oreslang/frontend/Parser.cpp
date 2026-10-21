@@ -257,7 +257,7 @@ public:
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
-                program.module = identifier();
+                program.module = declaration_identifier("module");
                 accept("as");
                 wrapped_module = true;
             } else {
@@ -323,7 +323,7 @@ private:
             field.offset = token_.offset;
             field.field_mutable = token_.text == "let";
             advance();
-            field.name = identifier();
+            field.name = declaration_identifier("field");
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
             require("int");
@@ -366,7 +366,7 @@ private:
         if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
-        param.name = identifier();
+        param.name = declaration_identifier("parameter");
         method.parameters.push_back(std::move(param));
         require(")");
         require(":");
@@ -417,7 +417,7 @@ private:
                         if (token_.text == "@")
                             fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
-                        std::string name = identifier();
+                        std::string name = declaration_identifier("constructor parameter");
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
                         result.constructor_parameters.push_back(std::move(name));
@@ -457,7 +457,7 @@ private:
                 // capability, independent of whether the slot is final.
                 require("<"); require("int"); require(">");
                 field.int_array = true;
-                field.name = identifier();
+                field.name = declaration_identifier("field");
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
                 if (!accept(":")) require("=");
@@ -471,7 +471,7 @@ private:
                 if (mutable_referent && token_.text != "int")
                     fail("native class field supports only scalar int or mut Array<int>");
                 require("int");
-                field.name = identifier();
+                field.name = declaration_identifier("field");
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
                 if (!accept(":") && !accept("="))
@@ -551,12 +551,12 @@ private:
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         require("fnc");
-        loop.name = identifier();
+        loop.name = declaration_identifier("function");
         require("("); require(")");
         require(":"); require("void");
         require("{");
         require("val");
-        loop.variable = identifier();
+        loop.variable = declaration_identifier("local binding");
         require(":"); require("int"); require("=");
         loop.initial = integer_literal();
         require(";");
@@ -607,12 +607,12 @@ private:
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
-        value.name = identifier();
+        value.name = declaration_identifier("function");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
             do {
                 GenericParameter slot;
-                slot.name = identifier();
+                slot.name = declaration_identifier("generic parameter");
                 if (slot.name == "_" || slot.name.rfind("$", 0) == 0)
                     fail("invalid generic parameter name");
                 for (const auto& prior : value.generic_parameters)
@@ -655,7 +655,7 @@ private:
                     if (generic) parameter.generic_type = type;
                     else parameter.class_name = type;
                 }
-                parameter.name = identifier();
+                parameter.name = declaration_identifier("parameter");
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
@@ -711,7 +711,7 @@ private:
                     require("<");
                     require("int");
                     require(">");
-                    binding.name = identifier();
+                    binding.name = declaration_identifier("local binding");
                     require("=");
                     require("new");
                     require("Array");
@@ -722,8 +722,10 @@ private:
                     require(")");
                     binding.int_array = true;
                 } else {
+                if (token_.text == "Entry")
+                    reject_native_entry_boundary(token_.offset);
                 binding.class_name = identifier();
-                binding.name = identifier();
+                binding.name = declaration_identifier("local binding");
                 require("=");
                 if (accept("new")) {
                     const std::string ctor = identifier();
@@ -749,7 +751,7 @@ private:
                 // loans. Preserve the distinction for native ownership checks.
                 binding.owner_mutable = token_.text == "val";
                 advance();
-                binding.name = identifier();
+                binding.name = declaration_identifier("local binding");
                 // Distinguish actor capabilities from scalar data before IR.
                 // Unsupported generic futures never become fake blocking calls.
                 if (token_.text != ":" && token_.text != "=") require(":");
@@ -840,7 +842,7 @@ private:
                     statement.kind = Statement::Kind::ScopedLocal;
                     statement.branch_local = std::make_unique<LocalBinding>();
                     statement.branch_local->offset = statement.offset;
-                    statement.branch_local->name = identifier();
+                    statement.branch_local->name = declaration_identifier("branch-local binding");
                     require(":");
                     require("int");
                     require("=");
@@ -965,7 +967,7 @@ private:
                     require("}");
                     require("catch");
                     require("(");
-                    value.catch_binding = identifier();
+                    value.catch_binding = declaration_identifier("catch binding");
                     for (const auto& param : value.parameters)
                         if (param.name == value.catch_binding)
                             fail("native caught throw binding shadows parameter");
@@ -1180,7 +1182,7 @@ private:
             // remains unreachable until typed exceptional CFG is implemented.
             require("catch");
             require("(");
-            identifier();
+            declaration_identifier("catch binding");
             require(")");
             require("{");
             // Native try cannot throw: allow the Java-required catch return
@@ -1477,6 +1479,14 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    std::string declaration_identifier(std::string_view role) {
+        if (token_.text == "Entry") {
+            fail("builtin Entry is compiler-owned and cannot be shadowed as "
+                 + std::string(role));
+        }
+        return identifier();
     }
 
     std::string identifier() {
