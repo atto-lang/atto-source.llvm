@@ -1098,9 +1098,20 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_done_resource_quiescence
         COMMAND oreslang-native-actor-retirement-barrier-test)
     set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
-    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")\n    oreslang_contract_test(reject_hat_kernel unsupported-hat-kernel.ores --diagnostic "native HAT kernel boundary unsupported")
+    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")\n    oreslang_contract_test(reject_hat_kernel unsupported-hat-kernel.ores --diagnostic "native LLVM HAT device/provider lowering is disabled")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
+    add_executable(oreslang-hat-kernel-ir-test
+        tests/hat_kernel_ir_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-hat-kernel-ir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-hat-kernel-ir-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-hat-kernel-ir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_hat_kernel_ir_cpu_reference COMMAND oreslang-hat-kernel-ir-test)
+
     add_executable(oreslang-data-layout-advisor-test tests/native_data_layout_advisor_test.cpp)
     target_include_directories(oreslang-data-layout-advisor-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-data-layout-advisor-test PRIVATE cxx_std_17)
