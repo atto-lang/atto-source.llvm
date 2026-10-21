@@ -5,5 +5,5 @@ end
 fnc inspect(borrow mut int value): int { return value; }
 pub fnc main(): int {
   let Pair pair = new Pair();
-  return inspect(rt borrow mut pair.left);
+  return inspect(rt mut borrow pair.left);
 }
