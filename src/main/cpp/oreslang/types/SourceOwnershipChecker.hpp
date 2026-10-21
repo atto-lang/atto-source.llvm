@@ -8,6 +8,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace oreslang {
 
@@ -31,12 +32,15 @@ namespace oreslang {
 class SourceOwnershipChecker final {
 public:
     static backend::ActorRefOwnershipEvidence issue_actor_state_ref_evidence(
-            const Program& program,
+            std::string_view source,
             const std::string& actor_name,
             const std::string& state_field,
             backend::ManagedRefAccess access,
             std::uint64_t actor_region_capacity_bytes,
             bool native64_target) {
+        // Reparse inside the authority boundary. A caller cannot construct or
+        // mutate Program/HIR flags and then ask this class to bless them.
+        Program program = parse_program(source);
         const auto actor_it = std::find_if(program.actors.begin(), program.actors.end(),
             [&](const ActorDecl& actor) { return actor.name == actor_name; });
         if (actor_it == program.actors.end())
