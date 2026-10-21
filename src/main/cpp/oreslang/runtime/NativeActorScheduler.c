@@ -385,10 +385,6 @@ allocation_failed:
     free(s->summary_control_bits);
     free(s->ready_data_bits);
     free(s->ready_control_bits);
-    free(s->summary_data_bits);
-    free(s->summary_control_bits);
-    free(s->ready_data_bits);
-    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);
