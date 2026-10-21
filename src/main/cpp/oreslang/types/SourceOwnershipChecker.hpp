@@ -27,6 +27,7 @@ class SourceManagedRefInitAuthorization final {
     std::string actor_name_;
     std::string ref_field_;
     std::size_t declaration_offset_ = 0;
+    std::size_t storage_index_ = 0;
     std::int64_t initial_value_ = 0;
 
     SourceManagedRefInitAuthorization(
@@ -35,12 +36,14 @@ class SourceManagedRefInitAuthorization final {
             std::string actor_name,
             std::string ref_field,
             std::size_t declaration_offset,
+            std::size_t storage_index,
             std::int64_t initial_value)
         : source_(std::move(source)),
           target_triple_(std::move(target_triple)),
           actor_name_(std::move(actor_name)),
           ref_field_(std::move(ref_field)),
           declaration_offset_(declaration_offset),
+          storage_index_(storage_index),
           initial_value_(initial_value) {}
 
     friend class SourceOwnershipChecker;
@@ -57,6 +60,7 @@ public:
     std::string_view actor_name() const noexcept { return actor_name_; }
     std::string_view ref_field() const noexcept { return ref_field_; }
     std::size_t declaration_offset() const noexcept { return declaration_offset_; }
+    std::size_t storage_index() const noexcept { return storage_index_; }
     std::int64_t initial_value() const noexcept { return initial_value_; }
 };
 
@@ -77,6 +81,7 @@ class SourceManagedRefAuthorization final {
     std::string actor_name_;
     std::string ref_field_;
     std::size_t use_offset_ = 0;
+    std::size_t storage_index_ = 0;
 
     SourceManagedRefAuthorization(
             backend::ActorRefOwnershipEvidence evidence,
@@ -84,13 +89,15 @@ class SourceManagedRefAuthorization final {
             std::string target_triple,
             std::string actor_name,
             std::string ref_field,
-            std::size_t use_offset)
+            std::size_t use_offset,
+            std::size_t storage_index)
         : evidence_(std::move(evidence)),
           source_(std::move(source)),
           target_triple_(std::move(target_triple)),
           actor_name_(std::move(actor_name)),
           ref_field_(std::move(ref_field)),
-          use_offset_(use_offset) {}
+          use_offset_(use_offset),
+          storage_index_(storage_index) {}
 
     friend class SourceOwnershipChecker;
     friend class backend::SourceManagedRefLowering;
@@ -109,6 +116,7 @@ public:
     std::string_view actor_name() const noexcept { return actor_name_; }
     std::string_view ref_field() const noexcept { return ref_field_; }
     std::size_t use_offset() const noexcept { return use_offset_; }
+    std::size_t storage_index() const noexcept { return storage_index_; }
 };
 
 /*
