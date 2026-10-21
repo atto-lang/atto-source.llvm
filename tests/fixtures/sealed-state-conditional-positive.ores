@@ -1,0 +1,22 @@
+define actor ReservationAuthority as
+  state {
+    revision: int = 8;
+    leader_epoch: int = 7;
+    result: int = 0;
+  }
+  pub fnc on_message(int claimed_epoch): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      if (claimed_epoch == s.leader_epoch) {
+        if (s.revision == 8) {
+          s.revision = s.revision + 1;
+          s.result = 1;
+        } else {
+          s.result = -2;
+        } fi
+      } else {
+        s.result = -1;
+      } fi
+      return s.result;
+    });
+  }
+end
