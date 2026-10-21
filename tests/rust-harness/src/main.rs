@@ -1,3 +1,5 @@
+mod strict_json;
+
 use std::{
     env,
     ffi::OsStr,
@@ -62,36 +64,16 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), String> {
     }
 }
 
-fn json_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
-    let needle = format!("\"{key}\"");
-    let start = text.find(&needle)? + needle.len();
-    let rest = text.get(start..)?;
-    let colon = rest.find(':')?;
-    Some(rest.get(colon + 1..)?.trim_start())
-}
-
 fn json_bool(text: &str, key: &str) -> Option<bool> {
-    let value = json_value(text, key)?;
-    if value.starts_with("true") {
-        Some(true)
-    } else if value.starts_with("false") {
-        Some(false)
-    } else {
-        None
-    }
+    strict_json::bool_field(text, key)
 }
 
 fn json_u64(text: &str, key: &str) -> Option<u64> {
-    let value = json_value(text, key)?;
-    let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    strict_json::u64_field(text, key)
 }
 
 fn json_string(text: &str, key: &str) -> Option<String> {
-    let value = json_value(text, key)?;
-    let quoted = value.strip_prefix('"')?;
-    let end = quoted.find('"')?;
-    Some(quoted[..end].to_string())
+    strict_json::string_field(text, key)
 }
 
 #[cfg(unix)]
