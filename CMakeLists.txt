@@ -2018,3 +2018,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-dop-shared-immutable-test)
     set_tests_properties(dop_shared_immutable_actor_independent PROPERTIES TIMEOUT 20)
 endif()
+
+# Actor-independent disjoint partition borrow reference for Task/ECS lowering.
+# Host-only CPU proof; not source-level Send/Sync, ECS or Task execution.
+if(BUILD_TESTING)
+    add_executable(oreslang-dop-scoped-partitions-test
+        tests/dop_scoped_partitions_test.cpp)
+    target_include_directories(oreslang-dop-scoped-partitions-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-dop-scoped-partitions-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-dop-scoped-partitions-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME dop_scoped_partitions_actor_independent
+        COMMAND oreslang-dop-scoped-partitions-test)
+    set_tests_properties(dop_scoped_partitions_actor_independent
+        PROPERTIES TIMEOUT 20)
+endif()
