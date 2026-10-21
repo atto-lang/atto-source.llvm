@@ -2116,6 +2116,9 @@ private:
                 const auto it = actor_types.find(spawn.actor_type);
                 if (it == actor_types.end())
                     throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
+                if (!it->second->managed_ref_fields.empty())
+                    throw std::runtime_error(
+                        "source spawn of managed Ref actor awaits scheduler context ABI");
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
