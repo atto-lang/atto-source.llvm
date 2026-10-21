@@ -39,13 +39,15 @@ struct Expression {
 // lowered to this reserved internal namespace; guest declarations using the
 // namespace are rejected, so there is no generic native/FFI escape hatch.
 inline bool native_blocking_file_intrinsic(std::string_view name) noexcept {
-    return name == "__oreslang_rt_file_write_i64_blocking" ||
+    return name == "__oreslang_rt_file_read_i64_blocking" ||
+           name == "__oreslang_rt_file_write_i64_blocking" ||
            name == "__oreslang_rt_file_size_blocking" ||
            name == "__oreslang_rt_file_truncate_blocking" ||
            name == "__oreslang_rt_file_sync_blocking" ||
            name == "__oreslang_rt_dir_sync_blocking";
 }
 inline std::size_t native_blocking_file_intrinsic_arity(std::string_view name) noexcept {
+    if (name == "__oreslang_rt_file_read_i64_blocking") return 3;
     if (name == "__oreslang_rt_file_write_i64_blocking") return 3;
     if (name == "__oreslang_rt_file_size_blocking") return 1;
     if (name == "__oreslang_rt_file_truncate_blocking") return 2;
