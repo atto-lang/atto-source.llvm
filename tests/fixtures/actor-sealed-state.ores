@@ -1,0 +1,17 @@
+// Canonical single-state actor: persistent storage is reachable only through
+// a lexical handle_state loan. The callback result is copied out.
+define actor Counter as {
+  state {
+    base: int = 40;
+    delta: int = 2;
+    total: int = 0;
+  }
+
+  pub fnc on_message(int n): int with state.write {
+    const result = self.handle_state(critical |state| -> {
+      state.total = state.total + state.base + state.delta + n;
+      return state.total;
+    });
+    return result;
+  }
+}
