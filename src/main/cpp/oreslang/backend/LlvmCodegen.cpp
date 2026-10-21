@@ -411,7 +411,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
