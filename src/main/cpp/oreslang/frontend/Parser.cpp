@@ -121,13 +121,6 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
-        // V3 question-mark types/argument presence require a proof-carrying
-        // Option/default/native ABI; never reinterpret them as scalar parameters.
-        if (ch == '?') {
-            throw std::runtime_error("native v3 '?' type/argument syntax requires "
-                                     "versioned Option and default ABI lowering at byte "
-                                     + std::to_string(start));
-        }
         if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
             throw std::runtime_error("native @DefaultArgVals declaration requires "
                                      "checked named defaults, ownership and ABI lowering at byte "
@@ -136,7 +129,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -190,6 +183,13 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
         return expr.left && expr.right &&
             native_pure_scalar_tree(*expr.left, depth + 1) &&
             native_pure_scalar_tree(*expr.right, depth + 1);
+    if (expr.kind == Expression::Kind::Conditional)
+        return expr.condition_lhs && expr.condition_rhs &&
+            expr.when_true && expr.when_false &&
+            native_pure_scalar_tree(*expr.condition_lhs, depth + 1) &&
+            native_pure_scalar_tree(*expr.condition_rhs, depth + 1) &&
+            native_pure_scalar_tree(*expr.when_true, depth + 1) &&
+            native_pure_scalar_tree(*expr.when_false, depth + 1);
     return false;
 }
 
@@ -216,6 +216,13 @@ bool native_constructor_scalar_tree(const Expression& expr,
         return expr.left && expr.right &&
             native_constructor_scalar_tree(*expr.left, depth + 1) &&
             native_constructor_scalar_tree(*expr.right, depth + 1);
+    if (expr.kind == Kind::Conditional)
+        return expr.condition_lhs && expr.condition_rhs &&
+            expr.when_true && expr.when_false &&
+            native_constructor_scalar_tree(*expr.condition_lhs, depth + 1) &&
+            native_constructor_scalar_tree(*expr.condition_rhs, depth + 1) &&
+            native_constructor_scalar_tree(*expr.when_true, depth + 1) &&
+            native_constructor_scalar_tree(*expr.when_false, depth + 1);
     return false;
 }
 
@@ -655,6 +662,8 @@ private:
                     if (generic) parameter.generic_type = type;
                     else parameter.class_name = type;
                 }
+                if (token_.text == "?")
+                    fail("native optional type '?' requires versioned Option/default ABI lowering");
                 parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
@@ -671,6 +680,8 @@ private:
                 [&](const GenericParameter& p) { return p.name == type; });
             if (!generic) fail("native return type requires int or scalar generic slot");
         }
+        if (token_.text == "?")
+            fail("native optional return type '?' requires versioned Option/default ABI lowering");
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -1016,9 +1027,9 @@ private:
                 const auto offset = token_.offset;
                 require("if");
                 require("(");
-                auto lhs = expression();
+                auto lhs = additive();
                 if (!accept("eq")) require("==");
-                auto rhs = expression();
+                auto rhs = additive();
                 if (terminal_try_finally &&
                         (!nonthrowing_protected_read(*lhs) ||
                          !nonthrowing_protected_read(*rhs)))
@@ -1217,7 +1228,59 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() { return conditional(); }
+
+    std::unique_ptr<Expression> conditional() {
+        if (++conditional_depth_ > kMaxNativeExpressionDepth) {
+            --conditional_depth_;
+            fail("native conditional expression nesting limit exceeded (64)");
+        }
+        struct ConditionalDepthGuard {
+            std::size_t& depth;
+            ~ConditionalDepthGuard() { --depth; }
+        } depth_guard{conditional_depth_};
+
+        const auto offset = token_.offset;
+        std::unique_ptr<Expression> condition_lhs;
+        std::unique_ptr<Expression> condition_rhs;
+
+        // Native bool values are not general first-class scalars yet. Admit
+        // only conditions whose boolean nature is explicit and statically
+        // proven: bool literals, or scalar equality.
+        if (token_.text == "true" || token_.text == "false") {
+            const bool value = token_.text == "true";
+            auto lhs = make_expression(Expression::Kind::Integer, token_.offset);
+            lhs->integer = value ? 1 : 0;
+            auto rhs = make_expression(Expression::Kind::Integer, token_.offset);
+            rhs->integer = 1;
+            advance();
+            if (!accept("?"))
+                fail("native bool literal is currently only admitted as a ternary condition");
+            condition_lhs = std::move(lhs);
+            condition_rhs = std::move(rhs);
+        } else {
+            auto lhs = additive();
+            if (token_.text != "eq" && token_.text != "==") {
+                if (token_.text == "?")
+                    fail("native ternary condition requires bool; use true/false or scalar equality");
+                return lhs;
+            }
+            advance();
+            auto rhs = additive();
+            if (!accept("?"))
+                fail("native scalar equality is currently only admitted as a ternary condition");
+            condition_lhs = std::move(lhs);
+            condition_rhs = std::move(rhs);
+        }
+
+        auto result = make_expression(Expression::Kind::Conditional, offset);
+        result->condition_lhs = std::move(condition_lhs);
+        result->condition_rhs = std::move(condition_rhs);
+        result->when_true = conditional();
+        require(":");
+        result->when_false = conditional();
+        return result;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
@@ -1622,6 +1685,12 @@ private:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 validate_expression(*expr.right, parameters, functions, depth + 1);
                 return;
+            case Expression::Kind::Conditional:
+                validate_expression(*expr.condition_lhs, parameters, functions, depth + 1);
+                validate_expression(*expr.condition_rhs, parameters, functions, depth + 1);
+                validate_expression(*expr.when_true, parameters, functions, depth + 1);
+                validate_expression(*expr.when_false, parameters, functions, depth + 1);
+                return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
@@ -1633,7 +1702,11 @@ private:
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
-            contains_callable_invocation(expr->right.get(), depth + 1)) return true;
+            contains_callable_invocation(expr->right.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition_lhs.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition_rhs.get(), depth + 1) ||
+            contains_callable_invocation(expr->when_true.get(), depth + 1) ||
+            contains_callable_invocation(expr->when_false.get(), depth + 1)) return true;
         for (const auto& item : expr->arguments)
             if (contains_callable_invocation(item.get(), depth + 1)) return true;
         return false;
@@ -1943,6 +2016,7 @@ private:
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
     std::size_t expression_depth_ = 0;
+    std::size_t conditional_depth_ = 0;
 };
 
 } // namespace
