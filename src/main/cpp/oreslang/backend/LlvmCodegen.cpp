@@ -1666,6 +1666,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 [&](const std::vector<ActorStateStatement>& statements,
                     std::set<std::string>& definitelyWritten) {
                     for (const auto& statement : statements) {
+                        if (statement.kind == ActorStateStatement::Kind::Local) {
+                            if (!statement.expression)
+                                throw std::runtime_error(
+                                    "invalid sealed actor state local read collection");
+                            collectExpressionReads(collectExpressionReads,
+                                *statement.expression, definitelyWritten);
+                            continue;
+                        }
                         if (statement.kind == ActorStateStatement::Kind::Write) {
                             collectExpressionReads(collectExpressionReads,
                                 *statement.expression, definitelyWritten);
@@ -1673,6 +1681,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 field_key(loan.binder, statement.field));
                             continue;
                         }
+                        if (statement.kind != ActorStateStatement::Kind::Conditional)
+                            throw std::runtime_error(
+                                "invalid sealed actor state statement kind");
                         collectExpressionReads(collectExpressionReads,
                             *statement.condition_lhs, definitelyWritten);
                         collectExpressionReads(collectExpressionReads,
@@ -1714,6 +1725,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             lowerStateStatements =
                 [&](const std::vector<ActorStateStatement>& statements) {
                     for (const auto& statement : statements) {
+                        if (statement.kind == ActorStateStatement::Kind::Local) {
+                            if (!statement.expression || statement.local_name.empty() ||
+                                    values.count(statement.local_name))
+                                throw std::runtime_error(
+                                    "invalid sealed actor state local lowering");
+                            llvm::Value* slot = builder.CreateAlloca(
+                                i64, nullptr, "state.local." + statement.local_name);
+                            llvm::Value* initial = lower(*statement.expression,
+                                builder, i64, values, stateFields, declarations);
+                            builder.CreateStore(initial, slot);
+                            values.emplace(statement.local_name, slot);
+                            continue;
+                        }
                         if (statement.kind == ActorStateStatement::Kind::Write) {
                             auto field = std::find_if(actor.fields.begin(),
                                 actor.fields.end(), [&](const LocalBinding& f) {
@@ -1734,6 +1758,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 field_key(loan.binder, statement.field)));
                             continue;
                         }
+                        if (statement.kind != ActorStateStatement::Kind::Conditional)
+                            throw std::runtime_error(
+                                "invalid sealed actor state statement lowering");
                         llvm::Value* lhs = lower(*statement.condition_lhs,
                             builder, i64, values, stateFields, declarations);
                         llvm::Value* rhs = lower(*statement.condition_rhs,
