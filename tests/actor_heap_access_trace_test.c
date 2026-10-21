@@ -11,6 +11,19 @@
     } \
 } while (0)
 
+static void test_late_activation_is_permanently_closed(void) {
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(3003, 9, 1);
+    OresActorTurn first = ores_actor_i64_heap_enter(heap, 3003, 9);
+    ores_actor_i64_heap_leave(heap, first);
+    /* Trace coverage may only start before execution. A host cannot observe
+     * a later suffix and present it as complete access evidence. */
+    REQUIRE(!ores_actor_i64_heap_trace_enable(heap, 4));
+    OresActorHeapAccessSummary summary = {0};
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, NULL, 0, &summary));
+    ores_actor_i64_heap_retire(heap);
+    REQUIRE(ores_actor_i64_heap_try_destroy(heap));
+}
+
 static void test_bounded_successful_accesses(void) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(1201, 7, 8);
     OresActorHeapAccessSummary summary = {0};
@@ -126,6 +139,7 @@ static void test_exact_snapshots_generation_reuse_and_leases(void) {
 }
 
 int main(void) {
+    test_late_activation_is_permanently_closed();
     test_exact_snapshots_generation_reuse_and_leases();
     test_bounded_successful_accesses();
     test_overflow_and_different_actor_identities();
