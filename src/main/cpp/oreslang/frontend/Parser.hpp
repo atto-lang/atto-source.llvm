@@ -119,6 +119,9 @@ struct ActorFieldWrite {
 struct ActorStateLoan {
     enum class Mode { Read, Write };
     Mode mode = Mode::Read;
+    // True only when source explicitly requested a critical callback.
+    // Access mode alone is not authority: critical read stays read-only.
+    bool critical = false;
     std::string result_binding;
     std::vector<ActorFieldWrite> writes;
     std::unique_ptr<Expression> result;
