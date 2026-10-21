@@ -1,0 +1,16 @@
+fnc helper(int x): int {
+  return x;
+}
+
+define actor DurableState as
+  state {
+    revision: int = 9;
+  }
+
+  pub fnc on_message(int fd): int with state.read, state.write, io, block {
+    return self.handle_state(critical |s| -> {
+      const status: int = helper(fd);
+      return s.revision + status;
+    });
+  }
+end
