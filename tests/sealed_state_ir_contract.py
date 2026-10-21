@@ -42,25 +42,33 @@ def main():
     require("call i64 @ores_actor_i64_heap_field_read" in read_ir,
             "read callback emitted no actor state read")
     require("call void @ores_actor_i64_heap_field_write" not in read_ir,
-            "read callback unexpectedly emitted actor state write")
+            "read callback unexpectedly emitted legacy actor state write")
+    require("call void @ores_actor_i64_heap_state_commit" not in read_ir,
+            "read callback unexpectedly emitted a state transaction commit")
 
     write_ir = compile_fixture(args.compiler, root / "sealed-state-write-positive.ores")
     require("call i64 @ores_actor_i64_heap_field_read" in write_ir,
             "read-modify-write callback emitted no state read")
-    require("call void @ores_actor_i64_heap_field_write" in write_ir,
-            "read-modify-write callback emitted no state write")
+    require("call void @ores_actor_i64_heap_state_commit" in write_ir,
+            "read-modify-write callback emitted no atomic state commit")
+    require("call void @ores_actor_i64_heap_field_write" not in write_ir,
+            "sealed callback regressed to per-field publication")
 
     write_only_ir = compile_fixture(
         args.compiler, root / "sealed-state-write-only-positive.ores")
-    require("call void @ores_actor_i64_heap_field_write" in write_only_ir,
-            "write-only callback emitted no state write")
+    require("call void @ores_actor_i64_heap_state_commit" in write_only_ir,
+            "write-only callback emitted no atomic state commit")
+    require("call void @ores_actor_i64_heap_field_write" not in write_only_ir,
+            "write-only sealed callback regressed to per-field publication")
     require("call i64 @ores_actor_i64_heap_field_read" not in write_only_ir,
             "write-only callback emitted a hidden state read")
 
     lexical_write_ir = compile_fixture(
         args.compiler, root / "sealed-state-using-write-positive.ores")
-    require("call void @ores_actor_i64_heap_field_write" in lexical_write_ir,
-            "lexical using state.write emitted no state write")
+    require("call void @ores_actor_i64_heap_state_commit" in lexical_write_ir,
+            "lexical using state.write emitted no atomic state commit")
+    require("call void @ores_actor_i64_heap_field_write" not in lexical_write_ir,
+            "lexical sealed write regressed to per-field publication")
     require("call i64 @ores_actor_i64_heap_field_read" not in lexical_write_ir,
             "lexical write-only using acquired a hidden state read")
 
