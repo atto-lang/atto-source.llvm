@@ -1,9 +1,35 @@
 #!/usr/bin/env python3
 """Execute native Oreslang ternaries and require fail-closed negatives."""
 import argparse
+import json
 from pathlib import Path
 import subprocess
 import tempfile
+
+CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "contracts"
+    / "v1"
+    / "conditional-expression-v1.json"
+)
+CONTRACT = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+assert CONTRACT["schema"] == "oreslang.conditional-expression.v1"
+assert CONTRACT["if"]["produces_value"] is False
+assert CONTRACT["ternary"]["condition_type"] == "bool"
+assert CONTRACT["ternary"]["truthiness_coercion"] is False
+assert CONTRACT["ternary"]["associativity"] == "right"
+assert CONTRACT["ternary"]["evaluation"]["branches"] == "selected_arm_only"
+
+PORTABLE_POSITIVE = {
+    vector["id"]: (vector["source"], vector["result"])
+    for vector in CONTRACT["portable_scalar_vectors"]
+    if "result" in vector
+}
+PORTABLE_REJECT = {
+    vector["id"]: vector
+    for vector in CONTRACT["portable_scalar_vectors"]
+    if "reject" in vector
+}
 
 PAIR = (
     "define class Pair as\n"
@@ -12,27 +38,8 @@ PAIR = (
     "end\n"
 )
 
-POSITIVE = {
-    "literal-true": ("""
-pub fnc main(): int {
-  return true ? 42 : 7;
-}
-""", 42),
-    "literal-false": ("""
-pub fnc main(): int {
-  return false ? 42 : 7;
-}
-""", 7),
-    "equality-and-arithmetic-precedence": ("""
-pub fnc main(): int {
-  return 20 + 1 == 21 ? 2 + 4 * 10 : 7;
-}
-""", 42),
-    "right-associative": ("""
-pub fnc main(): int {
-  return 0 == 1 ? 1 : 2 == 2 ? 42 : 3;
-}
-""", 42),
+POSITIVE = dict(PORTABLE_POSITIVE)
+POSITIVE.update({
     "parenthesized-condition": ("""
 pub fnc main(): int {
   return ((20 + 1 == 21)) ? 42 : 7;
@@ -72,14 +79,14 @@ pub fnc main(): int {
   return p.first;
 }
 """, 10),
-}
+})
+
 
 NEGATIVE = {
-    "reject-int-truthiness": ("""
-pub fnc main(): int {
-  return 1 ? 42 : 7;
-}
-""", "native ternary condition requires bool"),
+    "reject-int-truthiness": (
+        PORTABLE_REJECT["reject_integer_truthiness"]["source"],
+        "native ternary condition requires bool",
+    ),
     "reject-equality-as-int-value": ("""
 pub fnc main(): int {
   return 1 == 1;
