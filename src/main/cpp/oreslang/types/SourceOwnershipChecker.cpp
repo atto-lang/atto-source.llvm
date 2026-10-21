@@ -14,6 +14,40 @@
 
 namespace oreslang {
 
+SourceManagedRefInitAuthorization
+SourceOwnershipChecker::authorize_actor_managed_ref_init(
+        std::string_view source,
+        std::string_view actor_name,
+        std::string_view ref_field,
+        const TargetAbi& target) {
+    if (target.pointer_bits() != 64)
+        throw std::invalid_argument(
+            "managed Ref initialization requires certified native64 target");
+
+    Program program = parse_program(source);
+    const auto actor_it = std::find_if(
+        program.actors.begin(), program.actors.end(),
+        [&](const ActorDecl& actor) {
+            return std::string_view(actor.name) == actor_name;
+        });
+    if (actor_it == program.actors.end() || !actor_it->sealed_state)
+        throw std::invalid_argument(
+            "managed Ref initialization requires named sealed source actor");
+
+    const auto ref_it = std::find_if(
+        actor_it->managed_ref_fields.begin(), actor_it->managed_ref_fields.end(),
+        [&](const ActorManagedRefField& field) {
+            return std::string_view(field.name) == ref_field;
+        });
+    if (ref_it == actor_it->managed_ref_fields.end())
+        throw std::invalid_argument(
+            "managed Ref initialization requires declared Ref<int> field");
+
+    return SourceManagedRefInitAuthorization(
+        std::string(source), std::string(target.triple()),
+        actor_it->name, ref_it->name, ref_it->offset, ref_it->initial);
+}
+
 SourceManagedRefAuthorization
 SourceOwnershipChecker::authorize_actor_managed_ref(
         std::string_view source,
