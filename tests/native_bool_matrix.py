@@ -49,6 +49,14 @@ pub fnc main(): int {
   return true || false && false ? 42 : 7;
 }
 """, 42),
+    "logical-not": ("""
+fnc invert(bool value): bool {
+  return !value;
+}
+pub fnc main(): int {
+  return invert(false) ? 42 : 7;
+}
+""", 42),
     "nested-bool-ternary": ("""
 fnc invert(bool value): bool {
   return value ? false : true;
@@ -162,6 +170,11 @@ pub fnc main(): int {
   return true + 1;
 }
 """, "arithmetic requires int"),
+    "reject-int-logical-not": ("""
+pub fnc main(): bool {
+  return !1;
+}
+""", "logical '!' requires bool"),
     "reject-int-logical": ("""
 pub fnc main(): bool {
   return 1 && true;
