@@ -276,6 +276,7 @@ public:
             || ticket.proof_ != state_->active_ticket_proof)
             throw std::logic_error("stale cancelled device fence acknowledgement");
         state_->backend_quiescent = true;
+        state_->submitted = false;
         state_->active_ticket_proof.reset();
     }
     void retire_after_backend_release(const Identity& caller) {
@@ -378,6 +379,7 @@ private:
                 throw std::logic_error("submitted GPU pair cannot use pre-enqueue abort");
             a->status = b->status = Status::Idle;
             a->backend_quiescent = b->backend_quiescent = true;
+            a->submitted = b->submitted = false;
             a->paired = b->paired = false;
             a->active_pair_proof.reset();
             b->active_pair_proof.reset();
