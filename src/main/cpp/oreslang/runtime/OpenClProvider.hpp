@@ -26,6 +26,7 @@ public:
 
     virtual ~Api() = default;
 
+    virtual void validate_artifact(const dop::OpenClArtifact& artifact) const = 0;
     virtual Handle prepare(const dop::OpenClArtifact& artifact) = 0;
     virtual void release_program(Handle program) = 0;
 
@@ -49,6 +50,7 @@ public:
 
     virtual EventStatus poll_event(Handle event) = 0;
     virtual void release_event(Handle event) = 0;
+    virtual bool prove_device_loss_quiescence() = 0;
 };
 
 struct ProviderIdentity {
@@ -316,6 +318,7 @@ public:
 
     PreparedKernel prepare(const dop::Kernel& kernel) {
         auto artifact = dop::lower_opencl(kernel, target_);
+        api_.validate_artifact(artifact);
         Api::Handle program = api_.prepare(artifact);
         if (!program)
             throw std::runtime_error("OpenCL provider returned null program");
@@ -434,8 +437,8 @@ public:
                     dop::abort_gpu_before_enqueue(input, output, *claim);
                 }
             } catch (...) {
-                // Preserve the original provider failure. A rollback failure
-                // leaves the host ledger fail-closed in flight.
+                std::lock_guard<std::mutex> quarantine_guard(quarantine_lock_);
+                quarantine_latched_ = true;
             }
 
             if (operation) {
