@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeEntry.hpp"
+#include "oreslang/runtime/BoundedActorPort.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -101,6 +102,30 @@ int main() {
     MoveEntry owned = MoveEntry::of(MoveOnly(21), MoveOnly(34));
     REQUIRE(*owned.key().value == 21);
     REQUIRE(*owned.value().value == 34);
+
+    oreslang::runtime::BoundedActorPort<MoveEntry> port(1, 64);
+    REQUIRE(port.offer(std::move(owned), sizeof(NativeEntryI64Abi)));
+    REQUIRE(port.used_frames() == 1);
+    REQUIRE(port.used_bytes() == sizeof(NativeEntryI64Abi));
+
+    auto delivery = port.try_receive();
+    REQUIRE(delivery.has_value());
+    REQUIRE(*delivery->value().key().value == 21);
+    REQUIRE(*delivery->value().value().value == 34);
+    REQUIRE(port.used_frames() == 1);
+    REQUIRE(delivery->acknowledge_released());
+    REQUIRE(!delivery->acknowledge_released());
+    REQUIRE(port.used_frames() == 0);
+    REQUIRE(port.used_bytes() == 0);
+
+    bool stale_rejected = false;
+    try {
+        (void)delivery->value();
+    } catch (const std::logic_error&) {
+        stale_rejected = true;
+    }
+    REQUIRE(stale_rejected);
+    port.close();
 
     return 0;
 }
