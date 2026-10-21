@@ -26,7 +26,7 @@ end
 let particles = InvertedArray<Particle>.with_capacity(100000);
 let h = particles.push(Particle { x: 1.0, y: 2.0, vx: 3.0, vy: 4.0 });
 particles[h].move(0.016);
-let xs = rt borrow mut particles.columns.x;
+let xs = rt mut borrow particles.columns.x;
 ```
 
 Canonical grammar insertion: `class_decl = visibility "define" [ "abstract" | "inverted" ] "class" ...`. The stage-one semantic gate rejects `abstract inverted`, inherited/inheriting classes, overriding virtual dispatch, dynamic field layouts, and nontrivial field resources until ownership/destructor lowering exists. Import/export and static methods follow ordinary class visibility rules. No unqualified field widening or implicit AoS-to-SoA conversion.
