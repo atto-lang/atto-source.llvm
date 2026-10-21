@@ -35,8 +35,13 @@ typedef struct {
     uint64_t abandoned_user_messages;
     uint64_t abandoned_control_messages;
 } OresNativeActorTerminalState;
-enum { ORES_NATIVE_CONTROL_PANIC = 1, ORES_NATIVE_CONTROL_CANCELLED = 2,
-       ORES_NATIVE_CONTROL_STOPPED = 3 };
+enum {
+    ORES_NATIVE_CONTROL_PANIC = 1,
+    ORES_NATIVE_CONTROL_CANCELLED = 2,
+    ORES_NATIVE_CONTROL_STOPPED = 3,
+    ORES_NATIVE_CONTROL_THROW = 4,
+    ORES_NATIVE_CONTROL_RAISE = 5
+};
 typedef struct {
     uint64_t kind;
     OresNativeActorRef child;
@@ -46,8 +51,9 @@ typedef struct {
 /* Typed terminal failure is copied into the reserved parent CONTROL slot.
  * A supervisor handler runs only on the parent's single logical actor lane.
  */
-typedef void (*OresNativeActorPanicFn)(
+typedef void (*OresNativeActorSupervisorFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
+typedef OresNativeActorSupervisorFn OresNativeActorPanicFn;
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
@@ -120,7 +126,7 @@ typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t pa
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
-    OresNativeActorPanicFn on_panic, void* ctx);
+    OresNativeActorSupervisorFn on_supervisor, void* ctx);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
