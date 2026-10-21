@@ -376,7 +376,7 @@ public:
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire)
-                || (ref.ticket_->detached_from_group.load(std::memory_order_acquire)
+                || (ref.ticket_->stop_issued.load(std::memory_order_acquire)
                     && !ref.ticket_->stop_request_returned.load(std::memory_order_acquire)))
                 return false;
             // Close may settle readiness after detaching the worker table,

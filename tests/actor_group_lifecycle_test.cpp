@@ -513,6 +513,36 @@ int main() {
         }
     }
     {
+        // stop_workers() also invokes the trusted stop callback outside the
+        // group mutex. Once stop has been issued, live-group physical DONE
+        // cannot be acknowledged until that callback returns.
+        NativeActorGroup group(8300, 1);
+        std::promise<void> stop_entered;
+        std::promise<void> release_stop;
+        auto stop_gate = release_stop.get_future().share();
+        auto worker = group.adopt(8300, 1, 1, [&] {
+            stop_entered.set_value();
+            stop_gate.wait();
+        });
+        check(group.mark_ready(worker), "live stop barrier actor not ready");
+
+        std::thread stopper([&] { group.stop_workers(); });
+        stop_entered.get_future().wait();
+
+        check(!group.finalized(worker),
+              "live-group finalized DONE while stop callback still active");
+        check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+              "live stop callback did not fence get_done");
+
+        release_stop.set_value();
+        stopper.join();
+
+        check(group.finalized(worker),
+              "returned live stop callback did not permit physical DONE");
+        worker.get_done().get();
+    }
+
+    {
         // close() publishes detachment before invoking stop callbacks outside
         // the group mutex. A concurrent runtime finalizer must not treat that
         // intermediate state as physical quiescence or settle get_done().
