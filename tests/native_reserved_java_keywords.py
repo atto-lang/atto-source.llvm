@@ -115,6 +115,22 @@ CASES = {
         "pub fnc main(int x): int { return task { return read(rt borrow x); }; }",
         "native execution task lowering unsupported",
     ),
+    "nested-task-borrow": (
+        "pub fnc main(int x): int { return task { return task { return rt borrow x; }; }; }",
+        "native execution task lowering unsupported",
+    ),
+    "task-comment-borrow": (
+        "pub fnc main(int x): int { return task /* comment */ { return rt borrow x; }; }",
+        "native execution task lowering unsupported",
+    ),
+    "cpu-task-borrow": (
+        "pub fnc main(int x): int { return cpu task { return rt borrow x; }; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "gpu-task-borrow": (
+        "pub fnc main(int x): int { return gpu task { return rt borrow x; }; }",
+        "native gpu/quantum boundary unsupported",
+    ),
     # Exceptional controls must fail closed without emitting LLVM IR.
     "throw-function": (
         "pub fnc throw(): int { return 42; }",
