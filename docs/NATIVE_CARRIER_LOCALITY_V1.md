@@ -40,7 +40,10 @@ Related: Java #301, Java #303, Java #1025, LLVM #15, Java triple-layout #1480, a
 
 ## Remaining performance blockers found in audit
 
-- The existing native admission API still rejects actor_count greater than **1024**. The new locality hint does not make million-actor execution possible.
-- `find_ready()` continues to walk actor lanes linearly (globally prioritized CONTROL, preferred DATA and fallback DATA). The fairness fix bounds preferred dispatch bursts, but the scheduler still needs a bounded indexed ready-set/bitmap or sharded dense-ready queue before claiming large-scale O(1) wake-to-turn work.
+- The existing native admission API still rejects actor_count greater than **1024**. The locality/indexing work does not make million-actor execution possible.
+- `find_ready()` now uses compact 64-bit readiness words rather than walking the complete `ActorLane[]` under the global scheduler mutex. Separate global CONTROL, global DATA, and worker-local DATA bitsets preserve CONTROL-first/locality/fairness ordering. At the current 1024-actor/128-worker caps, the worker-local index is bounded to about 16 KiB. This reduces metadata scanned per dequeue, but it is **not O(1)** in the worst case: a sparse miss may inspect up to 16 summary words, and the global mutex still serializes scheduler state transitions.
+
+- Readiness bits are scheduler metadata only: claiming a bit clears all readiness classes before actor execution authority is entered; completion republishes CONTROL/DATA bits only after the actor becomes inactive. An actor may still migrate, and stale bit state must fail closed in tests rather than granting execution.
+- The locality regression now exercises all 16 readiness words with 1,024 actors and one worker, enqueueing actors in reverse producer order while requiring scheduler round-robin execution order after a gated first actor.
 - Global scheduler and actor-lane lock traffic, cacheline placement, CPU quota pressure, SMT, NUMA first-touch and OS context-switch rates require measurements. No SoA/AoSoA actor or Task metadata lowering is activated by this draft.
 - Actual CPU topology may change with hotplug or cgroup cpuset updates; optional binding is best effort and not dynamically reprobed.
