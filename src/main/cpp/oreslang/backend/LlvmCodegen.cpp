@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -285,6 +286,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (actor.sealed_state)
+                throw std::runtime_error(
+                    "wasm32 sealed actor state awaits scoped state-loan lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -1342,29 +1346,161 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
-        for (std::size_t i=0; i<actor.fields.size(); ++i) {
-            const auto& field = actor.fields[i];
-            llvm::Value* value = builder.CreateCall(fieldRead, {
-                actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
-                field.name + ".read");
-            llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
-            builder.CreateStore(value, slot);
-            values.emplace(field.name, slot);
+
+        if (actor.sealed_state) {
+            if (!actor.on_message.actor_state_loan || actor.on_message.result ||
+                    !actor.on_message.actor_field_writes.empty())
+                throw std::runtime_error(
+                    "sealed actor state reached codegen without one scoped loan");
+            const auto& loan = *actor.on_message.actor_state_loan;
+            if (!loan.result || loan.binder.empty())
+                throw std::runtime_error("invalid sealed actor state loan");
+            if (loan.mode == ActorStateLoan::Mode::Read) {
+                if (!actor.on_message.declared_effects.has(FunctionEffect::StateRead) ||
+                        !loan.writes.empty())
+                    throw std::runtime_error(
+                        "sealed actor read codegen lacks immutable read authority");
+            } else if (!actor.on_message.declared_effects.has(FunctionEffect::StateWrite)) {
+                throw std::runtime_error(
+                    "sealed actor write codegen lacks state.write authority");
+            }
+
+            std::unordered_set<std::string> stateNames;
+            for (const auto& field : actor.fields) stateNames.insert(field.name);
+            bool readsState = false;
+            const auto verifyStateExpression =
+                [&](const auto& self, const Expression& expr) -> void {
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return;
+                        case Expression::Kind::Variable:
+                            if (expr.name != param)
+                                throw std::runtime_error(
+                                    "state codegen rejected non-message capture");
+                            return;
+                        case Expression::Kind::Field:
+                            if (!expr.left ||
+                                    expr.left->kind != Expression::Kind::Variable ||
+                                    expr.left->name != loan.binder ||
+                                    !stateNames.count(expr.name))
+                                throw std::runtime_error(
+                                    "state codegen rejected unverified projection");
+                            readsState = true;
+                            return;
+                        case Expression::Kind::Negate:
+                            if (!expr.left) throw std::runtime_error("malformed state unary");
+                            self(self, *expr.left);
+                            return;
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            if (!expr.left || !expr.right)
+                                throw std::runtime_error("malformed state binary");
+                            self(self, *expr.left);
+                            self(self, *expr.right);
+                            return;
+                        default:
+                            throw std::runtime_error(
+                                "state codegen rejected call/ownership/escape expression");
+                    }
+                };
+            for (const auto& write : loan.writes) {
+                if (!stateNames.count(write.field) || !write.expression)
+                    throw std::runtime_error("invalid sealed actor state write");
+                verifyStateExpression(verifyStateExpression, *write.expression);
+            }
+            verifyStateExpression(verifyStateExpression, *loan.result);
+            if (readsState &&
+                    !actor.on_message.declared_effects.has(FunctionEffect::StateRead))
+                throw std::runtime_error(
+                    "state codegen read exceeds declared state.read authority");
+
+            // Snapshot only fields whose old value is needed before their
+            // first callback-local write. A write-only callback emits no
+            // hidden state-read effect.
+            std::set<std::string> initialReadKeys;
+            std::set<std::string> writtenKeys;
+            const auto collectInitialReads =
+                [&](const auto& self, const Expression& expr) -> void {
+                    if (expr.kind == Expression::Kind::Field && expr.left &&
+                            expr.left->kind == Expression::Kind::Variable &&
+                            expr.left->name == loan.binder) {
+                        const std::string key = field_key(loan.binder, expr.name);
+                        if (!writtenKeys.count(key)) initialReadKeys.insert(key);
+                        return;
+                    }
+                    if (expr.left) self(self, *expr.left);
+                    if (expr.right) self(self, *expr.right);
+                    for (const auto& argument : expr.arguments)
+                        self(self, *argument);
+                };
+            for (const auto& write : loan.writes) {
+                collectInitialReads(collectInitialReads, *write.expression);
+                writtenKeys.insert(field_key(loan.binder, write.field));
+            }
+            collectInitialReads(collectInitialReads, *loan.result);
+
+            std::unordered_map<std::string, llvm::Value*> stateFields;
+            for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                const auto& field = actor.fields[i];
+                const std::string key = field_key(loan.binder, field.name);
+                llvm::Value* slot = builder.CreateAlloca(
+                    i64, nullptr, "state." + field.name + ".slot");
+                if (initialReadKeys.count(key)) {
+                    llvm::Value* snapshot = builder.CreateCall(fieldRead, {
+                        actorHeap, currentDomain, currentEpoch,
+                        llvm::ConstantInt::get(i64, i)},
+                        "state." + field.name + ".snapshot");
+                    builder.CreateStore(snapshot, slot);
+                }
+                stateFields.emplace(key, slot);
+            }
+
+            for (const auto& write : loan.writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() ||
+                        loan.mode != ActorStateLoan::Mode::Write)
+                    throw std::runtime_error("invalid sealed actor state write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64,
+                    values, stateFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {
+                    actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value,
+                    stateFields.at(field_key(loan.binder, write.field)));
+            }
+            llvm::Value* result = lower(*loan.result, builder, i64,
+                values, stateFields, declarations);
+            builder.CreateRet(result);
+        } else {
+            for (std::size_t i=0; i<actor.fields.size(); ++i) {
+                const auto& field = actor.fields[i];
+                llvm::Value* value = builder.CreateCall(fieldRead, {
+                    actorHeap, currentDomain, currentEpoch, llvm::ConstantInt::get(i64,i)},
+                    field.name + ".read");
+                llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
+                builder.CreateStore(value, slot);
+                values.emplace(field.name, slot);
+            }
+            for (const auto& write : actor.on_message.actor_field_writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() || !field->field_mutable)
+                    throw std::runtime_error("invalid actor field write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64,
+                    values, emptyFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {
+                    actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, values.at(write.field));
+            }
+            llvm::Value* result = lower(*actor.on_message.result, builder, i64,
+                values, emptyFields, declarations);
+            builder.CreateRet(result);
         }
-        for (const auto& write : actor.on_message.actor_field_writes) {
-            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                [&](const LocalBinding& f) { return f.name == write.field; });
-            if (field == actor.fields.end() || !field->field_mutable)
-                throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
-            const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
-            builder.CreateStore(value, values.at(write.field));
-        }
-        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
-            emptyFields, declarations);
-        builder.CreateRet(result);
     }
 
     // Compiler-generated Wasm guest actor v0. One module instance belongs
