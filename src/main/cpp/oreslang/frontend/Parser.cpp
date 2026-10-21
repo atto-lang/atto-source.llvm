@@ -15,7 +15,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, Symbol, End };
+enum class Kind { Identifier, Integer, String, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -115,6 +115,25 @@ public:
                 ++at_;
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
+        }
+        // Native file-I/O intrinsics accept compile-time path basenames only.
+        // String values are not otherwise admitted by this scalar frontend.
+        if (ch == '"') {
+            ++at_;
+            const std::size_t body = at_;
+            while (at_ < source_.size() && source_[at_] != '"') {
+                const unsigned char byte = static_cast<unsigned char>(source_[at_]);
+                if (byte < 0x20 || byte == '\\')
+                    throw std::runtime_error("native path literal forbids escapes/control bytes at byte "
+                                             + std::to_string(at_));
+                ++at_;
+            }
+            if (at_ == source_.size())
+                throw std::runtime_error("unterminated native path literal at byte "
+                                         + std::to_string(start));
+            const auto text = source_.substr(body, at_ - body);
+            ++at_;
+            return {Kind::String, text, start};
         }
         // Contiguous scalar comparison operators are one token, matching
         // the Java/Graal surface syntax used by state admission guards.
@@ -1472,6 +1491,55 @@ private:
             const auto offset = token_.offset;
             advance();
             const auto operation = token_.text;
+            const bool file_io = operation == "file_open_read_blocking" ||
+                operation == "file_open_append_blocking" ||
+                operation == "file_open_replace_blocking" ||
+                operation == "file_write_u63_blocking" ||
+                operation == "file_read_u63_blocking" ||
+                operation == "file_sync_blocking" ||
+                operation == "file_close_blocking" ||
+                operation == "file_rename_blocking" ||
+                operation == "dir_sync_cwd_blocking";
+            if (file_io) {
+                advance();
+                auto result = make_expression(Expression::Kind::FileIo, offset);
+                result->name = operation;
+                require("(");
+                const auto path_literal = [&]() {
+                    if (token_.kind != Kind::String)
+                        fail("native file path must be a compile-time string literal");
+                    std::string path(token_.text);
+                    advance();
+                    if (path.empty() || path.size() > 255 || path == "." || path == ".." ||
+                            path.find('/') != std::string::npos ||
+                            path.find('\\\\') != std::string::npos)
+                        fail("native file path must be a nonempty basename without separators");
+                    for (const unsigned char ch : path) {
+                        if (!(std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-'))
+                            fail("native file path contains unsupported character");
+                    }
+                    return path;
+                };
+                if (operation == "file_open_read_blocking" ||
+                        operation == "file_open_append_blocking" ||
+                        operation == "file_open_replace_blocking") {
+                    result->string_arguments.push_back(path_literal());
+                } else if (operation == "file_rename_blocking") {
+                    result->string_arguments.push_back(path_literal());
+                    require(",");
+                    result->string_arguments.push_back(path_literal());
+                } else if (operation == "dir_sync_cwd_blocking") {
+                    // no arguments
+                } else {
+                    result->arguments.push_back(expression());
+                    if (operation == "file_write_u63_blocking") {
+                        require(",");
+                        result->arguments.push_back(expression());
+                    }
+                }
+                require(")");
+                return result;
+            }
             if (operation == "cooperate") {
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
@@ -1716,6 +1784,10 @@ private:
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
+            case Expression::Kind::FileIo:
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() ||
@@ -1835,7 +1907,42 @@ private:
         return false;
     }
 
+    static bool contains_native_file_io(const Expression* expr, std::size_t depth = 1) {
+        if (!expr) return false;
+        require_expression_depth(depth, expr->offset);
+        if (expr->kind == Expression::Kind::FileIo) return true;
+        if (contains_native_file_io(expr->left.get(), depth + 1) ||
+            contains_native_file_io(expr->right.get(), depth + 1)) return true;
+        for (const auto& item : expr->arguments)
+            if (contains_native_file_io(item.get(), depth + 1)) return true;
+        return false;
+    }
+
+    static bool function_contains_native_file_io(const Function& fn) {
+        for (const auto& local : fn.locals)
+            if (contains_native_file_io(local.initializer.get())) return true;
+        for (const auto& stmt : fn.statements) {
+            if (contains_native_file_io(stmt.expression.get()) ||
+                contains_native_file_io(stmt.condition_lhs.get()) ||
+                contains_native_file_io(stmt.condition_rhs.get()) ||
+                contains_native_file_io(stmt.array_commit_length.get())) return true;
+            for (const auto& value : stmt.array_commit_values)
+                if (contains_native_file_io(value.get())) return true;
+        }
+        for (const auto& guard : fn.early_returns)
+            if (contains_native_file_io(guard.lhs.get()) ||
+                contains_native_file_io(guard.rhs.get()) ||
+                contains_native_file_io(guard.result.get())) return true;
+        return contains_native_file_io(fn.result.get());
+    }
+
     static void validate_declared_effects(const Function& fn, const Program& program) {
+        const bool file_io = function_contains_native_file_io(fn);
+        if (file_io && (!fn.has_declared_effects ||
+                !fn.declared_effects.has(FunctionEffect::Io) ||
+                !fn.declared_effects.has(FunctionEffect::Block)))
+            throw std::runtime_error(
+                "native blocking file I/O requires using io, block");
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -1905,6 +2012,8 @@ private:
                     fn.name == "abort" ||
                     fn.name == "__oreslang_guest_main" ||
                     fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                    fn.name.rfind("oreslang_file_", 0) == 0 ||
+                    fn.name == "oreslang_dir_sync_cwd_blocking" ||
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
