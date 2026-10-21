@@ -962,6 +962,8 @@ if(BUILD_TESTING)
         --ir "call void @ores_actor_i64_heap_field_write")
     oreslang_contract_test(native_sealed_state_conditional sealed-state-conditional-positive.ores
         --ir "state.if.then")
+    oreslang_contract_test(native_sealed_state_relational sealed-state-relational-positive.ores
+        --ir "icmp sle i64")
     oreslang_contract_test(native_sealed_state_conditional_readonly_reject
         sealed-state-conditional-readonly-reject.ores
         --diagnostic "read-only actor state loan cannot mutate state")
