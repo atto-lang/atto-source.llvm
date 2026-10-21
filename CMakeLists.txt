@@ -1451,8 +1451,7 @@ if(BUILD_TESTING)
     # Neither naming style is permitted without a typed I/O registry, async
     # transport and continuation lowering. No IR may be emitted on failure.
     add_test(NAME native_async_only_io_boundary_matrix
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_async_io_boundary_matrix.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-async-io-boundary
             "$<TARGET_FILE:oreslang-llvmc>")
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not

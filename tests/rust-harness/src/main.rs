@@ -408,6 +408,45 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
     Ok(())
 }
 
+
+fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
+    let fixture = temp.path.join("probe.ores");
+    // These names must remain rejected until typed effects, native continuation
+    // lowering, and nonblocking transports are implemented together.
+    let operations = [
+        ("read blocking", "read_text_blocking(1)"),
+        ("read async", "read_text_async(1)"),
+        ("write blocking", "write_text_blocking(1)"),
+        ("write async", "write_text_async(1)"),
+        ("TCP connect blocking", "connect_blocking(1)"),
+        ("TCP connect async", "connect_async(1)"),
+        ("TCP read blocking", "read_line_blocking(1)"),
+        ("TCP read async", "read_line_async(1)"),
+        ("TCP write blocking", "socket_write_text_blocking(1)"),
+        ("TCP write async", "socket_write_text_async(1)"),
+        ("HTTP GET blocking", "http_get_text_blocking(1)"),
+        ("HTTP GET async", "http_get_text_async(1)"),
+        ("HTTP POST blocking", "http_post_text_blocking(1)"),
+        ("HTTP POST async", "http_post_text_async(1)"),
+        ("stdio blocking", "println_blocking(1)"),
+        ("stdio async", "println_async(1)"),
+    ];
+    for (name, operation) in operations {
+        fs::write(&fixture, format!("pub fnc main(): int {{ return {operation}; }}\n"))
+            .map_err(|e| format!("{name}: write fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(!out.status.success(),
+            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)))?;
+        require(stdout(&out).trim().is_empty(),
+            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)))?;
+        require(stderr(&out).contains("unknown function or wrong call arity"),
+            format!("{name}: missing explicit rejection diagnostic: {}", stderr(&out)))?;
+    }
+    println!("Native async-only I/O boundary: {} unsupported native bindings fail closed", operations.len());
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -424,6 +463,10 @@ fn real_main() -> Result<(), String> {
         Some("callable-nominal") => {
             let compiler = path_arg(&args, 2, "usage: callable-nominal <compiler>")?;
             callable_nominal(&compiler)
+        }
+        Some("native-async-io-boundary") => {
+            let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
+            native_async_io_boundary(&compiler)
         }
         Some("named-call-order") => {
             let compiler = path_arg(&args, 2, "usage: named-call-order <compiler> <fixture>")?;
@@ -448,7 +491,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary> ..."
                 .to_string(),
         ),
     }
