@@ -14,6 +14,8 @@ template<typename F> void denied(F&& f) {
 }
 
 int main() {
+    denied([] { NativeGenerationalReplySlots excessive(65'537); });
+    denied([] { NativeGenerationalReplySlots empty(0); });
     NativeGenerationalReplySlots registry(2048);
     const auto actor = registry.endpoint(NativeGenerationalReplySlots::Role::Actor);
     const auto child = registry.endpoint(NativeGenerationalReplySlots::Role::Actor);
