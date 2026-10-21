@@ -7,5 +7,5 @@ fnc conflict(borrow int a, borrow mut int b): int {
 }
 pub fnc main(): int {
   let mut Pair pair = new Pair();
-  return conflict(rt borrow pair.left, rt borrow mut pair.right);
+  return conflict(rt borrow pair.left, rt mut borrow pair.right);
 }
