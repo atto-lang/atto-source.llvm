@@ -60,7 +60,10 @@ int main() {
     owner.acknowledge_cancelled_device_event(next, id);
     expects<std::logic_error>([&] { owner.acknowledge_cancelled_device_event(next, id); });
     owner.retire_after_backend_release(id);
+    check(owner.status() == Status::Closed);
+    check(owner.snapshot().status == Status::Closed);
     owner.close_after_retirement();
+    expects<std::logic_error>([&] { owner.retire_after_backend_release(id); });
     expects<std::logic_error>([&] { (void)owner.begin_command(id); });
 
     const Identity second{"tenant", "device", 1};
@@ -70,6 +73,7 @@ int main() {
     check(failed.status() == Status::Poisoned);
     expects<std::logic_error>([&] { (void)failed.begin_command(second); });
     failed.retire_after_backend_release(second);
+    check(failed.status() == Status::Closed);
     failed.close_after_retirement();
     expects<std::invalid_argument>([&] { (void)BufferFence(second, 0); });
     // Deterministic concurrent start: a command admission and transfer
@@ -109,6 +113,39 @@ int main() {
             expects<std::logic_error>([&] { (void)contended.status(); });
         }
     }
+    // Closed-state observation must be race-free with retirement. The status
+    // reader may see Idle or Closed, but must never dereference a transiently
+    // closed wrapper through the old active() path.
+    for (int trial = 0; trial < 128; ++trial) {
+        BufferFence retiring(id, 8);
+        std::atomic<bool> go{false};
+        std::exception_ptr reader_error, retire_error;
+        std::thread reader([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try {
+                for (;;) {
+                    const auto observed = retiring.status();
+                    if (observed == Status::Closed) break;
+                    if (observed != Status::Idle)
+                        throw std::runtime_error("unexpected retirement status");
+                    std::this_thread::yield();
+                }
+            } catch (...) { reader_error = std::current_exception(); }
+        });
+        std::thread retire([&] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { retiring.retire_after_backend_release(id); }
+            catch (...) { retire_error = std::current_exception(); }
+        });
+        go.store(true, std::memory_order_release);
+        reader.join();
+        retire.join();
+        if (reader_error) std::rethrow_exception(reader_error);
+        if (retire_error) std::rethrow_exception(retire_error);
+        check(retiring.status() == Status::Closed);
+        retiring.close_after_retirement();
+    }
+
     // Move assignment must not orphan an unretired underlying buffer.
     BufferFence existing(id, 4), incoming(id, 4);
     expects<std::logic_error>([&] { existing = std::move(incoming); });
