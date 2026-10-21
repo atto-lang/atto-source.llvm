@@ -109,6 +109,11 @@ private:
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
+        // Becomes true only after the trusted stop callback has returned,
+        // including exceptional return. Post-close resource reclamation and
+        // DONE publication must stay behind this barrier: close() publishes
+        // detachment before it dispatches callbacks outside the group mutex.
+        std::atomic<bool> stop_request_returned{false};
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
         std::atomic<bool> detached_from_group{false};
@@ -191,6 +196,7 @@ public:
          */
         bool ready_for_resource_reclamation() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && ref_.ticket_->stop_request_returned.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
@@ -369,7 +375,9 @@ public:
             // is still active or reserved. Failed admission is side-effect-free.
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
-                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire)
+                || (ref.ticket_->detached_from_group.load(std::memory_order_acquire)
+                    && !ref.ticket_->stop_request_returned.load(std::memory_order_acquire)))
                 return false;
             // Close may settle readiness after detaching the worker table,
             // outside the group lock. The ticket mutex decides the winner.
@@ -554,6 +562,7 @@ private:
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
+                || !ref.ticket_->stop_request_returned.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
@@ -634,6 +643,10 @@ private:
         if (ref.ticket_->stop_issued.exchange(true, std::memory_order_acq_rel))
             return;
         try { stop(); } catch (...) { /* do not strand sibling workers */ }
+        // Release-publish only after the callback is no longer executing.
+        // A runtime finalizer acquiring this bit therefore cannot free actor
+        // resources while the stop callback still has authority to touch them.
+        ref.ticket_->stop_request_returned.store(true, std::memory_order_release);
     }
 
     static void request_stops(

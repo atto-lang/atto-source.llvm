@@ -513,6 +513,44 @@ int main() {
         }
     }
     {
+        // close() publishes detachment before invoking stop callbacks outside
+        // the group mutex. A concurrent runtime finalizer must not treat that
+        // intermediate state as physical quiescence or settle get_done().
+        NativeActorGroup group(8301, 1);
+        std::promise<void> stop_entered;
+        std::promise<void> release_stop;
+        auto stop_gate = release_stop.get_future().share();
+        auto worker = group.adopt(8301, 1, 1, [&] {
+            stop_entered.set_value();
+            stop_gate.wait();
+        });
+        auto finalizer = group.runtime_finalizer(worker);
+        check(group.mark_ready(worker), "stop-dispatch barrier actor not ready");
+
+        std::thread closer([&] { group.close(); });
+        stop_entered.get_future().wait();
+
+        check(!finalizer.ready_for_resource_reclamation(),
+              "detachment exposed reclamation while stop callback still active");
+        check(!finalizer.finalized(),
+              "runtime finalizer settled DONE while stop callback still active");
+        check(!group.finalized(worker),
+              "group finalizer settled DONE while post-close stop callback still active");
+        check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+              "get_done crossed stop callback completion barrier");
+
+        release_stop.set_value();
+        closer.join();
+
+        check(finalizer.ready_for_resource_reclamation(),
+              "returned stop callback did not open reclamation gate");
+        check(finalizer.finalized(),
+              "post-stop runtime finalization was not accepted");
+        worker.get_done().get();
+        check(!finalizer.finalized(), "stop-dispatch barrier allowed duplicate DONE");
+    }
+
+    {
         // Close drops undelivered CONTROL work, but only a post-close
         // runtime finalizer can acknowledge physical retirement. Neither
         // token nor close may execute the actor handler inline.
