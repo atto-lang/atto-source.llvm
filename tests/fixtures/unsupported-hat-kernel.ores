@@ -1,0 +1,3 @@
+define pub kernel VectorAdd as
+  fnc run(int index): void { return; }
+end
