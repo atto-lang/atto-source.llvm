@@ -9,7 +9,6 @@
 #define ORES_MAX_SLOT_BYTES (1024u * 1024u)
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
-#define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
 typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; unsigned char compact_published; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
 struct OresActorArena {
@@ -82,8 +81,8 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
         || !slot_bytes || slot_bytes > ORES_MAX_SLOT_BYTES
         || !scratch_bytes || scratch_bytes > ORES_MAX_SCRATCH_BYTES) deny();
     const size_t slab_bytes = checked_mul(slots, slot_bytes);
-    if (slab_bytes > ORES_MAX_ACTOR_BYTES
-        || scratch_bytes > ORES_MAX_ACTOR_BYTES - slab_bytes) deny();
+    if (slab_bytes > ORES_ACTOR_ARENA_MAX_BYTES
+        || scratch_bytes > ORES_ACTOR_ARENA_MAX_BYTES - slab_bytes) deny();
     (void) checked_mul(slots, sizeof(Slot));
     (void) checked_mul(slots, sizeof(size_t));
     OresActorArena* a = (OresActorArena*) calloc(1, sizeof(*a));
