@@ -13,8 +13,8 @@
 
 namespace oreslang {
 
-backend::ActorRefOwnershipEvidence
-SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+SourceManagedRefAuthorization
+SourceOwnershipChecker::authorize_actor_managed_ref(
         std::string_view source,
         std::string_view actor_name,
         std::string_view ref_field,
@@ -117,7 +117,8 @@ SourceOwnershipChecker::issue_actor_managed_ref_evidence(
     // MIR invariants cannot be bypassed accidentally.
     backend::ActorRefOwnershipEvidence evidence(claims);
     (void)backend::verify_actor_compressed32(evidence);
-    return evidence;
+    return SourceManagedRefAuthorization(
+        std::move(evidence), actor.name, ref_it->name, use.offset);
 }
 
 } // namespace oreslang
