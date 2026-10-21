@@ -7,5 +7,5 @@ fnc inspect(borrow mut Pair first, borrow int second): int {
 }
 pub fnc main(): int {
   let mut Pair pair = new Pair();
-  return inspect(rt borrow mut pair, rt borrow pair.right);
+  return inspect(rt mut borrow pair, rt borrow pair.right);
 }
