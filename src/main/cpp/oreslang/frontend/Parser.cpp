@@ -329,10 +329,19 @@ private:
                 if (!names.insert(field.name).second)
                     fail("duplicate actor state field '" + field.name + "'");
                 require(":");
-                require("int");
-                require("=");
-                field.initializer = expression();
-                require(";");
+                if (accept("Ref")) {
+                    require("<"); require("int"); require(">");
+                    field.managed_ref = true;
+                    field.managed_ref_pointee = "int";
+                    require("=");
+                    require("null");
+                    require(";");
+                } else {
+                    require("int");
+                    require("=");
+                    field.initializer = expression();
+                    require(";");
+                }
                 field.field_mutable = true;
                 actor.fields.push_back(std::move(field));
             }
@@ -438,6 +447,10 @@ private:
                     write.offset = token_.offset;
                     require("state"); require(".");
                     write.field = identifier();
+                    if (accept(".")) {
+                        require("value");
+                        write.managed_ref_payload = true;
+                    }
                     require("=");
                     write.expression = expression();
                     require(";");
@@ -1839,7 +1852,7 @@ private:
             std::unordered_set<std::string> mutables;
             const std::unordered_set<std::string> empty;
             for (const auto& field : actor.fields) {
-                validate_expression(*field.initializer, empty, {});
+                if (!field.managed_ref) validate_expression(*field.initializer, empty, {});
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutables.insert(field.name);
@@ -1859,15 +1872,30 @@ private:
                         ? "with clause omits state.write effect"
                         : "with clause omits state.read effect");
                 std::unordered_set<std::string> state_fields;
-                for (const auto& field : actor.fields) state_fields.insert(field.name);
+                std::unordered_set<std::string> managed_ref_fields;
+                for (const auto& field : actor.fields) {
+                    state_fields.insert(field.name);
+                    if (field.managed_ref) managed_ref_fields.insert(field.name);
+                }
                 const auto validate_state_expr = [&](const Expression& root) {
                     std::function<void(const Expression&)> visit;
                     visit = [&](const Expression& expr) {
                         if (expr.kind == Expression::Kind::Field) {
+                            if (expr.left && expr.left->kind == Expression::Kind::Field &&
+                                    expr.name == "value") {
+                                const auto& base = *expr.left;
+                                if (!base.left || base.left->kind != Expression::Kind::Variable ||
+                                        base.left->name != "state" ||
+                                        !managed_ref_fields.count(base.name))
+                                    throw std::runtime_error("managed Ref payload access requires declared state Ref<int>");
+                                return;
+                            }
                             if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
                                     expr.left->name != "state" ||
                                     !state_fields.count(expr.name))
                                 throw std::runtime_error("state loan may access only declared state fields");
+                            if (managed_ref_fields.count(expr.name))
+                                throw std::runtime_error("logical Ref<T> cannot be used as scalar; access its payload");
                             return;
                         }
                         if (expr.kind == Expression::Kind::Call ||
@@ -1892,6 +1920,10 @@ private:
                         throw std::runtime_error("read state loan contains write");
                     if (!state_fields.count(write.field))
                         throw std::runtime_error("unknown actor state field '" + write.field + "'");
+                    if (write.managed_ref_payload != (managed_ref_fields.count(write.field) != 0))
+                        throw std::runtime_error(write.managed_ref_payload
+                            ? "managed Ref payload write requires Ref<int> state field"
+                            : "logical Ref<T> state field cannot be overwritten as scalar");
                     validate_state_expr(*write.expression);
                 }
                 validate_state_expr(*loan.result);
