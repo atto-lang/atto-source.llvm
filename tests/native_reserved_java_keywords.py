@@ -38,6 +38,18 @@ CASES = {
         "pub fnc main(): int { cpu { return 7; } return 42; }",
         "native cpu execution block boundary unsupported",
     ),
+    "cpu-task-block": (
+        "pub fnc main(): int { return cpu task { 42 }; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "gpu-task-block": (
+        "pub fnc main(): int { return gpu task { 42 }; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "default-task-block": (
+        "pub fnc main(): int { return task { 42 }; }",
+        "native execution task lowering unsupported",
+    ),
     "gpu-block": (
         "pub fnc main(): int { gpu { return 7; } return 42; }",
         "native gpu/quantum boundary unsupported",
