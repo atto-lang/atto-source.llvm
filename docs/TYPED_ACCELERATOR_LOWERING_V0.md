@@ -12,9 +12,9 @@ This distinction is part of the safety contract.
 | Feature | Java/Truffle | Native C++/LLVM companion |
 | --- | --- | --- |
 | Homogeneous POD layouts | `DataOrientedLayout.Plan` | `dop::Plan` |
-| Typed F32 kernel | `accel.DopKernelIR.Kernel` | `dop::Kernel` |
-| Executable host lowering | `DopKernelIR.executeCpu` | `dop::execute_cpu` |
-| OpenCL C lowering | `DopKernelIR.lowerOpenCl` | `dop::lower_opencl` |
+| Typed F32 kernel | `runtime.compute.PortableKernelIR.Kernel` | `dop::Kernel` |
+| Executable host lowering | `PortableKernelIR.CpuReferenceProvider.execute` | `dop::execute_cpu` |
+| OpenCL C lowering | not yet implemented on Java/Graal | `dop::lower_opencl` |
 | Exclusive host-buffer transfers | `HostBuffer.take/borrowRead` | `HostBuffer::take/borrow_read` |
 | QASM3 lowering | `QuantumCircuitIR.lowerOpenQasm3` | `quantum::lower_openqasm3` |
 | Ideal simulator | `simulateProbabilities/Shots` | `simulate_probabilities/shots` |
@@ -25,6 +25,13 @@ yet imported as public Oreslang standard-library symbols and do not grant host
 or device permissions to an untrusted guest.
 
 ## DOP typed kernels
+
+The Java/Graal G2 implementation now uses `PortableKernelIR` as its
+source-neutral conformance IR. It deliberately provides an explicit CPU
+reference backend only; it does not claim Java-side OpenCL lowering or device
+execution. LLVM/native remains the first backend with OpenCL C emission. Both
+frontends still reject source execution-domain syntax.
+
 
 The first admitted source-neutral kernel IR is a fixed field-wise F32
 transform, with operations SCALE, BIAS, SCALE_BIAS. Input and output have

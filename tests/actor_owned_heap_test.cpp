@@ -23,8 +23,17 @@ static_assert(!std::is_copy_constructible<Heap>::value, "heap cannot be cloned")
 static_assert(!std::is_move_constructible<Heap>::value, "heap cannot be moved");
 
 static void test_independent_actor_storage_and_cycles() {
-    Heap alice(101);
-    Heap bob(102);
+    const ActorHeapIdentity alice_id{77, 0, 11};
+    const ActorHeapIdentity bob_id{77, 1, 12};
+    Heap alice(alice_id);
+    Heap bob(bob_id);
+    check(alice.allocation_domain_bound(), "actor heap must bind allocation authority");
+    check(same_actor_allocation_domain(alice.allocation_domain(), alice_id),
+          "actor heap capability must preserve runtime/slot/generation");
+    check(alice.allocation_domain().owner == 0,
+          "actor slot zero is a valid allocation owner");
+    check(bob.allocation_domain().owner == 1,
+          "distinct actor heap capability must remain distinct");
     auto one = alice.allocate(sizeof(Node), alignof(Node));
     auto two = alice.allocate(sizeof(Node), alignof(Node));
     check(one && two, "two actor-owned nodes must allocate");

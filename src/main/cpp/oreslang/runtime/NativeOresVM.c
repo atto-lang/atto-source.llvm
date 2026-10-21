@@ -402,6 +402,23 @@ int ores_native_vm_publish_control(
             vm->schedulers[domain], parent, payload);
 }
 
+OresNativeActorFuture* ores_native_vm_actor_future_open(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef owner, uint64_t control_token) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_future_open(
+            vm->schedulers[domain], owner, control_token)
+        : NULL;
+}
+
+int ores_native_vm_current_execution_context(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeExecutionContext* out) {
+    return vm && valid_domain(domain) && out
+        && ores_native_actor_scheduler_current_execution_context(
+            vm->schedulers[domain], out);
+}
+
 static void control_lock(OresNativeVM* vm) {
     if (pthread_mutex_lock(&vm->control_lock) != 0) abort();
 }

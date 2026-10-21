@@ -117,6 +117,17 @@ pub fnc main(): int {
   return 42;
 }
 """, "expected int expression"),
+    "if-as-binding-value": ("""
+pub fnc main(): int {
+  val y: int = if (1 eq 1) { return 1; } else { return 2; } fi
+  return y;
+}
+""", "expected int expression"),
+    "if-as-return-value": ("""
+pub fnc main(): int {
+  return if (1 eq 1) { return 1; } else { return 2; } fi;
+}
+""", "expected int expression"),
     "branch-after-return-guard": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();

@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/NativeActorFuture.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -134,6 +135,19 @@ int ores_native_vm_wait_done(
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload);
+
+/*
+ * Trusted continuation bridge helpers. The VM keeps its domain scheduler
+ * private while allowing runtime-owned Future and logical-execution plumbing.
+ * current_execution_context succeeds only from the selected domain's active
+ * carrier callback; it never exposes the scheduler pointer to guest code.
+ */
+OresNativeActorFuture* ores_native_vm_actor_future_open(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef owner, uint64_t control_token);
+int ores_native_vm_current_execution_context(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeExecutionContext* out);
 
 /* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
  * per domain. The host event loop explicitly pumps it; no master pthread or
