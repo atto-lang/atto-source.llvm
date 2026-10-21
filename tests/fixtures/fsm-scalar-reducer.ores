@@ -1,5 +1,5 @@
 // Bounded scalar-only flat FSM reducer, intentionally not an FSM keyword.
-// Does not implement version commits, effect outboxes, ECS or state loans.
+// Scalar projection tests below cover versions/effect identifiers but NOT\n// transactional version commits, effect outboxes, ECS or state loans.
 // 0=idle, 1=running, 2=done; events 0=start,1=tick,2=finish,3=reset.
 // -1=Rejected (distinct from accepted self-transition to state 1).
 fnc tick_state(int ticks): int {
@@ -50,4 +50,38 @@ fnc step_state(int state, int event, int ticks): int {
     if (state eq 1) { return running_transition(event, ticks); } fi
     if (state eq 2) { return done_transition(event, ticks); } fi
     return -1;
+}
+
+ // Bounded scalar projectors for independent native guest trace checks.
+ // Signed -1 is an intentionally special u32-max version boundary witness.
+ // These values are pure projections, NOT a storage transaction or outbox.
+fnc project_state(int state, int event, int ticks, int version): int {
+    const result: int = step_state(state, event, ticks);
+    if (version eq -1) { return state; } fi
+    if (result eq -1) { return state; } fi
+    return result;
+}
+fnc project_version(int state, int event, int ticks, int version): int {
+    const result: int = step_state(state, event, ticks);
+    if (version eq -1) { return version; } fi
+    if (result eq -1) { return version; } fi
+    return version + 1;
+}
+fnc project_ticks(int state, int event, int ticks, int version): int {
+    const result: int = step_state(state, event, ticks);
+    if (version eq -1) { return ticks; } fi
+    if (result eq -1) { return ticks; } fi
+    if (state eq 0) { return 0; } fi
+    if (state eq 2) { return 0; } fi
+    if (event eq 1) { return ticks + 1; } fi
+    return ticks;
+}
+fnc project_effect(int state, int event, int ticks, int version): int {
+    const result: int = step_state(state, event, ticks);
+    if (version eq -1) { return 0; } fi
+    if (result eq -1) { return 0; } fi
+    if (state eq 0) { return 1; } fi
+    if (state eq 2) { return 4; } fi
+    if (event eq 1) { return 2; } fi
+    return 3;
 }
