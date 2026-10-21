@@ -947,6 +947,30 @@ if(BUILD_TESTING)
         --ir "ret i64")
     oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
         --ir "oreslang_source_actor_spawn")
+    # Canonical current-main sealed actor state. These are real source compiler
+    # gates: the state binder is lexical, writes require exclusive authority,
+    # and no legacy persistent field may coexist with a state schema.
+    oreslang_contract_test(native_sealed_state_read sealed-state-read-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_sealed_state_write sealed-state-write-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_write_only sealed-state-write-only-positive.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_sealed_state_using_read sealed-state-using-read-positive.ores
+        --ir "call i64 @ores_actor_i64_heap_field_read")
+    oreslang_contract_test(native_sealed_state_missing_read_effect sealed-state-missing-read-reject.ores
+        --diagnostic "state callback reads state but using bound omits state.read")
+    oreslang_contract_test(native_sealed_state_read_mutation sealed-state-read-mutate-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(native_sealed_state_second_store sealed-state-second-store-reject.ores
+        --diagnostic "sealed actor state is the only guest-owned persistent instance storage")
+    oreslang_contract_test(native_sealed_state_call_escape sealed-state-call-escape-reject.ores
+        --diagnostic "state callback forbids calls, ownership operations, arrays and escaping references")
+    oreslang_contract_test(native_sealed_state_unknown_field sealed-state-unknown-field-reject.ores
+        --diagnostic "unknown actor state field")
+    oreslang_contract_test(wasm32_sealed_state_failclosed sealed-state-read-positive.ores
+        --target wasm32-unknown-unknown
+        --diagnostic "wasm32 sealed actor state awaits scoped state-loan lowering")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
