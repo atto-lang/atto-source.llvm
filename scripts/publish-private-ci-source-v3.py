@@ -274,18 +274,65 @@ def decode_contents(item, path, max_bytes):
     return data
 
 
+def safe_descriptor_flags_available():
+    flags = tuple(
+        getattr(os, name, None)
+        for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    )
+    if not all(type(value) is int and value > 0 for value in flags):
+        return False
+    return all(
+        (left & right) == 0
+        for index, left in enumerate(flags)
+        for right in flags[index + 1:]
+    )
+
+
 def read_local_regular(path, max_bytes):
-    p = Path(path)
+    """Read one protected file without following any path-component symlink."""
+    if (not isinstance(path, (str, Path))
+            or not isinstance(max_bytes, int) or isinstance(max_bytes, bool)
+            or max_bytes <= 0 or not safe_descriptor_flags_available()):
+        raise Denied("local protected file request is unsafe")
+    text_path = str(path)
+    if "\\" in text_path:
+        raise Denied("local protected file path is unsafe")
+    pure = PurePosixPath(text_path)
+    absolute = pure.is_absolute()
+    parts = pure.parts[1:] if absolute else pure.parts
+    if (not parts
+            or any(part in ("", ".", "..") for part in parts)
+            or any(part.casefold() == ".git" for part in parts)):
+        raise Denied("local protected file path is unsafe")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    opened = []
     try:
-        meta = p.lstat()
+        current = os.open("/" if absolute else ".", directory_flags)
+        opened.append(current)
+        for component in parts[:-1]:
+            current = os.open(component, directory_flags, dir_fd=current)
+            opened.append(current)
+        file_fd = os.open(parts[-1], file_flags, dir_fd=current)
+        try:
+            stream = os.fdopen(file_fd, "rb")
+        except BaseException:
+            os.close(file_fd)
+            raise
+        with stream:
+            meta = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
+                    or meta.st_size <= 0 or meta.st_size > max_bytes):
+                raise Denied("local protected file unsafe: " + text_path)
+            data = stream.read(max_bytes + 1)
     except OSError as exc:
-        raise Denied("local protected file unavailable: " + path) from exc
-    if (p.is_symlink() or not stat.S_ISREG(meta.st_mode)
-            or meta.st_nlink != 1 or meta.st_size <= 0 or meta.st_size > max_bytes):
-        raise Denied("local protected file unsafe: " + path)
-    data = p.read_bytes()
-    if len(data) != meta.st_size:
-        raise Denied("local protected file changed while reading: " + path)
+        raise Denied("local protected file unavailable: " + text_path) from exc
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+    if len(data) != meta.st_size or len(data) > max_bytes:
+        raise Denied("local protected file changed while reading: " + text_path)
     return data
 
 
@@ -332,10 +379,7 @@ def remote_source_file(path, main_sha, max_bytes):
 
 
 def parse_allowlist(raw, repository):
-    try:
-        lines = raw.decode("utf-8").splitlines()
-    except UnicodeError as exc:
-        raise Denied("allowlist is not UTF-8") from exc
+    lines = canonical_security_lines(raw, "allowlist")
     seen = set()
     allowed = False
     for line in lines:
