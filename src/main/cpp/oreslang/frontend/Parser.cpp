@@ -2056,7 +2056,7 @@ private:
                             }
                             if (!statement.condition_lhs || !statement.condition_rhs)
                                 throw std::runtime_error(
-                                    "actor state conditional requires equality operands");
+                                    "actor state conditional requires comparison operands");
                             validate_state_expression(*statement.condition_lhs);
                             validate_state_expression(*statement.condition_rhs);
                             validate_state_statements(statement.then_statements);
