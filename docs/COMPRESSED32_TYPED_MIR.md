@@ -10,13 +10,13 @@ the reference codec can represent object starts spanning nearly 32 GiB. The
 current fixed-capacity C actor arena deliberately admits **at most 64 MiB**
 (including scratch) and does not reserve a 32-GiB region.
 
-This stacked draft provides a **compiler-internal MIR contract** and an
-executable LLVM-to-native-C runtime bridge. It does **not** parse or execute
-general Oreslang `Ref<T>`, `state {}`, ownership-aware object graphs, or
-arbitrary actor class references. The existing native source parser rejects
-the new actor `state {}` contract rather than silently treating it as legacy
-scalar actor fields. LLVM support must not be advertised as guest source
-pointer support until the sealed critical state-loan verifier is integrated.
+This stacked draft provides a **compiler-internal MIR contract**, an
+executable LLVM-to-native-C runtime bridge, and a deliberately narrow
+source-authority slice: sealed actor `state {}` may declare actor-private
+`Ref<int>` values and terminal `rt ref_read/ref_write` uses. The
+`SourceOwnershipChecker` can derive non-forgeable evidence from that actual
+source. Ordinary LLVM emission still rejects those operations, so this is
+**not yet executable guest Ref<T> support** or a general object-graph feature.
 
 ## Host-runtime scalar ABI
 
@@ -66,7 +66,7 @@ enum. Reject cross-actor mailbox transport, frozen shared regions, native
 FFI pointers, integer casts, capability types, unsafe recycle policy and
 native32 configurations.
 
-### Compiler policy helper and remaining authority gate
+### Compiler policy helper and source authority
 
 `ActorRefOwnershipVerifier.hpp` now re-runs the ownership CFG at the exact
 live-loan block, re-runs the sealed `handle_state` callback/effect admission,
@@ -76,10 +76,13 @@ compressed32/quarantined MIR **claims**. It intentionally returns ordinary
 
 That distinction is security-critical: an internal caller can construct a
 synthetic CFG or callback description, so successful policy validation alone
-must not mint codegen authority. The evidence constructor is reserved for the
-real `SourceOwnershipChecker`, which still needs a source/HIR `Ref<T>` and
-single-`state {}` path from actual parsed programs. Until that frontend path
-exists, production source-to-compressed32 evidence issuance remains disabled.
+must not mint codegen authority. `SourceOwnershipChecker` is now the sole
+production friend of the evidence constructor. Its first source slice accepts
+**source text rather than a caller-built AST/CFG/MIR**, reparses and revalidates
+a sealed actor-private `Ref<int>`, derives the exact terminal ref use and loan
+mode, builds the ownership CFG internally, and re-runs the final compressed32
+claim validator before returning evidence. Callers cannot request a stronger
+read/write mode than the source program actually contains.
 
 The helper intentionally rejects `suspend` and `ffi` callbacks even where
 the more general state contract could otherwise admit them. Compact reference
@@ -104,29 +107,34 @@ it never bypasses the C runtime by trusting a guest-supplied liveness bit.
   compiles it to native object code with Clang, compiles the *real* ActorArena.c,
   links a C driver, and executes two actor heaps whose first compact offsets
   collide but whose domains and payloads remain distinct.
+- `source_ownership_checker_managed_ref_test.cpp` feeds real Oreslang source
+  into the production source checker and verifies read/write evidence while
+  keeping the private evidence constructor inaccessible to raw MIR callers.
 
-The last test is **backend IR-to-runtime AOT integration**, not a claim that
-the Oreslang source compiler now emits these references. GitHub Actions
-jobs that fail before running any steps provide no compiler or sanitizer
-test evidence. Do not mark this draft ready until exact-head full CMake,
-CTest, Clang AOT runtime, and sanitizers execute.
+The backend AOT test is **IR-to-runtime integration**. The new source checker
+closes the evidence-issuance boundary, but normal source LLVM emission still
+fails closed before managed-ref codegen. GitHub Actions jobs that fail before
+running any steps provide no compiler or sanitizer test evidence. Do not mark
+this draft ready until exact-head source-authority tests, full CMake/CTest,
+Clang AOT runtime, and sanitizers execute.
 
 ## Remaining native source/compiler work
 
-1. Introduce a logical `Ref<T, Domain>` or existing `Pointer<T>` owner in
-   HIR with sealed actor-domain and single-`state {}` semantics; the compiler
-   owns physical storage choice, not the source programmer.
-2. Lower verified `critical handle_state(callback)` loans to actor runtime
-   admission. Capture the active actor context after each continuation resume,
-   not a permanent OS-thread-local heap base.
-3. Encode actor-owned class/struct/array field references as `i32` only once
-   the entire reference lifetime and incoming-link invalidation is proven.
-   Until then use permanent slot quarantine or an explicit generational
-   handle, not unchecked slot reuse.
-4. Maintain full-width native pointers for OS, TCP, PostgreSQL, FFI, DMA and
+1. Thread the issued `ActorRefOwnershipEvidence` from the source checker into
+   source LLVM emission and the existing `ManagedRefMirLowering` helpers;
+   normal codegen remains deliberately closed until that connection is exact.
+2. Broaden the first `Ref<int>` HIR slice into general logical `Ref<T>`
+   while keeping physical compressed32/native64 width entirely compiler-owned.
+3. Add continuation-aware lifetime segmentation before permitting managed refs
+   across `await`/select. Capture the active actor context after each resume,
+   never a permanent OS-thread-local heap base.
+4. Encode broader actor-owned class/struct/array graph references as `i32`
+   only once incoming-edge invalidation is proven. Until then retain permanent
+   published-slot quarantine or an explicit generational handle.
+5. Maintain full-width native pointers for OS, TCP, PostgreSQL, FFI, DMA and
    other external resources. Message-passing actor capabilities are not
    compressed heap-local references.
-5. Evaluate selective heap choices and SoA/AoSoA/ECS integer row indices
+6. Evaluate selective heap choices and SoA/AoSoA/ECS integer row indices
    against 64-bit managed references on memory RSS, LLC misses, throughput
    and p95/p99 latency. Compression is not guaranteed to be a speedup.
 
