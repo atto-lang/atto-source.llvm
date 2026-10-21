@@ -971,6 +971,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(wasm32_sealed_state_failclosed sealed-state-read-positive.ores
         --target wasm32-unknown-unknown
         --diagnostic "wasm32 sealed actor state awaits scoped state-loan lowering")
+    add_test(NAME native_sealed_state_ir_effect_contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_state_ir_contract.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    set_tests_properties(native_sealed_state_ir_effect_contract PROPERTIES TIMEOUT 60)
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
