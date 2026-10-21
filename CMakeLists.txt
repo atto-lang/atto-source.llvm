@@ -968,6 +968,8 @@ if(BUILD_TESTING)
         --ir "state.if.then")
     oreslang_contract_test(native_sealed_state_relational sealed-state-relational-positive.ores
         --ir "icmp sle i64")
+    oreslang_contract_test(native_sealed_state_fenced_release sealed-state-release-positive.ores
+        --ir "sub i64")
     oreslang_contract_test(native_sealed_state_conditional_readonly_reject
         sealed-state-conditional-readonly-reject.ores
         --diagnostic "read-only actor state loan cannot mutate state")
