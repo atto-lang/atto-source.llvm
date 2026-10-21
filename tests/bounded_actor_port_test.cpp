@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 
 using oreslang::runtime::BoundedActorPort;
 struct MoveOnly {
@@ -18,6 +19,12 @@ template<class F> void rejected(F f) {
     throw std::runtime_error("expected bounded port failure");
 }
 int main() {
+    using Delivery = BoundedActorPort<MoveOnly>::Delivery;
+    static_assert(std::is_move_constructible<Delivery>::value,
+                  "delivery must move into optional/consumer ownership");
+    static_assert(!std::is_move_assignable<Delivery>::value,
+                  "live delivery leases must not be overwriteable");
+
     BoundedActorPort<MoveOnly> port(1, 64);
     MoveOnly first(42), second(77);
     check(port.offer(std::move(first), 32));
