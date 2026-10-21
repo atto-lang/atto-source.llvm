@@ -65,14 +65,21 @@ int main() {
     expect_throw([&] {
         (void)Authority::begin_download(buffer, gpu, "actor:42", 0, 4);
     });
+    expect_throw([&] { Authority::complete(buffer, first, true); });
+    Authority::mark_submitted(buffer, first);
+    expect_throw([&] { Authority::mark_submitted(buffer, first); });
+    expect_throw([&] { Authority::abort_before_enqueue(buffer, first); });
     Authority::complete(buffer, first, true);
     check(buffer.status() == oreslang::gpu::Status::Idle);
 
     auto second = Authority::begin_download(buffer, gpu, "actor:42", 64, 64);
+    Authority::mark_submitted(buffer, second);
     expect_throw([&] { Authority::complete(buffer, first, true); });
     Authority::complete(buffer, second, true);
 
     auto cancelled = Authority::begin_download(buffer, gpu, "actor:42", 0, 16);
+    expect_throw([&] { Authority::cancel(buffer, cancelled); });
+    Authority::mark_submitted(buffer, cancelled);
     Authority::cancel(buffer, cancelled);
     check(buffer.status() == oreslang::gpu::Status::Poisoned);
     expect_throw([&] { Authority::retire(buffer, gpu, "actor:42"); });
@@ -80,6 +87,27 @@ int main() {
     Authority::retire(buffer, gpu, "actor:42");
     check(buffer.status() == oreslang::gpu::Status::Closed);
     expect_throw([&] { Authority::retire(buffer, gpu, "actor:42"); });
+
+
+    {
+        auto reserved = Authority::bind_buffer<unsigned char>(
+            gpu, 12, 128, 8, "u8", "actor:abort");
+        auto fence = Authority::begin_upload(
+            reserved, gpu, "actor:abort", 8, 16);
+        expect_throw([&] { Authority::complete(reserved, fence, true); });
+        Authority::abort_before_enqueue(reserved, fence);
+        check(reserved.status() == oreslang::gpu::Status::Idle);
+        expect_throw([&] { Authority::abort_before_enqueue(reserved, fence); });
+
+        auto next = Authority::begin_upload(
+            reserved, gpu, "actor:abort", 16, 16);
+        check(next.sequence() != fence.sequence());
+        Authority::mark_submitted(reserved, next);
+        expect_throw([&] { Authority::abort_before_enqueue(reserved, next); });
+        Authority::complete(reserved, next, true);
+        Authority::retire(reserved, gpu, "actor:abort");
+        check(reserved.status() == oreslang::gpu::Status::Closed);
+    }
 
     expect_throw([] {
         (void)Authority::issue_device("vulkan", "gpu0", 0, "tenant-a");
