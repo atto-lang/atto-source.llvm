@@ -1443,6 +1443,13 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_async_io_boundary_matrix.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # General structural shapes are not a scalar-i64 ABI: prove negative
+    # admission with a functioning scalar-positive compiler control.
+    add_test(NAME native_structural_shape_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_shape_failclosed.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_structural_shape_failclosed PROPERTIES TIMEOUT 180)
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not
     # an async I/O reactor or source-level await implementation.
