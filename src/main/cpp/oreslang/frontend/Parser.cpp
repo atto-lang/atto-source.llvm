@@ -323,7 +323,7 @@ private:
             field.offset = token_.offset;
             field.field_mutable = token_.text == "let";
             advance();
-            field.name = declaration_identifier("field");
+            field.name = identifier();
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
             require(":");
             require("int");
@@ -366,7 +366,7 @@ private:
         if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
-        param.name = declaration_identifier("parameter");
+        param.name = identifier();
         method.parameters.push_back(std::move(param));
         require(")");
         require(":");
@@ -417,7 +417,7 @@ private:
                         if (token_.text == "@")
                             fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
-                        std::string name = declaration_identifier("constructor parameter");
+                        std::string name = identifier();
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
                         result.constructor_parameters.push_back(std::move(name));
@@ -457,7 +457,7 @@ private:
                 // capability, independent of whether the slot is final.
                 require("<"); require("int"); require(">");
                 field.int_array = true;
-                field.name = declaration_identifier("field");
+                field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
                 if (!accept(":")) require("=");
@@ -471,7 +471,7 @@ private:
                 if (mutable_referent && token_.text != "int")
                     fail("native class field supports only scalar int or mut Array<int>");
                 require("int");
-                field.name = declaration_identifier("field");
+                field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
                 if (!accept(":") && !accept("="))
@@ -556,7 +556,7 @@ private:
         require(":"); require("void");
         require("{");
         require("val");
-        loop.variable = declaration_identifier("local binding");
+        loop.variable = identifier();
         require(":"); require("int"); require("=");
         loop.initial = integer_literal();
         require(";");
@@ -655,7 +655,7 @@ private:
                     if (generic) parameter.generic_type = type;
                     else parameter.class_name = type;
                 }
-                parameter.name = declaration_identifier("parameter");
+                parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
@@ -711,7 +711,7 @@ private:
                     require("<");
                     require("int");
                     require(">");
-                    binding.name = declaration_identifier("local binding");
+                    binding.name = identifier();
                     require("=");
                     require("new");
                     require("Array");
@@ -725,7 +725,7 @@ private:
                 if (token_.text == "Entry")
                     reject_native_entry_boundary(token_.offset);
                 binding.class_name = identifier();
-                binding.name = declaration_identifier("local binding");
+                binding.name = identifier();
                 require("=");
                 if (accept("new")) {
                     const std::string ctor = identifier();
@@ -751,7 +751,7 @@ private:
                 // loans. Preserve the distinction for native ownership checks.
                 binding.owner_mutable = token_.text == "val";
                 advance();
-                binding.name = declaration_identifier("local binding");
+                binding.name = identifier();
                 // Distinguish actor capabilities from scalar data before IR.
                 // Unsupported generic futures never become fake blocking calls.
                 if (token_.text != ":" && token_.text != "=") require(":");
@@ -842,7 +842,7 @@ private:
                     statement.kind = Statement::Kind::ScopedLocal;
                     statement.branch_local = std::make_unique<LocalBinding>();
                     statement.branch_local->offset = statement.offset;
-                    statement.branch_local->name = declaration_identifier("branch-local binding");
+                    statement.branch_local->name = identifier();
                     require(":");
                     require("int");
                     require("=");
@@ -967,7 +967,7 @@ private:
                     require("}");
                     require("catch");
                     require("(");
-                    value.catch_binding = declaration_identifier("catch binding");
+                    value.catch_binding = identifier();
                     for (const auto& param : value.parameters)
                         if (param.name == value.catch_binding)
                             fail("native caught throw binding shadows parameter");
@@ -1182,7 +1182,7 @@ private:
             // remains unreachable until typed exceptional CFG is implemented.
             require("catch");
             require("(");
-            declaration_identifier("catch binding");
+            identifier();
             require(")");
             require("{");
             // Native try cannot throw: allow the Java-required catch return
