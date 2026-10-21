@@ -57,6 +57,45 @@ pub fnc main(): int {
   return invert(false) ? 42 : 7;
 }
 """, 42),
+    "bool-guard-condition-call": ("""
+fnc ready(): bool {
+  return true;
+}
+fnc classify(): int {
+  if (ready()) {
+    return 42;
+  } fi
+  return 7;
+}
+pub fnc main(): int {
+  return classify();
+}
+""", 42),
+    "bool-statement-condition-call": (PAIR + """
+fnc ready(): bool {
+  return true;
+}
+fnc hit(borrow mut Pair p): void {
+  p.first = 42;
+  return;
+}
+fnc miss(borrow mut Pair p): void {
+  p.first = 7;
+  return;
+}
+fnc choose(borrow mut Pair p): int {
+  if (ready()) {
+    hit(rt borrow mut p);
+  } else {
+    miss(rt borrow mut p);
+  } fi
+  return p.first;
+}
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  return choose(rt borrow mut p);
+}
+""", 42),
     "bool-if-guard": ("""
 fnc classify(bool flag, int x): int {
   if (flag && x > 10) {
@@ -167,6 +206,22 @@ pub fnc main(): int {
   return 0;
 }
 """, "native bool borrow ABI is not yet admitted"),
+    "reject-hidden-call-in-declared-effects-arm": ("""
+fnc leaf(): int {
+  return 1;
+}
+fnc guarded(): int using io {
+  if (true) {
+    leaf();
+  } else {
+    leaf();
+  } fi
+  return 1;
+}
+pub fnc main(): int {
+  return 0;
+}
+""", "using effects require transitive call summaries"),
     "reject-short-circuit-divergent-move": ("""
 pub fnc main(): int {
   val x: int = 1;
@@ -201,6 +256,8 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     if "short-circuit-" in name:
         assert "logic.rhs" in produced.stdout, name
         assert "logic.merge" in produced.stdout, name
+    if name == "bool-param-local":
+        assert "flag.bool.abi" in produced.stdout, name
 
 
 def main():
