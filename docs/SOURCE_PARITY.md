@@ -34,11 +34,10 @@ fnc classify(int x) -> int
 end
 ```
 
-An optional same-line `as` separator may make the body boundary explicit and
-permit compact source:
+`as` and `::` are equivalent optional same-line body separators in the Java/Graal contract. Both must remain fail-closed in native until the typed end-delimited body lowering exists. For example:
 
 ```ores
-fnc classify(int x) -> int as
+fnc classify(int x) -> int ::
     if x > 0 then
         return 1
     else
