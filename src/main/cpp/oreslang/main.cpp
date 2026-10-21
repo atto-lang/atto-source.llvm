@@ -89,6 +89,14 @@ static void collect_tree_shake_expression_calls(
         collect_tree_shake_expression_calls(*expression.left, calls);
     if (expression.right)
         collect_tree_shake_expression_calls(*expression.right, calls);
+    if (expression.condition_lhs)
+        collect_tree_shake_expression_calls(*expression.condition_lhs, calls);
+    if (expression.condition_rhs)
+        collect_tree_shake_expression_calls(*expression.condition_rhs, calls);
+    if (expression.when_true)
+        collect_tree_shake_expression_calls(*expression.when_true, calls);
+    if (expression.when_false)
+        collect_tree_shake_expression_calls(*expression.when_false, calls);
     for (const auto& argument : expression.arguments)
         if (argument) collect_tree_shake_expression_calls(*argument, calls);
 }

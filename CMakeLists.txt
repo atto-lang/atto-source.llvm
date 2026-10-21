@@ -640,7 +640,6 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-dop-gpu-admission-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-dop-gpu-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_gpu_exact_layout_fence_admission COMMAND oreslang-dop-gpu-admission-test)
-
     # Host-only parity for the source-visible std/compute descriptor contract.
     # These values are metadata only; they carry no device/buffer/fence authority
     # and do not imply source-module linking or physical GPU execution.
@@ -889,6 +888,23 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}" --sanitize)
         set_tests_properties(native_source_conditional_cfg
             native_source_conditional_cfg_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+    # Canonical value-producing conditional expression. The native subset
+    # admits only statically proven bool conditions (true/false or equality),
+    # lowers exactly one value arm, and requires affine state agreement at PHI.
+    if(ORE_CLANG)
+        add_test(NAME native_source_ternary_expression
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/ternary_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        add_test(NAME native_source_ternary_expression_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/ternary_native_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_source_ternary_expression
+            native_source_ternary_expression_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
     # Synchronous branch-scoped i64 lifetimes cannot escape the owning arm.
     if(ORE_CLANG)

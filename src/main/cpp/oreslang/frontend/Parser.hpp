@@ -22,13 +22,22 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Conditional, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
+    // Conditional is the native scalar form of Oreslang's lazy `? :`.
+    // The current native subset has no general bool value representation yet,
+    // so the condition is a proven boolean equality (including true/false
+    // lowered internally to 1 == 1 / 0 == 1). Branches remain ordinary i64
+    // expressions and are lowered lazily through distinct CFG predecessors.
+    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition_rhs;
+    std::unique_ptr<Expression> when_true;
+    std::unique_ptr<Expression> when_false;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;

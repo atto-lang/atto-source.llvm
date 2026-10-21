@@ -34,6 +34,18 @@ Function pure(const std::string& name, std::unique_ptr<Expression> result) {
     return function;
 }
 
+std::unique_ptr<Expression> conditional(
+        std::unique_ptr<Expression> when_true,
+        std::unique_ptr<Expression> when_false) {
+    auto expression = std::make_unique<Expression>();
+    expression->kind = Expression::Kind::Conditional;
+    expression->condition_lhs = integer(1);
+    expression->condition_rhs = integer(1);
+    expression->when_true = std::move(when_true);
+    expression->when_false = std::move(when_false);
+    return expression;
+}
+
 } // namespace
 
 int main() {
@@ -110,6 +122,34 @@ int main() {
         require(report.source_admitted, "literal bounded loop should admit");
         require(report.bounded_loop_iterations == 16,
                 "bounded iteration accounting");
+    }
+
+    {
+        Function entry = pure(
+            "entry",
+            conditional(integer(7), call("branch_only_callee")));
+        const auto facts = realtime_detail::direct_facts(entry, 8);
+        require(facts.calls.size() == 1,
+                "ternary-only call must participate in realtime call graph");
+        require(facts.calls.front() == native_function_slot("branch_only_callee", 0),
+                "ternary-only call identity");
+    }
+
+    {
+        Program program;
+        Function disallowed = pure("branch_only_io", integer(1));
+        disallowed.has_declared_effects = true;
+        disallowed.declared_effects.bits =
+            static_cast<std::uint32_t>(FunctionEffect::Io);
+        program.functions.push_back(std::move(disallowed));
+        program.functions.push_back(pure(
+            "main",
+            conditional(integer(7), call("branch_only_io"))));
+        const auto report = analyze_native_hard_rt(program);
+        require(!report.source_admitted,
+                "ternary arm effects must not evade realtime admission");
+        require(report.reason.find("disallowed capability") != std::string::npos,
+                "ternary arm effect reason");
     }
 
     {
