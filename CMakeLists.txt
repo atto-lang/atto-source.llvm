@@ -1774,6 +1774,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_blocking_file_io_ir
         native-blocking-file-io-positive.ores
         --ir "oreslang_file_write_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_ir
+        native-blocking-file-io-positive.ores
+        --ir "oreslang_file_read_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_requires_mut_borrow
+        native-blocking-file-read-no-borrow.ores
+        --diagnostic "borrowed argument requires explicit rt borrow [mut]")
+    oreslang_contract_test(native_blocking_file_read_rejects_shared_borrow
+        native-blocking-file-read-shared-borrow.ores
+        --diagnostic "borrow mode does not match borrowed parameter")
     oreslang_contract_test(native_blocking_file_io_missing_effects
         native-blocking-file-io-missing-effects.ores
         --diagnostic "native blocking file intrinsic requires using io, block")
@@ -1796,7 +1805,7 @@ if(BUILD_TESTING)
             tests/native_blocking_file_io_test.c
             src/main/cpp/oreslang/runtime/NativeBlockingFileIo.c)
         target_include_directories(oreslang-native-blocking-file-io-test PRIVATE
-            "\${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
         target_compile_options(oreslang-native-blocking-file-io-test PRIVATE
             -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_blocking_file_io_runtime
