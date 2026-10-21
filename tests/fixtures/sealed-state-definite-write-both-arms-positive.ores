@@ -1,0 +1,15 @@
+define actor BranchWriteAuthority as
+  state {
+    result: int = 7;
+  }
+  pub fnc on_message(int flag): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      if (flag == 1) {
+        s.result = 1;
+      } else {
+        s.result = 2;
+      } fi
+      return s.result;
+    });
+  }
+end
