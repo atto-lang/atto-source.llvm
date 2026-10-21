@@ -1320,7 +1320,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         // boundary and must remain safe even after parser-bypassing AST
         // transforms performed by compiler passes or native test callers.
         if (actor.sealed_state) {
-            if (actor.fields.size() > 16)
+            if (actor.fields.size() > 32)
                 throw std::runtime_error("sealed actor state exceeds field bound");
             for (const auto& field : actor.fields) {
                 if (!field.initializer || !field.field_mutable)
@@ -1381,7 +1381,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (!actor.on_message.has_declared_effects)
                 throw std::runtime_error(
                     "sealed actor state codegen lacks declared effect bound");
-            if (actor.fields.size() > 16)
+            if (actor.fields.size() > 32)
                 throw std::runtime_error("sealed actor state exceeds field bound");
             for (const auto& field : actor.fields) {
                 if (!field.initializer || !field.field_mutable)
