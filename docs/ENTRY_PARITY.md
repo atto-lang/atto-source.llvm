@@ -21,6 +21,8 @@ particular, the native tree now has:
 - a compiler-owned identified LLVM struct type, `%ores.entry.i64.i64`,
   so the native IR cannot confuse Entry with a structural `{ i64, i64 }`
   tuple/record despite matching field layout;
+- checked LLVM construction/projection helpers using `insertvalue` /
+  `extractvalue`, rejecting wrong component types and structural lookalikes;
 - `Entry`-specific Send/Sync/Share composition from exactly two component
   types, matching the Java/Graal immutable-product rule.
 - field-sensitive native drop planning for `entry.key` and `entry.value`,
