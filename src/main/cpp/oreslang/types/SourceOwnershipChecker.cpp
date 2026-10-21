@@ -26,7 +26,7 @@ SourceOwnershipChecker::issue_actor_managed_ref_evidence(
 
     const auto actor_it = std::find_if(
         program.actors.begin(), program.actors.end(),
-        [&](const ActorDecl& actor) { return actor.name == actor_name; });
+        [&](const ActorDecl& actor) { return std::string_view(actor.name) == actor_name; });
     if (actor_it == program.actors.end())
         throw std::invalid_argument("managed Ref evidence requires named source actor");
 
@@ -36,7 +36,7 @@ SourceOwnershipChecker::issue_actor_managed_ref_evidence(
 
     const auto ref_it = std::find_if(
         actor.managed_ref_fields.begin(), actor.managed_ref_fields.end(),
-        [&](const ActorManagedRefField& field) { return field.name == ref_field; });
+        [&](const ActorManagedRefField& field) { return std::string_view(field.name) == ref_field; });
     if (ref_it == actor.managed_ref_fields.end())
         throw std::invalid_argument("managed Ref evidence requires declared Ref<int> state field");
 
@@ -47,7 +47,7 @@ SourceOwnershipChecker::issue_actor_managed_ref_evidence(
 
     const ActorStateLoan& loan = *method.actor_state_loan;
     if (!loan.managed_ref_result || loan.result ||
-            loan.managed_ref_result->field != ref_field)
+            std::string_view(loan.managed_ref_result->field) != ref_field)
         throw std::invalid_argument(
             "managed Ref evidence requires exact source managed-ref use");
 
