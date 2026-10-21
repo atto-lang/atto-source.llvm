@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/backend/ManagedRefMir.hpp"
+#include "oreslang/runtime/TargetAbi.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +28,7 @@ class SourceManagedRefAuthorization final {
     // can match authorization to the same compilation unit without relying on
     // a collision-prone ad-hoc hash.
     std::string source_;
+    std::string target_triple_;
     std::string actor_name_;
     std::string ref_field_;
     std::size_t use_offset_ = 0;
@@ -34,11 +36,13 @@ class SourceManagedRefAuthorization final {
     SourceManagedRefAuthorization(
             backend::ActorRefOwnershipEvidence evidence,
             std::string source,
+            std::string target_triple,
             std::string actor_name,
             std::string ref_field,
             std::size_t use_offset)
         : evidence_(std::move(evidence)),
           source_(std::move(source)),
+          target_triple_(std::move(target_triple)),
           actor_name_(std::move(actor_name)),
           ref_field_(std::move(ref_field)),
           use_offset_(use_offset) {}
@@ -56,6 +60,7 @@ public:
     backend::ActorManagedRefMir claims() const noexcept {
         return evidence_.claims();
     }
+    std::string_view target_triple() const noexcept { return target_triple_; }
     std::string_view actor_name() const noexcept { return actor_name_; }
     std::string_view ref_field() const noexcept { return ref_field_; }
     std::size_t use_offset() const noexcept { return use_offset_; }
@@ -78,8 +83,7 @@ public:
         std::string_view source,
         std::string_view actor_name,
         std::string_view ref_field,
-        std::uint64_t actor_region_capacity_bytes,
-        bool native64_target);
+        const TargetAbi& target);
 };
 
 } // namespace oreslang
