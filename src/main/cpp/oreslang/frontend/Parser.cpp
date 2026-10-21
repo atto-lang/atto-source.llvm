@@ -509,6 +509,37 @@ private:
             require("-");
             require(">");
 
+            const auto parse_managed_ref_result = [&]() {
+                auto use = std::make_unique<ActorManagedRefUse>();
+                use->offset = token_.offset;
+                require("rt");
+                if (accept("ref_read")) {
+                    use->access = ActorManagedRefUse::Access::Read;
+                } else if (accept("ref_write")) {
+                    use->access = ActorManagedRefUse::Access::Write;
+                } else {
+                    fail("state callback rt operation must be ref_read or ref_write");
+                }
+                require("(");
+                const std::string receiver = identifier();
+                if (receiver != loan->binder)
+                    fail("managed reference access requires lexical state callback binding");
+                require(".");
+                use->field = identifier();
+                if (use->access == ActorManagedRefUse::Access::Write) {
+                    require(",");
+                    use->value = expression();
+                }
+                require(")");
+                return use;
+            };
+            const auto parse_terminal_result = [&]() {
+                if (token_.text == "rt")
+                    loan->managed_ref_result = parse_managed_ref_result();
+                else
+                    loan->result = expression();
+            };
+
             if (accept("{")) {
                 while (token_.text != "return") {
                     if (token_.kind == Kind::End || token_.text == "}")
@@ -526,11 +557,11 @@ private:
                     loan->writes.push_back(std::move(write));
                 }
                 require("return");
-                loan->result = expression();
+                parse_terminal_result();
                 require(";");
                 require("}");
             } else {
-                loan->result = expression();
+                parse_terminal_result();
             }
             require(")");
             require(";");
