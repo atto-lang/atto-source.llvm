@@ -77,9 +77,21 @@ compressed32/quarantined MIR **claims**. It intentionally returns ordinary
 That distinction is security-critical: an internal caller can construct a
 synthetic CFG or callback description, so successful policy validation alone
 must not mint codegen authority. The evidence constructor is reserved for the
-real `SourceOwnershipChecker`, which still needs a source/HIR `Ref<T>` and
-single-`state {}` path from actual parsed programs. Until that frontend path
-exists, production source-to-compressed32 evidence issuance remains disabled.
+real `SourceOwnershipChecker`.
+
+The current stacked source-authority slice now parses logical actor-state
+`Ref<int>` fields as `Ref<int> = null`, records exact
+`state.<ref>.value` read/write use inside a lexical critical
+`self.handle_state(...)` callback, and lets `SourceOwnershipChecker`
+reconstruct the ownership CFG and callback facts from that parsed HIR. Callers
+cannot supply MIR claims, CFGs, provenance booleans, origins, escape classes or
+physical ref widths to the evidence issuer.
+
+This is deliberately an **authority-only** milestone. LLVM codegen still fails
+closed when it sees a logical `Ref<T>` because source allocation/publication
+into the real `ActorArena` has not yet been wired. Consequently this branch
+proves that parsed source can legitimately mint evidence, but it does not yet
+claim end-to-end source-to-compact32 execution.
 
 The helper intentionally rejects `suspend` and `ffi` callbacks even where
 the more general state contract could otherwise admit them. Compact reference
