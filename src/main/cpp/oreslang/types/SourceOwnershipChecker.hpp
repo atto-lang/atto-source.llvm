@@ -1,7 +1,7 @@
 #pragma once
 
-#include "oreslang/backend/ActorRefOwnershipVerifier.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/CriticalHandleStateContract.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -13,33 +13,50 @@
 namespace oreslang {
 
 /*
- * Production source/HIR authority for actor-local managed references.
+ * Non-authorizing proof that parsed source contains one exact, lexically
+ * admitted managed-reference payload use inside the actor's sealed critical
+ * state loan.
  *
- * This class is the only non-test friend allowed to construct
- * ActorRefOwnershipEvidence. Callers select a parsed actor/state field and
- * requested access, but cannot supply MIR claims, CFGs, "verified" booleans,
- * origins, escape classifications, or physical ref widths.
+ * IMPORTANT: this is deliberately NOT ActorRefOwnershipEvidence. Source syntax
+ * alone cannot prove that a concrete actor-private allocation was published,
+ * that its physical slot is quarantined, or which backend storage width was
+ * chosen. Those facts only exist after allocation/publication lowering.
+ */
+class SourceManagedRefUseProof final {
+    std::string actor_;
+    std::string state_field_;
+    backend::ManagedRefAccess access_;
+
+    SourceManagedRefUseProof(std::string actor, std::string state_field,
+                             backend::ManagedRefAccess access)
+        : actor_(std::move(actor)), state_field_(std::move(state_field)),
+          access_(access) {}
+    friend class SourceOwnershipChecker;
+public:
+    SourceManagedRefUseProof() = delete;
+    const std::string& actor() const noexcept { return actor_; }
+    const std::string& state_field() const noexcept { return state_field_; }
+    backend::ManagedRefAccess access() const noexcept { return access_; }
+};
+
+/*
+ * Production source/HIR checker for logical actor-local managed references.
  *
- * Current slice is intentionally narrow:
- *  - canonical actor state { ... }
- *  - Ref<int> state fields only
- *  - exact state.<ref>.value use inside one lexical critical handle_state loan
- *  - no suspension, FFI, mailbox transport, return of the Ref itself, or casts
- *  - compact32 only on native64 with caller-supplied bounded actor arena size
+ * The checker reparses raw source inside this authority boundary. Callers
+ * cannot supply a mutated Program/HIR, ownership CFG, provenance flags,
+ * physical storage width, actor-region size, or a "verified" boolean.
  *
- * Allocation/publication lowering is still a separate backend integration gate.
+ * This milestone proves source use/loan authority only. It intentionally does
+ * not mint ActorRefOwnershipEvidence until source allocation + publication
+ * lowering can bind a real ActorArena allocation to the exact use site.
  */
 class SourceOwnershipChecker final {
 public:
-    static backend::ActorRefOwnershipEvidence issue_actor_state_ref_evidence(
+    static SourceManagedRefUseProof validate_actor_state_ref_use(
             std::string_view source,
             const std::string& actor_name,
             const std::string& state_field,
-            backend::ManagedRefAccess access,
-            std::uint64_t actor_region_capacity_bytes,
-            bool native64_target) {
-        // Reparse inside the authority boundary. A caller cannot construct or
-        // mutate Program/HIR flags and then ask this class to bless them.
+            backend::ManagedRefAccess access) {
         Program program = parse_program(source);
         const auto actor_it = std::find_if(program.actors.begin(), program.actors.end(),
             [&](const ActorDecl& actor) { return actor.name == actor_name; });
@@ -48,27 +65,27 @@ public:
         const ActorDecl& actor = *actor_it;
         if (!actor.state_declared || !actor.on_message.actor_state_loan)
             throw std::invalid_argument(
-                "source ownership checker: compact Ref requires canonical actor state loan");
+                "source ownership checker: managed Ref requires canonical actor state loan");
 
         const auto field_it = std::find_if(actor.fields.begin(), actor.fields.end(),
             [&](const LocalBinding& field) { return field.name == state_field; });
         if (field_it == actor.fields.end() || !field_it->managed_ref ||
                 field_it->managed_ref_pointee != "int")
             throw std::invalid_argument(
-                "source ownership checker: compact Ref requires declared Ref<int> state field");
+                "source ownership checker: managed Ref requires declared Ref<int> state field");
 
         const ActorStateLoan& loan = *actor.on_message.actor_state_loan;
         if (!loan.critical)
             throw std::invalid_argument(
-                "source ownership checker: compact Ref requires critical handle_state loan");
+                "source ownership checker: managed Ref requires critical handle_state loan");
         if (access == backend::ManagedRefAccess::Write &&
                 loan.mode != ActorStateLoan::Mode::Write)
             throw std::invalid_argument(
-                "source ownership checker: compact Ref write requires mutable state loan");
+                "source ownership checker: managed Ref write requires mutable state loan");
         if (access == backend::ManagedRefAccess::Read &&
                 loan.mode != ActorStateLoan::Mode::Read)
             throw std::invalid_argument(
-                "source ownership checker: read evidence requires critical read loan");
+                "source ownership checker: managed Ref read requires critical read loan");
 
         const auto is_payload_read = [&](const Expression& root) {
             bool found = false;
@@ -127,41 +144,13 @@ public:
         callback.state_loan_live_across_suspend = false;
         callback.continuation_generation_fenced = false;
         callback.inferred.bits = static_cast<std::uint32_t>(required);
+        if (admit_critical_handle_state(
+                callback, actor.on_message.declared_effects, false)
+                != CriticalStateAdmission::Accept)
+            throw std::invalid_argument(
+                "source ownership checker: state callback admission rejected");
 
-        ownership::Graph graph;
-        const std::string place = "state." + state_field;
-        graph.entry.emplace(place, ownership::PlaceState{ownership::kOwned});
-
-        ownership::BasicBlock acquire;
-        acquire.operations.emplace_back(
-            access == backend::ManagedRefAccess::Write
-                ? ownership::Operation::Kind::BorrowExclusive
-                : ownership::Operation::Kind::BorrowShared,
-            place, UINT64_C(1));
-        acquire.successors.push_back(1);
-
-        ownership::BasicBlock exact_site;
-        exact_site.successors.push_back(2);
-
-        ownership::BasicBlock release;
-        release.operations.emplace_back(
-            access == backend::ManagedRefAccess::Write
-                ? ownership::Operation::Kind::ReleaseExclusive
-                : ownership::Operation::Kind::ReleaseShared,
-            place, UINT64_C(1));
-
-        graph.blocks.push_back(std::move(acquire));
-        graph.blocks.push_back(std::move(exact_site));
-        graph.blocks.push_back(std::move(release));
-
-        const auto claims =
-            backend::ActorRefOwnershipVerifier::derive_verified_state_loan_claims(
-                graph, 1, place, callback, actor.on_message.declared_effects,
-                access, actor_region_capacity_bytes, native64_target);
-
-        // Private constructor: only this production source/HIR authority can
-        // cross from revalidated source facts into codegen evidence.
-        return backend::ActorRefOwnershipEvidence(claims);
+        return SourceManagedRefUseProof(actor_name, state_field, access);
     }
 };
 
