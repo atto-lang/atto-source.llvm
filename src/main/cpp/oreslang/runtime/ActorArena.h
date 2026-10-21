@@ -23,6 +23,14 @@ void ores_actor_arena_write(OresActorArena*, OresArenaTurn, OresArenaHandle, siz
                             const void* src, size_t bytes);
 void ores_actor_arena_drop(OresActorArena*, OresArenaTurn, OresArenaHandle);
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
+/* Whole-slot loans: many readers OR one writer. Owner access is suspended
+ * while an exclusive loan exists. Loan I/O requires the current actor turn;
+ * release alone may run on another carrier, including during retirement. */
+OresArenaLoan ores_actor_arena_borrow_mut(OresActorArena*, OresArenaTurn, OresArenaHandle);
+void ores_actor_arena_loan_read(OresActorArena*, OresArenaTurn, OresArenaLoan,
+                               size_t offset, void* out, size_t bytes);
+void ores_actor_arena_loan_write(OresActorArena*, OresArenaTurn, OresArenaLoan,
+                                size_t offset, const void* src, size_t bytes);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);
 OresArenaScratch ores_actor_arena_scratch_alloc(OresActorArena*, OresArenaTurn,
                                                 size_t bytes, size_t alignment);

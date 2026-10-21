@@ -1709,6 +1709,13 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_arena_persistent_scratch
         COMMAND oreslang-native-actor-arena-test)
     set_tests_properties(native_actor_arena_persistent_scratch PROPERTIES TIMEOUT 25)
+    # Linker wrapping audits the real C arena, including loan-table reuse.
+    # This covers allocator calls during the guarded turn, not the entire host.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(oreslang-native-actor-arena-test PRIVATE ORES_ARENA_TEST_ALLOCATIONS=1)
+        target_link_options(oreslang-native-actor-arena-test PRIVATE
+            -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free)
+    endif()
 
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.

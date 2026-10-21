@@ -1,4 +1,4 @@
-#include "oreslang/runtime/ActorArena.h"
+#include "ActorArena.h"
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,8 +10,8 @@
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
 #define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
-typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; } Slot;
-typedef struct { uint64_t nonce, index, generation; } LoanEntry;
+typedef struct { uint64_t generation, writer; size_t length; uint32_t loans; unsigned char live; } Slot;
+typedef struct { uint64_t nonce, index, generation; unsigned char exclusive; } LoanEntry;
 struct OresActorArena {
     atomic_flag lock;
     uint64_t domain, owner, incarnation, epoch, next_loan_nonce;
@@ -143,6 +143,7 @@ void ores_actor_arena_read(OresActorArena* a, OresArenaTurn turn,
     require_turn(a, turn);
     Slot* s = require_slot(a, handle);
     require_span(s->length, offset, bytes);
+    if (s->writer) deny();
     if (bytes && !out) deny();
     if (bytes) memcpy(out, a->slab + (size_t) handle.index * a->slot_bytes + offset, bytes);
     leave_lock(a);
@@ -170,11 +171,13 @@ void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandl
     a->free_slots[a->free_count++] = (size_t) h.index;
     leave_lock(a);
 }
-OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
+static OresArenaLoan borrow_slot(OresActorArena* a, OresArenaTurn turn,
+                                OresArenaHandle h, unsigned char exclusive) {
     enter_lock(a);
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
-    if (s->loans == UINT32_MAX || a->loans >= ORES_MAX_LOANS
+    if (s->writer || (exclusive && s->loans)
+        || s->loans == UINT32_MAX || a->loans >= ORES_MAX_LOANS
         || a->next_loan_nonce == UINT64_MAX) deny();
     size_t index = ORES_MAX_LOANS;
     for (size_t i = 0; i < ORES_MAX_LOANS; ++i) {
@@ -182,11 +185,55 @@ OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, Ore
     }
     if (index == ORES_MAX_LOANS) deny();
     const uint64_t nonce = a->next_loan_nonce++;
-    a->entries[index] = (LoanEntry) {nonce, h.index, h.generation};
+    a->entries[index] = (LoanEntry) {nonce, h.index, h.generation, exclusive};
+    if (exclusive) s->writer = nonce;
     ++s->loans; ++a->loans;
     OresArenaLoan loan = {a->domain, nonce, h.index, h.generation};
     leave_lock(a);
     return loan;
+}
+OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
+    return borrow_slot(a, turn, h, 0);
+}
+OresArenaLoan ores_actor_arena_borrow_mut(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
+    return borrow_slot(a, turn, h, 1);
+}
+/* Tokens are trusted-host values, not guest-forgeable capabilities. Validate
+ * every field against the live issuance table before granting any access. */
+static Slot* require_loan(OresActorArena* a, OresArenaLoan loan, int writing) {
+    if (loan.domain != a->domain || !loan.nonce) deny();
+    for (size_t i = 0; i < ORES_MAX_LOANS; ++i) {
+        const LoanEntry* e = &a->entries[i];
+        if (e->nonce != loan.nonce) continue;
+        if (e->index != loan.index || e->generation != loan.generation
+            || (writing && !e->exclusive)) deny();
+        OresArenaHandle h = {loan.domain, loan.index, loan.generation};
+        Slot* s = require_slot(a, h);
+        if (!s->loans || (e->exclusive ? s->writer != loan.nonce : s->writer != 0)) deny();
+        return s;
+    }
+    deny();
+    return NULL;
+}
+void ores_actor_arena_loan_read(OresActorArena* a, OresArenaTurn turn,
+                               OresArenaLoan loan, size_t off, void* out, size_t bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    Slot* s = require_loan(a, loan, 0);
+    require_span(s->length, off, bytes);
+    if (bytes && !out) deny();
+    if (bytes) memcpy(out, a->slab + (size_t) loan.index * a->slot_bytes + off, bytes);
+    leave_lock(a);
+}
+void ores_actor_arena_loan_write(OresActorArena* a, OresArenaTurn turn,
+                                OresArenaLoan loan, size_t off, const void* src, size_t bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    Slot* s = require_loan(a, loan, 1);
+    require_span(s->length, off, bytes);
+    if (bytes && !src) deny();
+    if (bytes) memcpy(a->slab + (size_t) loan.index * a->slot_bytes + off, src, bytes);
+    leave_lock(a);
 }
 void ores_actor_arena_release(OresActorArena* a, OresArenaLoan loan) {
     enter_lock(a);
@@ -198,6 +245,10 @@ void ores_actor_arena_release(OresActorArena* a, OresArenaLoan loan) {
             || loan.index >= a->slots) deny();
         Slot* s = &a->meta[loan.index];
         if (!s->live || s->generation != loan.generation || !s->loans) deny();
+        if (e->exclusive) {
+            if (s->writer != loan.nonce || s->loans != 1) deny();
+            s->writer = 0;
+        }
         --s->loans; --a->loans;
         memset(e, 0, sizeof(*e));
         leave_lock(a);
