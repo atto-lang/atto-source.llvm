@@ -990,6 +990,24 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     set_tests_properties(native_sealed_state_conditional_contract_rust
         PROPERTIES TIMEOUT 90)
+    oreslang_contract_test(native_sealed_state_durable_io
+        sealed-state-durable-io-positive.ores
+        --ir "oreslang_file_sync_blocking")
+    oreslang_contract_test(native_sealed_state_durable_read
+        sealed-state-durable-read-local-positive.ores
+        --ir "oreslang_file_read_i64_blocking")
+    oreslang_contract_test(native_sealed_state_durable_missing_effects
+        sealed-state-durable-io-missing-effects.ores
+        --diagnostic "native blocking state I/O requires io, block effects")
+    oreslang_contract_test(native_sealed_state_durable_read_loan
+        sealed-state-durable-io-read-loan.ores
+        --diagnostic "native durable state I/O requires critical write loan")
+    oreslang_contract_test(native_sealed_state_durable_arbitrary_call
+        sealed-state-durable-io-arbitrary-call.ores
+        --diagnostic "state callback forbids arbitrary calls and escaping references")
+    oreslang_contract_test(native_sealed_state_durable_read_output_field
+        sealed-state-durable-read-output-field.ores
+        --diagnostic "checked state file read output requires prior mutable scalar local")
     oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
         --diagnostic "actor effect declarations use with; using is lexical state acquisition")
     oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
