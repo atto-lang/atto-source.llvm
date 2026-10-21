@@ -63,7 +63,9 @@ fnc project_state(int state, int event, int ticks, int version): int {
 }
 fnc project_version(int state, int event, int ticks, int version): int {
     const result: int = step_state(state, event, ticks);
-    if (version eq -1) { return version; } fi
+    // Exit-status projector: encode the u32-max sentinel as 255; the native
+    // C main adapter deliberately rejects direct negative guest return values.
+    if (version eq -1) { return 255; } fi
     if (result eq -1) { return version; } fi
     return version + 1;
 }
