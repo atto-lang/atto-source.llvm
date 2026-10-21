@@ -2,6 +2,7 @@
 
 #include "oreslang/backend/ActorRefOwnershipVerifier.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/runtime/ActorArena.h"
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
 
@@ -110,7 +111,7 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
     // budget. Do not accept a caller-authored capacity claim at this authority
     // boundary; layout facts come from compiler/runtime policy and TargetAbi.
     constexpr std::uint64_t kActorRegionCapacity =
-        UINT64_C(64) * 1024 * 1024;
+        static_cast<std::uint64_t>(ORES_ACTOR_ARENA_MAX_BYTES);
     const bool native64_target = target.pointer_bits() == 64;
 
     backend::ActorManagedRefMir claims =
