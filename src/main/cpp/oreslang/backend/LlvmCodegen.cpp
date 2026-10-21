@@ -1094,11 +1094,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 continue;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
-                llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
+                llvm::Value* conditionValue = nullptr;
+                if (stmt.condition) {
+                    conditionValue = lower(*stmt.condition, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                } else {
+                    llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    conditionValue = builder.CreateZExt(
+                        builder.CreateICmpEQ(lhs, rhs, "if.eq.i1"), i64, "if.eq");
+                }
+                llvm::Value* condition = builder.CreateICmpNE(
+                    conditionValue, llvm::ConstantInt::get(i64, 0), "if.cond.i1");
                 llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
                     context, "if.then", function);
                 llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
@@ -1219,14 +1228,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 builder.CreateBr(cleanup);
             };
             for (const auto& guard : fn.early_returns) {
-                llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
+                llvm::Value* conditionValue = nullptr;
+                if (guard.condition) {
+                    conditionValue = lower(*guard.condition, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                } else {
+                    llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                    llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                    conditionValue = builder.CreateZExt(
+                        builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
+                        i64, "return.guard.eq");
+                }
+                llvm::Value* takenCondition = builder.CreateICmpNE(
+                    conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
                 llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
                 llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-                builder.CreateCondBr(equal, taken, next);
+                builder.CreateCondBr(takenCondition, taken, next);
                 builder.SetInsertPoint(taken);
                 llvm::Value* selected = lower(*guard.result, builder, i64,
                     storage, field_storage, declarations, &region_moves);
