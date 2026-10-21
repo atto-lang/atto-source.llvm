@@ -280,6 +280,44 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 v3.exact_source_tree(669, "9" * 40)
         self.assertFalse(any("/git/blobs/" in route for route in seen))
 
+    def test_recheck_source_snapshot_rejects_moved_pr_head(self):
+        def api(route, method="GET", payload=None):
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "8" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "head changed"):
+                v3.recheck_source_snapshot(669, "9" * 40, SOURCE_TREE)
+
+    def test_recheck_source_snapshot_rejects_tree_change(self):
+        def api(route, method="GET", payload=None):
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if route.endswith("/git/commits/" + "9" * 40):
+                return {"sha": "9" * 40, "tree": {"sha": "4" * 40}}
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "commit/tree changed"):
+                v3.recheck_source_snapshot(669, "9" * 40, SOURCE_TREE)
+
     def test_publish_binds_receipt_tree_branch_and_authorization(self):
         contract = carrier_contract()
         rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
@@ -319,6 +357,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 ),
             ),
             patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "recheck_source_snapshot") as recheck_snapshot,
             patch.object(v3, "gh_api", side_effect=api),
         ):
             result = v3.publish(
@@ -329,6 +368,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
             )
 
+        self.assertEqual(recheck_snapshot.call_count, 2)
+        recheck_snapshot.assert_any_call(669, "9" * 40, SOURCE_TREE)
         self.assertEqual(result["branch"], "ci/oreslang-" + SOURCE_TREE)
         self.assertEqual(
             result["authorization_ref"], "ci/authorized-" + CARRIER_COMMIT
