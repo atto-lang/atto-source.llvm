@@ -1,0 +1,11 @@
+define actor Counter as
+  state {
+    count: int = 0;
+  }
+  pub fnc on_message(int n): int using state.write {
+    return self.handle_state(critical |s| -> {
+      s.count = s.count + n;
+      return s.count;
+    });
+  }
+end
