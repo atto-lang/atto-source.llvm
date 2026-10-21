@@ -977,6 +977,22 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     set_tests_properties(native_sealed_state_ir_effect_contract PROPERTIES TIMEOUT 60)
+    # Direct compiler-AST callers cannot manufacture state authority by
+    # setting effect bits or malformed schema metadata after parsing.
+    add_executable(oreslang-sealed-state-codegen-authority-test
+        tests/sealed_state_codegen_authority_test.cpp
+        src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+        src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp)
+    target_include_directories(oreslang-sealed-state-codegen-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-sealed-state-codegen-authority-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-sealed-state-codegen-authority-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_sealed_state_codegen_authority
+        COMMAND oreslang-sealed-state-codegen-authority-test)
+    set_tests_properties(native_sealed_state_codegen_authority PROPERTIES TIMEOUT 30)
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
