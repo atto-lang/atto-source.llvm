@@ -22,6 +22,10 @@ void operator delete(void* memory) noexcept {
     std::free(memory);
 }
 
+void operator delete(void* memory, std::size_t) noexcept {
+    std::free(memory);
+}
+
 struct MoveOnly {
     std::unique_ptr<int> item;
     explicit MoveOnly(int n) : item(std::make_unique<int>(n)) {}
