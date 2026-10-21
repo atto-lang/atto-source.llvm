@@ -1431,15 +1431,22 @@ if(BUILD_TESTING)
         native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_user_tuple_call_is_ordinary
         native-user-tuple-call.ores --ir "call i64 @tuple")
-    oreslang_contract_test(native_local_entry_identifier_is_ordinary
-        native-local-entry-name.ores --ir "define i64 @main")
+    oreslang_contract_test(reject_native_entry_shadow_local_binding
+        native-local-entry-name.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_function
+        entry-shadow-function-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_module
+        entry-shadow-module-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_generic_parameter
+        entry-shadow-generic-parameter-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_parameter
+        entry-shadow-parameter-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_field
+        entry-shadow-field-reject.ores --diagnostic "builtin Entry is compiler-owned")
     if(ORE_CLANG)
         oreslang_contract_test(native_user_tuple_call_executes
             native-user-tuple-call.ores --run 42 --clang "${ORE_CLANG}")
         set_tests_properties(native_user_tuple_call_executes PROPERTIES TIMEOUT 60)
-        oreslang_contract_test(native_local_entry_identifier_executes
-            native-local-entry-name.ores --run 42 --clang "${ORE_CLANG}")
-        set_tests_properties(native_local_entry_identifier_executes PROPERTIES TIMEOUT 60)
     endif()
 
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
