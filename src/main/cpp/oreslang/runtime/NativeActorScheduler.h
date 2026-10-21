@@ -147,6 +147,10 @@ uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* schedul
 /* Test-only deterministic worker-create failure; no production symbol. */
 void ores_native_actor_scheduler_test_fail_next_create(void);
 #endif
+#ifdef ORESLANG_NATIVE_TEST_CALLOC_FAILURE_CONTROL
+/* Test-only scheduler calloc failure point; 0 disables injection. */
+void ores_native_actor_scheduler_test_fail_calloc_ordinal(unsigned ordinal);
+#endif
 #ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
 /* Test-only execution-id exhaustion control; no production symbol. */
 int ores_native_actor_scheduler_test_set_next_execution(
