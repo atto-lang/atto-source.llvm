@@ -228,12 +228,16 @@ object at the same offset. It trades high churn efficiency for correctness;
 future recycling is conditional on a proven no-incoming-references/ownership
 analysis or a redesigned compact slot+generation representation.
 
-**Not yet proven:** the parser/ownership checker does not admit general
-source-level managed `Ref<T>` in the LLVM backend. A future compiler cannot
-materialize a host descriptor from arbitrary guest-supplied `u32`. It must
-also prohibit compact storage from flowing across actor mailboxes, validate
-actor epoch and borrow lifetimes on suspension, and ensure the actor base
-loaded after carrier migration comes from the current actor context.
+**Source authority milestone:** the native parser now admits one narrow,
+width-independent actor-private `Ref<int>` form inside the single sealed
+`state {}` schema. `SourceOwnershipChecker` reparses source text, derives the
+exact lexical ref use and ownership loan internally, binds the resulting
+authorization to the source/actor/field/use site and target ABI, and is the
+only production friend allowed to mint `ActorRefOwnershipEvidence`. Ordinary
+LLVM source emission still rejects this managed-ref operation until that
+site-bound authorization is threaded into compact codegen. General `Ref<T>`,
+mailbox transport, suspension lifetimes and FFI remain fail-closed. A compiler
+must never materialize a host descriptor from an arbitrary guest `u32`.
 
 The backend-only `ManagedRefLowering.hpp` now constructs LLVM IR that
 keeps the guest reference as `i32`, zero extends and shifts its offset,
