@@ -1,0 +1,8 @@
+define actor RefWriter as
+  state {
+    root: Ref<int> = new Ref<int>(0);
+  }
+  pub fnc on_message(int n): int with state.write {
+    return self.handle_state(critical write |s| -> rt ref_write(s.root, n));
+  }
+end
