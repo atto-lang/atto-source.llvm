@@ -1,2 +1,5 @@
 define pub kernel K as
+  fnc main(int left, int right): int {
+    return left + right;
+  }
 end
