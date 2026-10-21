@@ -21,6 +21,12 @@ A successful snapshot certifies only that the observed buffer was not
 truncated, never that all source-language accesses were observed. The recorder
 is explicitly overwritten through volatile stores before its allocation is freed at physical heap reclamation.
 
+The shared cross-backend admission specification is proposed in
+[oreslang-test CLI PR #6](https://github.com/ores-truffle-oreslang/oreslang-test.cli/pull/6)
+(`docs/RACE_EVIDENCE_V1.md`). This local recorder cannot generate a trusted
+receipt on its own. Host-run provenance, scheduler edges and complete source
+coverage remain required.
+
 ## Explicit limitations
 
 - Memory outside ActorOwnedI64Heap is not traced.
