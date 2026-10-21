@@ -503,7 +503,23 @@ private:
                             require("if");
                             require("(");
                             conditional.condition_lhs = expression();
-                            if (!accept("eq")) require("==");
+                            if (accept("eq")) {
+                                conditional.compare = ActorStateStatement::Compare::Eq;
+                            } else if (accept("==")) {
+                                conditional.compare = ActorStateStatement::Compare::Eq;
+                            } else if (accept("!=")) {
+                                conditional.compare = ActorStateStatement::Compare::Ne;
+                            } else if (accept("<")) {
+                                conditional.compare = accept("=")
+                                    ? ActorStateStatement::Compare::Le
+                                    : ActorStateStatement::Compare::Lt;
+                            } else if (accept(">")) {
+                                conditional.compare = accept("=")
+                                    ? ActorStateStatement::Compare::Ge
+                                    : ActorStateStatement::Compare::Gt;
+                            } else {
+                                fail("actor state conditional requires eq, ==, !=, <, <=, > or >=");
+                            }
                             conditional.condition_rhs = expression();
                             require(")");
                             require("{");
