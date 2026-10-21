@@ -327,8 +327,8 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End)
                     fail("unterminated native actor state schema");
-                if (actor.fields.size() == 16)
-                    fail("native actor state field limit exceeded (16)");
+                if (actor.fields.size() == 32)
+                    fail("native actor state field limit exceeded (32)");
                 LocalBinding field;
                 field.offset = token_.offset;
                 field.field_mutable = true; // mutation still requires a write loan
