@@ -1388,9 +1388,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     throw std::runtime_error(
                         "sealed actor state codegen rejected malformed state schema");
             }
+            std::function<bool(const std::vector<ActorStateStatement>&)> hasStateWrite;
+            hasStateWrite = [&](const std::vector<ActorStateStatement>& statements) {
+                for (const auto& statement : statements) {
+                    if (statement.kind == ActorStateStatement::Kind::Write)
+                        return true;
+                    if (hasStateWrite(statement.then_statements) ||
+                            hasStateWrite(statement.else_statements))
+                        return true;
+                }
+                return false;
+            };
             if (loan.mode == ActorStateLoan::Mode::Read) {
                 if (!actor.on_message.declared_effects.has(FunctionEffect::StateRead) ||
-                        !loan.writes.empty())
+                        hasStateWrite(loan.statements))
                     throw std::runtime_error(
                         "sealed actor read codegen lacks immutable read authority");
             } else if (!actor.on_message.declared_effects.has(FunctionEffect::StateWrite)) {
@@ -1437,41 +1448,90 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 "state codegen rejected call/ownership/escape expression");
                     }
                 };
-            for (const auto& write : loan.writes) {
-                if (!stateNames.count(write.field) || !write.expression)
-                    throw std::runtime_error("invalid sealed actor state write");
-                verifyStateExpression(verifyStateExpression, *write.expression);
-            }
+            std::function<void(const std::vector<ActorStateStatement>&)> verifyStateStatements;
+            verifyStateStatements =
+                [&](const std::vector<ActorStateStatement>& statements) {
+                    for (const auto& statement : statements) {
+                        if (statement.kind == ActorStateStatement::Kind::Write) {
+                            if (!stateNames.count(statement.field) ||
+                                    !statement.expression)
+                                throw std::runtime_error(
+                                    "invalid sealed actor state write");
+                            verifyStateExpression(
+                                verifyStateExpression, *statement.expression);
+                            continue;
+                        }
+                        if (!statement.condition_lhs || !statement.condition_rhs)
+                            throw std::runtime_error(
+                                "invalid sealed actor state conditional");
+                        verifyStateExpression(
+                            verifyStateExpression, *statement.condition_lhs);
+                        verifyStateExpression(
+                            verifyStateExpression, *statement.condition_rhs);
+                        verifyStateStatements(statement.then_statements);
+                        verifyStateStatements(statement.else_statements);
+                    }
+                };
+            verifyStateStatements(loan.statements);
             verifyStateExpression(verifyStateExpression, *loan.result);
             if (readsState &&
                     !actor.on_message.declared_effects.has(FunctionEffect::StateRead))
                 throw std::runtime_error(
                     "state codegen read exceeds declared state.read authority");
 
-            // Snapshot only fields whose old value is needed before their
-            // first callback-local write. A write-only callback emits no
-            // hidden state-read effect.
+            // Snapshot exactly the state whose old value can be observed along
+            // some control-flow path before a definite write. At a conditional
+            // merge only fields written by BOTH arms are definitely initialized.
             std::set<std::string> initialReadKeys;
-            std::set<std::string> writtenKeys;
-            const auto collectInitialReads =
-                [&](const auto& self, const Expression& expr) -> void {
+            const auto collectExpressionReads =
+                [&](const auto& self, const Expression& expr,
+                    const std::set<std::string>& definitelyWritten) -> void {
                     if (expr.kind == Expression::Kind::Field && expr.left &&
                             expr.left->kind == Expression::Kind::Variable &&
                             expr.left->name == loan.binder) {
                         const std::string key = field_key(loan.binder, expr.name);
-                        if (!writtenKeys.count(key)) initialReadKeys.insert(key);
+                        if (!definitelyWritten.count(key))
+                            initialReadKeys.insert(key);
                         return;
                     }
-                    if (expr.left) self(self, *expr.left);
-                    if (expr.right) self(self, *expr.right);
+                    if (expr.left) self(self, *expr.left, definitelyWritten);
+                    if (expr.right) self(self, *expr.right, definitelyWritten);
                     for (const auto& argument : expr.arguments)
-                        self(self, *argument);
+                        self(self, *argument, definitelyWritten);
                 };
-            for (const auto& write : loan.writes) {
-                collectInitialReads(collectInitialReads, *write.expression);
-                writtenKeys.insert(field_key(loan.binder, write.field));
-            }
-            collectInitialReads(collectInitialReads, *loan.result);
+            std::function<void(const std::vector<ActorStateStatement>&,
+                               std::set<std::string>&)> collectStatementReads;
+            collectStatementReads =
+                [&](const std::vector<ActorStateStatement>& statements,
+                    std::set<std::string>& definitelyWritten) {
+                    for (const auto& statement : statements) {
+                        if (statement.kind == ActorStateStatement::Kind::Write) {
+                            collectExpressionReads(collectExpressionReads,
+                                *statement.expression, definitelyWritten);
+                            definitelyWritten.insert(
+                                field_key(loan.binder, statement.field));
+                            continue;
+                        }
+                        collectExpressionReads(collectExpressionReads,
+                            *statement.condition_lhs, definitelyWritten);
+                        collectExpressionReads(collectExpressionReads,
+                            *statement.condition_rhs, definitelyWritten);
+                        auto thenWritten = definitelyWritten;
+                        auto elseWritten = definitelyWritten;
+                        collectStatementReads(
+                            statement.then_statements, thenWritten);
+                        collectStatementReads(
+                            statement.else_statements, elseWritten);
+                        std::set<std::string> merged;
+                        for (const auto& key : thenWritten)
+                            if (elseWritten.count(key)) merged.insert(key);
+                        definitelyWritten = std::move(merged);
+                    }
+                };
+            std::set<std::string> definitelyWritten;
+            collectStatementReads(loan.statements, definitelyWritten);
+            collectExpressionReads(
+                collectExpressionReads, *loan.result, definitelyWritten);
 
             std::unordered_map<std::string, llvm::Value*> stateFields;
             for (std::size_t i = 0; i < actor.fields.size(); ++i) {
@@ -1489,21 +1549,53 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 stateFields.emplace(key, slot);
             }
 
-            for (const auto& write : loan.writes) {
-                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                    [&](const LocalBinding& f) { return f.name == write.field; });
-                if (field == actor.fields.end() ||
-                        loan.mode != ActorStateLoan::Mode::Write)
-                    throw std::runtime_error("invalid sealed actor state write lowering");
-                llvm::Value* value = lower(*write.expression, builder, i64,
-                    values, stateFields, declarations);
-                const std::size_t index = std::distance(actor.fields.begin(), field);
-                builder.CreateCall(fieldWrite, {
-                    actorHeap, currentDomain, currentEpoch,
-                    llvm::ConstantInt::get(i64, index), value});
-                builder.CreateStore(value,
-                    stateFields.at(field_key(loan.binder, write.field)));
-            }
+            std::function<void(const std::vector<ActorStateStatement>&)> lowerStateStatements;
+            lowerStateStatements =
+                [&](const std::vector<ActorStateStatement>& statements) {
+                    for (const auto& statement : statements) {
+                        if (statement.kind == ActorStateStatement::Kind::Write) {
+                            auto field = std::find_if(actor.fields.begin(),
+                                actor.fields.end(), [&](const LocalBinding& f) {
+                                    return f.name == statement.field;
+                                });
+                            if (field == actor.fields.end() ||
+                                    loan.mode != ActorStateLoan::Mode::Write)
+                                throw std::runtime_error(
+                                    "invalid sealed actor state write lowering");
+                            llvm::Value* value = lower(*statement.expression,
+                                builder, i64, values, stateFields, declarations);
+                            const std::size_t index =
+                                std::distance(actor.fields.begin(), field);
+                            builder.CreateCall(fieldWrite, {
+                                actorHeap, currentDomain, currentEpoch,
+                                llvm::ConstantInt::get(i64, index), value});
+                            builder.CreateStore(value, stateFields.at(
+                                field_key(loan.binder, statement.field)));
+                            continue;
+                        }
+                        llvm::Value* lhs = lower(*statement.condition_lhs,
+                            builder, i64, values, stateFields, declarations);
+                        llvm::Value* rhs = lower(*statement.condition_rhs,
+                            builder, i64, values, stateFields, declarations);
+                        llvm::Value* condition =
+                            builder.CreateICmpEQ(lhs, rhs, "state.if.eq");
+                        llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
+                            context, "state.if.then", handler);
+                        llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
+                            context, "state.if.else", handler);
+                        llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(
+                            context, "state.if.merge", handler);
+                        builder.CreateCondBr(condition, thenBlock, elseBlock);
+                        builder.SetInsertPoint(thenBlock);
+                        lowerStateStatements(statement.then_statements);
+                        builder.CreateBr(mergeBlock);
+                        builder.SetInsertPoint(elseBlock);
+                        lowerStateStatements(statement.else_statements);
+                        builder.CreateBr(mergeBlock);
+                        builder.SetInsertPoint(mergeBlock);
+                    }
+                };
+            lowerStateStatements(loan.statements);
             llvm::Value* result = lower(*loan.result, builder, i64,
                 values, stateFields, declarations);
             builder.CreateRet(result);
