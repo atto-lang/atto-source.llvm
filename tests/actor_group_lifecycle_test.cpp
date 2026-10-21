@@ -671,5 +671,58 @@ int main() {
         check(failed == 1, "terminal error subscriber notified incorrectly");
         check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
     }
+    {
+        // Wire identity is (runtime, actor, generation), not the private
+        // shared ticket pointer. Once an incarnation physically retires, the
+        // registry must remember its generation forever so the same or an
+        // older generation can never be re-adopted.
+        NativeActorGroup group(8501, 1);
+        auto first = group.adopt(8501, 77, 5, [] {});
+        check(group.mark_ready(first), "generation high-water actor not ready");
+        check(group.finalized(first), "generation high-water actor not finalized");
+        first.get_done().get();
+
+        bool same_rejected = false;
+        try { (void) group.adopt(8501, 77, 5, [] {}); }
+        catch (const std::logic_error&) { same_rejected = true; }
+        check(same_rejected, "retired generation was reused");
+
+        bool older_rejected = false;
+        try { (void) group.adopt(8501, 77, 4, [] {}); }
+        catch (const std::logic_error&) { older_rejected = true; }
+        check(older_rejected, "older generation bypassed retired high-water mark");
+
+        auto next = group.adopt(8501, 77, 6, [] {});
+        check(!group.mark_ready(first),
+              "stale prior-generation ref mutated replacement incarnation");
+        check(group.mark_ready(next), "strictly newer generation not admitted");
+        check(!group.finalized(first),
+              "stale prior-generation ref finalized replacement incarnation");
+        check(group.finalized(next), "new generation could not finalize");
+        next.get_done().get();
+    }
+
+    {
+        // The high-water mark is runtime-global, not group-local. A new
+        // supervisor cannot resurrect the same wire generation after transfer
+        // or destruction of the previous group.
+        NativeActorGroup original(8502, 1);
+        auto old = original.adopt(8502, 9, 11, [] {});
+        check(original.mark_ready(old), "cross-group generation actor not ready");
+        check(original.finalized(old), "cross-group generation actor not finalized");
+
+        NativeActorGroup replacement_group(8502, 1);
+        bool stale_rejected = false;
+        try { (void) replacement_group.adopt(8502, 9, 11, [] {}); }
+        catch (const std::logic_error&) { stale_rejected = true; }
+        check(stale_rejected, "new group reused retired wire generation");
+
+        auto replacement = replacement_group.adopt(8502, 9, 12, [] {});
+        check(replacement_group.mark_ready(replacement),
+              "new group rejected strictly newer generation");
+        check(replacement_group.finalized(replacement),
+              "new group could not finalize newer generation");
+    }
+
 
 }

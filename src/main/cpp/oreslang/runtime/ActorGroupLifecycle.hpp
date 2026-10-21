@@ -310,12 +310,36 @@ public:
         const Key key{runtime_id, actor_id};
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
+        auto high = owners.high_water.find(key);
+        if (high != owners.high_water.end() && generation <= high->second)
+            throw std::logic_error(
+                "actor generation must advance beyond every retired incarnation");
+
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
+
+        bool inserted_high_water = false;
+        std::uint64_t previous_high_water = 0;
         try {
-            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
+            if (high == owners.high_water.end()) {
+                auto inserted = owners.high_water.emplace(key, generation);
+                if (!inserted.second)
+                    throw std::logic_error("actor generation registry insertion raced");
+                high = inserted.first;
+                inserted_high_water = true;
+            } else {
+                previous_high_water = high->second;
+                high->second = generation;
+            }
+
+            auto live = owners.live.emplace(
+                key, Owner{generation, group_id_, ref.ticket_});
+            if (!live.second)
+                throw std::logic_error("actor owner registry insertion raced");
         } catch (...) {
+            if (inserted_high_water) owners.high_water.erase(key);
+            else if (high != owners.high_water.end()) high->second = previous_high_water;
             workers_.erase(actor_id);
             throw;
         }
@@ -518,6 +542,10 @@ private:
     struct OwnerRegistry {
         std::mutex mutex;
         std::map<Key, Owner> live;
+        // Persistent per-(runtime, actor) generation high-water mark. Physical
+        // finalization removes live authority but never makes an old wire
+        // identity reusable.
+        std::map<Key, std::uint64_t> high_water;
     };
     static OwnerRegistry& registry() {
         static OwnerRegistry instance;
