@@ -22,8 +22,10 @@ int64_t oreslang_file_write_i64_blocking(int64_t fd, int64_t offset, int64_t val
 
     size_t written = 0;
     while (written < sizeof(bytes)) {
-        const off_t at = (off_t)offset + (off_t)written;
-        if (at < 0 || (int64_t)at != offset + (int64_t)written) return 0;
+        if (offset > INT64_MAX - (int64_t)written) return 0;
+        const int64_t target = offset + (int64_t)written;
+        const off_t at = (off_t)target;
+        if (at < 0 || (int64_t)at != target) return 0;
         const ssize_t n = pwrite((int)fd, bytes + written,
                                  sizeof(bytes) - written, at);
         if (n < 0) {
