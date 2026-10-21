@@ -20,6 +20,9 @@ particular, the native tree now has:
 - a fixed two-i64 ABI record for the first scalar product lowering target;
 - `Entry`-specific Send/Sync/Share composition from exactly two component
   types, matching the Java/Graal immutable-product rule.
+- field-sensitive native drop planning for `entry.key` and `entry.value`,
+  with reverse-initialization-order exact-once teardown and double-drop
+  rejection.
 
 Those pieces are **not** permission to accept `Entry` source yet. They exist so
 the parser, ownership checker, LLVM lowerer and actor transport can converge on
