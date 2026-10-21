@@ -1,0 +1,37 @@
+import "@typespec/json-schema";
+using TypeSpec.JsonSchema;
+
+// JSON conformance exchange only. Oreslang's eq/is and trap effect semantics
+// remain defined by the language; this model does not implement them.
+namespace Oreslang.Assert.V1 {
+  @jsonSchema
+  model Operand {
+    kind: "int" | "bool" | "string";
+    value: string;
+  }
+
+  @jsonSchema
+  model Expected {
+    kind: "returned" | "throw" | "none";
+    boolean?: boolean;
+    message_contains?: string;
+  }
+
+  @jsonSchema
+  model AssertCase {
+    id: string;
+    operation: "equal" | "not_equal" | "same" | "true" | "false"
+      | "equal_throws" | "not_equal_throws" | "same_throws"
+      | "true_throws" | "false_throws" | "fail";
+    operands: Operand[];
+    trapped: boolean;
+    expected: Expected;
+  }
+
+  @jsonSchema
+  model Suite {
+    schema_version: "1.0.0";
+    stdlib_module: "std/assert";
+    cases: AssertCase[];
+  }
+}
