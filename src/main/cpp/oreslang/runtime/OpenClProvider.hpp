@@ -517,13 +517,13 @@ public:
         }
 
         if (status == EventStatus::DeviceLost) {
-            gpu::BufferFence::complete_pair(
+            gpu::BufferFence::cancel_pair(
                     operation.input_.fence,
                     operation.output_.fence,
-                    operation.claim_.claim().tickets,
-                    false);
+                    operation.claim_.claim().tickets);
+            operation.cancel_requested_ = true;
             operation.state_ = OperationState::DeviceLost;
-            finish_cleanup(operation);
+            retain_quarantined(operation);
             return operation.state_;
         }
 
@@ -623,6 +623,27 @@ public:
         if (operation.state_ != OperationState::ReleaseFailed)
             throw std::logic_error("OpenCL operation has no failed physical release");
         finish_cleanup(operation);
+        if (operation.cleanup_complete_
+                && operation.state_ == OperationState::DeviceLost)
+            remove_quarantined(operation);
+    }
+
+    void recover_device_loss(Operation& operation) {
+        std::lock_guard<std::mutex> guard(operation.lock_);
+        require_owner(operation);
+        if (operation.state_ != OperationState::DeviceLost)
+            throw std::logic_error(
+                    "OpenCL operation is not awaiting device-loss recovery");
+        if (!api_.prove_device_loss_quiescence())
+            throw std::logic_error(
+                    "OpenCL provider could not prove device-loss quiescence");
+
+        gpu::BufferFence::acknowledge_cancelled_pair(
+                operation.input_.fence,
+                operation.output_.fence,
+                operation.claim_.claim().tickets);
+        finish_cleanup(operation);
+        remove_quarantined(operation);
     }
 
     void retry_pre_enqueue_cleanup() {
