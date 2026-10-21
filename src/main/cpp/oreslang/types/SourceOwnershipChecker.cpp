@@ -43,9 +43,12 @@ SourceOwnershipChecker::authorize_actor_managed_ref_init(
         throw std::invalid_argument(
             "managed Ref initialization requires declared Ref<int> field");
 
+    const std::size_t ref_index = static_cast<std::size_t>(
+        std::distance(actor_it->managed_ref_fields.begin(), ref_it));
     return SourceManagedRefInitAuthorization(
         std::string(source), std::string(target.triple()),
-        actor_it->name, ref_it->name, ref_it->offset, ref_it->initial);
+        actor_it->name, ref_it->name, ref_it->offset,
+        ref_index, ref_it->initial);
 }
 
 SourceManagedRefAuthorization
@@ -158,9 +161,11 @@ SourceOwnershipChecker::authorize_actor_managed_ref(
     // MIR invariants cannot be bypassed accidentally.
     backend::ActorRefOwnershipEvidence evidence(claims);
     (void)backend::verify_actor_compressed32(evidence);
+    const std::size_t ref_index = static_cast<std::size_t>(
+        std::distance(actor.managed_ref_fields.begin(), ref_it));
     return SourceManagedRefAuthorization(
         std::move(evidence), std::string(source), std::string(target.triple()),
-        actor.name, ref_it->name, use.offset);
+        actor.name, ref_it->name, use.offset, ref_index);
 }
 
 } // namespace oreslang
