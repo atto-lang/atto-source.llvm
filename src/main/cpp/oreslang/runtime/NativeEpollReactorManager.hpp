@@ -156,8 +156,11 @@ public:
         const auto* entry = lookup_owned(key);
         if (!entry) return false;
         const std::uint64_t one = 1;
-        return ::write(entry->fd, &one, sizeof(one)) ==
-               static_cast<ssize_t>(sizeof(one));
+        ssize_t written;
+        do {
+            written = ::write(entry->fd, &one, sizeof(one));
+        } while (written < 0 && errno == EINTR);
+        return written == static_cast<ssize_t>(sizeof(one));
     }
     // Trusted host consumer acknowledgement: eventfd readiness persists until
     // its counter is read. This never runs guest callbacks or parks a carrier.
@@ -167,8 +170,11 @@ public:
         const auto* entry = lookup_owned(key);
         if (!entry) return false;
         std::uint64_t counter = 0;
-        return ::read(entry->fd, &counter, sizeof(counter)) ==
-               static_cast<ssize_t>(sizeof(counter));
+        ssize_t received;
+        do {
+            received = ::read(entry->fd, &counter, sizeof(counter));
+        } while (received < 0 && errno == EINTR);
+        return received == static_cast<ssize_t>(sizeof(counter));
     }
     // Terminal completion must be consumed before the watched handle closes.
     bool close_owned_eventfd(OwnedEventFd key) noexcept {
