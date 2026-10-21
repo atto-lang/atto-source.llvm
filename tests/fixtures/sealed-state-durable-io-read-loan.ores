@@ -1,0 +1,12 @@
+define actor DurableState as
+  state {
+    revision: int = 9;
+  }
+
+  pub fnc on_message(int fd): int with state.read, io, block {
+    return self.handle_state(|s| -> {
+      const size: int = rt file_size_blocking(fd);
+      return s.revision + size;
+    });
+  }
+end
