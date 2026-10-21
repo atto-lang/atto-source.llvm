@@ -27,6 +27,7 @@ SOURCE_BRANCH = "main"
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
+CODEOWNERS_PATH = ".github/CODEOWNERS"
 PREFIX = "private-oreslang-source"
 RECEIPT_PATH = "ci/oreslang-receipt.json"
 
@@ -41,6 +42,7 @@ MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
 MAX_POLICY = 64 * 1024
 MAX_PLAN = 64 * 1024
+MAX_CODEOWNERS = 64 * 1024
 MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 TTL = dt.timedelta(hours=24)
 
@@ -99,6 +101,55 @@ def strict_json_loads(text, label):
         )
     except (json.JSONDecodeError, RecursionError, OverflowError) as exc:
         raise Denied(label) from exc
+
+
+def canonical_security_lines(contents, label):
+    """Accept only printable ASCII records separated by LF."""
+    if (not isinstance(contents, bytes)
+            or any(byte != 10 and not 32 <= byte <= 126 for byte in contents)):
+        raise Denied(label + " contains noncanonical ASCII LF bytes")
+    return contents.decode("ascii").split("\n")
+
+
+def require_source_security_codeowners(contents):
+    rules = [
+        line.strip() for line in canonical_security_lines(
+            contents, "protected source CODEOWNERS"
+        )
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    required_tail = [
+        "/.github/CODEOWNERS @ORESoftware",
+        "/.github/workflows/* @ORESoftware",
+        "/.github/private-ci-approved-repositories.txt @ORESoftware",
+        "/.github/private-ci-carrier-contracts.json @ORESoftware",
+        "/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware",
+        "/scripts/run-in-private-ci-destination.sh @ORESoftware",
+        "/scripts/publish-private-ci-source.py @ORESoftware",
+        "/scripts/publish-private-ci-source-v3.py @ORESoftware",
+        "/scripts/test-publish-private-ci-source-v3.py @ORESoftware",
+        "/scripts/test-private-ci-destination.sh @ORESoftware",
+        "/scripts/test-publish-private-ci-source.py @ORESoftware",
+        "/scripts/audit-private-ci-governance.py @ORESoftware",
+        "/scripts/test-audit-private-ci-governance.py @ORESoftware",
+    ]
+    if len(rules) < len(required_tail) or rules[-len(required_tail):] != required_tail:
+        raise Denied("protected source CODEOWNERS lacks terminal security-owner rules")
+
+
+def require_carrier_security_codeowners(contents):
+    rules = [
+        line.strip() for line in canonical_security_lines(
+            contents, "carrier CODEOWNERS"
+        )
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if rules != [
+        "* @ORESoftware",
+        "/.github/ @ORESoftware",
+        "/.github/CODEOWNERS @ORESoftware",
+    ]:
+        raise Denied("carrier CODEOWNERS must be fully security-owned")
 
 
 def trusted_github_cli():
@@ -217,6 +268,9 @@ def decode_contents(item, path, max_bytes):
         raise Denied("invalid base64 for protected file: " + path) from exc
     if not data or len(data) > max_bytes:
         raise Denied("protected file missing or oversized: " + path)
+    blob_sha = valid_sha(item.get("sha"), "protected file blob SHA invalid")
+    if git_blob_sha(data) != blob_sha:
+        raise Denied("protected file blob digest mismatch: " + path)
     return data
 
 
@@ -369,6 +423,14 @@ def protected_authority(repository, source_pr, test_plan):
     if local_self != remote_self or git_blob_sha(local_self) != remote_self_sha:
         raise Denied("publisher bytes differ from protected source main")
 
+    remote_codeowners, _ = remote_source_file(
+        CODEOWNERS_PATH, main_sha, MAX_CODEOWNERS
+    )
+    local_codeowners = read_local_regular(CODEOWNERS_PATH, MAX_CODEOWNERS)
+    if local_codeowners != remote_codeowners:
+        raise Denied("local CODEOWNERS differs from protected source main")
+    require_source_security_codeowners(remote_codeowners)
+
     remote_allow, _ = remote_source_file(POLICY_PATH, main_sha, MAX_POLICY)
     local_allow = read_local_regular(POLICY_PATH, MAX_POLICY)
     if local_allow != remote_allow:
@@ -418,6 +480,14 @@ def checked_carrier_main(repository, expected_sha):
                 or any(not isinstance(bypasses.get(k, []), list)
                        or bypasses.get(k) for k in ("users", "teams", "apps"))):
             raise Denied("carrier main has pull-request review bypasses")
+    codeowners = gh_api(
+        f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
+    )
+    carrier_codeowners = decode_contents(
+        codeowners, CODEOWNERS_PATH, MAX_CODEOWNERS
+    )
+    require_carrier_security_codeowners(carrier_codeowners)
+
     return base_sha
 
 
