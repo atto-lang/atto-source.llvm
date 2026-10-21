@@ -128,7 +128,7 @@ int main() {
         foreign.complete(forged, true);
         expect<std::logic_error>([&] { (void)source.take(); });
         expect<std::logic_error>([&] { (void)result.take(); });
-        BufferFence::mark_pair_submitted(source, result, admitted.tickets);
+        mark_gpu_submitted(in, out, admitted);
         BufferFence::complete_pair(source, result, admitted.tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
@@ -388,8 +388,7 @@ int main() {
         expect<std::logic_error>([&] { (void)claimed.queue(); });
         expect<std::logic_error>([&] { (void)claimed.claim(); });
         check(transferred.queue().queue_id == valid.queue_id);
-        BufferFence::mark_pair_submitted(
-                source, result, transferred.claim().tickets);
+        mark_gpu_submitted(input, output, transferred);
         BufferFence::complete_pair(source, result, transferred.claim().tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
