@@ -1741,21 +1741,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 stateFields.emplace(key, slot);
             }
 
-            std::function<void(const std::vector<ActorStateStatement>&)> lowerStateStatements;
+            using StateValues = std::unordered_map<std::string, llvm::Value*>;
+            std::function<void(const std::vector<ActorStateStatement>&, StateValues&)>
+                lowerStateStatements;
             lowerStateStatements =
-                [&](const std::vector<ActorStateStatement>& statements) {
+                [&](const std::vector<ActorStateStatement>& statements,
+                    StateValues& currentValues) {
                     for (const auto& statement : statements) {
                         if (statement.kind == ActorStateStatement::Kind::Local) {
                             if (!statement.expression || statement.local_name.empty() ||
-                                    values.count(statement.local_name))
+                                    currentValues.count(statement.local_name))
                                 throw std::runtime_error(
                                     "invalid sealed actor state local lowering");
                             llvm::Value* slot = builder.CreateAlloca(
                                 i64, nullptr, "state.local." + statement.local_name);
                             llvm::Value* initial = lower(*statement.expression,
-                                builder, i64, values, stateFields, declarations);
+                                builder, i64, currentValues, stateFields, declarations);
                             builder.CreateStore(initial, slot);
-                            values.emplace(statement.local_name, slot);
+                            currentValues.emplace(statement.local_name, slot);
                             continue;
                         }
                         if (statement.kind == ActorStateStatement::Kind::Write) {
@@ -1768,7 +1771,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                 throw std::runtime_error(
                                     "invalid sealed actor state write lowering");
                             llvm::Value* value = lower(*statement.expression,
-                                builder, i64, values, stateFields, declarations);
+                                builder, i64, currentValues, stateFields, declarations);
                             const std::size_t index =
                                 std::distance(actor.fields.begin(), field);
                             builder.CreateCall(fieldWrite, {
@@ -1782,9 +1785,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                             throw std::runtime_error(
                                 "invalid sealed actor state statement lowering");
                         llvm::Value* lhs = lower(*statement.condition_lhs,
-                            builder, i64, values, stateFields, declarations);
+                            builder, i64, currentValues, stateFields, declarations);
                         llvm::Value* rhs = lower(*statement.condition_rhs,
-                            builder, i64, values, stateFields, declarations);
+                            builder, i64, currentValues, stateFields, declarations);
                         llvm::CmpInst::Predicate predicate;
                         const char* predicateName;
                         switch (statement.compare) {
@@ -1826,15 +1829,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                             context, "state.if.merge", handler);
                         builder.CreateCondBr(condition, thenBlock, elseBlock);
                         builder.SetInsertPoint(thenBlock);
-                        lowerStateStatements(statement.then_statements);
+                        auto thenValues = currentValues;
+                        lowerStateStatements(statement.then_statements, thenValues);
                         builder.CreateBr(mergeBlock);
                         builder.SetInsertPoint(elseBlock);
-                        lowerStateStatements(statement.else_statements);
+                        auto elseValues = currentValues;
+                        lowerStateStatements(statement.else_statements, elseValues);
                         builder.CreateBr(mergeBlock);
                         builder.SetInsertPoint(mergeBlock);
                     }
                 };
-            lowerStateStatements(loan.statements);
+            lowerStateStatements(loan.statements, values);
             llvm::Value* result = lower(*loan.result, builder, i64,
                 values, stateFields, declarations);
             builder.CreateRet(result);
