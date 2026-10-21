@@ -77,6 +77,34 @@ llvm::Value* array_handle_address(const Expression& receiver,
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
 
+bool expression_has_native_file_io(const Expression* expr) {
+    if (!expr) return false;
+    if (expr->kind == Expression::Kind::FileIo) return true;
+    if (expression_has_native_file_io(expr->left.get()) ||
+            expression_has_native_file_io(expr->right.get())) return true;
+    for (const auto& arg : expr->arguments)
+        if (expression_has_native_file_io(arg.get())) return true;
+    return false;
+}
+
+bool function_has_native_file_io(const Function& fn) {
+    for (const auto& local : fn.locals)
+        if (expression_has_native_file_io(local.initializer.get())) return true;
+    for (const auto& stmt : fn.statements) {
+        if (expression_has_native_file_io(stmt.expression.get()) ||
+                expression_has_native_file_io(stmt.condition_lhs.get()) ||
+                expression_has_native_file_io(stmt.condition_rhs.get()) ||
+                expression_has_native_file_io(stmt.array_commit_length.get())) return true;
+        for (const auto& arg : stmt.array_commit_values)
+            if (expression_has_native_file_io(arg.get())) return true;
+    }
+    for (const auto& guard : fn.early_returns)
+        if (expression_has_native_file_io(guard.lhs.get()) ||
+                expression_has_native_file_io(guard.rhs.get()) ||
+                expression_has_native_file_io(guard.result.get())) return true;
+    return expression_has_native_file_io(fn.result.get());
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -217,6 +245,56 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::FileIo: {
+#if LLVM_VERSION_MAJOR >= 18
+            llvm::Type* path_ptr = llvm::PointerType::get(builder.getContext(), 0);
+#else
+            llvm::Type* path_ptr = llvm::Type::getInt8PtrTy(builder.getContext());
+#endif
+            llvm::Module* module = builder.GetInsertBlock()->getModule();
+            const auto path = [&](std::size_t index) {
+                if (index >= expr.string_arguments.size())
+                    throw std::runtime_error("native file intrinsic missing path literal");
+                return builder.CreateGlobalStringPtr(expr.string_arguments[index], "ores.path");
+            };
+            std::vector<llvm::Value*> args;
+            for (const auto& arg : expr.arguments)
+                args.push_back(lower(*arg, builder, i64, storage, field_storage, functions, moves));
+            if (expr.name == "file_open_read_blocking" ||
+                    expr.name == "file_open_append_blocking" ||
+                    expr.name == "file_open_replace_blocking") {
+                const std::string symbol = "oreslang_" + expr.name;
+                auto callee = module->getOrInsertFunction(symbol,
+                    llvm::FunctionType::get(i64, {path_ptr}, false));
+                return builder.CreateCall(callee, {path(0)}, "file.open");
+            }
+            if (expr.name == "file_write_u63_blocking") {
+                if (args.size() != 2) throw std::runtime_error("invalid native file write arity");
+                auto callee = module->getOrInsertFunction("oreslang_file_write_u63_blocking",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(callee, args, "file.write");
+            }
+            if (expr.name == "file_read_u63_blocking" ||
+                    expr.name == "file_sync_blocking" ||
+                    expr.name == "file_close_blocking") {
+                if (args.size() != 1) throw std::runtime_error("invalid native file unary arity");
+                const std::string symbol = "oreslang_" + expr.name;
+                auto callee = module->getOrInsertFunction(symbol,
+                    llvm::FunctionType::get(i64, {i64}, false));
+                return builder.CreateCall(callee, args, "file.op");
+            }
+            if (expr.name == "file_rename_blocking") {
+                auto callee = module->getOrInsertFunction("oreslang_file_rename_blocking",
+                    llvm::FunctionType::get(i64, {path_ptr, path_ptr}, false));
+                return builder.CreateCall(callee, {path(0), path(1)}, "file.rename");
+            }
+            if (expr.name == "dir_sync_cwd_blocking") {
+                auto callee = module->getOrInsertFunction("oreslang_dir_sync_cwd_blocking",
+                    llvm::FunctionType::get(i64, {}, false));
+                return builder.CreateCall(callee, {}, "dir.sync");
+            }
+            throw std::runtime_error("unknown native file intrinsic");
+        }
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
             if (callee->arg_size() != expr.arguments.size()) {
@@ -273,6 +351,10 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    const bool has_native_file_io = std::any_of(source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return function_has_native_file_io(fn); });
+    if (has_native_file_io && (wasm32_target || cortex_m_target))
+        throw std::runtime_error("native blocking file I/O is host-only");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
