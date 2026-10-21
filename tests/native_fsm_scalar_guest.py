@@ -7,6 +7,7 @@ versions, ECS or region capabilities. OS exit status encodes result + 1.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -48,7 +49,31 @@ def expected(state, event, ticks):
     return -1
 
 
-def verify(root, compiler, clang):
+def load_trace_oracle(path):
+    require(path is not None and path.is_file(), "missing shared FSM trace oracle")
+    spec = importlib.util.spec_from_file_location("ore_fsm_trace_contract", path)
+    require(spec is not None and spec.loader is not None,
+            "unloadable shared FSM trace oracle")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    require(module.CONTRACT == "ores-fsm-trace-v0",
+            "unsupported shared FSM trace contract")
+    return module
+
+
+def oracle_expected(oracle, state, event, ticks):
+    # Shared contract models *unsigned* snapshots and events.
+    # Negative out-of-domain guest probes are checked by expected() only.
+    if any(v < 0 or v > oracle.LIMIT for v in (state, event, ticks)):
+        return None
+    accepted, reason, after, effects = oracle.step(
+        oracle.snap(state, 0, ticks), event)
+    require(type(accepted) is bool and type(after) is dict and type(effects) is list,
+            "malformed shared trace oracle outcome")
+    return after["state"] if accepted else -1
+
+
+def verify(root, compiler, clang, trace_oracle=None):
     fixture = root / "tests/fixtures/fsm-scalar-reducer.ores"
     negative = root / "tests/fixtures/fsm-duplicate-function-reject.ores"
     require(compiler.is_file() and clang.is_file(), "LLVM or Clang compiler unavailable")
@@ -60,6 +85,8 @@ def verify(root, compiler, clang):
     prelude = fixture.read_text(encoding="utf-8")
     require("pub fnc main(" not in prelude and len(prelude) < 4096,
             "fixture exceeds bound or already defines main")
+    oracle = load_trace_oracle(trace_oracle) if trace_oracle else None
+    oracle_cases = 0
     observed = []
     # Original 100 canonical cases plus adversarial packed-coordinate
     # aliases: state*10+event must never stand in for a pair of identities.
@@ -91,10 +118,20 @@ def verify(root, compiler, clang):
             require(linked.returncode == 0, f"LLVM link failed: {linked.stderr[:400]}")
             observed_result = run([str(exe)], timeout=10)
             want = expected(state, event, ticks) + 1
+            if oracle is not None:
+                independent = oracle_expected(oracle, state, event, ticks)
+                if independent is not None:
+                    require(independent + 1 == want,
+                            f"shared trace oracle disagrees at {state},{event},{ticks}")
+                    require(observed_result.returncode == independent + 1,
+                            f"guest/shared trace mismatch at {state},{event},{ticks}")
+                    oracle_cases += 1
             require(observed_result.returncode == want and not observed_result.stdout
                     and not observed_result.stderr,
                     f"guest mismatch {state},{event},{ticks}: {observed_result.returncode} != {want}")
             observed.append(f"{state}:{event}:{ticks}:{observed_result.returncode}")
+        if oracle is not None:
+            require(oracle_cases >= 100, "insufficient unsigned shared-trace coverage")
         rejected = run([str(compiler), str(negative)])
         require(rejected.returncode != 0 and not rejected.stdout.strip() and rejected.stderr,
                 "duplicate source signature not rejected before IR emission")
@@ -104,6 +141,8 @@ def verify(root, compiler, clang):
         "compiler_sha256": file_sha256(compiler),
         "clang_sha256": file_sha256(clang),
         "cases": len(cases),
+        "shared_trace_oracle_cases": oracle_cases,
+        "shared_trace_oracle_sha256": file_sha256(trace_oracle) if oracle else None,
         "observations_sha256": hashlib.sha256("\n".join(observed).encode()).hexdigest(),
         "negative_compiler_rejections": 1,
         "claims": ["scalar-result", "guard-rejection", "unknown-state", "unknown-event"],
@@ -115,9 +154,13 @@ def main():
     p.add_argument("--compiler", type=Path, required=True)
     p.add_argument("--clang", type=Path, required=True)
     p.add_argument("--source-root", type=Path, required=True)
+    p.add_argument("--trace-oracle", type=Path,
+                   help="optional exact-source shared FSM trace-v0 Python authority")
     args = p.parse_args()
     try:
-        report = verify(args.source_root.resolve(), args.compiler.resolve(), args.clang.resolve())
+        report = verify(args.source_root.resolve(), args.compiler.resolve(),
+                        args.clang.resolve(),
+                        args.trace_oracle.resolve() if args.trace_oracle else None)
         print(json.dumps(report, sort_keys=True))
         return 0
     except (OSError, AssertionError, ValueError, subprocess.SubprocessError) as exc:
