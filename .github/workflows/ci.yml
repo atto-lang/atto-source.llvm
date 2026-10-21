@@ -35,13 +35,16 @@ jobs:
             --compiler "$(realpath build/oreslang-llvmc)" \
             --clang "$(command -v clang)" \
             --source-root .
+      - name: Verify pinned merged trace-oracle source Git identity
+        run: |
+          test "$(git hash-object tests/contracts/fsm_trace_v0.py)" = d39f833a794aeb34397765cc8436dc50156ea6ae
       - name: Compare 1600 native scalar version/effect projections against shared oracle
         run: |
           python3 tests/native_fsm_extended_guest.py \
             --compiler "$(realpath build/oreslang-llvmc)" \
             --clang "$(command -v clang)" \
             --source-root . \
-            --trace-oracle contracts/v1/fsm/trace_v0.py
+            --trace-oracle tests/contracts/fsm_trace_v0.py
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail
