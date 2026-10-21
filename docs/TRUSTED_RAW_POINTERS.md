@@ -2,10 +2,11 @@
 
 Status: **native runtime foundation + fail-closed source gate**, 2026-10-17.
 
-Oreslang's safe `Pointer<T>` remains an affine owning handle. It does not gain
-numeric address semantics or pointer arithmetic. Native/embedded escape-hatch
-work uses a distinct future source capability, `RawPointer<T>`, guarded by the
-`unsafe.memory` effect and a trusted execution domain.
+Oreslang source does not expose `Pointer<T>`, `RawPointer<T>`, address-of,
+dereference, or pointer-arithmetic syntax. This branch's raw-pointer work is a
+trusted compiler/runtime substrate only. `TrustedRawPointer<T>` may be used by
+the native backend, core runtime, or platform/stdlib implementation boundary;
+guest source cannot construct, name, cast, dereference, or perform arithmetic on it.
 
 ## What is implemented on this branch
 
@@ -29,70 +30,40 @@ work uses a distinct future source capability, `RawPointer<T>`, guarded by the
   forbidden.
 - Ordinary and volatile load/store paths are distinct so MMIO code is not
   accidentally compiled as non-volatile access.
-- The source parser explicitly rejects `rt ref`, `rt deref`, `rt unref`
-  and `rt raw` before IR until typed provenance/lifetime lowering exists.
+- The source parser rejects `rt ref`, `rt deref`, `rt unref` and `rt raw`
+  as invalid Oreslang source before IR. This is a permanent source-language
+  boundary, not a placeholder for future guest pointer lowering.
 
 ## Trust and actor rules
 
-A raw pointer is not admitted merely because code is native. Source lowering
-must establish both:
+Raw-address authority is trusted implementation state, not a guest capability.
+The backend/runtime must bind it to an approved core/platform operation,
+allocation or device provenance, address space, generation/epoch and explicit
+read/write authority. It must never be actor-mailbox, serialization, `Send`,
+`Share`, or user-mintable state.
 
-1. the current execution domain is trusted (never an `UNTRUSTED` actor or
-   sandboxed/portable guest), and
-2. the enclosing callable's transitive effect row contains `unsafe.memory`.
+The internal `unsafe.memory` effect bit may remain as compiler metadata for
+auditing trusted core/runtime operations. It does **not** authorize a guest
+source escape hatch and must not turn `Pointer<T>`, `RawPointer<T>`,
+`rt raw`, `rt ref`, `rt deref`, or `rt unref` into valid source.
 
-The compiler/runtime may additionally require a native/embedded target profile.
-Raw pointers are non-owning capabilities and are never actor-mailbox,
-serialization, `Send`, or `Share` values by default.
+Derived native views must retain the lifetime/provenance of their owning arena,
+allocation, platform grant, or device window. Arena retirement, reallocating
+mutation, actor teardown, hot reload and cancellation must fence outstanding
+native leases. A naked integer never grants pointer authority.
 
-A raw view derived from an owning pointer/arena does not erase its original
-loan. Owner move, `rt unref`, arena retirement, reallocating mutation, actor
-teardown and hot reload must remain blocked while descendant raw leases live.
-Grant-backed numeric addresses carry no allocation provenance, cannot
-participate in provenance-based pointer subtraction/ordering, and remain an
-explicitly unsafe boundary even if an address is later reused by another
-object. A naked integer without a matching grant is rejected.
+## Backend-only lowering work
 
-## Intended source semantics
-
-The shared contract uses these semantic forms:
-
-```ores
-fnc checksum(Pointer<byte> owner, int n): int using unsafe.memory {
-    const RawPointer<byte> p = rt raw owner;
-    // p + i is element arithmetic; byte element => byte arithmetic.
-    // rt deref(p + i) is a raw read in the admitted unsafe scope.
-    ...
-}
-```
-
-Mutable formation is `rt raw mut owner` and requires a distinct exclusive
-ownership/loan proof in addition to trusted-domain admission and
-`unsafe.memory`; the effect alone cannot upgrade a read-only raw capability.
-`p.addr()` exposes a `uintptr` only inside `unsafe.memory`. Numeric
-construction is `RawPointer<T>.from_addr(grant, uintptr)`: the grant binds the
-permitted native range, address space, generation and read/write rights. A
-board/embedded profile may mint a static grant for documented physical device
-ranges; there is no naked integer-to-pointer authority. Safe `Pointer<T>` itself never becomes an integer and never supports
-`+`/`-`.
-
-## Remaining lowering work before source admission
-
-1. Add a typed native IR/HIR representation for `Pointer<T>`,
-   `RawPointer<T>`, provenance and raw-loan identity.
-2. Carry actor trust kind into callable validation and reject raw operations
-   under `UNTRUSTED` before code generation.
-3. Require `unsafe.memory` transitively for raw formation, arithmetic,
-   address exposure, cast and dereference.
-4. Lower bounded arithmetic to checked GEP/address calculations with element
-   scaling, address-space preservation and explicit one-past rules.
-5. Lower raw read/write with alignment, bounds/generation checks when
-   provenance exists; keep MMIO volatile/atomic operations separately typed.
-6. Tie raw leases to actor arena generations, hot-reload retirement and
-   cancellation/unwind drop plans.
-7. Add guest-language positive fixtures only after the above exist; retain
-   current negative no-IR fixtures until then.
-8. Run ASan/UBSan/TSan and exact-tree tests. Runtime-host tests alone do not
+1. Keep raw/address representations in backend IR/runtime types that cannot be
+   named by ordinary Oreslang source.
+2. Bind every raw load/store/arithmetic/cast to compiler/runtime provenance,
+   bounds, address-space, generation and authority checks.
+3. Keep MMIO volatile/atomic access separately typed and platform-authorized.
+4. Tie native leases to actor arena generations, teardown, hot reload and
+   unwind/cancellation retirement.
+5. Maintain source negative fixtures for all pointer-style spellings and assert
+   rejection before IR/artifact publication.
+6. Run ASan/UBSan/TSan and exact-tree tests; runtime-host tests alone do not
    prove guest compiler safety.
 
 See the shared `docs/POINTER_CAPABILITY_CONTRACT.md` in
