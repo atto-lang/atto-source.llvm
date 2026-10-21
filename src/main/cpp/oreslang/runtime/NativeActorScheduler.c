@@ -16,7 +16,23 @@ void ores_native_actor_scheduler_test_fail_next_create(void) {
 }
 #endif
 
-#ifdef ORESLANG_NATIVE_TEST_CALLOC_FAIL_ORDINAL
+#if defined(ORESLANG_NATIVE_TEST_CALLOC_FAILURE_CONTROL)
+static _Atomic unsigned scheduler_calloc_ordinal;
+static _Atomic unsigned scheduler_calloc_fail_ordinal;
+void ores_native_actor_scheduler_test_fail_calloc_ordinal(unsigned ordinal) {
+    atomic_store_explicit(&scheduler_calloc_fail_ordinal, ordinal, memory_order_relaxed);
+    atomic_store_explicit(&scheduler_calloc_ordinal, 0u, memory_order_relaxed);
+}
+static void* scheduler_calloc(size_t count, size_t size) {
+    const unsigned ordinal = atomic_fetch_add_explicit(
+        &scheduler_calloc_ordinal, 1u, memory_order_relaxed) + 1u;
+    const unsigned fail_ordinal = atomic_load_explicit(
+        &scheduler_calloc_fail_ordinal, memory_order_relaxed);
+    if (fail_ordinal != 0u && ordinal == fail_ordinal)
+        return NULL;
+    return calloc(count, size);
+}
+#elif defined(ORESLANG_NATIVE_TEST_CALLOC_FAIL_ORDINAL)
 static _Atomic unsigned scheduler_calloc_ordinal;
 static void* scheduler_calloc(size_t count, size_t size) {
     const unsigned ordinal = atomic_fetch_add_explicit(
