@@ -1,39 +1,33 @@
 #include "oreslang/runtime/BoundedActorPort.hpp"
 
-#include <cstdlib>
 #include <memory>
 #include <new>
 #include <stdexcept>
 #include <type_traits>
 
 using oreslang::runtime::BoundedActorPort;
-static bool fail_next_allocation = false;
-
-void* operator new(std::size_t size) {
-    if (fail_next_allocation) {
-        fail_next_allocation = false;
-        throw std::bad_alloc();
-    }
-    if (void* memory = std::malloc(size)) return memory;
-    throw std::bad_alloc();
-}
-
-void operator delete(void* memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete(void* memory, std::size_t) noexcept {
-    std::free(memory);
-}
-
 struct MoveOnly {
+    static bool fail_next_allocation;
     std::unique_ptr<int> item;
+
+    static void* operator new(std::size_t size) {
+        if (fail_next_allocation) {
+            fail_next_allocation = false;
+            throw std::bad_alloc();
+        }
+        return ::operator new(size);
+    }
+    static void operator delete(void* memory) noexcept {
+        ::operator delete(memory);
+    }
+
     explicit MoveOnly(int n) : item(std::make_unique<int>(n)) {}
     MoveOnly(MoveOnly&&) noexcept = default;
     MoveOnly& operator=(MoveOnly&&) noexcept = default;
     MoveOnly(const MoveOnly&) = delete;
     MoveOnly& operator=(const MoveOnly&) = delete;
 };
+bool MoveOnly::fail_next_allocation = false;
 static void check(bool ok) { if (!ok) throw std::runtime_error("port invariant broken"); }
 template<class F> void rejected(F f) {
     try { f(); } catch (const std::exception&) { return; }
@@ -70,7 +64,7 @@ int main() {
     // quota accounting intact, and a subsequent retry can succeed.
     BoundedActorPort<MoveOnly> allocation_failure(1, 32);
     MoveOnly retryable(99);
-    fail_next_allocation = true;
+    MoveOnly::fail_next_allocation = true;
     bool allocation_rejected = false;
     try {
         (void)allocation_failure.offer(std::move(retryable), 16);
