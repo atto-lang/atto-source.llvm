@@ -51,12 +51,19 @@ int main() {
     static_assert(!std::is_constructible<ActorRefOwnershipEvidence,
                                          ActorManagedRefMir>::value,
                   "raw MIR claims must remain unable to mint source evidence");
+    static_assert(!std::is_default_constructible<SourceManagedRefAuthorization>::value,
+                  "source authorization must be site-bound");
+    static_assert(!std::is_constructible<SourceManagedRefAuthorization,
+                                         ActorRefOwnershipEvidence,
+                                         std::string, std::string,
+                                         std::size_t>::value,
+                  "ordinary callers cannot wrap/replay raw evidence");
 
     {
-        const auto evidence =
-            SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        const auto authorization =
+            SourceOwnershipChecker::authorize_actor_managed_ref(
                 READ_SOURCE, "RefReader", "root", REGION, true);
-        const auto claims = evidence.claims();
+        const auto claims = authorization.claims();
         CHECK(claims.origin == ManagedRefOrigin::ActorOwned);
         CHECK(claims.escape == ManagedRefEscape::ActorLocal);
         CHECK(claims.access == ManagedRefAccess::Read);
@@ -65,8 +72,9 @@ int main() {
         CHECK(claims.inside_actor_critical_state_loan);
         CHECK(!claims.mutable_loan);
         CHECK(claims.allocation_is_actor_private);
-        CHECK(verify_actor_compressed32(evidence).access()
-              == ManagedRefAccess::Read);
+        CHECK(authorization.actor_name() == "RefReader");
+        CHECK(authorization.ref_field() == "root");
+        CHECK(authorization.use_offset() != 0);
     }
 
     {
