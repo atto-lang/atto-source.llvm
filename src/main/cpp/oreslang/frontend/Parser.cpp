@@ -2104,8 +2104,9 @@ private:
                         for (const auto& statement : statements) {
                             if (statement.kind == ActorStateStatement::Kind::Write)
                                 return true;
-                            if (has_state_write(statement.then_statements) ||
-                                    has_state_write(statement.else_statements))
+                            if (statement.kind == ActorStateStatement::Kind::Conditional &&
+                                    (has_state_write(statement.then_statements) ||
+                                     has_state_write(statement.else_statements)))
                                 return true;
                         }
                         return false;
@@ -2119,15 +2120,19 @@ private:
                 }
 
                 bool reads_state = false;
-                std::function<void(const Expression&)> validate_state_expression;
-                validate_state_expression = [&](const Expression& expr) {
+                bool uses_blocking_io = false;
+                std::unordered_set<std::string> state_locals;
+                std::unordered_set<std::string> mutable_state_locals;
+
+                std::function<void(const Expression&, bool)> validate_state_expression;
+                validate_state_expression = [&](const Expression& expr, bool allow_blocking_io) {
                     switch (expr.kind) {
                         case Expression::Kind::Integer:
                             return;
                         case Expression::Kind::Variable:
-                            if (expr.name != parameter)
+                            if (expr.name != parameter && !state_locals.count(expr.name))
                                 throw std::runtime_error(
-                                    "state callback may capture only its message parameter");
+                                    "state callback may capture only its message parameter or prior scalar local");
                             return;
                         case Expression::Kind::Field:
                             if (!expr.left ||
@@ -2143,26 +2148,90 @@ private:
                         case Expression::Kind::Negate:
                             if (!expr.left)
                                 throw std::runtime_error("malformed state unary expression");
-                            validate_state_expression(*expr.left);
+                            validate_state_expression(*expr.left, false);
                             return;
                         case Expression::Kind::Add:
                         case Expression::Kind::Subtract:
                         case Expression::Kind::Multiply:
                             if (!expr.left || !expr.right)
                                 throw std::runtime_error("malformed state binary expression");
-                            validate_state_expression(*expr.left);
-                            validate_state_expression(*expr.right);
+                            validate_state_expression(*expr.left, false);
+                            validate_state_expression(*expr.right, false);
                             return;
-                        default:
+                        case Expression::Kind::Call: {
+                            if (!allow_blocking_io ||
+                                    !native_blocking_file_intrinsic(expr.name))
+                                throw std::runtime_error(
+                                    "state callback forbids arbitrary calls and escaping references");
+                            if (loan.mode != ActorStateLoan::Mode::Write)
+                                throw std::runtime_error(
+                                    "native durable state I/O requires critical write loan");
+                            if (!method.declared_effects.has(FunctionEffect::Io) ||
+                                    !method.declared_effects.has(FunctionEffect::Block))
+                                throw std::runtime_error(
+                                    "native blocking state I/O requires io, block effects");
+                            uses_blocking_io = true;
+                            if (expr.arguments.size() !=
+                                    native_blocking_file_intrinsic_arity(expr.name))
+                                throw std::runtime_error(
+                                    "invalid native blocking state I/O arity");
+                            if (expr.name == "__oreslang_rt_file_read_i64_blocking") {
+                                validate_state_expression(*expr.arguments[0], false);
+                                validate_state_expression(*expr.arguments[1], false);
+                                const auto& out = *expr.arguments[2];
+                                if (out.kind != Expression::Kind::BorrowMut || !out.left ||
+                                        out.left->kind != Expression::Kind::Variable ||
+                                        !mutable_state_locals.count(out.left->name))
+                                    throw std::runtime_error(
+                                        "checked state file read output requires prior mutable scalar local");
+                                return;
+                            }
+                            for (const auto& argument : expr.arguments)
+                                validate_state_expression(*argument, false);
+                            return;
+                        }
+                        case Expression::Kind::Borrow:
+                        case Expression::Kind::BorrowMut:
+                        case Expression::Kind::Take:
+                        case Expression::Kind::Copy:
+                        case Expression::Kind::Share:
+                        case Expression::Kind::ArrayCall:
                             throw std::runtime_error(
-                                "state callback forbids calls, ownership operations, arrays and escaping references");
+                                "state callback forbids ownership operations, arrays and escaping references");
                     }
+                    throw std::runtime_error("invalid state callback expression");
                 };
 
-                std::function<void(const std::vector<ActorStateStatement>&)> validate_state_statements;
+                std::function<void(const std::vector<ActorStateStatement>&, std::size_t)>
+                    validate_state_statements;
                 validate_state_statements =
-                    [&](const std::vector<ActorStateStatement>& statements) {
+                    [&](const std::vector<ActorStateStatement>& statements,
+                        std::size_t depth) {
+                        bool saw_non_local = false;
                         for (const auto& statement : statements) {
+                            if (statement.kind == ActorStateStatement::Kind::Local) {
+                                if (depth != 0)
+                                    throw std::runtime_error(
+                                        "native actor state locals are top-level callback scalars only");
+                                if (saw_non_local)
+                                    throw std::runtime_error(
+                                        "native actor state locals must precede conditionals and writes");
+                                if (statement.local_name.empty() || !statement.expression)
+                                    throw std::runtime_error(
+                                        "invalid native actor state scalar local");
+                                if (statement.local_name == parameter ||
+                                        statement.local_name == loan.binder ||
+                                        fields.count(statement.local_name) ||
+                                        state_locals.count(statement.local_name))
+                                    throw std::runtime_error(
+                                        "native actor state scalar local shadows existing name");
+                                validate_state_expression(*statement.expression, true);
+                                state_locals.insert(statement.local_name);
+                                if (statement.local_mutable)
+                                    mutable_state_locals.insert(statement.local_name);
+                                continue;
+                            }
+                            saw_non_local = true;
                             if (statement.kind == ActorStateStatement::Kind::Write) {
                                 if (!fields.count(statement.field))
                                     throw std::runtime_error(
@@ -2171,24 +2240,29 @@ private:
                                 if (!statement.expression)
                                     throw std::runtime_error(
                                         "actor state write requires expression");
-                                validate_state_expression(*statement.expression);
+                                validate_state_expression(*statement.expression, false);
                                 continue;
                             }
-                            if (!statement.condition_lhs || !statement.condition_rhs)
+                            if (statement.kind != ActorStateStatement::Kind::Conditional ||
+                                    !statement.condition_lhs || !statement.condition_rhs)
                                 throw std::runtime_error(
                                     "actor state conditional requires comparison operands");
-                            validate_state_expression(*statement.condition_lhs);
-                            validate_state_expression(*statement.condition_rhs);
-                            validate_state_statements(statement.then_statements);
-                            validate_state_statements(statement.else_statements);
+                            validate_state_expression(*statement.condition_lhs, false);
+                            validate_state_expression(*statement.condition_rhs, false);
+                            validate_state_statements(statement.then_statements, depth + 1);
+                            validate_state_statements(statement.else_statements, depth + 1);
                         }
                     };
-                validate_state_statements(loan.statements);
-                validate_state_expression(*loan.result);
+                validate_state_statements(loan.statements, 0);
+                validate_state_expression(*loan.result, false);
                 if (reads_state &&
                         !method.declared_effects.has(FunctionEffect::StateRead))
                     throw std::runtime_error(
                         "state callback reads state but with bound omits state.read");
+                if (uses_blocking_io &&
+                        loan.mode != ActorStateLoan::Mode::Write)
+                    throw std::runtime_error(
+                        "native durable state I/O requires critical write loan");
             } else {
                 if (method.actor_state_loan)
                     throw std::runtime_error(
