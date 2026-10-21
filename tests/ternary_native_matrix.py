@@ -59,6 +59,14 @@ pub fnc main(): int {
   return identity(3 == 3 ? 42 : 7);
 }
 """, 42),
+    "effectful-bool-condition": ("""
+fnc one(): int {
+  return 1;
+}
+pub fnc main(): int {
+  return one() == 1 ? 42 : 7;
+}
+""", 42),
     "lazy-selected-arm-only": (PAIR + """
 fnc select_true(borrow mut Pair p): int {
   p.first = 10;
@@ -87,11 +95,6 @@ NEGATIVE = {
         PORTABLE_REJECT["reject_integer_truthiness"]["source"],
         "native ternary condition requires bool",
     ),
-    "reject-equality-as-int-value": ("""
-pub fnc main(): int {
-  return 1 == 1;
-}
-""", "native scalar equality is currently only admitted as a ternary condition"),
     "reject-missing-colon": ("""
 pub fnc main(): int {
   return true ? 42;
@@ -113,14 +116,6 @@ pub fnc main(): int {
   return choose(42);
 }
 """, "native optional parameter presence '?' requires versioned default/presence ABI lowering"),
-    "reject-effectful-condition": ("""
-fnc one(): int {
-  return 1;
-}
-pub fnc main(): int {
-  return one() == 1 ? 42 : 7;
-}
-""", "native guarded condition must be pure and cannot move, call or borrow"),
     "reject-divergent-move-state": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
