@@ -1221,8 +1221,8 @@ if(BUILD_TESTING)
     add_test(NAME native_compressed32_provenance_gate
         COMMAND oreslang-managed-ref-provenance-gate-test)
 
-    # Production compiler authority: evidence can be issued only after the
-    # ownership CFG and sealed critical-state callback contract both verify.
+    # Production-safe policy helper: re-run ownership CFG and sealed
+    # critical-state admission, but do NOT mint ActorRefOwnershipEvidence.
     # This target is compiled WITHOUT synthetic test provenance.
     add_executable(oreslang-actor-ref-ownership-verifier-test
         tests/actor_ref_ownership_verifier_test.cpp)
@@ -1230,7 +1230,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-actor-ref-ownership-verifier-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    add_test(NAME native_compressed32_compiler_ownership_issuer
+    add_test(NAME native_compressed32_compiler_ownership_policy
         COMMAND oreslang-actor-ref-ownership-verifier-test)
 
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
