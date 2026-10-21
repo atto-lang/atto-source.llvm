@@ -67,6 +67,27 @@ bool function_uses_blocking_file_intrinsic(const Function& fn) {
     return expression_uses_blocking_file_intrinsic(fn.result.get());
 }
 
+bool state_statements_use_blocking_file_intrinsic(
+        const std::vector<ActorStateStatement>& statements) {
+    for (const auto& statement : statements) {
+        if (expression_uses_blocking_file_intrinsic(statement.expression.get()) ||
+                expression_uses_blocking_file_intrinsic(statement.condition_lhs.get()) ||
+                expression_uses_blocking_file_intrinsic(statement.condition_rhs.get()))
+            return true;
+        if (state_statements_use_blocking_file_intrinsic(statement.then_statements) ||
+                state_statements_use_blocking_file_intrinsic(statement.else_statements))
+            return true;
+    }
+    return false;
+}
+
+bool actor_uses_blocking_file_intrinsic(const ActorDecl& actor) {
+    if (!actor.on_message.actor_state_loan) return false;
+    const auto& loan = *actor.on_message.actor_state_loan;
+    return state_statements_use_blocking_file_intrinsic(loan.statements) ||
+           expression_uses_blocking_file_intrinsic(loan.result.get());
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -516,9 +537,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
-    const bool has_blocking_file_intrinsics = std::any_of(
-        source.functions.begin(), source.functions.end(),
-        [](const Function& fn) { return function_uses_blocking_file_intrinsic(fn); });
+    const bool has_blocking_file_intrinsics =
+        std::any_of(source.functions.begin(), source.functions.end(),
+            [](const Function& fn) { return function_uses_blocking_file_intrinsic(fn); }) ||
+        std::any_of(source.actors.begin(), source.actors.end(),
+            [](const ActorDecl& actor) { return actor_uses_blocking_file_intrinsic(actor); });
     if (has_blocking_file_intrinsics) {
         if (wasm32_target || cortex_m_target)
             throw std::runtime_error(
