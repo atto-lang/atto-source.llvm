@@ -889,9 +889,9 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_conditional_cfg
             native_source_conditional_cfg_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
-    # Canonical value-producing conditional expression. The native subset
-    # admits only statically proven bool conditions (true/false or equality),
-    # lowers exactly one value arm, and requires affine state agreement at PHI.
+    # Canonical value-producing conditional expression. Conditions are
+    # first-class bool expressions on this stacked branch; exactly one value
+    # arm executes and affine state must agree at the PHI join.
     if(ORE_CLANG)
         add_test(NAME native_source_ternary_expression
             COMMAND "${Python3_EXECUTABLE}"
@@ -905,6 +905,22 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}" --sanitize)
         set_tests_properties(native_source_ternary_expression
             native_source_ternary_expression_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+    # First-class native bool scalars. Source typing distinguishes int/bool
+    # while the initial same-module ABI canonicalizes bool to i64 0/1.
+    if(ORE_CLANG)
+        add_test(NAME native_source_bool_scalars
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}")
+        add_test(NAME native_source_bool_scalars_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_bool_matrix.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}" --sanitize)
+        set_tests_properties(native_source_bool_scalars
+            native_source_bool_scalars_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
     # Synchronous branch-scoped i64 lifetimes cannot escape the owning arm.
     if(ORE_CLANG)

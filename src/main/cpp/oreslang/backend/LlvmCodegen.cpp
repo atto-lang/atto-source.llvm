@@ -86,6 +86,8 @@ llvm::Value* lower(const Expression& expr,
     switch (expr.kind) {
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
+        case Expression::Kind::Boolean:
+            return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
                 expr.name + ".read");
@@ -216,15 +218,97 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::LogicalNot: {
+            llvm::Value* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            return builder.CreateZExt(
+                builder.CreateICmpEQ(value, llvm::ConstantInt::get(i64, 0), "bool.not.i1"),
+                i64, "bool.not");
+        }
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* compared = nullptr;
+            switch (expr.kind) {
+                case Expression::Kind::Equal:
+                    compared = builder.CreateICmpEQ(left, right, "cmp.eq.i1"); break;
+                case Expression::Kind::NotEqual:
+                    compared = builder.CreateICmpNE(left, right, "cmp.ne.i1"); break;
+                case Expression::Kind::Less:
+                    compared = builder.CreateICmpSLT(left, right, "cmp.lt.i1"); break;
+                case Expression::Kind::LessEqual:
+                    compared = builder.CreateICmpSLE(left, right, "cmp.le.i1"); break;
+                case Expression::Kind::Greater:
+                    compared = builder.CreateICmpSGT(left, right, "cmp.gt.i1"); break;
+                case Expression::Kind::GreaterEqual:
+                    compared = builder.CreateICmpSGE(left, right, "cmp.ge.i1"); break;
+                default: break;
+            }
+            return builder.CreateZExt(compared, i64, "cmp.bool");
+        }
+        case Expression::Kind::LogicalXor: {
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* lb = builder.CreateICmpNE(left, llvm::ConstantInt::get(i64, 0), "xor.left.i1");
+            llvm::Value* rb = builder.CreateICmpNE(right, llvm::ConstantInt::get(i64, 0), "xor.right.i1");
+            return builder.CreateZExt(builder.CreateXor(lb, rb, "xor.i1"), i64, "xor.bool");
+        }
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr: {
+            llvm::Function* parent = builder.GetInsertBlock()->getParent();
+            llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* leftBool = builder.CreateICmpNE(
+                left, llvm::ConstantInt::get(i64, 0), "logic.left.i1");
+            llvm::BasicBlock* leftExit = builder.GetInsertBlock();
+            llvm::BasicBlock* rhs = llvm::BasicBlock::Create(
+                builder.getContext(), "logic.rhs", parent);
+            llvm::BasicBlock* merge = llvm::BasicBlock::Create(
+                builder.getContext(), "logic.merge", parent);
+            if (expr.kind == Expression::Kind::LogicalAnd)
+                builder.CreateCondBr(leftBool, rhs, merge);
+            else
+                builder.CreateCondBr(leftBool, merge, rhs);
+
+            builder.SetInsertPoint(rhs);
+            llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* rightBool = builder.CreateICmpNE(
+                right, llvm::ConstantInt::get(i64, 0), "logic.right.i1");
+            llvm::Value* rightCanonical = builder.CreateZExt(rightBool, i64, "logic.right.bool");
+            llvm::BasicBlock* rhsExit = builder.GetInsertBlock();
+            builder.CreateBr(merge);
+
+            builder.SetInsertPoint(merge);
+            auto* result = builder.CreatePHI(i64, 2, "logic.value");
+            result->addIncoming(
+                llvm::ConstantInt::get(i64,
+                    expr.kind == Expression::Kind::LogicalOr ? 1 : 0),
+                leftExit);
+            result->addIncoming(rightCanonical, rhsExit);
+            return result;
+        }
         case Expression::Kind::Conditional: {
-            // Ownership/type admission has already proven a side-effect-free
-            // boolean equality condition and compatible affine branch states.
-            // Evaluate only the selected value arm and merge the i64 result.
-            llvm::Value* lhs = lower(*expr.condition_lhs, builder, i64,
-                storage, field_storage, functions, moves);
-            llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
-                storage, field_storage, functions, moves);
-            llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "ternary.eq");
+            // Type admission has proven a bool condition and compatible arm
+            // result types; ownership admission has proven a valid affine join.
+            // Evaluate the condition once, then only the selected value arm.
+            llvm::Value* conditionValue = nullptr;
+            if (expr.condition) {
+                conditionValue = lower(*expr.condition, builder, i64,
+                    storage, field_storage, functions, moves);
+            } else {
+                llvm::Value* lhs = lower(*expr.condition_lhs, builder, i64,
+                    storage, field_storage, functions, moves);
+                llvm::Value* rhs = lower(*expr.condition_rhs, builder, i64,
+                    storage, field_storage, functions, moves);
+                conditionValue = builder.CreateZExt(
+                    builder.CreateICmpEQ(lhs, rhs, "ternary.eq.i1"),
+                    i64, "ternary.eq");
+            }
+            llvm::Value* condition = builder.CreateICmpNE(
+                conditionValue, llvm::ConstantInt::get(i64, 0), "ternary.cond.i1");
             llvm::Function* parent = builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* whenTrue = llvm::BasicBlock::Create(
                 builder.getContext(), "ternary.true", parent);
@@ -577,7 +661,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 }
             } else if (param.mode == Parameter::Mode::Value) {
                 llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
-                builder.CreateStore(&arg, slot);
+                llvm::Value* incoming = &arg;
+                if (param.scalar_type == ScalarType::Bool) {
+                    // Public/native callers are not trusted to preserve the
+                    // source-level canonical bool representation. Normalize
+                    // every nonzero ABI value to exactly 1 at function entry.
+                    incoming = builder.CreateZExt(
+                        builder.CreateICmpNE(&arg, llvm::ConstantInt::get(i64, 0),
+                            param.name + ".bool.abi.i1"),
+                        i64, param.name + ".bool.abi");
+                }
+                builder.CreateStore(incoming, slot);
                 storage.emplace(param.name, slot);
             } else {
                 storage.emplace(param.name, &arg);
@@ -1010,11 +1104,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 continue;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
-                llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                    storage, field_storage, declarations, &region_moves);
-                llvm::Value* condition = builder.CreateICmpEQ(lhs, rhs, "if.else.eq");
+                llvm::Value* conditionValue = nullptr;
+                if (stmt.condition) {
+                    conditionValue = lower(*stmt.condition, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                } else {
+                    llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
+                        storage, field_storage, declarations, &region_moves);
+                    conditionValue = builder.CreateZExt(
+                        builder.CreateICmpEQ(lhs, rhs, "if.eq.i1"), i64, "if.eq");
+                }
+                llvm::Value* condition = builder.CreateICmpNE(
+                    conditionValue, llvm::ConstantInt::get(i64, 0), "if.cond.i1");
                 llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
                     context, "if.then", function);
                 llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
@@ -1135,14 +1238,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 builder.CreateBr(cleanup);
             };
             for (const auto& guard : fn.early_returns) {
-                llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
-                    declarations, &region_moves);
-                llvm::Value* equal = builder.CreateICmpEQ(left, right, "return.guard.eq");
+                llvm::Value* conditionValue = nullptr;
+                if (guard.condition) {
+                    conditionValue = lower(*guard.condition, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                } else {
+                    llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                    llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                    conditionValue = builder.CreateZExt(
+                        builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
+                        i64, "return.guard.eq");
+                }
+                llvm::Value* takenCondition = builder.CreateICmpNE(
+                    conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
                 llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
                 llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-                builder.CreateCondBr(equal, taken, next);
+                builder.CreateCondBr(takenCondition, taken, next);
                 builder.SetInsertPoint(taken);
                 llvm::Value* selected = lower(*guard.result, builder, i64,
                     storage, field_storage, declarations, &region_moves);

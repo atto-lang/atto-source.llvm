@@ -109,7 +109,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(expr->right.get(), facts);
     if (facts.call_budget_exceeded) return;
-    // ConditionalExpr owns four non-generic child edges outside left/right:
+    scan_expression(expr->condition.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    // ConditionalExpr owns compatibility and branch child edges outside left/right:
     // the proven-bool equality pair plus both lazy value arms. Realtime
     // admission must inspect every edge; skipping an unselected-looking arm
     // would let calls/allocation/state effects evade static accounting.
@@ -149,11 +151,22 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             add_effect(facts, FunctionEffect::StateWrite);
             break;
         case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
         case Expression::Kind::Variable:
         case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
         case Expression::Kind::Conditional:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
@@ -176,6 +189,7 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
 inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(statement.expression.get(), facts);
+    scan_expression(statement.condition.get(), facts);
     scan_expression(statement.condition_lhs.get(), facts);
     scan_expression(statement.condition_rhs.get(), facts);
     scan_expression(statement.array_commit_length.get(), facts);
@@ -217,6 +231,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
         if (facts.call_budget_exceeded) return facts;
     }
     for (const auto& guard : function.early_returns) {
+        scan_expression(guard.condition.get(), facts);
         scan_expression(guard.lhs.get(), facts);
         scan_expression(guard.rhs.get(), facts);
         scan_expression(guard.result.get(), facts);
