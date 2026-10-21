@@ -411,6 +411,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = i64->getPointerTo();
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
@@ -519,12 +520,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
-            actorInits.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "init", module));
-            actorHandlers.emplace(actor.name, llvm::Function::Create(
-                llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
-                llvm::Function::ExternalLinkage, prefix + "on_message", module));
+            if (!actor.managed_ref_fields.empty()) {
+                // Managed-ref actors use a separate compiler-owned context ABI:
+                // arena*, opaque domain-bound ref-state*, domain, epoch [, message].
+                // Source spawn remains rejected until the scheduler adapter
+                // constructs and owns both runtime objects together.
+                actorInits.emplace(actor.name, llvm::Function::Create(
+                    llvm::FunctionType::get(
+                        voidTy, {native_ptr, native_ptr, i64, i64}, false),
+                    llvm::Function::ExternalLinkage, prefix + "init", module));
+                actorHandlers.emplace(actor.name, llvm::Function::Create(
+                    llvm::FunctionType::get(
+                        i64, {native_ptr, native_ptr, i64, i64, i64}, false),
+                    llvm::Function::ExternalLinkage,
+                    prefix + "on_message", module));
+            } else {
+                actorInits.emplace(actor.name, llvm::Function::Create(
+                    llvm::FunctionType::get(
+                        voidTy, {native_ptr, i64, i64}, false),
+                    llvm::Function::ExternalLinkage, prefix + "init", module));
+                actorHandlers.emplace(actor.name, llvm::Function::Create(
+                    llvm::FunctionType::get(
+                        i64, {native_ptr, i64, i64, i64}, false),
+                    llvm::Function::ExternalLinkage,
+                    prefix + "on_message", module));
+            }
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
