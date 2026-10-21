@@ -291,9 +291,9 @@ llvm::Value* lower(const Expression& expr,
             return result;
         }
         case Expression::Kind::Conditional: {
-            // Ownership/type admission has already proven a side-effect-free
-            // boolean equality condition and compatible affine branch states.
-            // Evaluate only the selected value arm and merge the i64 result.
+            // Type admission has proven a bool condition and compatible arm
+            // result types; ownership admission has proven a valid affine join.
+            // Evaluate the condition once, then only the selected value arm.
             llvm::Value* conditionValue = nullptr;
             if (expr.condition) {
                 conditionValue = lower(*expr.condition, builder, i64,
