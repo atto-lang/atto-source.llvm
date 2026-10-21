@@ -2,8 +2,10 @@
 
 #include "oreslang/backend/ManagedRefMir.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -78,40 +80,41 @@ int main() {
     }
 
     {
-        const auto evidence =
-            SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        const auto authorization =
+            SourceOwnershipChecker::authorize_actor_managed_ref(
                 WRITE_SOURCE, "RefWriter", "root", REGION, true);
-        const auto claims = evidence.claims();
+        const auto claims = authorization.claims();
         CHECK(claims.access == ManagedRefAccess::Write);
         CHECK(claims.mutable_loan);
-        CHECK(verify_actor_compressed32(evidence).access()
-              == ManagedRefAccess::Write);
+        CHECK(authorization.actor_name() == "RefWriter");
+        CHECK(authorization.ref_field() == "root");
+        CHECK(authorization.use_offset() != 0);
     }
 
     rejects([] {
-        (void)SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        (void)SourceOwnershipChecker::authorize_actor_managed_ref(
             READ_SOURCE, "MissingActor", "root", REGION, true);
     });
     rejects([] {
-        (void)SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        (void)SourceOwnershipChecker::authorize_actor_managed_ref(
             READ_SOURCE, "RefReader", "missing", REGION, true);
     });
     rejects([] {
-        (void)SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        (void)SourceOwnershipChecker::authorize_actor_managed_ref(
             READ_SOURCE, "RefReader", "root", 0, true);
     });
     rejects([] {
-        (void)SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        (void)SourceOwnershipChecker::authorize_actor_managed_ref(
             READ_SOURCE, "RefReader", "root", REGION, false);
     });
 
     // A caller cannot ask for write evidence from read source: access is
     // derived exclusively from the parsed terminal managed-ref operation.
     {
-        const auto evidence =
-            SourceOwnershipChecker::issue_actor_managed_ref_evidence(
+        const auto authorization =
+            SourceOwnershipChecker::authorize_actor_managed_ref(
                 READ_SOURCE, "RefReader", "root", REGION, true);
-        CHECK(evidence.claims().access == ManagedRefAccess::Read);
+        CHECK(authorization.claims().access == ManagedRefAccess::Read);
     }
 
     return 0;
