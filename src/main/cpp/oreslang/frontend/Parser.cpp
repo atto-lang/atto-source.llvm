@@ -396,20 +396,82 @@ private:
         require(")");
         require(":");
         require("int");
-        require("{");
-        while (token_.text != "return") {
-            if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
-            ActorFieldWrite write;
-            write.offset = token_.offset;
-            write.field = identifier();
-            require("=");
-            write.expression = expression();
-            require(";");
-            method.actor_field_writes.push_back(std::move(write));
+        if (accept("with")) {
+            method.has_declared_effects = true;
+            do {
+                require("state");
+                require(".");
+                FunctionEffect effect;
+                if (accept("read")) effect = FunctionEffect::StateRead;
+                else if (accept("write")) effect = FunctionEffect::StateWrite;
+                else fail("actor with clause supports only state.read/state.write");
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (method.declared_effects.bits & bit)
+                    fail("duplicate actor state effect");
+                method.declared_effects.bits |= bit;
+            } while (accept(","));
         }
-        require("return");
-        method.result = expression();
-        require(";");
+        if (actor.state_declared && token_.text == "using")
+            fail("signature using is not actor state authority; declare with state.read/state.write");
+        require("{");
+        if (actor.state_declared) {
+            if (accept("const")) {
+                auto loan = std::make_unique<ActorStateLoan>();
+                loan->offset = token_.offset;
+                loan->result_binding = identifier();
+                require("=");
+                require("self"); require("."); require("handle_state"); require("(");
+                loan->mode = ActorStateLoan::Mode::Read;
+                if (accept("critical")) {
+                    loan->mode = ActorStateLoan::Mode::Write;
+                    if (accept("read")) loan->mode = ActorStateLoan::Mode::Read;
+                    else (void)accept("write");
+                }
+                require("|");
+                if (identifier() != "state")
+                    fail("handle_state callback binding must be 'state'");
+                require("|"); require("->"); require("{");
+                while (token_.text == "state") {
+                    if (loan->mode != ActorStateLoan::Mode::Write)
+                        fail("read-only actor state loan cannot mutate state");
+                    ActorFieldWrite write;
+                    write.offset = token_.offset;
+                    require("state"); require(".");
+                    write.field = identifier();
+                    require("=");
+                    write.expression = expression();
+                    require(";");
+                    loan->writes.push_back(std::move(write));
+                }
+                if (token_.text == "await" || token_.text == "select" ||
+                        token_.text == "nb-select" || token_.text == "using" ||
+                        token_.text == "self")
+                    fail("actor state loan cannot suspend, nest, or escape");
+                require("return");
+                loan->result = expression();
+                require(";"); require("}"); require(")"); require(";");
+                method.actor_state_loan = std::move(loan);
+            }
+            if (!method.actor_state_loan)
+                fail("actor state access requires scoped handle_state callback");
+            require("return");
+            method.result = expression();
+            require(";");
+        } else {
+            while (token_.text != "return") {
+                if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+                ActorFieldWrite write;
+                write.offset = token_.offset;
+                write.field = identifier();
+                require("=");
+                write.expression = expression();
+                require(";");
+                method.actor_field_writes.push_back(std::move(write));
+            }
+            require("return");
+            method.result = expression();
+            require(";");
+        }
         require("}");
         actor.on_message = std::move(method);
         if (braced) require("}");
