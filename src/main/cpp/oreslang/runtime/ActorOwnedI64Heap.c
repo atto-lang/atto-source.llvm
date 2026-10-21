@@ -120,8 +120,11 @@ int ores_actor_i64_heap_trace_snapshot(
         heap->trace_dropped, heap->trace_count, heap->trace_capacity, 1u
     };
     *summary = result;
+    /* Lost events invalidate a complete snapshot. Keep summary.dropped
+     * available for diagnostics, but never return a successful receipt. */
+    const int complete = (result.dropped == 0);
     unlock_heap(heap);
-    return 1;
+    return complete;
 }
 
 static void require_turn(OresActorI64Heap* heap, OresActorTurn turn) {
