@@ -660,6 +660,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-portable-compute-authority-test PRIVATE Threads::Threads)
     add_test(NAME native_portable_compute_authority_contract
         COMMAND oreslang-portable-compute-authority-test)
+    add_executable(oreslang-portable-compute-kernel-g2-test
+        tests/portable_compute_kernel_g2_test.cpp)
+    target_include_directories(oreslang-portable-compute-kernel-g2-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-portable-compute-kernel-g2-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_portable_compute_kernel_g2_contract
+        COMMAND oreslang-portable-compute-kernel-g2-test)
     add_executable(oreslang-dop-read-loan-thread-test tests/dop_hostbuffer_concurrency_test.cpp)
     target_include_directories(oreslang-dop-read-loan-thread-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -1186,6 +1194,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
+    oreslang_contract_test(reject_cpu_expression unsupported-cpu-expression.ores --diagnostic "native cpu execution block boundary unsupported")
     add_executable(oreslang-data-layout-advisor-test tests/native_data_layout_advisor_test.cpp)
     target_include_directories(oreslang-data-layout-advisor-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-data-layout-advisor-test PRIVATE cxx_std_17)
