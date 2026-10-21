@@ -211,4 +211,51 @@ int main() {
         check(queue.outstanding() == 0, "overflow consumed capacity");
     }
 
+    // Callback handles may revoke a timer even after expiry has been polled,
+    // provided CONTROL has not yet claimed execution authority.
+    {
+        NativeTimerQueue q(1);
+        const auto pending = q.arm_after(50, 10);
+        check(q.revoke_before_dispatch(pending), "pre-expiry revocation lost");
+        check(!q.revoke_before_dispatch(pending), "duplicate revocation accepted");
+        check(q.outstanding() == 0, "pre-expiry revoked reservation retained");
+        const auto ready = q.arm_after(50, 0);
+        check(q.poll(50, 1).size() == 1, "ready fixture failed");
+        check(q.revoke_before_dispatch(ready), "polled callback not revocable");
+        check(!q.claim_delivery(ready), "revoked callback was dispatched");
+        check(!q.discard_delivery(ready), "revoked callback ticket retained");
+        check(q.outstanding() == 0, "post-expiry revoked reservation retained");
+    }
+    // A scheduler claim and a callback cancellation cannot both win.
+    {
+        NativeTimerQueue q(1);
+        for (int i = 0; i < 300; ++i) {
+            auto handle = q.arm_after(5, 0);
+            check(q.poll(5, 1).size() == 1, "poll fixture failed");
+            std::atomic<bool> cancelled{false};
+            std::thread other([&] {
+                cancelled.store(q.revoke_before_dispatch(handle),
+                                std::memory_order_relaxed);
+            });
+            const bool claimed = q.claim_delivery(handle);
+            other.join();
+            check(static_cast<int>(claimed)
+                    + static_cast<int>(cancelled.load(std::memory_order_relaxed)) == 1,
+                  "claim and cancellation did not arbitrate exactly once");
+            check(q.outstanding() == 0, "claim/revoke leaked ready reservation");
+        }
+        q.close();
+    }
+    // Closing the owner and stale/cross-domain handles cannot revive delivery.
+    {
+        NativeTimerQueue a(1), b(1);
+        const auto token = a.arm_after(0, 0);
+        check(a.poll(0, 1).size() == 1, "polled close fixture failed");
+        check(!b.revoke_before_dispatch(token), "cross-domain revocation accepted");
+        a.close();
+        check(!a.revoke_before_dispatch(token), "revocation allowed after close");
+        check(!a.claim_delivery(token), "claim allowed after close");
+        check(a.outstanding() == 0, "close leaked ticket");
+    }
+
 }
