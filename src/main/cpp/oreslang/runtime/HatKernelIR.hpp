@@ -96,7 +96,7 @@ inline KernelIR lower_kernel(std::string module, const HatKernelDecl& source) {
 
     std::unordered_map<std::string, std::size_t> parameter_indices;
     for (const auto& parameter : source.entry.parameters) {
-        if (parameter.mode != Parameter::Mode::Value
+        if (parameter.mode != oreslang::Parameter::Mode::Value
                 || !parameter.class_name.empty() || !parameter.generic_type.empty())
             throw std::runtime_error("HAT v1 kernel parameters must be immutable int values");
         const auto index = ir.parameters.size();
@@ -210,14 +210,20 @@ inline std::int64_t checked_mul(std::int64_t left, std::int64_t right) {
     return result;
 #else
     if (left == 0 || right == 0) return 0;
-    if (left == -1 && right == std::numeric_limits<std::int64_t>::min())
-        throw std::overflow_error("HAT i64 multiplication overflow");
-    if (right == -1 && left == std::numeric_limits<std::int64_t>::min())
-        throw std::overflow_error("HAT i64 multiplication overflow");
-    const auto result_candidate = left * right;
-    if (result_candidate / right != left)
-        throw std::overflow_error("HAT i64 multiplication overflow");
-    return result_candidate;
+    const auto max = std::numeric_limits<std::int64_t>::max();
+    const auto min = std::numeric_limits<std::int64_t>::min();
+    if (left == -1 && right == min) throw std::overflow_error("HAT i64 multiplication overflow");
+    if (right == -1 && left == min) throw std::overflow_error("HAT i64 multiplication overflow");
+    if (left > 0) {
+        if ((right > 0 && left > max / right) ||
+            (right < 0 && right < min / left))
+            throw std::overflow_error("HAT i64 multiplication overflow");
+    } else {
+        if ((right > 0 && left < min / right) ||
+            (right < 0 && left < max / right))
+            throw std::overflow_error("HAT i64 multiplication overflow");
+    }
+    return left * right;
 #endif
 }
 
