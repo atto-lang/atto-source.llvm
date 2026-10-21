@@ -125,7 +125,7 @@ jobs:
             -o /tmp/oreslang-nio-fd-state-machine-exact-head
           "$CXX" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror "${options[@]}" \
             -I src/main/cpp tests/native_fd_close_eintr_regression.cpp \
-            -Wl,--wrap=close -o /tmp/oreslang-nio-fd-close-eintr-exact-head
+            -Wl,--wrap=close -Wl,--wrap=read -Wl,--wrap=write -o /tmp/oreslang-nio-fd-close-eintr-exact-head
       - name: Execute native, bridge-denial and host-capability-model tests three times
         shell: bash
         env:
