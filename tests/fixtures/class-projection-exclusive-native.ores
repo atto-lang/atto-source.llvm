@@ -7,5 +7,5 @@ fnc view_mut(borrow mut int value): int {
 }
 pub fnc main(): int {
   let mut Pair pair = new Pair();
-  return view_mut(rt borrow mut pair.left) + pair.right;
+  return view_mut(rt mut borrow pair.left) + pair.right;
 }
