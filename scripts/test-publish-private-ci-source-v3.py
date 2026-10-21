@@ -19,7 +19,7 @@ BASE_TREE = "b" * 40
 CARRIER_COMMIT = "c" * 40
 BASE = "d" * 40
 WORKFLOW = "e" * 40
-PLAN_BLOB = "f" * 40
+PLAN_BLOB = None
 PROTECTED = "1" * 40
 DATA = b"synthetic llvm source\n"
 BLOB = v3.git_blob_sha(DATA)
@@ -42,6 +42,13 @@ PLAN = (
     )
     + "\n"
 ).encode()
+PLAN_BLOB = v3.git_blob_sha(PLAN)
+CARRIER_CODEOWNERS = (
+    b"* @ORESoftware\n"
+    b"/.github/ @ORESoftware\n"
+    b"/.github/CODEOWNERS @ORESoftware\n"
+)
+CARRIER_CODEOWNERS_BLOB = v3.git_blob_sha(CARRIER_CODEOWNERS)
 
 
 def carrier_contract():
@@ -98,6 +105,65 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_strict_json_rejects_duplicate_and_nonfinite_values(self):
+        with self.assertRaisesRegex(v3.Denied, "duplicate JSON key"):
+            v3.strict_json_loads('{"x":1,"x":2}', "fixture")
+        with self.assertRaisesRegex(v3.Denied, "nonfinite"):
+            v3.strict_json_loads('{"x":NaN}', "fixture")
+        with self.assertRaisesRegex(v3.Denied, "nonfinite"):
+            v3.strict_json_loads('{"x":1e9999}', "fixture")
+
+    def test_safe_path_requires_canonical_ascii_route(self):
+        self.assertEqual(
+            v3.safe_path(
+                "ci/test-plans/llvm-pr669.json",
+                "ci/test-plans/",
+                ".json",
+            ),
+            "ci/test-plans/llvm-pr669.json",
+        )
+        for value in (
+            "ci/test-plans/../x.json",
+            "ci/test-plans/x%2fescape.json",
+            "ci/test-plans/x.json?ref=other",
+            "ci/test-plans//x.json",
+            "ci/test-plans/.git/x.json",
+        ):
+            with self.subTest(value=value), self.assertRaises(v3.Denied):
+                v3.safe_path(value, "ci/test-plans/", ".json")
+
+    def test_github_api_environment_requires_exactly_one_explicit_token(self):
+        with patch.dict(v3.os.environ, {}, clear=True):
+            with self.assertRaisesRegex(v3.Denied, "exactly one"):
+                v3.github_api_environment()
+        with patch.dict(
+            v3.os.environ,
+            {"GH_TOKEN": "one", "GITHUB_TOKEN": "two"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "exactly one"):
+                v3.github_api_environment()
+        with patch.dict(v3.os.environ, {"GH_TOKEN": "one"}, clear=True):
+            env = v3.github_api_environment()
+        self.assertEqual(env["GH_TOKEN"], "one")
+        self.assertEqual(env["PATH"], "/usr/bin:/bin")
+        self.assertEqual(env["HOME"], "/")
+        self.assertEqual(
+            set(env),
+            {
+                "GH_TOKEN", "GH_HOST", "GH_PROMPT_DISABLED",
+                "PATH", "HOME", "XDG_CONFIG_HOME", "LC_ALL",
+            },
+        )
+
+    def test_carrier_codeowners_require_exact_security_ownership(self):
+        v3.require_carrier_security_codeowners(CARRIER_CODEOWNERS)
+        with self.assertRaisesRegex(v3.Denied, "fully security-owned"):
+            v3.require_carrier_security_codeowners(
+                b"* @the1mills\n/.github/ @the1mills\n"
+                b"/.github/CODEOWNERS @the1mills\n"
+            )
+
     def test_carrier_main_requires_protection_and_codeowner_review(self):
         good_protection = {
             "required_pull_request_reviews": {
@@ -122,6 +188,15 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 }
             if route == "repos/trusted/ci/branches/main/protection":
                 return good_protection
+            if route == (
+                    "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE):
+                return {
+                    "path": ".github/CODEOWNERS",
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                    "sha": CARRIER_CODEOWNERS_BLOB,
+                }
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=good_api):
