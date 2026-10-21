@@ -18,12 +18,13 @@ namespace oreslang::backend {
  * contract, then derives candidate MIR claims. It deliberately returns plain
  * ActorManagedRefMir data rather than ActorRefOwnershipEvidence: synthetic
  * graphs/callbacks are useful for policy tests but are not production source
- * authority. Only SourceOwnershipChecker may eventually wrap claims derived
- * from real source/HIR state loans into evidence.
+ * authority. Only SourceOwnershipChecker may wrap claims derived from its
+ * reparsed, validated source/HIR state loans into evidence.
  *
  * This is intentionally narrower than the general handle_state contract:
  * compact references cannot survive suspension or FFI in this milestone.
- * Source Ref<T> parsing/lowering remains a separate frontend integration gate.
+ * General Ref<T> lowering remains a separate frontend integration gate; the
+ * first source authority slice is sealed actor-private Ref<int> only.
  */
 class ActorRefOwnershipVerifier final {
 public:
