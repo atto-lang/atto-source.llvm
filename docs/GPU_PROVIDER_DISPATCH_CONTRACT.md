@@ -52,11 +52,17 @@ The provider must keep an independent, non-guest-accessible operation record.
 
 **Known missing primitive:** after `claimPair` / `claim_pair`, the existing
 fence ledger has no separately authenticated *pre-enqueue abort* operation.
-If backend admission fails before any command was submitted, the provider
-MUST NOT call ordinary completion as a substitute for real device evidence.
-The implementation must add an unforgeable submission-state witness and
-abort path, or redesign admission into RESERVED -> ENQUEUED. Until then,
-provider dispatch remains disabled. This is an intentional fail-closed gate.
+Fence admission now distinguishes RESERVED from SUBMITTED. If physical
+enqueue fails before any command reached hardware, the provider must invoke
+the exact-ticket pre-enqueue abort and atomically restore both allocations to
+idle. After enqueue succeeds it must mark the exact pair submitted before
+completion or cancellation is legal. A submitted command can never use the
+pre-enqueue abort path.
+
+This closes the host-ledger ambiguity, but provider dispatch remains disabled
+until a real backend also authenticates physical allocation provenance, queue
+authority, quotas and device completion events. OpenCL source emission alone
+is still not execution evidence.
 
 For paired work, legacy per-buffer `complete`, `cancel`, and cancelled-event
 acknowledgment APIs reject while the allocation is paired. Only atomic paired
