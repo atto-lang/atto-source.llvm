@@ -225,6 +225,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                             "type": "blob",
                             "mode": "100644",
                             "sha": BLOB,
+                            "size": len(DATA),
                         }
                     ],
                 }
@@ -244,6 +245,77 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
+
+    def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
+        seen = []
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": "huge.bin",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": "2" * 40,
+                        "size": v3.MAX_FILE + 1,
+                    }],
+                }
+            raise AssertionError(route)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "file exceeds mirror limit"):
+                v3.exact_source_tree(669, "9" * 40)
+        self.assertFalse(any("/git/blobs/" in route for route in seen))
+
+    def test_source_tree_rejects_blob_size_mismatch(self):
+        def api(route, method="GET", payload=None):
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [{
+                        "path": "src/synthetic.cpp",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": len(DATA) + 1,
+                    }],
+                }
+            if route.endswith("/git/blobs/" + BLOB):
+                return {
+                    "sha": BLOB,
+                    "encoding": "base64",
+                    "content": base64.b64encode(DATA).decode(),
+                }
+            raise AssertionError(route)
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "size differs"):
+                v3.exact_source_tree(669, "9" * 40)
 
     def test_source_tree_rejects_symlink_mode_before_blob_read(self):
         seen = []
@@ -319,6 +391,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 ),
             ),
             patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+            patch.object(v3, "require_exact_ref"),
             patch.object(v3, "gh_api", side_effect=api),
         ):
             result = v3.publish(
@@ -364,6 +438,201 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             [
                 "refs/heads/ci/oreslang-" + SOURCE_TREE,
                 "refs/heads/ci/authorized-" + CARRIER_COMMIT,
+            ],
+        )
+
+
+    def test_ref_request_uses_narrow_handoff_routes(self):
+        response = type(
+            "Result", (), {"returncode": 0, "stderr": "", "stdout": "{}"}
+        )()
+        ref_name = "ci/authorized-" + CARRIER_COMMIT
+        with patch.object(v3.subprocess, "run", return_value=response) as run:
+            self.assertIs(v3._gh_ref_request("trusted/ci", ref_name, "GET"), response)
+        self.assertIn(
+            "repos/trusted/ci/git/ref/heads/ci%2Fauthorized-" + CARRIER_COMMIT,
+            run.call_args.args[0],
+        )
+        with self.assertRaisesRegex(v3.Denied, "target is invalid"):
+            v3._gh_ref_request("trusted/ci", "ci/unrelated", "GET")
+
+    def test_live_ref_rejects_repository_identity_replacement(self):
+        response = type(
+            "Result", (), {"returncode": 0, "stderr": "", "stdout": "{}"}
+        )()
+        with (
+            patch.object(
+                v3, "gh_api",
+                return_value={
+                    "id": 999,
+                    "full_name": "trusted/ci",
+                    "private": True,
+                    "visibility": "private",
+                    "archived": False,
+                    "disabled": False,
+                },
+            ),
+            patch.object(v3, "_gh_ref_request", return_value=response),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "identity changed"):
+                v3.live_ref_sha(
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT, 1323598177
+                )
+
+    def test_delete_exact_ref_refuses_moved_ref(self):
+        with patch.object(v3, "live_ref_sha", return_value="9" * 40):
+            with self.assertRaisesRegex(v3.Denied, "moved"):
+                v3.delete_exact_ref(
+                    "trusted/ci",
+                    "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT,
+                    1323598177,
+                )
+
+    def _publish_fixture(self, api, verify_source_pr=None, require_exact_ref=None,
+                         delete_exact_ref=None):
+        contract = carrier_contract()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        patches = [
+            patch.object(v3, "protected_authority", return_value=(PROTECTED, contract)),
+            patch.object(v3, "checked_destination", return_value=(BASE_TREE, PLAN)),
+            patch.object(
+                v3, "exact_source_tree",
+                return_value=(
+                    SOURCE_TREE,
+                    [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                    rows,
+                    manifest,
+                ),
+            ),
+            patch.object(v3, "recheck_destination_identity"),
+            patch.object(v3, "gh_api", side_effect=api),
+        ]
+        if verify_source_pr is not None:
+            patches.append(patch.object(v3, "verify_source_pr", side_effect=verify_source_pr))
+        else:
+            patches.append(
+                patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID)
+            )
+        if require_exact_ref is not None:
+            patches.append(patch.object(v3, "require_exact_ref", side_effect=require_exact_ref))
+        else:
+            patches.append(patch.object(v3, "require_exact_ref"))
+        if delete_exact_ref is not None:
+            patches.append(patch.object(v3, "delete_exact_ref", side_effect=delete_exact_ref))
+        return contract, patches
+
+    def test_publish_rolls_back_payload_if_pr_head_moves_before_authorization(self):
+        writes = []
+        def api(route, method="GET", payload=None):
+            writes.append((method, route, payload))
+            if method == "POST" and route.endswith("/git/blobs"):
+                data = base64.b64decode(payload["content"], validate=True)
+                return {"sha": v3.git_blob_sha(data)}
+            if method == "POST" and route.endswith("/git/trees"):
+                return {"sha": SOURCE_TREE if payload.get("base_tree") is None else "3" * 40}
+            if method == "POST" and route.endswith("/git/commits"):
+                return {"sha": CARRIER_COMMIT}
+            if method == "POST" and route.endswith("/git/refs"):
+                return {"ref": payload["ref"], "object": {"sha": payload["sha"]}}
+            raise AssertionError((method, route))
+
+        deleted = []
+        contract, patches = self._publish_fixture(
+            api,
+            verify_source_pr=[
+                v3.SOURCE_REPO_ID,
+                v3.Denied("PR head moved"),
+            ],
+            delete_exact_ref=lambda *args: deleted.append(args) or True,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            with self.assertRaisesRegex(v3.Denied, "PR head moved"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        self.assertEqual(
+            deleted,
+            [(
+                "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                CARRIER_COMMIT, contract["repository_id"],
+            )],
+        )
+
+    def test_publish_rolls_back_payload_on_ambiguous_create_failure(self):
+        def api(route, method="GET", payload=None):
+            if method == "POST" and route.endswith("/git/blobs"):
+                data = base64.b64decode(payload["content"], validate=True)
+                return {"sha": v3.git_blob_sha(data)}
+            if method == "POST" and route.endswith("/git/trees"):
+                return {"sha": SOURCE_TREE if payload.get("base_tree") is None else "3" * 40}
+            if method == "POST" and route.endswith("/git/commits"):
+                return {"sha": CARRIER_COMMIT}
+            if method == "POST" and route.endswith("/git/refs"):
+                raise v3.Denied("ambiguous ref transport failure")
+            raise AssertionError((method, route))
+
+        deleted = []
+        contract, patches = self._publish_fixture(
+            api,
+            delete_exact_ref=lambda *args: deleted.append(args) or False,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            with self.assertRaisesRegex(v3.Denied, "ambiguous ref transport failure"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        self.assertEqual(
+            deleted,
+            [(
+                "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                CARRIER_COMMIT, contract["repository_id"],
+            )],
+        )
+
+    def test_publish_rolls_back_both_refs_on_authorization_mismatch(self):
+        def api(route, method="GET", payload=None):
+            if method == "POST" and route.endswith("/git/blobs"):
+                data = base64.b64decode(payload["content"], validate=True)
+                return {"sha": v3.git_blob_sha(data)}
+            if method == "POST" and route.endswith("/git/trees"):
+                return {"sha": SOURCE_TREE if payload.get("base_tree") is None else "3" * 40}
+            if method == "POST" and route.endswith("/git/commits"):
+                return {"sha": CARRIER_COMMIT}
+            if method == "POST" and route.endswith("/git/refs"):
+                if payload["ref"].startswith("refs/heads/ci/authorized-"):
+                    return {"ref": payload["ref"], "object": {"sha": "9" * 40}}
+                return {"ref": payload["ref"], "object": {"sha": payload["sha"]}}
+            raise AssertionError((method, route))
+
+        deleted = []
+        contract, patches = self._publish_fixture(
+            api,
+            delete_exact_ref=lambda *args: deleted.append(args) or True,
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7]:
+            with self.assertRaisesRegex(v3.Denied, "authorization ref"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
+                )
+        self.assertEqual(
+            deleted,
+            [
+                (
+                    "trusted/ci", "ci/authorized-" + CARRIER_COMMIT,
+                    CARRIER_COMMIT, contract["repository_id"],
+                ),
+                (
+                    "trusted/ci", "ci/oreslang-" + SOURCE_TREE,
+                    CARRIER_COMMIT, contract["repository_id"],
+                ),
             ],
         )
 
