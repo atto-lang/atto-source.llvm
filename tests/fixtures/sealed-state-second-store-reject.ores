@@ -3,7 +3,7 @@ define actor Counter as
     count: int = 0;
   }
   let hidden: int = 1;
-  pub fnc on_message(int n): int using state.read {
+  pub fnc on_message(int n): int with state.read {
     return self.handle_state(|s| -> s.count + n);
   }
 end
