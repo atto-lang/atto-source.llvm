@@ -20,7 +20,7 @@ pub fnc main(): int {
 ## Deliberately conservative alias model
 
 A projected `rt borrow p.health` is tracked as a **shared whole-owner loan
-of `p`**, and `rt borrow mut p.health` as an **exclusive whole-owner
+of `p`**, and `rt mut borrow p.health` as an **exclusive whole-owner
 loan**. Its lifetime starts during left-to-right argument evaluation and ends
 when the synchronous callee returns. Even a projected mutable borrow of
 `p.health` conflicts with a simultaneous shared borrow of `p.stamina`.
