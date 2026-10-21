@@ -74,10 +74,12 @@ generation, sequence, and completion-seal checks remain enforced.
 - Use a single typed DOP layout plan (AoS, SoA, AoSoA), including padded
   length, scalar width, alignment and lane count, for host transfers and GPU
   kernel offsets. Identical byte lengths are not layout compatibility.
-- GPU kernel generation may not silently select host execution. Unsupported
-  GPU hardware, 32-bit device pointers, missing f32 or excessive storage/rows
-  fail with explicit diagnostics. Host ABI and endian compatibility require
-  explicit proof on the actual provider.
+- GPU kernel generation may not silently select host execution. The emitted
+  artifact carries ABI version, required address width, f32 support, canonical
+  little-endian byte interpretation, exact byte capacity and both global
+  NDRange dimensions. The provider must validate every field against the
+  authenticated physical device before enqueue. Unsupported hardware fails
+  explicitly; artifact emission alone is never the proof.
 - `cpu { gpu { ... } cpu { ... } }` requires transfer/continuation boundaries:
   the inner CPU region resumes **after** the necessary device event and
   materialization, not as a CPU callback inside the kernel.
