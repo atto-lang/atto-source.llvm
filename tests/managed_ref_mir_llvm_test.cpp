@@ -152,6 +152,12 @@ int main(int argc, char** argv) {
         marked->addFnAttr(llvm::Attribute::NoUnwind);
         rejects([&] { (void) actor_checked_runtime_decl(&correct, symbol, signature); }, "extra function attribute permitted");
         marked->removeFnAttr(llvm::Attribute::NoUnwind);
+        marked->addRetAttr(llvm::Attribute::NoUndef);
+        rejects([&] { (void) actor_checked_runtime_decl(&correct, symbol, signature); }, "extra return attribute permitted");
+        marked->removeRetAttr(llvm::Attribute::NoUndef);
+        marked->addParamAttr(0, llvm::Attribute::NonNull);
+        rejects([&] { (void) actor_checked_runtime_decl(&correct, symbol, signature); }, "extra parameter attribute permitted");
+        marked->removeParamAttr(0, llvm::Attribute::NonNull);
         auto* body = llvm::BasicBlock::Create(context, "entry", marked);
         llvm::IRBuilder<> define(body);
         define.CreateRet(llvm::ConstantInt::get(i32, 0));
