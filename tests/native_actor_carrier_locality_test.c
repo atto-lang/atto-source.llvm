@@ -7,6 +7,16 @@
 #include <time.h>
 
 enum { ACTORS = 8, ROUNDS = 40 };
+enum { LARGE_ACTORS = 1024 };
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef refs[LARGE_ACTORS];
+    atomic_int expected_actor;
+    atomic_int seen[LARGE_ACTORS];
+    atomic_int errors;
+    atomic_int gate_entered, gate_release;
+} LargeState;
+
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef refs[ACTORS];
@@ -44,6 +54,26 @@ static void on_message(void* opaque, size_t actor, uint64_t message) {
     if (atomic_fetch_sub(&s->active[actor], 1) != 1)
         atomic_fetch_add(&s->errors, 1);
 }
+static void on_large_message(void* opaque, size_t actor, uint64_t message) {
+    LargeState* s = (LargeState*)opaque;
+    if (actor >= LARGE_ACTORS || message != 0) {
+        atomic_fetch_add(&s->errors, 1);
+        return;
+    }
+    if (atomic_fetch_add(&s->seen[actor], 1) != 0)
+        atomic_fetch_add(&s->errors, 1);
+    int expected = atomic_fetch_add(&s->expected_actor, 1);
+    if ((int)actor != expected)
+        atomic_fetch_add(&s->errors, 1);
+    if (actor == 0) {
+        atomic_store(&s->gate_entered, 1);
+        while (!atomic_load(&s->gate_release)) {
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+    }
+}
+
 static void close_scheduler(State* s, size_t count) {
     assert(ores_native_actor_scheduler_drain(s->scheduler));
     for (size_t i = 0; i < count; i++)
@@ -120,6 +150,38 @@ int main(void) {
     assert(atomic_load(&fair.cold_after_hot) >= 1);
     assert(atomic_load(&fair.cold_after_hot) <= 9);
     close_scheduler(&fair, 2);
-    puts("NATIVE_CARRIER_LOCALITY_PASS one_worker_reuse=95 multiple_actors=8 fairness_burst=8");
+
+    /* Exercise every word of the compact 1024-actor ready index. Reverse
+     * producer order must not perturb next_actor round-robin selection. */
+    LargeState large = {0};
+    large.scheduler = ores_native_actor_scheduler_open(
+        LARGE_ACTORS, 1, 1, on_large_message, &large);
+    assert(large.scheduler);
+    for (size_t a = 0; a < LARGE_ACTORS; ++a) {
+        large.refs[a] = ores_native_actor_scheduler_spawn(large.scheduler, a);
+        assert(large.refs[a].scheduler_domain);
+    }
+    assert(ores_native_actor_scheduler_send(large.scheduler, large.refs[0], 0));
+    started = 0;
+    for (int i = 0; i < 5000; ++i) {
+        if (atomic_load(&large.gate_entered)) { started = 1; break; }
+        struct timespec pause = {0, 1000000};
+        nanosleep(&pause, NULL);
+    }
+    assert(started);
+    for (size_t a = LARGE_ACTORS; a-- > 1; )
+        assert(ores_native_actor_scheduler_send(large.scheduler, large.refs[a], 0));
+    atomic_store(&large.gate_release, 1);
+    assert(ores_native_actor_scheduler_drain(large.scheduler));
+    assert(atomic_load(&large.expected_actor) == LARGE_ACTORS);
+    assert(atomic_load(&large.errors) == 0);
+    for (size_t a = 0; a < LARGE_ACTORS; ++a)
+        assert(atomic_load(&large.seen[a]) == 1);
+    for (size_t a = 0; a < LARGE_ACTORS; ++a)
+        assert(ores_native_actor_scheduler_stop(large.scheduler, large.refs[a]));
+    ores_native_actor_scheduler_retire(large.scheduler);
+    assert(ores_native_actor_scheduler_try_destroy(large.scheduler));
+
+    puts("NATIVE_CARRIER_LOCALITY_PASS one_worker_reuse=95 multiple_actors=8 fairness_burst=8 ready_index=1024");
     return 0;
 }
