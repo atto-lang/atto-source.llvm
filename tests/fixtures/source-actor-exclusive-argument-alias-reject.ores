@@ -1,5 +1,5 @@
 fnc inspect(borrow mut int x, int y): int { return x + y; }
 define actor Worker as {
   let total: int = 0;
-  pub fnc on_message(int n): int { return inspect(rt borrow mut n, n); }
+  pub fnc on_message(int n): int { return inspect(rt mut borrow n, n); }
 }
