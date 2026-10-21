@@ -66,6 +66,29 @@ enum. Reject cross-actor mailbox transport, frozen shared regions, native
 FFI pointers, integer casts, capability types, unsafe recycle policy and
 native32 configurations.
 
+### Production ownership evidence issuer
+
+`ActorRefOwnershipVerifier.hpp` is now the only production issuer of
+`ActorRefOwnershipEvidence`. It does not accept caller-authored MIR provenance
+flags. Instead it re-runs the ownership CFG verifier at the exact live-loan
+block, re-runs the sealed `handle_state` callback/effect admission, checks
+read versus exclusive-write loan mode, and derives actor-owned/local,
+compressed32/quarantined MIR claims itself. The final
+`verify_actor_compressed32` gate is run again before evidence leaves the
+issuer, so future MIR invariants cannot be bypassed accidentally.
+
+The first issuer intentionally rejects `suspend` and `ffi` callbacks even
+where the more general state contract could otherwise admit them. Compact
+reference lifetime segmentation across continuation readmission and native
+pointer boundaries is not yet proven. The production issuer is exercised
+without `ORESLANG_COMPRESSED32_TEST_PROVENANCE`; synthetic claim issuance
+remains isolated to MIR/backend regression binaries.
+
+This closes the compiler-internal evidence issuance gap, **not** the source
+frontend gap. The current narrow native parser still has no general
+`Ref<T>`/owned-reference AST-to-MIR path, so arbitrary guest reference
+programs remain fail-closed until that mapping is wired to this issuer.
+
 `ManagedRefMirLowering.hpp` accepts a verified plan and emits `i32`
 publication and runtime-checked `i64` payload accesses through those C
 symbols. It never widens a stored reference into an `i64` pointer, and

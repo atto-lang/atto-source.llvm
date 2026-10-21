@@ -1221,6 +1221,18 @@ if(BUILD_TESTING)
     add_test(NAME native_compressed32_provenance_gate
         COMMAND oreslang-managed-ref-provenance-gate-test)
 
+    # Production compiler authority: evidence can be issued only after the
+    # ownership CFG and sealed critical-state callback contract both verify.
+    # This target is compiled WITHOUT synthetic test provenance.
+    add_executable(oreslang-actor-ref-ownership-verifier-test
+        tests/actor_ref_ownership_verifier_test.cpp)
+    target_include_directories(oreslang-actor-ref-ownership-verifier-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-ref-ownership-verifier-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compressed32_compiler_ownership_issuer
+        COMMAND oreslang-actor-ref-ownership-verifier-test)
+
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
     # actor reference in i32 and use native ActorArena.c checked accessors.
     # Not yet full source-level Ref<T> lowering.
