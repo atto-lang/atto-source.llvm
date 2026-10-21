@@ -2,7 +2,7 @@ define actor Counter as
   state {
     count: int = 41;
   }
-  pub fnc on_message(int n): int using state.read {
+  pub fnc on_message(int n): int with state.read {
     return using state.read(critical read |s| -> s.count + n);
   }
 end
