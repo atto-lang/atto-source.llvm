@@ -200,6 +200,10 @@ struct NativeCallSignature {
     std::vector<std::string> parameters;
     std::vector<GenericParameter> generics;
     std::vector<std::string> parameter_generic_types;
+    std::vector<ScalarType> parameter_scalar_types;
+    std::vector<bool> parameter_is_scalar;
+    ScalarType return_type = ScalarType::I64;
+    bool returns_void = false;
 };
 using NativeSignatures = std::unordered_map<
     std::string, std::unordered_map<std::size_t, NativeCallSignature>>;
@@ -1652,7 +1656,9 @@ private:
                                     std::size_t depth = 1) {
         require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
-            case Expression::Kind::Integer: return;
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean:
+                return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -1756,6 +1762,7 @@ private:
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
@@ -1766,17 +1773,186 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Equal:
+            case Expression::Kind::NotEqual:
+            case Expression::Kind::Less:
+            case Expression::Kind::LessEqual:
+            case Expression::Kind::Greater:
+            case Expression::Kind::GreaterEqual:
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 validate_expression(*expr.right, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Conditional:
-                validate_expression(*expr.condition_lhs, parameters, functions, depth + 1);
-                validate_expression(*expr.condition_rhs, parameters, functions, depth + 1);
+                if (expr.condition)
+                    validate_expression(*expr.condition, parameters, functions, depth + 1);
+                else {
+                    validate_expression(*expr.condition_lhs, parameters, functions, depth + 1);
+                    validate_expression(*expr.condition_rhs, parameters, functions, depth + 1);
+                }
                 validate_expression(*expr.when_true, parameters, functions, depth + 1);
                 validate_expression(*expr.when_false, parameters, functions, depth + 1);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
+    }
+
+    static const char* scalar_type_name(ScalarType type) {
+        return type == ScalarType::Bool ? "bool" : "int";
+    }
+
+    static ScalarType validate_scalar_expression(
+            const Expression& expr,
+            const std::unordered_map<std::string, ScalarType>& variables,
+            const NativeSignatures& functions,
+            std::size_t depth = 1) {
+        require_expression_depth(depth, expr.offset);
+        auto require_type = [&](ScalarType actual, ScalarType expected, std::string_view where) {
+            if (actual != expected)
+                throw std::runtime_error(std::string(where) + " requires " +
+                    scalar_type_name(expected) + ", got " + scalar_type_name(actual) +
+                    " at byte " + std::to_string(expr.offset));
+        };
+        switch (expr.kind) {
+            case Expression::Kind::Integer:
+                return ScalarType::I64;
+            case Expression::Kind::Boolean:
+                return ScalarType::Bool;
+            case Expression::Kind::Variable: {
+                const auto found = variables.find(expr.name);
+                // Non-scalar class/array/actor names are rejected by ownership
+                // if used as scalar values; treat their placeholder as i64 here
+                // only so field/borrow syntax can reach that stricter pass.
+                return found == variables.end() ? ScalarType::I64 : found->second;
+            }
+            case Expression::Kind::Field:
+            case Expression::Kind::ArrayCall:
+                return ScalarType::I64;
+            case Expression::Kind::Call: {
+                const auto family = functions.find(expr.name);
+                if (family == functions.end() ||
+                        !family->second.count(expr.arguments.size()))
+                    throw std::runtime_error("unknown function or wrong call arity '" +
+                        expr.name + "' at byte " + std::to_string(expr.offset));
+                const auto& signature = family->second.at(expr.arguments.size());
+                if (signature.returns_void)
+                    throw std::runtime_error("void call cannot be used as a scalar expression at byte " +
+                        std::to_string(expr.offset));
+                std::vector<bool> bound(signature.parameters.size(), false);
+                std::size_t positional = 0;
+                bool named_seen = false;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
+                    if (!label.empty()) {
+                        named_seen = true;
+                        auto it = std::find(signature.parameters.begin(),
+                            signature.parameters.end(), label);
+                        if (it == signature.parameters.end())
+                            throw std::runtime_error("unknown named argument '" + label + "'");
+                        slot = static_cast<std::size_t>(it - signature.parameters.begin());
+                    } else {
+                        if (named_seen)
+                            throw std::runtime_error("positional argument after named argument");
+                        ++positional;
+                    }
+                    if (slot >= signature.parameters.size() || bound[slot])
+                        throw std::runtime_error("duplicate native scalar argument binding");
+                    bound[slot] = true;
+                    const ScalarType actual = validate_scalar_expression(
+                        *expr.arguments[i], variables, functions, depth + 1);
+                    if (signature.parameter_is_scalar[slot] &&
+                            actual != signature.parameter_scalar_types[slot])
+                        throw std::runtime_error("argument '" + signature.parameters[slot] +
+                            "' requires " + scalar_type_name(signature.parameter_scalar_types[slot]) +
+                            ", got " + scalar_type_name(actual) + " at byte " +
+                            std::to_string(expr.arguments[i]->offset));
+                }
+                return signature.return_type;
+            }
+            case Expression::Kind::Negate: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::I64, "unary '-'");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::LogicalNot: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::Bool, "logical '!'");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Copy:
+            case Expression::Kind::Take:
+            case Expression::Kind::Share:
+            case Expression::Kind::Borrow:
+            case Expression::Kind::BorrowMut:
+                return validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+            case Expression::Kind::Multiply: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::I64, "arithmetic");
+                require_type(right, ScalarType::I64, "arithmetic");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::Less:
+            case Expression::Kind::LessEqual:
+            case Expression::Kind::Greater:
+            case Expression::Kind::GreaterEqual: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::I64, "ordered comparison");
+                require_type(right, ScalarType::I64, "ordered comparison");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Equal:
+            case Expression::Kind::NotEqual: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                if (left != right)
+                    throw std::runtime_error("equality operands require the same scalar type at byte " +
+                        std::to_string(expr.offset));
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::Bool, "logical operator");
+                require_type(right, ScalarType::Bool, "logical operator");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Conditional: {
+                ScalarType condition = expr.condition
+                    ? validate_scalar_expression(*expr.condition, variables, functions, depth + 1)
+                    : ScalarType::Bool;
+                require_type(condition, ScalarType::Bool, "ternary condition");
+                ScalarType when_true = validate_scalar_expression(
+                    *expr.when_true, variables, functions, depth + 1);
+                ScalarType when_false = validate_scalar_expression(
+                    *expr.when_false, variables, functions, depth + 1);
+                if (when_true != when_false)
+                    throw std::runtime_error("ternary arms require a common scalar type at byte " +
+                        std::to_string(expr.offset));
+                return when_true;
+            }
+        }
+        throw std::runtime_error("internal invalid native scalar expression kind");
     }
 
     static bool contains_callable_invocation(
@@ -1787,6 +1963,7 @@ private:
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition.get(), depth + 1) ||
             contains_callable_invocation(expr->condition_lhs.get(), depth + 1) ||
             contains_callable_invocation(expr->condition_rhs.get(), depth + 1) ||
             contains_callable_invocation(expr->when_true.get(), depth + 1) ||
@@ -1886,7 +2063,12 @@ private:
             for (const auto& param : fn.parameters) {
                 signature.parameters.push_back(param.name);
                 signature.parameter_generic_types.push_back(param.generic_type);
+                signature.parameter_scalar_types.push_back(param.scalar_type);
+                signature.parameter_is_scalar.push_back(
+                    param.class_name.empty() && param.generic_type.empty());
             }
+            signature.return_type = fn.return_type;
+            signature.returns_void = fn.returns_void;
             if (!functions[fn.name].emplace(fn.parameters.size(), std::move(signature)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
