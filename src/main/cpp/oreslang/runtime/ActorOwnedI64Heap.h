@@ -53,6 +53,16 @@ void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
 void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
+/* Atomic compiler-owned sealed-state publication. values contains the
+ * actor's complete fixed scalar state vector; dirty_mask selects the fields
+ * to publish. All selected slots are validated under one heap lock before
+ * any value changes. Current sealed-state source schemas are bounded to 32
+ * fields, so bits above field_count are always rejected. */
+void ores_actor_i64_heap_state_commit(OresActorI64Heap* heap,
+                                      uint64_t domain, uint64_t epoch,
+                                      uint64_t dirty_mask,
+                                      const int64_t* values,
+                                      uint64_t field_count);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
 /* Returns zero while a turn or loan is outstanding; returns one and frees
  * native memory after quiescence. Never call with an invalidated heap pointer.
