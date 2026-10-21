@@ -1355,6 +1355,16 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const auto& loan = *actor.on_message.actor_state_loan;
             if (!loan.result || loan.binder.empty())
                 throw std::runtime_error("invalid sealed actor state loan");
+            if (!actor.on_message.has_declared_effects)
+                throw std::runtime_error(
+                    "sealed actor state codegen lacks declared effect bound");
+            if (actor.fields.size() > 16)
+                throw std::runtime_error("sealed actor state exceeds field bound");
+            for (const auto& field : actor.fields) {
+                if (!field.initializer || !field.field_mutable)
+                    throw std::runtime_error(
+                        "sealed actor state codegen rejected malformed state schema");
+            }
             if (loan.mode == ActorStateLoan::Mode::Read) {
                 if (!actor.on_message.declared_effects.has(FunctionEffect::StateRead) ||
                         !loan.writes.empty())
