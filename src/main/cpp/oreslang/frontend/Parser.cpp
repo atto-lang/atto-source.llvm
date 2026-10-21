@@ -116,8 +116,11 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        // Contiguous scalar comparison operators are one token, matching
+        // the Java/Graal surface syntax used by state admission guards.
+        const auto comparison = source_.substr(at_, 2);
+        if (comparison == "==" || comparison == "!=" ||
+                comparison == "<=" || comparison == ">=") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -488,35 +491,33 @@ private:
                 std::size_t state_branch_count = 0;
                 std::function<std::vector<ActorStateStatement>(std::size_t)> parse_state_arm;
                 parse_state_arm = [&](std::size_t depth) {
-                    if (depth > 8)
-                        fail("native actor state conditional nesting limit exceeded (8)");
+                    if (depth > 32)
+                        fail("native actor state conditional nesting limit exceeded (32)");
                     std::vector<ActorStateStatement> statements;
                     while (token_.text != "return" && token_.text != "}") {
                         if (token_.kind == Kind::End)
                             fail("state callback requires return");
                         if (token_.text == "if") {
-                            if (++state_branch_count > 8)
-                                fail("native actor state conditional CFG limit exceeded (8)");
+                            if (++state_branch_count > 32)
+                                fail("native actor state conditional CFG limit exceeded (32)");
                             ActorStateStatement conditional;
                             conditional.kind = ActorStateStatement::Kind::Conditional;
                             conditional.offset = token_.offset;
                             require("if");
                             require("(");
                             conditional.condition_lhs = expression();
-                            if (accept("eq")) {
-                                conditional.compare = ActorStateStatement::Compare::Eq;
-                            } else if (accept("==")) {
+                            if (accept("eq") || accept("==")) {
                                 conditional.compare = ActorStateStatement::Compare::Eq;
                             } else if (accept("!=")) {
                                 conditional.compare = ActorStateStatement::Compare::Ne;
+                            } else if (accept("<=")) {
+                                conditional.compare = ActorStateStatement::Compare::Le;
+                            } else if (accept(">=")) {
+                                conditional.compare = ActorStateStatement::Compare::Ge;
                             } else if (accept("<")) {
-                                conditional.compare = accept("=")
-                                    ? ActorStateStatement::Compare::Le
-                                    : ActorStateStatement::Compare::Lt;
+                                conditional.compare = ActorStateStatement::Compare::Lt;
                             } else if (accept(">")) {
-                                conditional.compare = accept("=")
-                                    ? ActorStateStatement::Compare::Ge
-                                    : ActorStateStatement::Compare::Gt;
+                                conditional.compare = ActorStateStatement::Compare::Gt;
                             } else {
                                 fail("actor state conditional requires eq, ==, !=, <, <=, > or >=");
                             }
