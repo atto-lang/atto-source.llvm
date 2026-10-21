@@ -962,6 +962,10 @@ if(BUILD_TESTING)
         --ir "call void @ores_actor_i64_heap_field_write")
     oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
         --diagnostic "actor effect declarations use with; using is lexical state acquisition")
+    oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
+        --diagnostic "using state.read cannot request a critical write loan")
+    oreslang_contract_test(native_sealed_state_write_downgrade_reject sealed-state-using-write-downgrade-reject.ores
+        --diagnostic "using state.write requires critical write callback")
     oreslang_contract_test(native_sealed_state_missing_read_effect sealed-state-missing-read-reject.ores
         --diagnostic "state callback reads state but with bound omits state.read")
     oreslang_contract_test(native_sealed_state_read_mutation sealed-state-read-mutate-reject.ores
