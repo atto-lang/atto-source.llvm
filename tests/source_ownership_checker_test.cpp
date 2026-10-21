@@ -34,10 +34,11 @@ define actor Box as {
   }
 }
 )";
-    auto read_evidence = SourceOwnershipChecker::issue_actor_state_ref_evidence(
-        read_source, "Box", "root", ManagedRefAccess::Read, REGION, true);
-    auto read_verified = verify_actor_compressed32(read_evidence);
-    CHECK(read_verified.access() == ManagedRefAccess::Read);
+    auto read_proof = SourceOwnershipChecker::validate_actor_state_ref_use(
+        read_source, "Box", "root", ManagedRefAccess::Read);
+    CHECK(read_proof.access() == ManagedRefAccess::Read);
+    CHECK(read_proof.actor() == "Box");
+    CHECK(read_proof.state_field() == "root");
 
     const std::string write_source = R"(
 define actor Box as {
@@ -53,24 +54,14 @@ define actor Box as {
   }
 }
 )";
-    auto write_evidence = SourceOwnershipChecker::issue_actor_state_ref_evidence(
-        write_source, "Box", "root", ManagedRefAccess::Write, REGION, true);
-    auto write_verified = verify_actor_compressed32(write_evidence);
-    CHECK(write_verified.access() == ManagedRefAccess::Write);
+    auto write_proof = SourceOwnershipChecker::validate_actor_state_ref_use(
+        write_source, "Box", "root", ManagedRefAccess::Write);
+    CHECK(write_proof.access() == ManagedRefAccess::Write);
 
     rejects([&] {
-        (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            write_source, "Box", "root", ManagedRefAccess::Read, REGION, true);
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            write_source, "Box", "root", ManagedRefAccess::Read);
     });
-    rejects([&] {
-        (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            read_source, "Box", "root", ManagedRefAccess::Read, 0, true);
-    });
-    rejects([&] {
-        (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            read_source, "Box", "root", ManagedRefAccess::Read, REGION, false);
-    });
-
     const std::string noncritical = R"(
 define actor Box as {
   state { root: Ref<int> = null; }
@@ -83,8 +74,8 @@ define actor Box as {
 }
 )";
     rejects([&] {
-        (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            noncritical, "Box", "root", ManagedRefAccess::Read, REGION, true);
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            noncritical, "Box", "root", ManagedRefAccess::Read);
     });
 
     const std::string scalar = R"(
@@ -99,12 +90,18 @@ define actor Box as {
 }
 )";
     rejects([&] {
-        (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            scalar, "Box", "root", ManagedRefAccess::Read, REGION, true);
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            scalar, "Box", "root", ManagedRefAccess::Read);
     });
 
+    static_assert(!std::is_default_constructible<SourceManagedRefUseProof>::value,
+                  "source Ref use proof must be checker-issued");
+    static_assert(!std::is_constructible<SourceManagedRefUseProof,
+                                         std::string, std::string,
+                                         ManagedRefAccess>::value,
+                  "callers must not forge source Ref use proof");
     static_assert(!std::is_constructible<ActorRefOwnershipEvidence,
                                          ActorManagedRefMir>::value,
-                  "MIR claims must not become source evidence");
+                  "source-use proof and MIR claims must not become compact evidence");
     return 0;
 }
