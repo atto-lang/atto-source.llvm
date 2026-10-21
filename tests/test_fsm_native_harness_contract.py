@@ -25,6 +25,31 @@ class FSMNativeHarnessContract(unittest.TestCase):
                 with self.subTest(state=state, event=event, ticks=ticks):
                     self.assertEqual(gate.expected(state, event, ticks), -1)
 
+    def test_trace_oracle_adapter_is_explicitly_bounded_and_fail_closed(self):
+        class FakeOracle:
+            LIMIT = (1 << 32) - 1
+
+            @staticmethod
+            def snap(state, version, ticks):
+                return {"state": state, "version": version, "ticks": ticks}
+
+            @staticmethod
+            def step(before, event):
+                if before["state"] == 0 and event == 0 and before["ticks"] <= 3:
+                    return True, "none", {"state": 1, "version": 1,
+                                          "ticks": 0}, [1]
+                return False, "unhandled", before, []
+
+        model = FakeOracle()
+        self.assertEqual(gate.oracle_expected(model, 0, 0, 2), 1)
+        self.assertEqual(gate.oracle_expected(model, 1, 99, 1), -1)
+        self.assertIsNone(gate.oracle_expected(model, -1, 0, 1))
+        self.assertIsNone(gate.oracle_expected(model, 0, -1, 1))
+        self.assertIsNone(gate.oracle_expected(model, 0, 0, -1))
+        self.assertIsNone(gate.oracle_expected(model, 0, 0, 1 << 32))
+        with self.assertRaises(AssertionError):
+            gate.load_trace_oracle(ROOT / "tests/missing-contract-does-not-exist.py")
+
     def test_guest_fixture_does_not_pack_untrusted_coordinates(self):
         source = (ROOT / "tests/fixtures/fsm-scalar-reducer.ores").read_text(encoding="utf-8")
         self.assertNotIn("state * 10 + event", source)
