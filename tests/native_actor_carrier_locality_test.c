@@ -13,7 +13,7 @@ typedef struct {
     OresNativeActorRef refs[LARGE_ACTORS];
     atomic_int expected_actor;
     atomic_int seen[LARGE_ACTORS];
-    atomic_int errors;
+    atomic_int errors, controls;
     atomic_int gate_entered, gate_release;
 } LargeState;
 
@@ -73,6 +73,15 @@ static void on_large_message(void* opaque, size_t actor, uint64_t message) {
         }
     }
 }
+static void on_large_control(void* opaque, size_t actor, uint64_t payload) {
+    LargeState* s = (LargeState*)opaque;
+    if (actor != LARGE_ACTORS - 1 || payload != UINT64_C(0xc0117e01))
+        atomic_fetch_add(&s->errors, 1);
+    if (atomic_load(&s->expected_actor) != 1)
+        atomic_fetch_add(&s->errors, 1);
+    atomic_fetch_add(&s->controls, 1);
+}
+
 
 static void close_scheduler(State* s, size_t count) {
     assert(ores_native_actor_scheduler_drain(s->scheduler));
@@ -154,8 +163,8 @@ int main(void) {
     /* Exercise every word of the compact 1024-actor ready index. Reverse
      * producer order must not perturb next_actor round-robin selection. */
     LargeState large = {0};
-    large.scheduler = ores_native_actor_scheduler_open(
-        LARGE_ACTORS, 1, 1, on_large_message, &large);
+    large.scheduler = ores_native_actor_scheduler_open_control(
+        LARGE_ACTORS, 2, 1, on_large_message, on_large_control, &large);
     assert(large.scheduler);
     for (size_t a = 0; a < LARGE_ACTORS; ++a) {
         large.refs[a] = ores_native_actor_scheduler_spawn(large.scheduler, a);
@@ -171,9 +180,13 @@ int main(void) {
     assert(started);
     for (size_t a = LARGE_ACTORS; a-- > 1; )
         assert(ores_native_actor_scheduler_send(large.scheduler, large.refs[a], 0));
+    assert(ores_native_actor_scheduler_publish_control(
+        large.scheduler, large.refs[LARGE_ACTORS - 1], UINT64_C(0xc0117e01)));
     atomic_store(&large.gate_release, 1);
     assert(ores_native_actor_scheduler_drain(large.scheduler));
     assert(atomic_load(&large.expected_actor) == LARGE_ACTORS);
+    assert(atomic_load(&large.controls) == 1);
+    assert(ores_native_actor_scheduler_control_completed(large.scheduler) == 1);
     assert(atomic_load(&large.errors) == 0);
     for (size_t a = 0; a < LARGE_ACTORS; ++a)
         assert(atomic_load(&large.seen[a]) == 1);
@@ -182,6 +195,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(large.scheduler);
     assert(ores_native_actor_scheduler_try_destroy(large.scheduler));
 
-    puts("NATIVE_CARRIER_LOCALITY_PASS one_worker_reuse=95 multiple_actors=8 fairness_burst=8 ready_index=1024");
+    puts("NATIVE_CARRIER_LOCALITY_PASS one_worker_reuse=95 multiple_actors=8 fairness_burst=8 ready_index=1024 control_high_word=1");
     return 0;
 }
