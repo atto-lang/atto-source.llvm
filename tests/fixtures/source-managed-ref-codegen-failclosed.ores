@@ -1,0 +1,12 @@
+define actor Box as {
+  state {
+    root: Ref<int> = null;
+  }
+
+  pub fnc on_message(int n): int with state.read {
+    const result = self.handle_state(critical read |state| -> {
+      return state.root.value;
+    });
+    return result;
+  }
+}
