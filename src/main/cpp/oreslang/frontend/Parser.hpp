@@ -58,6 +58,10 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
+    // Logical managed reference. Source never chooses compressed32/native64;
+    // physical layout is a backend decision after ownership verification.
+    bool managed_ref = false;
+    std::string managed_ref_pointee;
     std::size_t offset = 0;
 };
 
@@ -109,6 +113,8 @@ struct ActorAction {
 
 struct ActorFieldWrite {
     std::string field;
+    // true only for source state.<Ref>.value = ...; never for scalar state.
+    bool managed_ref_payload = false;
     std::unique_ptr<Expression> expression;
     std::size_t offset = 0;
 };
