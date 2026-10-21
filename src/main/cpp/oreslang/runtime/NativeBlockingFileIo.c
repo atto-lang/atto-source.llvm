@@ -13,6 +13,38 @@ static int checked_fd(int64_t fd) {
     return fd >= 0 && fd <= INT_MAX;
 }
 
+int64_t oreslang_file_read_i64_blocking(int64_t fd, int64_t offset, int64_t* out_value) {
+    if (!checked_fd(fd) || offset < 0 || out_value == NULL) return 0;
+
+    unsigned char bytes[8];
+    size_t read_count = 0;
+    while (read_count < sizeof(bytes)) {
+        if (offset > INT64_MAX - (int64_t)read_count) return 0;
+        const int64_t target = offset + (int64_t)read_count;
+        const off_t at = (off_t)target;
+        if (at < 0 || (int64_t)at != target) return 0;
+
+        const ssize_t n = pread((int)fd, bytes + read_count,
+                                sizeof(bytes) - read_count, at);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return 0;
+        }
+        if (n == 0) return 0;
+        read_count += (size_t)n;
+    }
+
+    uint64_t bits = 0;
+    for (size_t i = 0; i < sizeof(bytes); ++i)
+        bits |= ((uint64_t)bytes[i]) << (i * 8u);
+
+    const int64_t value = bits <= (uint64_t)INT64_MAX
+        ? (int64_t)bits
+        : -1 - (int64_t)(UINT64_MAX - bits);
+    *out_value = value;
+    return 1;
+}
+
 int64_t oreslang_file_write_i64_blocking(int64_t fd, int64_t offset, int64_t value) {
     if (!checked_fd(fd) || offset < 0) return 0;
     uint64_t bits = (uint64_t)value;
