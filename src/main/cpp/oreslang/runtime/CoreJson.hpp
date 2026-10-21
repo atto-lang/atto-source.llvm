@@ -83,8 +83,8 @@ public:
         // bound before target conversion.
         const Value validated = parse(number->lexeme);
         const auto* parsed_number = std::get_if<Number>(&validated.value);
-        if (!parsed_number)
-            throw std::runtime_error(std::string(where) + " must be an integral JSON number");
+        if (!parsed_number || parsed_number->lexeme != number->lexeme)
+            throw std::runtime_error(std::string(where) + " is not a canonical JSON number token");
         const std::string_view text(parsed_number->lexeme);
 
         std::size_t at = 0;
@@ -486,7 +486,8 @@ private:
             Parser parser(lexeme);
             const Value parsed = parser.parse_value(0);
             parser.skip_ws();
-            if (!parser.at_end() || !std::holds_alternative<Number>(parsed.value))
+            const auto* number = std::get_if<Number>(&parsed.value);
+            if (!parser.at_end() || !number || number->lexeme != lexeme)
                 fail("invalid JSON number value");
         }
 
