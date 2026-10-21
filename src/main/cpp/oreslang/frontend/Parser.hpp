@@ -120,7 +120,9 @@ struct ActorFieldWrite {
 // remain impossible in this AST.
 struct ActorStateStatement {
     enum class Kind { Write, Conditional };
+    enum class Compare { Eq, Ne, Lt, Le, Gt, Ge };
     Kind kind = Kind::Write;
+    Compare compare = Compare::Eq;
     std::string field;
     std::unique_ptr<Expression> expression;
     std::unique_ptr<Expression> condition_lhs;
