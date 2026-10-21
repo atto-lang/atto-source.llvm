@@ -33,15 +33,17 @@ int main() {
     REQUIRE(structural_pair->isLiteral());
     REQUIRE(structural_pair != entry);
 
-    auto* forged = llvm::StructType::create(context, "ores.entry.i64.i64");
-    REQUIRE(forged != entry);
+    llvm::LLVMContext forged_context;
+    auto* forged = llvm::StructType::create(
+        forged_context, "ores.entry.i64.i64");
+    REQUIRE(forged->isOpaque());
     bool collision_rejected = false;
     try {
-        (void)oreslang::backend::native_entry_i64_type(context);
+        (void)oreslang::backend::native_entry_i64_type(forged_context);
     } catch (const std::runtime_error&) {
         collision_rejected = true;
     }
-    REQUIRE(!collision_rejected);
+    REQUIRE(collision_rejected);
 
     return 0;
 }
