@@ -22,6 +22,11 @@ int main() {
     expects<std::logic_error>([&] { (void)buffer.begin_command(foreign); });
     auto first = buffer.begin_command(id);
     check(buffer.status() == Status::InFlight);
+    expects<std::logic_error>([&] { buffer.complete(first, true); });
+    expects<std::logic_error>([&] { buffer.cancel_pending(first); });
+    buffer.mark_submitted(first);
+    expects<std::logic_error>([&] { buffer.mark_submitted(first); });
+    expects<std::logic_error>([&] { buffer.abort_unsubmitted(first); });
     expects<std::logic_error>([&] { (void)buffer.take(); });
     expects<std::logic_error>([&] { buffer.close_after_retirement(); });
     static_assert(!std::is_default_constructible<Ticket>::value,
@@ -30,6 +35,7 @@ int main() {
     // completion or cancellation of this buffer's in-flight work.
     BufferFence impostor(id, 1024);
     auto impostor_ticket = impostor.begin_command(id);
+    impostor.mark_submitted(impostor_ticket);
     check(impostor_ticket.generation() == first.generation());
     check(impostor_ticket.sequence() == first.sequence());
     expects<std::logic_error>([&] { buffer.complete(impostor_ticket, true); });
@@ -37,6 +43,25 @@ int main() {
     impostor.complete(impostor_ticket, true);
     impostor.retire_after_backend_release(id);
     impostor.close_after_retirement();
+
+    // A reservation that never reached hardware may be rolled back exactly
+    // once with its original ticket. Submitted work must use completion or
+    // cancellation instead.
+    {
+        BufferFence reserved(id, 32);
+        auto ticket = reserved.begin_command(id);
+        reserved.abort_unsubmitted(ticket);
+        check(reserved.status() == Status::Idle);
+        expects<std::logic_error>([&] { reserved.abort_unsubmitted(ticket); });
+        auto next_ticket = reserved.begin_command(id);
+        check(next_ticket.sequence() != ticket.sequence());
+        reserved.mark_submitted(next_ticket);
+        expects<std::logic_error>([&] { reserved.abort_unsubmitted(next_ticket); });
+        reserved.complete(next_ticket, true);
+        reserved.retire_after_backend_release(id);
+        reserved.close_after_retirement();
+    }
+
     // C++ implicit move must not bypass take()'s in-flight constraint.
     expects<std::logic_error>([&] { BufferFence stolen(std::move(buffer)); });
     check(buffer.status() == Status::InFlight);
@@ -52,6 +77,8 @@ int main() {
     buffer.close_after_retirement(); // moved-from wrapper has no handle
     auto next = owner.begin_command(id);
     check(next.sequence() != first.sequence());
+    expects<std::logic_error>([&] { owner.cancel_pending(next); });
+    owner.mark_submitted(next);
     owner.cancel_pending(next);
     expects<std::logic_error>([&] { owner.acknowledge_cancelled_device_event(first, id); });
     check(owner.status() == Status::Poisoned);
@@ -69,6 +96,7 @@ int main() {
     const Identity second{"tenant", "device", 1};
     BufferFence failed(second, 4);
     auto t = failed.begin_command(second);
+    failed.mark_submitted(t);
     failed.complete(t, false);
     check(failed.status() == Status::Poisoned);
     expects<std::logic_error>([&] { (void)failed.begin_command(second); });
@@ -104,6 +132,7 @@ int main() {
         if (transfer_error) std::rethrow_exception(transfer_error);
         check(admitted.has_value() != transferred.has_value());
         if (admitted) {
+            contended.mark_submitted(*admitted);
             contended.complete(*admitted, true);
             contended.retire_after_backend_release(id);
             contended.close_after_retirement();
