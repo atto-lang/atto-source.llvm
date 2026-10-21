@@ -1,0 +1,3 @@
+pub fnc main(): int {
+  return Entry.of(1, 2);
+}

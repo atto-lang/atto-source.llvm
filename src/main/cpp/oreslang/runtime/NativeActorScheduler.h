@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "oreslang/runtime/NativeExecutionContext.h"
 typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
@@ -157,6 +158,12 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Logical execution identity for the current guest turn. The execution id is
+ * not a heap id and is not a carrier/thread id. For actor turns the allocation
+ * domain names the actor-owned domain independently. Returns zero outside an
+ * authenticated current turn. */
+int ores_native_actor_scheduler_current_execution_context(
+    OresNativeActorScheduler* scheduler, OresNativeExecutionContext* out);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
@@ -187,6 +194,11 @@ void ores_native_actor_scheduler_test_fail_next_create(void);
  * failure cannot later recover through ordinary DATA/CONTROL admission. */
 void ores_native_actor_scheduler_test_fail_create_after(
     size_t successful_creates_before_failure);
+#endif
+#ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
+/* Test-only execution-id exhaustion control; no production symbol. */
+int ores_native_actor_scheduler_test_set_next_execution(
+    OresNativeActorScheduler* scheduler, uint64_t next_execution);
 #endif
 #ifdef __cplusplus
 }

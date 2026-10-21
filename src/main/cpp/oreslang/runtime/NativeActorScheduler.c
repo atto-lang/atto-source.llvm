@@ -1,5 +1,6 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
+#include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
 #include <stdint.h>
@@ -58,6 +59,8 @@ struct OresNativeActorScheduler {
     int realtime_preallocated;
     int realtime_prestart_failed;
     uint64_t domain;
+    uint64_t next_execution;
+    uint64_t reserved_executions;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
     OresNativeActorTaskFn callback;
@@ -69,6 +72,7 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
 
@@ -100,6 +104,18 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+#ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
+int ores_native_actor_scheduler_test_set_next_execution(
+        OresNativeActorScheduler* s, uint64_t next_execution) {
+    if (!s || !next_execution) return 0;
+    lock(s);
+    const int ok = !s->retired && s->outstanding == 0
+        && s->reserved_executions == 0;
+    if (ok) s->next_execution = next_execution;
+    unlock(s);
+    return ok;
+}
+#endif
 
 static void publish_terminal_locked(
         OresNativeActorScheduler* s, size_t actor_index) {
@@ -108,14 +124,11 @@ static void publish_terminal_locked(
             || !lane->retired || lane->active || lane->queued || lane->has_control)
         return;
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
-        return;
     if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
             && lane->requested_terminal_kind
                 != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
         abort();
     if (lane->processed_user_messages > lane->accepted_user_messages)
-        abort();
-
     lane->terminal = (OresNativeActorTerminalState){
         .actor = {s->domain, (uint64_t)actor_index, lane->generation},
         .kind = lane->requested_terminal_kind,
@@ -125,7 +138,6 @@ static void publish_terminal_locked(
         .abandoned_control_messages = 0,
     };
     lane->terminal_valid = 1;
-}
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
@@ -220,6 +232,10 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (!s->reserved_executions || !s->next_execution) abort();
+        --s->reserved_executions;
+        const uint64_t execution_id = s->next_execution;
+        s->next_execution = execution_id == UINT64_MAX ? 0 : execution_id + 1;
         OresExecutionClaim execution_claim = {0};
         /* Only this scheduler can certify that the dequeued envelope was
          * admitted before retirement. Never time out an active guest owner. */
@@ -232,12 +248,24 @@ static void* carrier(void* raw) {
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
+        executing_context = (OresNativeExecutionContext){
+            .id = {s->domain, execution_id},
+            .allocation = {
+                ORES_ALLOCATION_DOMAIN_ACTOR,
+                s->domain,
+                (uint64_t)i,
+                lane->generation
+            },
+            .parent_execution = 0,
+            .continuation = 0
+        };
         executing = s;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
+        executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
         lock(s);
@@ -298,6 +326,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
+    s->next_execution = 1;
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
     s->callback = callback;
@@ -381,6 +410,13 @@ static int create_carrier(pthread_t* tid, void* context) {
 #endif
     return pthread_create(tid, NULL, carrier, context);
 }
+static int execution_slot_available_locked(OresNativeActorScheduler* s) {
+    /* reserved_executions counts admitted turns that have not yet claimed an
+     * execution id. Keep enough remaining ids for every reservation so
+     * exhaustion is reported at admission rather than crashing a carrier. */
+    return s->next_execution != 0
+        && s->reserved_executions <= UINT64_MAX - s->next_execution;
+}
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
     /* A failed real-time prestart is a one-way poison state. Ordinary DATA or
@@ -427,7 +463,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
-        || s->accepted == UINT64_MAX) {
+        || s->accepted == UINT64_MAX
+        || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
     }
@@ -441,6 +478,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    s->reserved_executions++;
     ++a->accepted_user_messages;
     s->accepted++;
     s->outstanding++;
@@ -497,7 +535,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted == UINT64_MAX) {
+        } else if (s->accepted == UINT64_MAX
+                || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
             /* enqueue_locked and stop() arbitrate under this same lock.
@@ -538,7 +577,8 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
         const int new_lane = !lane->active && !lane->queued;
@@ -551,6 +591,7 @@ int ores_native_actor_scheduler_publish_control(
         lane->control_payload = payload;
         lane->control_is_failure = 0;
         lane->has_control = 1;
+        ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
         pthread_cond_signal(&s->ready);
@@ -570,7 +611,8 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX;
+        && s->accepted != UINT64_MAX
+        && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
         const int new_lane = !a->active && !a->queued;
@@ -583,6 +625,7 @@ int ores_native_actor_scheduler_publish_failure(
         a->failure = failure;
         a->control_is_failure = 1;
         a->has_control = 1;
+        s->reserved_executions++;
         s->accepted++;
         s->outstanding++;
         pthread_cond_signal(&s->ready);
@@ -703,6 +746,16 @@ int ores_native_actor_scheduler_is_current_actor(
     // An active callback pins its scheduler/lane; only the authority mutex
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
+}
+int ores_native_actor_scheduler_current_execution_context(
+        OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
+    if (!s || !out || executing != s || !executing_context.id.runtime_domain
+            || !executing_context.id.execution)
+        return 0;
+    if (!ores_native_actor_scheduler_is_current_actor(s, executing_actor))
+        return 0;
+    *out = executing_context;
+    return 1;
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
