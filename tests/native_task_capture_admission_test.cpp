@@ -19,7 +19,9 @@ using oreslang::types::TaskExecutionDomain;
 namespace {
 
 AutoType scalar() {
-    return AutoType{AutoTypeKind::Scalar};
+    AutoType out;
+    out.kind = AutoTypeKind::Scalar;
+    return out;
 }
 
 AutoType wrapped(AutoTypeKind kind, AutoType child, bool shareable = false) {
