@@ -1477,6 +1477,28 @@ private:
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
             }
+
+            const std::string file_intrinsic = "$rt." + operation;
+            if (native_blocking_file_intrinsic(file_intrinsic)) {
+                advance();
+                auto result = make_expression(Expression::Kind::Call, offset);
+                result->name = file_intrinsic;
+                require("(");
+                if (!accept(")")) {
+                    do {
+                        if (named_argument_ahead())
+                            fail("native blocking file intrinsics use positional arguments only");
+                        result->argument_names.emplace_back();
+                        result->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+                if (result->arguments.size() !=
+                        native_blocking_file_intrinsic_arity(result->name))
+                    fail("wrong arity for native blocking file intrinsic");
+                return result;
+            }
+
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
@@ -1717,6 +1739,18 @@ private:
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Call: {
+                if (native_blocking_file_intrinsic(expr.name)) {
+                    if (expr.type_arguments_present || !expr.argument_names.empty())
+                        throw std::runtime_error(
+                            "native blocking file intrinsic forbids generic/named arguments");
+                    if (expr.arguments.size() !=
+                            native_blocking_file_intrinsic_arity(expr.name))
+                        throw std::runtime_error(
+                            "wrong native blocking file intrinsic arity");
+                    for (const auto& arg : expr.arguments)
+                        validate_expression(*arg, parameters, functions, depth + 1);
+                    return;
+                }
                 const auto found = functions.find(expr.name);
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
@@ -1826,6 +1860,12 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
+        if (expr->kind == Expression::Kind::Call &&
+                native_blocking_file_intrinsic(expr->name)) {
+            for (const auto& item : expr->arguments)
+                if (contains_callable_invocation(item.get(), depth + 1)) return true;
+            return false;
+        }
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
@@ -1835,7 +1875,47 @@ private:
         return false;
     }
 
+    static bool contains_blocking_file_intrinsic(
+            const Expression* expr, std::size_t depth = 1) {
+        if (!expr) return false;
+        require_expression_depth(depth, expr->offset);
+        if (expr->kind == Expression::Kind::Call &&
+                native_blocking_file_intrinsic(expr->name))
+            return true;
+        if (contains_blocking_file_intrinsic(expr->left.get(), depth + 1) ||
+            contains_blocking_file_intrinsic(expr->right.get(), depth + 1))
+            return true;
+        for (const auto& item : expr->arguments)
+            if (contains_blocking_file_intrinsic(item.get(), depth + 1)) return true;
+        return false;
+    }
+
+    static bool function_contains_blocking_file_intrinsic(const Function& fn) {
+        for (const auto& local : fn.locals)
+            if (contains_blocking_file_intrinsic(local.initializer.get())) return true;
+        for (const auto& stmt : fn.statements) {
+            if (contains_blocking_file_intrinsic(stmt.expression.get()) ||
+                contains_blocking_file_intrinsic(stmt.array_commit_length.get()))
+                return true;
+            for (const auto& item : stmt.array_commit_values)
+                if (contains_blocking_file_intrinsic(item.get())) return true;
+        }
+        for (const auto& guard : fn.early_returns)
+            if (contains_blocking_file_intrinsic(guard.lhs.get()) ||
+                contains_blocking_file_intrinsic(guard.rhs.get()) ||
+                contains_blocking_file_intrinsic(guard.result.get()))
+                return true;
+        return contains_blocking_file_intrinsic(fn.result.get());
+    }
+
     static void validate_declared_effects(const Function& fn, const Program& program) {
+        const bool blocking_file_io = function_contains_blocking_file_intrinsic(fn);
+        if (blocking_file_io && (!fn.has_declared_effects ||
+                !fn.declared_effects.has(FunctionEffect::Io) ||
+                !fn.declared_effects.has(FunctionEffect::Block))) {
+            throw std::runtime_error(
+                "native blocking file intrinsic requires using io, block");
+        }
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -1900,6 +1980,9 @@ private:
             // collide at the ELF/Wasm symbol boundary.
             if (fn.name.rfind("oreslang_int_array_", 0) == 0)
                 throw std::runtime_error("reserved native Array<int> ABI symbol");
+            if (fn.name.rfind("oreslang_file_", 0) == 0 ||
+                    fn.name.rfind("oreslang_dir_", 0) == 0)
+                throw std::runtime_error("reserved native blocking file ABI symbol");
             if (program.module.empty()) {
                 const bool runtime_symbol =
                     fn.name == "abort" ||
