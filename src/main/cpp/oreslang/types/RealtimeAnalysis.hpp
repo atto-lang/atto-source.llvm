@@ -109,6 +109,18 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(expr->right.get(), facts);
     if (facts.call_budget_exceeded) return;
+    // ConditionalExpr owns four non-generic child edges outside left/right:
+    // the proven-bool equality pair plus both lazy value arms. Realtime
+    // admission must inspect every edge; skipping an unselected-looking arm
+    // would let calls/allocation/state effects evade static accounting.
+    scan_expression(expr->condition_lhs.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->condition_rhs.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->when_true.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->when_false.get(), facts);
+    if (facts.call_budget_exceeded) return;
     for (const auto& argument : expr->arguments) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;
@@ -142,6 +154,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Conditional:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
         case Expression::Kind::Borrow:
