@@ -48,30 +48,33 @@ cases = {
     "cooperate": ("pub fnc main(): int { return rt cooperate; }", "native rt cooperate requires verified heap-owned continuation lowering"),
     "pointer ref is gated": (
         "pub fnc main(int x): int { return rt ref x; }",
-        "native rt ref is reserved for Pointer<T> but is not enabled"),
+        "pointer-style rt operation is not valid Oreslang source"),
     "pointer unref is gated": (
         "pub fnc main(int x): int { return rt unref x; }",
-        "native rt unref is reserved for Pointer<T> but is not enabled"),
+        "pointer-style rt operation is not valid Oreslang source"),
     "pointer deref is gated": (
         "pub fnc main(int x): int { return rt deref x; }",
-        "native rt deref is reserved for Pointer<T> but is not enabled"),
+        "pointer-style rt operation is not valid Oreslang source"),
+    "legacy mutable borrow order is rejected": (
+        "pub fnc main(int x): int { return rt borrow mut x; }",
+        "legacy 'rt borrow mut' is not valid Oreslang"),
     "borrow": ("pub fnc main(int x): int { return rt borrow x; }", "borrowed reference may only be passed"),
-    "borrow mut": ("pub fnc main(int x): int { return rt borrow mut x; }", "borrowed reference may only be passed"),
+    "borrow mut": ("pub fnc main(int x): int { return rt mut borrow x; }", "borrowed reference may only be passed"),
     "take from borrowed parameter": ("fnc view(borrow int x): int { return rt take x; }", "cannot rt take through a borrowed parameter"),
     "borrow of temporary": (
         "fnc view(borrow int x): int { return x; } pub fnc main(): int { return view(rt borrow (40 + 2)); }",
         "native borrow requires an addressable named int parameter"),
     "const local cannot gain exclusive loan": (
         "fnc mutate(borrow mut int x): int { return x; } "
-        "pub fnc main(): int { const fixed: int = 42; return mutate(rt borrow mut fixed); }",
+        "pub fnc main(): int { const fixed: int = 42; return mutate(rt mut borrow fixed); }",
         "cannot mutably borrow immutable owner"),
     "immutable/exclusive conflict": (
         "fnc join(borrow int a, borrow mut int b): int { return a + b; } "
-        "fnc invoke(int x): int { return join(rt borrow x, rt borrow mut x); }",
+        "fnc invoke(int x): int { return join(rt borrow x, rt mut borrow x); }",
         "conflicting active native borrow"),
     "exclusive/exclusive conflict": (
         "fnc join(borrow mut int a, borrow mut int b): int { return a + b; } "
-        "fnc invoke(int x): int { return join(rt borrow mut x, rt borrow mut x); }",
+        "fnc invoke(int x): int { return join(rt mut borrow x, rt mut borrow x); }",
         "conflicting active native borrow"),
     "move during shared loan": (
         "fnc use(borrow int a, int b): int { return a + b; } "
@@ -79,12 +82,12 @@ cases = {
         "cannot move int while borrow is active"),
     "read during exclusive loan": (
         "fnc use(borrow mut int a, int b): int { return a + b; } "
-        "fnc invoke(int x): int { return use(rt borrow mut x, x); }",
+        "fnc invoke(int x): int { return use(rt mut borrow x, x); }",
         "read conflicts with active mutable borrow"),
     "nested call loan conflict": (
         "fnc inner(borrow mut int b): int { return b; } "
         "fnc outer(borrow int a, int b): int { return a + b; } "
-        "fnc invoke(int x): int { return outer(rt borrow x, inner(rt borrow mut x)); }",
+        "fnc invoke(int x): int { return outer(rt borrow x, inner(rt mut borrow x)); }",
         "conflicting active native borrow"),
     "borrow mode mismatch": (
         "fnc use(borrow mut int a): int { return a; } "
@@ -100,23 +103,23 @@ cases = {
         "borrowed argument requires explicit rt borrow"),
     "shared cannot strengthen to mutable": (
         "fnc inner(borrow mut int a): int { return a; } "
-        "fnc outer(borrow int x): int { return inner(rt borrow mut x); }",
+        "fnc outer(borrow int x): int { return inner(rt mut borrow x); }",
         "cannot mutably reborrow shared parameter"),
     "mutable reborrow double-exclusive": (
         "fnc inner(borrow mut int a, borrow mut int b): int { return a + b; } "
-        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, rt borrow mut x); }",
+        "fnc outer(borrow mut int x): int { return inner(rt mut borrow x, rt mut borrow x); }",
         "conflicting active native borrow"),
     "mutable reborrow then shared": (
         "fnc inner(borrow mut int a, borrow int b): int { return a + b; } "
-        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, rt borrow x); }",
+        "fnc outer(borrow mut int x): int { return inner(rt mut borrow x, rt borrow x); }",
         "conflicting active native borrow"),
     "shared reborrow then mutable": (
         "fnc inner(borrow int a, borrow mut int b): int { return a + b; } "
-        "fnc outer(borrow mut int x): int { return inner(rt borrow x, rt borrow mut x); }",
+        "fnc outer(borrow mut int x): int { return inner(rt borrow x, rt mut borrow x); }",
         "conflicting active native borrow"),
     "read during exclusive reborrow": (
         "fnc inner(borrow mut int a, int b): int { return a + b; } "
-        "fnc outer(borrow mut int x): int { return inner(rt borrow mut x, x); }",
+        "fnc outer(borrow mut int x): int { return inner(rt mut borrow x, x); }",
         "read conflicts with active mutable borrow"),
     "reborrow then await": (
         "fnc inner(borrow int a, int b): int { return a + b; } "
