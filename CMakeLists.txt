@@ -1233,6 +1233,21 @@ if(BUILD_TESTING)
     add_test(NAME native_compressed32_compiler_ownership_policy
         COMMAND oreslang-actor-ref-ownership-verifier-test)
 
+    # Source/HIR authority: rebuild the ownership CFG and critical-state
+    # facts from parsed source. Callers cannot supply synthetic graphs or MIR
+    # claims to this pass. Evidence issuance remains gated until logical Ref<T>
+    # has a real source/HIR node.
+    add_executable(oreslang-source-ownership-checker-test
+        tests/source_ownership_checker_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-ownership-checker-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-ownership-checker-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_compressed32_source_ownership_authority
+        COMMAND oreslang-source-ownership-checker-test)
+
     # Actual backend codegen for checked scalar runtime C ABI: LLVM must keep
     # actor reference in i32 and use native ActorArena.c checked accessors.
     # Not yet full source-level Ref<T> lowering.
