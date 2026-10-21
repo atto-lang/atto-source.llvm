@@ -197,6 +197,18 @@ public:
     }
 
     template <typename T>
+    static void mark_submitted(Buffer<T>& buffer, const Fence& fence) {
+        validate_fence_device(buffer, fence);
+        buffer.fence_.mark_submitted(fence.ticket_);
+    }
+
+    template <typename T>
+    static void abort_before_enqueue(Buffer<T>& buffer, const Fence& fence) {
+        validate_fence_device(buffer, fence);
+        buffer.fence_.abort_unsubmitted(fence.ticket_);
+    }
+
+    template <typename T>
     static void complete(Buffer<T>& buffer, const Fence& fence, bool succeeded) {
         validate_fence_device(buffer, fence);
         buffer.fence_.complete(fence.ticket_, succeeded);
