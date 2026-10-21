@@ -13,6 +13,44 @@ typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
 
+/* HOST ONLY, experimental, scalar-i64 actor heap access evidence v1.
+ * This records only operations through this heap ABI. It does NOT certify
+ * complete Oreslang memory/synchronization coverage or race freedom.
+ * Guest code must not receive this API, its output buffer, or credentials.
+ */
+typedef enum {
+    ORES_ACTOR_HEAP_ACCESS_ALLOC = 1,
+    ORES_ACTOR_HEAP_ACCESS_READ = 2,
+    ORES_ACTOR_HEAP_ACCESS_WRITE = 3,
+    ORES_ACTOR_HEAP_ACCESS_DROP = 4,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_INIT = 5,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_READ = 6,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE = 7
+} OresActorHeapAccessKind;
+
+typedef struct {
+    uint64_t domain, actor_id, incarnation, turn_epoch;
+    uint64_t slot_index, slot_generation;
+    uint32_t kind;
+} OresActorHeapAccessEvent;
+
+typedef struct {
+    uint64_t dropped;
+    uint32_t stored, capacity;
+    uint32_t enabled;
+} OresActorHeapAccessSummary;
+
+/* Enable before first turn; bounded 1..65536 events. Never allocates while
+ * a turn executes. Returns 0 if unavailable/rejected; 1 only on admission.
+ * Snapshot must be taken while no turn executes; refuses partial buffers.
+ * Overflow is sticky (dropped>0) and disqualifies complete-trace claims.
+ * Neither function exposes a native/guest address or recorded data value.
+ */
+int ores_actor_i64_heap_trace_enable(OresActorI64Heap* heap, uint32_t capacity);
+int ores_actor_i64_heap_trace_snapshot(
+    OresActorI64Heap* heap, OresActorHeapAccessEvent* output,
+    uint32_t output_capacity, OresActorHeapAccessSummary* summary);
+
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
                                            uint64_t incarnation,
