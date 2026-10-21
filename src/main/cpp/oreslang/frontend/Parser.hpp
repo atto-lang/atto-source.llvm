@@ -249,26 +249,7 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
                       bool experimental_rt_scalar_loop = false);
 
 } // namespace oreslang
-
-// and therefore cannot be forged by guest identifiers. Descriptors are supplied
-// by the trusted process launcher; source code receives no generic native/FFI escape.
-inline bool native_blocking_file_intrinsic(std::string_view name) noexcept {
-    return name == "$rt.file_write_i64_blocking" ||
-           name == "$rt.file_size_blocking" ||
-           name == "$rt.file_truncate_blocking" ||
-           name == "$rt.file_sync_blocking" ||
-           name == "$rt.dir_sync_blocking";
-}
-inline std::size_t native_blocking_file_intrinsic_arity(std::string_view name) noexcept {
-    if (name == "$rt.file_write_i64_blocking") return 3;
-    if (name == "$rt.file_size_blocking") return 1;
-    if (name == "$rt.file_truncate_blocking") return 2;
-    if (name == "$rt.file_sync_blocking") return 1;
-    if (name == "$rt.dir_sync_blocking") return 1;
-    return 0;
-}
-
-struct Parameter {
+\n// and therefore cannot be forged by guest identifiers. Descriptors are supplied\n// by the trusted process launcher; source code receives no generic native/FFI escape.\ninline bool native_blocking_file_intrinsic(std::string_view name) noexcept {\n    return name == "$rt.file_write_i64_blocking" ||\n           name == "$rt.file_size_blocking" ||\n           name == "$rt.file_truncate_blocking" ||\n           name == "$rt.file_sync_blocking" ||\n           name == "$rt.dir_sync_blocking";\n}\ninline std::size_t native_blocking_file_intrinsic_arity(std::string_view name) noexcept {\n    if (name == "$rt.file_write_i64_blocking") return 3;\n    if (name == "$rt.file_size_blocking") return 1;\n    if (name == "$rt.file_truncate_blocking") return 2;\n    if (name == "$rt.file_sync_blocking") return 1;\n    if (name == "$rt.dir_sync_blocking") return 1;\n    return 0;\n}\n\nstruct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
     std::string class_name; // empty means primitive i64
