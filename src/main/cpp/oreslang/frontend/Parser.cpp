@@ -168,6 +168,7 @@ inline void require_expression_depth(std::size_t depth, std::size_t offset) {
 // ownership-checked class field read: no nested calls or ownership transfers.
 bool nonthrowing_protected_read(const Expression& expr) {
     if (expr.kind == Expression::Kind::Integer ||
+            expr.kind == Expression::Kind::Boolean ||
             expr.kind == Expression::Kind::Variable) return true;
     return expr.kind == Expression::Kind::Field && expr.left &&
            expr.left->kind == Expression::Kind::Variable;
@@ -178,19 +179,31 @@ bool nonthrowing_protected_read(const Expression& expr) {
 bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
-    if (expr.kind == Expression::Kind::Negate)
+    if (expr.kind == Expression::Kind::Negate ||
+            expr.kind == Expression::Kind::LogicalNot)
         return expr.left && native_pure_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
-            expr.kind == Expression::Kind::Multiply)
+            expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Equal ||
+            expr.kind == Expression::Kind::NotEqual ||
+            expr.kind == Expression::Kind::Less ||
+            expr.kind == Expression::Kind::LessEqual ||
+            expr.kind == Expression::Kind::Greater ||
+            expr.kind == Expression::Kind::GreaterEqual ||
+            expr.kind == Expression::Kind::LogicalAnd ||
+            expr.kind == Expression::Kind::LogicalOr ||
+            expr.kind == Expression::Kind::LogicalXor)
         return expr.left && expr.right &&
             native_pure_scalar_tree(*expr.left, depth + 1) &&
             native_pure_scalar_tree(*expr.right, depth + 1);
     if (expr.kind == Expression::Kind::Conditional)
-        return expr.condition_lhs && expr.condition_rhs &&
+        return (expr.condition ||
+                (expr.condition_lhs && expr.condition_rhs)) &&
             expr.when_true && expr.when_false &&
-            native_pure_scalar_tree(*expr.condition_lhs, depth + 1) &&
-            native_pure_scalar_tree(*expr.condition_rhs, depth + 1) &&
+            (!expr.condition || native_pure_scalar_tree(*expr.condition, depth + 1)) &&
+            (!expr.condition_lhs || native_pure_scalar_tree(*expr.condition_lhs, depth + 1)) &&
+            (!expr.condition_rhs || native_pure_scalar_tree(*expr.condition_rhs, depth + 1)) &&
             native_pure_scalar_tree(*expr.when_true, depth + 1) &&
             native_pure_scalar_tree(*expr.when_false, depth + 1);
     return false;
@@ -215,19 +228,25 @@ bool native_constructor_scalar_tree(const Expression& expr,
                                     std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
-    if (expr.kind == Kind::Negate)
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean ||
+            expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
-            expr.kind == Kind::Multiply)
+            expr.kind == Kind::Multiply || expr.kind == Kind::Equal ||
+            expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
+            expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
+            expr.kind == Kind::GreaterEqual || expr.kind == Kind::LogicalAnd ||
+            expr.kind == Kind::LogicalOr || expr.kind == Kind::LogicalXor)
         return expr.left && expr.right &&
             native_constructor_scalar_tree(*expr.left, depth + 1) &&
             native_constructor_scalar_tree(*expr.right, depth + 1);
     if (expr.kind == Kind::Conditional)
-        return expr.condition_lhs && expr.condition_rhs &&
+        return (expr.condition || (expr.condition_lhs && expr.condition_rhs)) &&
             expr.when_true && expr.when_false &&
-            native_constructor_scalar_tree(*expr.condition_lhs, depth + 1) &&
-            native_constructor_scalar_tree(*expr.condition_rhs, depth + 1) &&
+            (!expr.condition || native_constructor_scalar_tree(*expr.condition, depth + 1)) &&
+            (!expr.condition_lhs || native_constructor_scalar_tree(*expr.condition_lhs, depth + 1)) &&
+            (!expr.condition_rhs || native_constructor_scalar_tree(*expr.condition_rhs, depth + 1)) &&
             native_constructor_scalar_tree(*expr.when_true, depth + 1) &&
             native_constructor_scalar_tree(*expr.when_false, depth + 1);
     return false;
