@@ -1098,7 +1098,7 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_done_resource_quiescence
         COMMAND oreslang-native-actor-retirement-barrier-test)
     set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
-    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
+    oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")\n    oreslang_contract_test(reject_hat_kernel unsupported-hat-kernel.ores --diagnostic "native HAT kernel boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
     add_executable(oreslang-data-layout-advisor-test tests/native_data_layout_advisor_test.cpp)
