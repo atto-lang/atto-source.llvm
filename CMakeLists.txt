@@ -2389,6 +2389,10 @@ if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME refreshed_actor_persistent_fields
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_persistent_fields_refresh.py"
         "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME native_actor_sealed_state_source_contract
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_sealed_state_contract.py"
+        "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_actor_sealed_state_source_contract PROPERTIES TIMEOUT 60)
 endif()
 
 if(BUILD_TESTING)
