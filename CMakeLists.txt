@@ -668,6 +668,16 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_auto_traits_and_logical_dop
         COMMAND oreslang-ownership-auto-traits-dop-test)
+    # Nominal immutable Entry<K,V> host substrate. Guest source syntax remains
+    # fail-closed until LLVM lowering, ownership/drop and actor transport use it.
+    add_executable(oreslang-native-entry-value-test
+        tests/native_entry_value_test.cpp)
+    target_include_directories(oreslang-native-entry-value-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-entry-value-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_entry_nominal_value_substrate
+        COMMAND oreslang-native-entry-value-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
