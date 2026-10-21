@@ -1,0 +1,16 @@
+define actor ReservationAuthority as
+  state {
+    revision: int = 8;
+    result: int = 0;
+  }
+  pub fnc on_message(int expected): int with state.write {
+    return self.handle_state(critical write |s| -> {
+      if (s.revision == expected) {
+        s.result = 1;
+      } else {
+        s.result = 0;
+      } fi
+      return s.result;
+    });
+  }
+end
