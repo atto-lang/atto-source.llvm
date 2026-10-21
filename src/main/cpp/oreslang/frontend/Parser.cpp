@@ -1947,6 +1947,7 @@ private:
                     || functions.count(actor.name))
                 throw std::runtime_error("duplicate actor/class/function symbol '" + actor.name + "'");
             std::unordered_set<std::string> fields;
+            std::unordered_set<std::string> ref_fields;
             std::unordered_set<std::string> mutables;
             const std::unordered_set<std::string> empty;
             for (const auto& field : actor.fields) {
@@ -1956,6 +1957,16 @@ private:
                 if (!fields.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutables.insert(field.name);
+            }
+            if (!actor.sealed_state && !actor.managed_ref_fields.empty())
+                throw std::runtime_error(
+                    "managed Ref<T> fields require sealed actor state");
+            if (actor.fields.size() + actor.managed_ref_fields.size() > 16)
+                throw std::runtime_error("native actor state field limit exceeded (16)");
+            for (const auto& ref : actor.managed_ref_fields) {
+                if (fields.count(ref.name) || !ref_fields.insert(ref.name).second)
+                    throw std::runtime_error(
+                        "duplicate actor state field '" + ref.name + "'");
             }
             const auto& method = actor.on_message;
             if (method.parameters.size() != 1)
@@ -1974,8 +1985,10 @@ private:
                 const auto& loan = *method.actor_state_loan;
                 if (loan.binder.empty() || loan.binder == parameter)
                     throw std::runtime_error("invalid actor state callback binding");
-                if (!loan.result)
-                    throw std::runtime_error("state callback requires scalar return");
+                if (static_cast<bool>(loan.result) ==
+                        static_cast<bool>(loan.managed_ref_result))
+                    throw std::runtime_error(
+                        "state callback requires exactly one scalar or managed-ref result");
 
                 if (loan.mode == ActorStateLoan::Mode::Read) {
                     if (!method.declared_effects.has(FunctionEffect::StateRead))
@@ -2038,7 +2051,33 @@ private:
                         throw std::runtime_error("actor state write requires expression");
                     validate_state_expression(*write.expression);
                 }
-                validate_state_expression(*loan.result);
+                if (loan.managed_ref_result) {
+                    const auto& use = *loan.managed_ref_result;
+                    if (!ref_fields.count(use.field))
+                        throw std::runtime_error(
+                            "unknown actor managed Ref field '" + use.field + "'");
+                    // Loading the actor-local reference bits is itself a state
+                    // read even when the referent will then be mutated.
+                    reads_state = true;
+                    if (use.access == ActorManagedRefUse::Access::Read) {
+                        if (use.value)
+                            throw std::runtime_error(
+                                "managed Ref read cannot carry a write value");
+                    } else {
+                        if (loan.mode != ActorStateLoan::Mode::Write)
+                            throw std::runtime_error(
+                                "managed Ref write requires exclusive state loan");
+                        if (!method.declared_effects.has(FunctionEffect::StateWrite))
+                            throw std::runtime_error(
+                                "managed Ref write requires state.write effect");
+                        if (!use.value)
+                            throw std::runtime_error(
+                                "managed Ref write requires scalar value");
+                        validate_state_expression(*use.value);
+                    }
+                } else {
+                    validate_state_expression(*loan.result);
+                }
                 if (reads_state &&
                         !method.declared_effects.has(FunctionEffect::StateRead))
                     throw std::runtime_error(
