@@ -48,6 +48,10 @@ class SourceManagedRefAuthorization final {
 
 public:
     SourceManagedRefAuthorization() = delete;
+    SourceManagedRefAuthorization(const SourceManagedRefAuthorization&) = delete;
+    SourceManagedRefAuthorization& operator=(const SourceManagedRefAuthorization&) = delete;
+    SourceManagedRefAuthorization(SourceManagedRefAuthorization&&) noexcept = default;
+    SourceManagedRefAuthorization& operator=(SourceManagedRefAuthorization&&) noexcept = default;
 
     backend::ActorManagedRefMir claims() const noexcept {
         return evidence_.claims();
