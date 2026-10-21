@@ -1,4 +1,5 @@
 #include "ActorOwnedI64Heap.h"
+#include "NativeActorDomainId.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
@@ -92,8 +93,8 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (id == 0 || id == UINT64_MAX) rejected();
+    const uint64_t id = ores_native_actor_domain_reserve(&next_domain);
+    if (!id) rejected();
     heap->domain = id;
     heap->owner = actor_id;
     heap->incarnation = incarnation;
