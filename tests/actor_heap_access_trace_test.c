@@ -83,7 +83,50 @@ static void test_overflow_and_different_actor_identities(void) {
     REQUIRE(ores_actor_i64_heap_try_destroy(heap));
 }
 
+static void test_exact_snapshots_generation_reuse_and_leases(void) {
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(2002, 5, 1);
+    OresActorHeapAccessSummary summary = {0};
+    REQUIRE(ores_actor_i64_heap_trace_enable(heap, 8));
+    /* Zero recorded events can be snapshotted with a zero-capacity output. */
+    REQUIRE(ores_actor_i64_heap_trace_snapshot(heap, NULL, 0, &summary));
+    REQUIRE(summary.stored == 0 && summary.dropped == 0);
+    OresActorTurn first = ores_actor_i64_heap_enter(heap, 2002, 5);
+    OresActorSlot original = ores_actor_i64_heap_new(heap, first, 9);
+    OresActorLoan loan = ores_actor_i64_heap_borrow(heap, first, original);
+    REQUIRE(ores_actor_i64_heap_read(heap, first, original) == 9);
+    ores_actor_i64_heap_leave(heap, first);
+    /* Shared read loans are permitted to cross turn boundaries, and the
+     * actor cannot be reclaimed before the final loan release. */
+    ores_actor_i64_heap_release(heap, loan);
+    OresActorTurn second = ores_actor_i64_heap_enter(heap, 2002, 5);
+    ores_actor_i64_heap_drop(heap, second, original);
+    OresActorSlot reused = ores_actor_i64_heap_new(heap, second, 10);
+    REQUIRE(reused.index == original.index);
+    REQUIRE(reused.generation == original.generation + 1);
+    REQUIRE(ores_actor_i64_heap_read(heap, second, reused) == 10);
+    ores_actor_i64_heap_leave(heap, second);
+    OresActorHeapAccessEvent events[8] = {0};
+    OresActorHeapAccessSummary sentinel = {99, 99, 99, 99};
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, events, 4, &sentinel));
+    REQUIRE(sentinel.dropped == 99 && sentinel.stored == 99);
+    REQUIRE(!ores_actor_i64_heap_trace_snapshot(heap, events, 8, NULL));
+    REQUIRE(ores_actor_i64_heap_trace_snapshot(heap, events, 8, &summary));
+    REQUIRE(summary.stored == 5 && summary.dropped == 0);
+    REQUIRE(events[0].kind == ORES_ACTOR_HEAP_ACCESS_ALLOC);
+    REQUIRE(events[1].kind == ORES_ACTOR_HEAP_ACCESS_READ);
+    REQUIRE(events[2].kind == ORES_ACTOR_HEAP_ACCESS_DROP);
+    REQUIRE(events[3].kind == ORES_ACTOR_HEAP_ACCESS_ALLOC);
+    REQUIRE(events[4].kind == ORES_ACTOR_HEAP_ACCESS_READ);
+    REQUIRE(events[0].slot_generation == original.generation);
+    REQUIRE(events[3].slot_generation == reused.generation);
+    REQUIRE(events[0].turn_epoch == first.epoch);
+    REQUIRE(events[4].turn_epoch == second.epoch);
+    ores_actor_i64_heap_retire(heap);
+    REQUIRE(ores_actor_i64_heap_try_destroy(heap));
+}
+
 int main(void) {
+    test_exact_snapshots_generation_reuse_and_leases();
     test_bounded_successful_accesses();
     test_overflow_and_different_actor_identities();
     puts("ACTOR_HEAP_ACCESS_EVIDENCE|scope=native_i64_host_only|result=PASS");
