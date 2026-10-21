@@ -52,7 +52,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "using", "with", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -400,9 +400,14 @@ private:
         require(":");
         require("int");
 
-        // Current native syntax uses using as the declared effect upper bound.
-        // State-loan acquisition below is checked independently.
+        // Canonical actor state contract: `with` declares the callable
+        // effect upper bound; `using` is reserved for lexical capability
+        // acquisition inside the body. Keep this distinct even though older
+        // ordinary native functions still parse signature-level `using`.
         if (accept("using")) {
+            fail("actor effect declarations use with; using is lexical state acquisition");
+        }
+        if (accept("with")) {
             if (!actor.sealed_state)
                 fail("actor state effects require a sealed state schema");
             method.has_declared_effects = true;
@@ -1981,7 +1986,7 @@ private:
                 if (reads_state &&
                         !method.declared_effects.has(FunctionEffect::StateRead))
                     throw std::runtime_error(
-                        "state callback reads state but using bound omits state.read");
+                        "state callback reads state but with bound omits state.read");
             } else {
                 if (method.actor_state_loan)
                     throw std::runtime_error(
