@@ -7,7 +7,10 @@ LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-sourc
 
 - Zero or one `define module M [as] ... end` wrapper.
 - Multiple zero- or multi-argument `[pub] fnc`/`routine` declarations,
-  with `int` parameters and `: int` return annotation.
+  with `int` parameters and the legacy native `: int` return annotation.
+  Java/Graal's `-> Type ... end` free/module body form (including `as` and `::` separators) is recognized only
+  far enough to emit a targeted fail-closed diagnostic; it is not native
+  lowering parity.
 - Exactly one `return <expr>;` statement per function.
 - Decimal int literals, unary negative, binary add/subtract/multiply, grouping,
   integer parameters, same-module function calls (including forward calls).
@@ -16,6 +19,35 @@ LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-sourc
 Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
+
+## Keyword-delimited callable and tuple return parity boundary
+
+Java/Graal admits ordinary free/module callables of the form:
+
+```ores
+fnc classify(int x) -> int ::
+    if x > 0 then
+        return 1
+    else
+        return 0
+    fi
+end
+```
+
+and contextual finite tuple return types such as
+`tuple (int, int, string)`. The native frontend remains a braced scalar
+compiler and therefore intentionally provides rejection parity only.
+
+Both Java/Graal body separators, `as` and `::`, have native rejection coverage. The lexer treats contiguous `->` as one token so the declaration cannot be
+misread as arithmetic. The function parser rejects that syntax before body
+lowering. A `tuple` return type is rejected before scalar ABI selection.
+Dedicated contract fixtures require a nonzero compiler exit and no partial
+LLVM IR.
+
+Native implementation parity requires typed return parsing, keyword-delimited
+CFG lowering, all-path return proof, finite tuple ABI/ownership/drop rules and
+differential Java/LLVM execution coverage. Until those exist, explicit
+rejection is the safe contract.
 
 ## Numeric division fail-closed parity boundary
 
@@ -90,7 +122,7 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 
 | Java capability | LLVM status |
 | --- | --- |
-| Lexer, modules, functions | Partial i64-only subset, not full Java parity |
+| Lexer, modules, functions | Partial i64-only subset; `-> Type ... end` is targeted fail-closed, not executable parity |
 | Function calls, expressions | i64 arithmetic and same-module calls |
 | Type/ownership checking | Name/arity, i64 explicit moves and scoped nonescaping scalar loans; heap references and async unsupported |
 | LLVM IR verification | Implemented |
