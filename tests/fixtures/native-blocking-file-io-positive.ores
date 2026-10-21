@@ -1,0 +1,19 @@
+pub fnc durable_write(int fd, int offset, int value): int using io, block {
+  return rt file_write_i64_blocking(fd, offset, value);
+}
+
+pub fnc durable_size(int fd): int using io, block {
+  return rt file_size_blocking(fd);
+}
+
+pub fnc durable_truncate(int fd, int size): int using io, block {
+  return rt file_truncate_blocking(fd, size);
+}
+
+pub fnc durable_sync(int fd): int using io, block {
+  return rt file_sync_blocking(fd);
+}
+
+pub fnc durable_dir_sync(int fd): int using io, block {
+  return rt dir_sync_blocking(fd);
+}
