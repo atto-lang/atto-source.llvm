@@ -118,7 +118,7 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     const bool exclusive = expr.kind == Expression::Kind::BorrowMut;
     if (expr.kind != Expression::Kind::Borrow &&
         expr.kind != Expression::Kind::BorrowMut)
-        reject(expr, "borrowed argument requires explicit rt borrow [mut]");
+        reject(expr, "borrowed argument requires explicit rt borrow or rt mut borrow");
     if ((expected == Mode::BorrowMut) != exclusive)
         reject(expr, "borrow mode does not match borrowed parameter");
     if (!expr.left || expr.left->kind != Expression::Kind::Variable)
