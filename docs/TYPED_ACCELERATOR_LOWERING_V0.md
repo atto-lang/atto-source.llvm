@@ -14,7 +14,7 @@ This distinction is part of the safety contract.
 | Homogeneous POD layouts | `DataOrientedLayout.Plan` | `dop::Plan` |
 | Typed F32 kernel | `runtime.compute.PortableKernelIR.Kernel` | `dop::Kernel` |
 | Executable host lowering | `PortableKernelIR.CpuReferenceProvider.execute` | `dop::execute_cpu` |
-| OpenCL C lowering | not yet implemented on Java/Graal | `dop::lower_opencl` |
+| OpenCL C lowering | `PortableKernelIR.lowerOpenCl` | `dop::lower_opencl` |
 | Exclusive host-buffer transfers | `HostBuffer.take/borrowRead` | `HostBuffer::take/borrow_read` |
 | QASM3 lowering | `QuantumCircuitIR.lowerOpenQasm3` | `quantum::lower_openqasm3` |
 | Ideal simulator | `simulateProbabilities/Shots` | `simulate_probabilities/shots` |
@@ -27,9 +27,7 @@ or device permissions to an untrusted guest.
 ## DOP typed kernels
 
 The Java/Graal G2 implementation now uses `PortableKernelIR` as its
-source-neutral conformance IR. It deliberately provides an explicit CPU
-reference backend only; it does not claim Java-side OpenCL lowering or device
-execution. LLVM/native remains the first backend with OpenCL C emission. Both
+source-neutral conformance IR. It provides the explicit CPU reference backend plus OpenCL C artifact emission; neither path claims device execution. Java/Graal and LLVM/native now emit the same admitted OpenCL C artifact for the G2 subset. Both
 frontends still reject source execution-domain syntax.
 
 
