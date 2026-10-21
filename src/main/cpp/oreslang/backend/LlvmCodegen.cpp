@@ -272,6 +272,11 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    for (const auto& actor : source.actors)
+        for (const auto& field : actor.fields)
+            if (field.managed_ref)
+                throw std::runtime_error(
+                    "logical Ref<T> passed source ownership checking boundary but compact allocation/publication lowering is not wired");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
