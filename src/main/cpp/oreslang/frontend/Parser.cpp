@@ -2043,7 +2043,8 @@ private:
             }
         }
         for (const auto& guard : fn.early_returns)
-            if (contains_callable_invocation(guard.lhs.get()) ||
+            if (contains_callable_invocation(guard.condition.get()) ||
+                contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
                 contains_callable_invocation(guard.result.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
@@ -2198,8 +2199,11 @@ private:
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
                 if (stmt.kind == Statement::Kind::Conditional) {
-                    validate_expression(*stmt.condition_lhs, names, functions);
-                    validate_expression(*stmt.condition_rhs, names, functions);
+                    if (stmt.condition) validate_expression(*stmt.condition, names, functions);
+                    else {
+                        validate_expression(*stmt.condition_lhs, names, functions);
+                        validate_expression(*stmt.condition_rhs, names, functions);
+                    }
                     NameSet then_names = names;
                     NameSet else_names = names;
                     for (const auto& action : stmt.then_statements)
@@ -2264,8 +2268,11 @@ private:
                         fn.catch_binding + "'");
             }
             for (const auto& guard : fn.early_returns) {
-                validate_expression(*guard.lhs, params, functions);
-                validate_expression(*guard.rhs, params, functions);
+                if (guard.condition) validate_expression(*guard.condition, params, functions);
+                else {
+                    validate_expression(*guard.lhs, params, functions);
+                    validate_expression(*guard.rhs, params, functions);
+                }
                 validate_expression(*guard.result, params, functions);
             }
             if (fn.result) validate_expression(*fn.result, params, functions);
@@ -2307,10 +2314,15 @@ private:
             std::function<void(const Statement&, TypeMap&)> check_statement_types;
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
                 if (stmt.kind == Statement::Kind::Conditional) {
-                    require_scalar(*stmt.condition_lhs, ScalarType::I64,
-                        "native if equality left operand", env);
-                    require_scalar(*stmt.condition_rhs, ScalarType::I64,
-                        "native if equality right operand", env);
+                    if (stmt.condition) {
+                        require_scalar(*stmt.condition, ScalarType::Bool,
+                            "native if condition", env);
+                    } else {
+                        require_scalar(*stmt.condition_lhs, ScalarType::I64,
+                            "native if equality left operand", env);
+                        require_scalar(*stmt.condition_rhs, ScalarType::I64,
+                            "native if equality right operand", env);
+                    }
                     TypeMap then_env = env;
                     TypeMap else_env = env;
                     for (const auto& action : stmt.then_statements)
@@ -2355,10 +2367,15 @@ private:
                 require_scalar(*fn.caught_throw_value, ScalarType::I64,
                     "native thrown scalar", scalar_types);
             for (const auto& guard : fn.early_returns) {
-                require_scalar(*guard.lhs, ScalarType::I64,
-                    "native return guard left operand", scalar_types);
-                require_scalar(*guard.rhs, ScalarType::I64,
-                    "native return guard right operand", scalar_types);
+                if (guard.condition) {
+                    require_scalar(*guard.condition, ScalarType::Bool,
+                        "native guarded return condition", scalar_types);
+                } else {
+                    require_scalar(*guard.lhs, ScalarType::I64,
+                        "native return guard left operand", scalar_types);
+                    require_scalar(*guard.rhs, ScalarType::I64,
+                        "native return guard right operand", scalar_types);
+                }
                 require_scalar(*guard.result, fn.return_type,
                     "native guarded return", scalar_types);
             }
