@@ -415,8 +415,8 @@ private:
                 fail("actor state effects require a sealed state schema");
             method.has_declared_effects = true;
             do {
-                std::string name = identifier();
-                if (accept(".")) name += "." + identifier();
+                std::string name = effect_atom();
+                if (accept(".")) name += "." + effect_atom();
                 FunctionEffect effect;
                 try { effect = FunctionEffects::parse(name); }
                 catch (const std::invalid_argument&) {
@@ -870,8 +870,8 @@ private:
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
-                std::string name = identifier();
-                if (accept(".")) name += "." + identifier();
+                std::string name = effect_atom();
+                if (accept(".")) name += "." + effect_atom();
                 FunctionEffect effect;
                 try { effect = FunctionEffects::parse(name); }
                 catch (const std::invalid_argument&) {
@@ -1695,6 +1695,17 @@ private:
 
     void require(std::string_view text) {
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
+    }
+
+    std::string effect_atom() {
+        // Effect names are compiler vocabulary, not ordinary guest identifiers.
+        // Reserved words such as block/suspend/throw are valid only when the
+        // enclosing effect parser subsequently recognizes the complete name.
+        if (token_.kind != Kind::Identifier)
+            fail("expected function effect name");
+        std::string result(token_.text);
+        advance();
+        return result;
     }
 
     std::string identifier() {
