@@ -1,0 +1,14 @@
+define actor ReservationAuthority as
+  state {
+    revision: int = 8;
+  }
+  pub fnc on_message(int expected): int with state.read {
+    return self.handle_state(|s| -> {
+      if (s.revision == expected) {
+        s.revision = 9;
+      } else {
+      } fi
+      return s.revision;
+    });
+  }
+end
