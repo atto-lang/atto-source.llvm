@@ -783,6 +783,10 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->summary_data_bits);
+    free(s->summary_control_bits);
+    free(s->ready_data_bits);
+    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);
