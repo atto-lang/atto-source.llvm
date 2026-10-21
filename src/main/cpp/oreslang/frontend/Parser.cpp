@@ -1349,6 +1349,13 @@ private:
                 fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
             }
         }
+        // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
+        // named task, but fail closed when it opens a task block.
+        if (token_.text == "task") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "{")
+                fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
+        }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
