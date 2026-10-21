@@ -259,16 +259,17 @@ public:
     }
     Status status() const {
         std::lock_guard<std::mutex> owner(owner_lock_);
-        active();
+        if (!state_) throw std::logic_error("device ownership moved");
         std::lock_guard<std::mutex> guard(state_->lock);
         return state_->status;
     }
 
     // A per-allocation metadata snapshot, not provider authorization.
+    // Closed allocations remain observable as Closed; moved-from wrappers do not.
     struct Snapshot { Identity identity; std::uint64_t bytes; Status status; };
     Snapshot snapshot() const {
         std::lock_guard<std::mutex> owner_guard(owner_lock_);
-        active();
+        if (!state_) throw std::logic_error("device ownership moved");
         std::lock_guard<std::mutex> guard(state_->lock);
         return Snapshot{state_->identity, state_->bytes, state_->status};
     }
