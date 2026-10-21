@@ -1,7 +1,6 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/SourceOwnershipChecker.hpp"
 
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -17,8 +16,6 @@ static void rejects(F&& fn) {
     try { fn(); } catch (const std::exception&) { denied = true; }
     CHECK(denied);
 }
-
-static constexpr std::uint64_t REGION = UINT64_C(64) * 1024 * 1024;
 
 int main() {
     const std::string read_source = R"(
@@ -92,6 +89,72 @@ define actor Box as {
     rejects([&] {
         (void) SourceOwnershipChecker::validate_actor_state_ref_use(
             scalar, "Box", "root", ManagedRefAccess::Read);
+    });
+
+    const std::string ref_as_scalar = R"(
+define actor Box as {
+  state { root: Ref<int> = null; }
+  pub fnc on_message(int n): int with state.read {
+    const result = self.handle_state(critical read |state| -> {
+      return state.root;
+    });
+    return result;
+  }
+}
+)";
+    rejects([&] {
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            ref_as_scalar, "Box", "root", ManagedRefAccess::Read);
+    });
+
+    const std::string overwrite_ref = R"(
+define actor Box as {
+  state { root: Ref<int> = null; }
+  pub fnc on_message(int n): int with state.write {
+    const result = self.handle_state(critical |state| -> {
+      state.root = n;
+      return n;
+    });
+    return result;
+  }
+}
+)";
+    rejects([&] {
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            overwrite_ref, "Box", "root", ManagedRefAccess::Write);
+    });
+
+    const std::string scalar_payload = R"(
+define actor Box as {
+  state { root: int = 0; }
+  pub fnc on_message(int n): int with state.write {
+    const result = self.handle_state(critical |state| -> {
+      state.root.value = n;
+      return n;
+    });
+    return result;
+  }
+}
+)";
+    rejects([&] {
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            scalar_payload, "Box", "root", ManagedRefAccess::Write);
+    });
+
+    const std::string nested_payload = R"(
+define actor Box as {
+  state { root: Ref<int> = null; }
+  pub fnc on_message(int n): int with state.read {
+    const result = self.handle_state(critical read |state| -> {
+      return state.root.value.value;
+    });
+    return result;
+  }
+}
+)";
+    rejects([&] {
+        (void) SourceOwnershipChecker::validate_actor_state_ref_use(
+            nested_payload, "Box", "root", ManagedRefAccess::Read);
     });
 
     static_assert(!std::is_default_constructible<SourceManagedRefUseProof>::value,
