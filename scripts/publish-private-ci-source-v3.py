@@ -407,8 +407,12 @@ def exact_source_tree(source_pr, source_commit):
             or not isinstance(entries, list) or len(entries) > MAX_TREE_ENTRIES):
         raise Denied("source tree incomplete or exceeds safety limit")
 
-    files = []
-    total = 0
+    # Validate all paths, modes, SHAs and declared blob sizes before fetching
+    # any blob bytes. GitHub's tree metadata gives us enough information to
+    # enforce the mirror budget without first allocating a potentially huge
+    # base64 blob response.
+    declared = []
+    declared_total = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
@@ -426,6 +430,20 @@ def exact_source_tree(source_pr, source_commit):
                 or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise Denied("source tree path unsafe")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
+        size = entry.get("size")
+        if (not isinstance(size, int) or isinstance(size, bool)
+                or size < 0 or size > MAX_FILE):
+            raise Denied("source file exceeds mirror limit")
+        declared_total += size
+        if declared_total > MAX_TOTAL or len(declared) >= MAX_FILES:
+            raise Denied("source mirror exceeds bounded capacity")
+        declared.append((path, mode, sha, size))
+
+    if not declared:
+        raise Denied("source tree is empty")
+
+    files = []
+    for path, mode, sha, declared_size in declared:
         blob = gh_api(f"repos/{SOURCE_REPO}/git/blobs/{sha}")
         if (blob.get("sha") != sha or blob.get("encoding") != "base64"):
             raise Denied("source blob metadata mismatch")
@@ -436,16 +454,12 @@ def exact_source_tree(source_pr, source_commit):
             data = base64.b64decode("".join(encoded.split()), validate=True)
         except (ValueError, base64.binascii.Error) as exc:
             raise Denied("source blob base64 invalid") from exc
-        if len(data) > MAX_FILE:
-            raise Denied("source file exceeds mirror limit")
+        if len(data) != declared_size:
+            raise Denied("source blob size differs from tree metadata")
         if git_blob_sha(data) != sha:
             raise Denied("source blob bytes do not match Git SHA")
-        total += len(data)
-        if total > MAX_TOTAL or len(files) >= MAX_FILES:
-            raise Denied("source mirror exceeds bounded capacity")
         files.append((path, mode, sha, data))
-    if not files:
-        raise Denied("source tree is empty")
+
     files.sort(key=lambda item: item[0])
     rows = [[path, mode, sha, len(data)] for path, mode, sha, data in files]
     return root_tree, files, rows, hashlib.sha256(canonical_bytes(rows)).hexdigest()
