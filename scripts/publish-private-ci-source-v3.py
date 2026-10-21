@@ -390,9 +390,10 @@ def exact_source_tree(source_pr, source_commit):
         raise Denied("source commit is not exact open PR head against main")
 
     commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{source_commit}")
-    if commit.get("sha") != source_commit:
-        raise Denied("source commit identity mismatch")
-    root_tree = valid_sha(commit.get("tree", {}).get("sha"), "source root tree")
+    commit_tree = commit.get("tree")
+    if commit.get("sha") != source_commit or not isinstance(commit_tree, dict):
+        raise Denied("source commit identity/tree mismatch")
+    root_tree = valid_sha(commit_tree.get("sha"), "source root tree")
     tree = gh_api(f"repos/{SOURCE_REPO}/git/trees/{root_tree}?recursive=1")
     entries = tree.get("tree")
     if (tree.get("sha") != root_tree or tree.get("truncated") is not False
@@ -459,8 +460,10 @@ def recheck_source_snapshot(source_pr, source_commit, expected_tree):
         raise Denied("source PR head changed during transfer")
 
     commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{source_commit}")
+    commit_tree = commit.get("tree")
     if (commit.get("sha") != source_commit
-            or commit.get("tree", {}).get("sha") != expected_tree):
+            or not isinstance(commit_tree, dict)
+            or commit_tree.get("sha") != expected_tree):
         raise Denied("source commit/tree changed during transfer")
 
 
