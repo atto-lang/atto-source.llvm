@@ -274,19 +274,21 @@ public:
             } else if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
-            }
-            if (accept("module")) {
+            } else if (accept("module")) {
                 program.module = identifier();
                 accept("as");
                 wrapped_module = true;
-            } else if (token_.text != "pub") {
-                if (accept("kernel")) program.kernels.push_back(hat_kernel_declaration(false));
-                else if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
-                    require("actor");
-                    fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'module', 'class' or 'actor'");
+            } else if (accept("kernel")) {
+                program.kernels.push_back(hat_kernel_declaration(false));
+            } else if (accept("class")) {
+                program.classes.push_back(class_declaration());
+            } else if (accept("actor")) {
+                program.actors.push_back(actor_declaration());
+            } else if (accept_transform_pipe_modifier()) {
+                require("actor");
+                fail("native transform-pipe actor requires typed pipeline role and transport lowering");
+            } else {
+                fail("expected 'module', 'kernel', 'class' or 'actor'");
             }
         }
         while (token_.kind != Kind::End
@@ -298,14 +300,18 @@ public:
                 } else if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
-                }
-                if (accept("kernel")) program.kernels.push_back(hat_kernel_declaration(false));
-                else if (accept("class")) program.classes.push_back(class_declaration());
-                else if (accept("actor")) program.actors.push_back(actor_declaration());
-                else if (accept_transform_pipe_modifier()) {
+                } else if (accept("kernel")) {
+                    program.kernels.push_back(hat_kernel_declaration(false));
+                } else if (accept("class")) {
+                    program.classes.push_back(class_declaration());
+                } else if (accept("actor")) {
+                    program.actors.push_back(actor_declaration());
+                } else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
+                } else {
+                    fail("expected 'kernel', 'class' or 'actor'");
+                }
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
