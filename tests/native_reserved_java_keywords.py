@@ -115,6 +115,11 @@ CASES = {
         "pub fnc main(int x): int { return task { return read(rt borrow x); }; }",
         "native execution task lowering unsupported",
     ),
+    "task-borrowed-classic-for-initializer": (
+        "pub fnc main(int owner): int { "
+        "return task { for (val loop = rt borrow owner; false; ) {} return 0; }; }",
+        "native execution task lowering unsupported",
+    ),
     "nested-task-borrow": (
         "pub fnc main(int x): int { return task { return task { return rt borrow x; }; }; }",
         "native execution task lowering unsupported",
