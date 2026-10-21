@@ -120,15 +120,14 @@ int main() {
         parent, invalid_decision, {EffectKind::Throw, 1}, "throw"));
     hooks.decision = static_cast<SupervisorControlTurn::Decision>(0xff);
     CHECK(parent.admit_turn(hooks, true) == Admitted::Control);
-    CHECK(hooks.last == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last == SupervisorFailureLane::Kind::Throw);
     CHECK(hooks.last_origin == SupervisorFailureLane::Kind::Throw);
     CHECK(hooks.last_code == 1);
     CHECK(hooks.escalations == 1);
     CHECK(parent.restarts_used() == 0);
     CHECK(parent.reserved_count() == 0);
 
-    // An ordinary unhandled Raise is delivered as actor-terminal Panic,
-    // preserving the original typed supervisor CONTROL provenance.
+    // An ordinary unhandled Raise remains a typed Raise CONTROL event.
     hooks.decision = SupervisorControlTurn::Decision::Acknowledge;
     const Key raised{"child-unhandled-raise", 17};
     parent.reserve_child(raised);
@@ -138,7 +137,7 @@ int main() {
     const int before_raised = hooks.callbacks;
     CHECK(parent.admit_turn(hooks, true) == Admitted::Control);
     CHECK(hooks.callbacks == before_raised + 1);
-    CHECK(hooks.last == SupervisorFailureLane::Kind::Panic);
+    CHECK(hooks.last == SupervisorFailureLane::Kind::Raise);
     CHECK(hooks.last_origin == SupervisorFailureLane::Kind::Raise);
     CHECK(hooks.last_code == 44);
     CHECK(!parent.urgent() && parent.reserved_count() == 0);
