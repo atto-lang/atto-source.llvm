@@ -1,10 +1,27 @@
 #include "oreslang/runtime/BoundedActorPort.hpp"
 
+#include <cstdlib>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <type_traits>
 
 using oreslang::runtime::BoundedActorPort;
+static bool fail_next_allocation = false;
+
+void* operator new(std::size_t size) {
+    if (fail_next_allocation) {
+        fail_next_allocation = false;
+        throw std::bad_alloc();
+    }
+    if (void* memory = std::malloc(size)) return memory;
+    throw std::bad_alloc();
+}
+
+void operator delete(void* memory) noexcept {
+    std::free(memory);
+}
+
 struct MoveOnly {
     std::unique_ptr<int> item;
     explicit MoveOnly(int n) : item(std::make_unique<int>(n)) {}
@@ -43,6 +60,29 @@ int main() {
     check(port.used_frames() == 0 && port.used_bytes() == 0);
     // close seals admission, including after earlier close failure
     rejected([&] { (void)port.offer(std::move(second), 32); });
+
+    // Any fallible allocation during admission must occur before the
+    // sender is moved. A failed offer therefore leaves caller ownership and
+    // quota accounting intact, and a subsequent retry can succeed.
+    BoundedActorPort<MoveOnly> allocation_failure(1, 32);
+    MoveOnly retryable(99);
+    fail_next_allocation = true;
+    bool allocation_rejected = false;
+    try {
+        (void)allocation_failure.offer(std::move(retryable), 16);
+    } catch (const std::bad_alloc&) {
+        allocation_rejected = true;
+    }
+    check(allocation_rejected);
+    check(retryable.item != nullptr && *retryable.item == 99);
+    check(allocation_failure.used_frames() == 0
+          && allocation_failure.used_bytes() == 0);
+    check(allocation_failure.offer(std::move(retryable), 16));
+    check(retryable.item == nullptr);
+    auto retried = allocation_failure.try_receive();
+    check(retried && *retried->value().item == 99);
+    check(retried->acknowledge_released());
+    allocation_failure.close();
 
     BoundedActorPort<MoveOnly> abandoned(1, 16);
     MoveOnly forgotten(1);
