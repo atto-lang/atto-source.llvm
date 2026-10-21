@@ -34,9 +34,8 @@ define actor Box as {
   }
 }
 )";
-    Program read = parse_program(read_source);
     auto read_evidence = SourceOwnershipChecker::issue_actor_state_ref_evidence(
-        read, "Box", "root", ManagedRefAccess::Read, REGION, true);
+        read_source, "Box", "root", ManagedRefAccess::Read, REGION, true);
     auto read_verified = verify_actor_compressed32(read_evidence);
     CHECK(read_verified.access() == ManagedRefAccess::Read);
 
@@ -54,23 +53,22 @@ define actor Box as {
   }
 }
 )";
-    Program write = parse_program(write_source);
     auto write_evidence = SourceOwnershipChecker::issue_actor_state_ref_evidence(
-        write, "Box", "root", ManagedRefAccess::Write, REGION, true);
+        write_source, "Box", "root", ManagedRefAccess::Write, REGION, true);
     auto write_verified = verify_actor_compressed32(write_evidence);
     CHECK(write_verified.access() == ManagedRefAccess::Write);
 
     rejects([&] {
         (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            write, "Box", "root", ManagedRefAccess::Read, REGION, true);
+            write_source, "Box", "root", ManagedRefAccess::Read, REGION, true);
     });
     rejects([&] {
         (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            read, "Box", "root", ManagedRefAccess::Read, 0, true);
+            read_source, "Box", "root", ManagedRefAccess::Read, 0, true);
     });
     rejects([&] {
         (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            read, "Box", "root", ManagedRefAccess::Read, REGION, false);
+            read_source, "Box", "root", ManagedRefAccess::Read, REGION, false);
     });
 
     const std::string noncritical = R"(
@@ -84,10 +82,9 @@ define actor Box as {
   }
 }
 )";
-    Program ordinary = parse_program(noncritical);
     rejects([&] {
         (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            ordinary, "Box", "root", ManagedRefAccess::Read, REGION, true);
+            noncritical, "Box", "root", ManagedRefAccess::Read, REGION, true);
     });
 
     const std::string scalar = R"(
@@ -101,10 +98,9 @@ define actor Box as {
   }
 }
 )";
-    Program scalar_program = parse_program(scalar);
     rejects([&] {
         (void) SourceOwnershipChecker::issue_actor_state_ref_evidence(
-            scalar_program, "Box", "root", ManagedRefAccess::Read, REGION, true);
+            scalar, "Box", "root", ManagedRefAccess::Read, REGION, true);
     });
 
     static_assert(!std::is_constructible<ActorRefOwnershipEvidence,
