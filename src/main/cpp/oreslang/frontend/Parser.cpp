@@ -1913,7 +1913,7 @@ private:
                         "sealed actor state requires exactly one scoped state callback");
                 if (!method.has_declared_effects)
                     throw std::runtime_error(
-                        "actor state loan requires declared using effect bound");
+                        "actor state loan requires declared with effect bound");
 
                 const auto& loan = *method.actor_state_loan;
                 if (loan.binder.empty() || loan.binder == parameter)
