@@ -85,6 +85,14 @@ public:
         }
     }
 
+    // Bind a receipt to exactly the actor incarnation being retired.
+    // Continuation-specific completion does NOT replace the registry's duty
+    // to pin every other suspended continuation and live child/FFI loan.
+    bool belongs_to(std::uint64_t actor_id, std::uint64_t generation) const noexcept {
+        return actor_id != 0 && generation != 0 && ticket_.continuation_id != 0
+            && ticket_.actor_id == actor_id && ticket_.actor_generation == generation;
+    }
+
     Phase phase() const noexcept { return phase_.load(std::memory_order_acquire); }
     bool ready_for_reclaim() const noexcept { return phase() == Phase::completed; }
     bool incomplete() const noexcept { return phase() == Phase::cleanup_incomplete; }
