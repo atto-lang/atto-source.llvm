@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -11,7 +12,8 @@ using oreslang::formal::NativeScalarSmt;
 static std::string read_source(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("cannot open native proof fixture");
-    return std::string(std::istreambuf_iterator<char>(in), {});
+    return std::string(std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>());
 }
 static void save(const fs::path& path, const std::string& contents) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
