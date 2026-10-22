@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <new>
 #include <stdexcept>
 #include <type_traits>
@@ -175,6 +176,91 @@ static void test_transient_bump_tail_reuse_with_persistent_fields() {
           "interior/tail free invalidated persistent handle");
 }
 
+static void test_coalesced_interior_holes_preserve_live_actor_payloads() {
+    using Tiny = ActorOwnedHeap<128, 8>;
+    Tiny heap(104);
+    const auto anchor = heap.allocate(16, 8);
+    const auto middle1 = heap.allocate(16, 8);
+    const auto middle2 = heap.allocate(16, 8);
+    const auto tail = heap.allocate(16, 8);
+    check(anchor && middle1 && middle2 && tail, "bounded hole setup");
+    check(heap.write(*anchor, std::uint64_t{0x1122334455667788ULL}),
+          "persistent actor payload write");
+    check(heap.write(*tail, std::uint64_t{0xAABBCCDDEEFF0011ULL}),
+          "tail actor payload write");
+    const auto used_before = heap.used();
+
+    check(heap.remove(*middle1), "free first middle object");
+    check(heap.remove(*middle2), "free second middle object");
+    check(heap.used() == used_before, "interior frees must not move bump tail");
+    check(!heap.read<std::uint64_t>(*middle1)
+          && !heap.read<std::uint64_t>(*middle2),
+          "generations retired before hole reclamation");
+
+    // A 32-byte request must fit the two coalesced 16-byte holes. It must
+    // not consume new bump bytes or relocate either live object.
+    const auto replacement = heap.allocate(32, 8);
+    check(replacement.has_value(), "neighboring holes failed to coalesce");
+    check(heap.used() == used_before, "coalesced allocation grew actor bump");
+    check(heap.read<std::uint64_t>(*replacement).value() == 0,
+          "reused interior extent must be zero-filled");
+    check(heap.read<std::uint64_t>(*anchor).value() == 0x1122334455667788ULL,
+          "persistent field changed after hole reuse");
+    check(heap.read<std::uint64_t>(*tail).value() == 0xAABBCCDDEEFF0011ULL,
+          "live actor tail moved during interior reuse");
+    check(heap.remove(*replacement), "drop reused interior extent");
+    check(heap.remove(*tail), "release bump tail");
+    check(heap.used() == 16,
+          "tail rewind must consume adjacent coalesced hole");
+    check(heap.remove(*anchor), "final persistent field reclamation");
+    check(heap.used() == 0, "final drain failed to recycle actor heap");
+}
+
+static void test_randomized_interior_reclamation_preserves_stale_fences() {
+    using Tiny = ActorOwnedHeap<512, 8>;
+    Tiny heap(105);
+    std::array<std::optional<Tiny::Handle>, 8> active{};
+    std::array<std::uint64_t, 8> values{};
+    std::optional<Tiny::Handle> stale{};
+    std::uint32_t state = 0xBEEFCAFEu;
+    auto random = [&]() noexcept {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    };
+    for (int step = 0; step < 50000; ++step) {
+        const std::size_t choice = random() % active.size();
+        if (active[choice]) {
+            stale = *active[choice];
+            check(heap.remove(*active[choice]), "seeded drop rejected valid handle");
+            active[choice].reset();
+        } else {
+            const std::size_t width = 8 + (random() % 40);
+            const std::size_t alignment = std::size_t{1} << (random() % 5);
+            const auto h = heap.allocate(width, alignment);
+            if (h) {
+                values[choice] = std::uint64_t(random()) + 1;
+                check(heap.write(*h, values[choice]), "seeded actor payload write");
+                active[choice] = h;
+            }
+        }
+        std::size_t alive = 0;
+        for (std::size_t i = 0; i < active.size(); ++i) {
+            if (!active[i]) continue;
+            ++alive;
+            const auto value = heap.read<std::uint64_t>(*active[i]);
+            check(value && *value == values[i],
+                  "interior reclamation overlapped or corrupted a live actor");
+        }
+        check(heap.live_allocations() == alive,
+              "model/live actor slot accounting mismatch");
+        check(heap.used() <= Tiny::capacity, "actor byte budget overflowed");
+        if (stale) check(!heap.read<std::uint64_t>(*stale),
+                         "previously freed generational identity revived");
+    }
+}
+
 static void test_heap_address_reuse_aba() {
     alignas(Heap) unsigned char storage[sizeof(Heap)];
     Heap* former = new (storage) Heap(33);
@@ -248,6 +334,8 @@ int main() {
         test_heap_address_reuse_aba();
         test_long_lived_actor_full_drain_recycles_bytes_without_aba();
         test_transient_bump_tail_reuse_with_persistent_fields();
+        test_coalesced_interior_holes_preserve_live_actor_payloads();
+        test_randomized_interior_reclamation_preserves_stale_fences();
         std::cout << "PASS native actor-owned byte heap contracts\n";
         return 0;
     } catch (const std::exception& failure) {
