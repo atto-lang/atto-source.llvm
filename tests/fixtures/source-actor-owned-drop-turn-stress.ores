@@ -1,0 +1,12 @@
+// Source actor compiled independently from the mailbox scheduler. The native
+// test driver executes this *generated handler* in 10,000 admitted turns,
+// retaining one persistent field and reusing exactly two owned native slots.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    const previous: owned int = total + n;
+    const doubled: owned int = previous + previous;
+    total = doubled;
+    return total;
+  }
+}
