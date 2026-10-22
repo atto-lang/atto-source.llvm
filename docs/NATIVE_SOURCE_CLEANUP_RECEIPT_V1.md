@@ -1,0 +1,78 @@
+# Native source-cleanup receipt v1 (host prerequisite; not guest lowering)
+
+Java/Graal PR [#1887](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1887)
+separates a cancellation request from an authenticated, physically completed
+SourceTask cleanup. Native LLVM must preserve the same distinction.
+
+## New bounded host substrate
+
+`NativeSourceCleanupGate` is an allocation-free atomic state machine. A
+`NativeSourceCleanupTicket` binds actor ID, actor incarnation, and continuation
+ID to prevent stale or cross-incarnation control operations.
+
+| State | Legal transitions | Physical actor reclaim? |
+| --- | --- | --- |
+| pending | complete_normally or request_cancel | no |
+| cancel_requested | try_claim_cleanup or fail_cleanup | no |
+| cleanup_running | yield_cleanup, complete_cleanup or fail_cleanup | no |
+| cleanup_yielded | try_claim_cleanup or fail_cleanup | no |
+| completed | none | yes, subject to remaining registry/finalizer barriers |
+| cleanup_incomplete | none | **never** |
+
+`request_cancel` cannot publish completed DONE. A cleanup turn may yield
+to `await` and then be claimed again by the scheduler. Scheduler shutdown,
+exhaustion, missing cleanup carrier or fatal cleanup raises
+`cleanup_incomplete`; completing it retroactively is forbidden. The caller
+must not invoke `complete_cleanup` until the compiler/runtime has actually
+run LIFO defers/finally, closed iterators exactly once, retired lexical
+mutex guards/loans and reconciled FFI/I/O pins. **These are obligations, not
+yet independently verified by this state machine.**
+
+`NativeActorRetirementBarrier` accepts an *optional* shared cleanup gate.
+With one installed, resource closers and `get_done()` are withheld until
+the gate reports completion AND the existing group execution finalizer,
+loans, callbacks and resource registry are safe. An incomplete gate
+reports `Poll::cleanup_incomplete` without publishing DONE or invoking
+any allocation closer. The barrier intentionally retains the registry;
+its fail-closed emergency-retention destructor is not a substitute for
+supervised, bounded quarantine and isolate teardown.
+
+## Native tests added
+
+- Exactly one winner for concurrent normal-completion versus cancellation
+  (800 adversarial pairings per CTest invocation).
+- Stale actor/continuation ticket rejection and duplicate claim denial.
+- Three successive cleanup yield/reclaim cycles before physical completion.
+- Fatal/incomplete cleanup can never be converted into a completed receipt.
+- Actual actor resource-registry and ActorGroup `get_done()` integration
+  refuses reclamation on cancel request or yielded cleanup and admits it
+  after an explicit completed receipt.
+- Incomplete cleanup forbids native arena release and falsely successful DONE.
+
+## Not yet implemented; hard merge gates
+
+1. **LLVM frontend/compiler lowering:** Native source `Task`, `await`,
+   `defer`, `finally`, `recover` and iterator close must be lowered into
+   heap-owned continuation frames and explicit verified cleanup turns.
+   Current unsupported source forms must continue to fail before emitting IR.
+2. **Trusted continuation authority:** Connect receipts to actual
+   `NativeContinuationStore` generations, `NativeActorScheduler` owner
+   execution lanes, supervisor CONTROL stop handling and actor incarnation
+   fencing; guest code must not call these host APIs directly.
+3. **Physical admission after STOP:** Provide a bounded *cleanup-only* carrier
+   path after normal actor admission shuts, with strict single-flight guest
+   execution and no guest catch/trap interception of cancellation/panic.
+4. **Quarantine/FFI:** Broker ACK, live borrow/loan, callbacks, child Tasks,
+   native arena and native destruction must join before a positive receipt;
+   isolate-level verified shutdown must handle cleanup failures without UAF.
+5. **Executable differential tests:** Compile actual positive/negative
+   `.ores` fixtures on Java/Graal and LLVM with identical task/fault behavior,
+   including cancellation-before-start, cancellation at await, cleanup
+   re-suspension, close-once, panic dominance and actor-stop races.
+6. **Exact-head execution:** Full native CMake/CTest, GCC/Clang,
+   ASan/UBSan/TSan (where supported), compiled guest LLVM IR/object/native
+   binaries and GraalVM JDK25 + Native Image on permitted runners. Zero-step
+   Actions failures are runner evidence only, not test evidence.
+
+No private-source cross-org Git mirror is permitted until reviewed policy
+and destination authorization allow it. This change stays DRAFT.
