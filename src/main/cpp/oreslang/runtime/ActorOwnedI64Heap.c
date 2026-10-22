@@ -247,6 +247,8 @@ void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
     lock_heap(heap);
     OresActorTurn turn = {domain, epoch};
     require_turn(heap, turn);
+    // First-turn constructor initialization authority expires on leave.
+    if (heap->turn_epoch != 1) rejected();
     if (index >= heap->capacity) rejected();
     ActorSlot* field = &heap->slots[index];
     // Unlike an ordinary slot, source-level actor fields are initialized
@@ -264,6 +266,8 @@ void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
     lock_heap(heap);
     OresActorTurn turn = {domain, epoch};
     require_turn(heap, turn);
+    // First-turn constructor initialization authority expires on leave.
+    if (heap->turn_epoch != 1) rejected();
     if (index >= heap->capacity) rejected();
     ActorSlot* field = &heap->slots[index];
     if (field->live || field->generation != 1) rejected();
