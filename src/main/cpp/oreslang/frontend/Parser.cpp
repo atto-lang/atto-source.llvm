@@ -412,6 +412,8 @@ private:
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
             if (token_.text == "const") {
+                if (!method.actor_field_writes.empty())
+                    fail("native actor owned temporaries must precede field writes");
                 if (!experimental_owned_int_)
                     fail("experimental owned int requires --experimental-owned-int");
                 LocalBinding local;
@@ -447,6 +449,15 @@ private:
         }
         require("return");
         method.result = expression();
+        if (!method.locals.empty()) {
+            // This slice has one drop epilogue. No taken/moved or borrowed
+            // reference can escape the handler in its scalar return value.
+            if (!native_constructor_scalar_tree(*method.result))
+                fail("native actor owned temporary return requires pure scalar expression");
+            for (const auto& write : method.actor_field_writes)
+                if (!native_constructor_scalar_tree(*write.expression))
+                    fail("native actor owned temporary field write requires pure scalar expression");
+        }
         require(";");
         require("}");
         actor.on_message = std::move(method);
