@@ -135,3 +135,16 @@ transport, or cross-actor raw compact-field copies. The source compiler
 does not yet mint general graph references from parsed Oreslang programs.
 Permanent quarantine also limits allocation churn in long-lived actors;
 proof-based safe reuse or versioned reference layouts need separate work.
+
+## Checked physical field-layout proof
+
+LLVM graph-edge lowering no longer takes a raw numeric reference-field offset.
+`VerifiedCompressedRefField` is issued only after verifying that every
+compiler-generated field has a nonzero size, fits inside the object allocation,
+and does not overlap another field. Compressed fields must be aligned 4-byte
+references and the designated field must actually be a reference. This
+prevents the concrete overlap regression: an i64 at bytes 0..7 and an i32
+reference at bytes 4..7 must be rejected; offset 8 is valid.
+
+Source HIR still needs to supply trusted layout metadata. This verifier
+cannot itself authenticate ownership/provenance of guest-origin data.
