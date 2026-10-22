@@ -4,7 +4,8 @@ define actor Worker as {
 }
 pub fnc main(): int {
   const worker = spawn Worker();
+  const retained: int = 7;
   await worker.get_ready();
   stop worker;
-  return 42;
+  return retained;
 }

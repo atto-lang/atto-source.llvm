@@ -1,5 +1,8 @@
 #pragma once
 
+#include "oreslang/runtime/ActorHeapIdentity.hpp"
+#include "oreslang/runtime/ManagedRef.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -57,6 +60,7 @@ private:
     std::size_t used_ = 0;
     std::size_t live_count_ = 0;
     const std::uint64_t actor_id_;
+    const OresNativeAllocationDomainRef allocation_domain_;
     const std::uint64_t heap_identity_;
     std::uint64_t incarnation_ = 1;
     bool retired_ = false;
@@ -79,8 +83,32 @@ private:
     }
 
 public:
+    /*
+     * Preferred runtime constructor: heap ownership is the authenticated actor
+     * allocation capability, never the transient logical execution id.
+     */
+    explicit ActorOwnedHeap(OresNativeAllocationDomainRef allocation_domain)
+        : actor_id_(allocation_domain.owner),
+          allocation_domain_(allocation_domain),
+          heap_identity_(new_identity()) {
+        if (allocation_domain.kind != ORES_ALLOCATION_DOMAIN_ACTOR
+                || allocation_domain.domain == 0
+                || allocation_domain.generation == 0)
+            throw std::invalid_argument("invalid actor allocation domain");
+    }
+
+    explicit ActorOwnedHeap(ActorHeapIdentity identity)
+        : ActorOwnedHeap(actor_allocation_domain(identity)) {}
+
+    /*
+     * Legacy host-only prototype constructor. It intentionally carries no
+     * authenticated runtime allocation capability; new runtime integrations
+     * must use ActorHeapIdentity or OresNativeAllocationDomainRef.
+     */
     explicit ActorOwnedHeap(std::uint64_t actor_id)
-        : actor_id_(actor_id), heap_identity_(new_identity()) {
+        : actor_id_(actor_id),
+          allocation_domain_{ORES_ALLOCATION_DOMAIN_NONE, 0, 0, 0},
+          heap_identity_(new_identity()) {
         if (actor_id == 0) throw std::invalid_argument("zero actor id");
     }
 
@@ -90,10 +118,46 @@ public:
     ActorOwnedHeap& operator=(ActorOwnedHeap&&) = delete;
 
     std::uint64_t actor_id() const noexcept { return actor_id_; }
+    OresNativeAllocationDomainRef allocation_domain() const noexcept {
+        return allocation_domain_;
+    }
+    bool allocation_domain_bound() const noexcept {
+        return allocation_domain_.kind == ORES_ALLOCATION_DOMAIN_ACTOR;
+    }
     std::size_t used() const noexcept { return used_; }
     std::size_t live_allocations() const noexcept { return live_count_; }
     bool retired() const noexcept { return retired_; }
     static constexpr std::size_t capacity = Bytes;
+
+    // 4-byte actor-relative location for compiler-managed object fields. A
+    // CompactRef is NOT a capability: it contains no actor/heap identity,
+    // generation or authorization. Never send it to another actor, put it on
+    // the wire, or decode it without the original lifetime/provenance proof.
+    // The native FFI and ActorRef ABI remain pointer-width independent.
+    using CompactRef = CompressedActorRef;
+    static_assert(sizeof(CompactRef) == 4, "actor-local edge must occupy four bytes");
+
+    // Turn a currently live, generationally checked heap allocation into a
+    // compact local offset. Only 8-byte-aligned object starts are representable
+    // in this mode; other alignments must use a native64/handle representation.
+    std::optional<CompactRef> compact(const Handle& handle) const noexcept {
+        if (!valid(handle)) return std::nullopt;
+        const auto base = reinterpret_cast<std::uintptr_t>(memory_.data());
+        const auto offset = slots_[handle.slot_].offset;
+        if (offset >= Bytes || base > std::numeric_limits<std::uintptr_t>::max() - offset)
+            return std::nullopt;
+        return CompactRef::encode(base, Bytes, base + offset);
+    }
+
+    // Validated bridge for runtimes maintaining the ORIGINAL complete Handle
+    // alongside a compact edge (e.g. an out-of-line generation table). Never
+    // construct a fresh proof by resolving the offset: that would reintroduce
+    // ABA after slot reuse. This function does not disclose host raw pointers.
+    bool compact_matches(const Handle& original, CompactRef ref) const noexcept {
+        if (ref.is_null()) return false;
+        const auto expected = compact(original);
+        return expected.has_value() && *expected == ref;
+    }
 
     // Allocation does not call malloc or invoke any GC. It fails closed under
     // fixed slot/byte limits. Never expose a raw pointer to actor memory.

@@ -51,7 +51,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "quantum", "over", "structural", "int", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
         "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -116,12 +116,23 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
-            at_ += 2;
-            return {Kind::Symbol, source_.substr(start, 2), start};
+        // Contiguous comparison/logical operators are single tokens, matching
+        // the Java/Graal precedence grammar.
+        for (std::string_view op : {"==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+            if (source_.substr(at_, 2) == op) {
+                at_ += 2;
+                return {Kind::Symbol, source_.substr(start, 2), start};
+            }
         }
-        if (std::string_view("(){},:;+-*/%=.<>").find(ch) != std::string_view::npos) {
+        if (ch == '@' && source_.substr(start, 15) == "@DefaultArgVals") {
+            throw std::runtime_error("native @DefaultArgVals declaration requires "
+                                     "checked named defaults, ownership and ABI lowering at byte "
+                                     + std::to_string(start));
+        }
+        // Admit '@' as a TOKEN only so existing parameter-local @Default guards
+        // can issue their specific fail-closed diagnostic instead of a generic
+        // unsupported-token error. No annotation execution is enabled.
+        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -142,11 +153,22 @@ std::unique_ptr<Expression> make_expression(Expression::Kind kind,
     return result;
 }
 
+inline constexpr std::size_t kMaxNativeExpressionDepth = 64;
+
+inline void require_expression_depth(std::size_t depth, std::size_t offset) {
+    if (depth > kMaxNativeExpressionDepth) {
+        throw std::runtime_error(
+            "native expression nesting limit exceeded (64) at byte " +
+            std::to_string(offset));
+    }
+}
+
 // The first native terminal-try slice has no exceptional CFG. Restrict
 // protected return/guard expressions to primitive values or an addressable,
 // ownership-checked class field read: no nested calls or ownership transfers.
 bool nonthrowing_protected_read(const Expression& expr) {
     if (expr.kind == Expression::Kind::Integer ||
+            expr.kind == Expression::Kind::Boolean ||
             expr.kind == Expression::Kind::Variable) return true;
     return expr.kind == Expression::Kind::Field && expr.left &&
            expr.left->kind == Expression::Kind::Variable;
@@ -154,16 +176,36 @@ bool nonthrowing_protected_read(const Expression& expr) {
 
 // Arithmetic over checked scalar reads is nonthrowing. Never admit
 // general calls, array mutations, ownership transfers, or suspension.
-bool native_pure_scalar_tree(const Expression& expr) {
+bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     if (nonthrowing_protected_read(expr)) return true;
-    if (expr.kind == Expression::Kind::Negate)
-        return expr.left && native_pure_scalar_tree(*expr.left);
+    if (expr.kind == Expression::Kind::Negate ||
+            expr.kind == Expression::Kind::LogicalNot)
+        return expr.left && native_pure_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
-            expr.kind == Expression::Kind::Multiply)
+            expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Equal ||
+            expr.kind == Expression::Kind::NotEqual ||
+            expr.kind == Expression::Kind::Less ||
+            expr.kind == Expression::Kind::LessEqual ||
+            expr.kind == Expression::Kind::Greater ||
+            expr.kind == Expression::Kind::GreaterEqual ||
+            expr.kind == Expression::Kind::LogicalAnd ||
+            expr.kind == Expression::Kind::LogicalOr ||
+            expr.kind == Expression::Kind::LogicalXor)
         return expr.left && expr.right &&
-            native_pure_scalar_tree(*expr.left) &&
-            native_pure_scalar_tree(*expr.right);
+            native_pure_scalar_tree(*expr.left, depth + 1) &&
+            native_pure_scalar_tree(*expr.right, depth + 1);
+    if (expr.kind == Expression::Kind::Conditional)
+        return (expr.condition ||
+                (expr.condition_lhs && expr.condition_rhs)) &&
+            expr.when_true && expr.when_false &&
+            (!expr.condition || native_pure_scalar_tree(*expr.condition, depth + 1)) &&
+            (!expr.condition_lhs || native_pure_scalar_tree(*expr.condition_lhs, depth + 1)) &&
+            (!expr.condition_rhs || native_pure_scalar_tree(*expr.condition_rhs, depth + 1)) &&
+            native_pure_scalar_tree(*expr.when_true, depth + 1) &&
+            native_pure_scalar_tree(*expr.when_false, depth + 1);
     return false;
 }
 
@@ -171,6 +213,10 @@ struct NativeCallSignature {
     std::vector<std::string> parameters;
     std::vector<GenericParameter> generics;
     std::vector<std::string> parameter_generic_types;
+    std::vector<ScalarType> parameter_scalar_types;
+    std::vector<bool> parameter_is_scalar;
+    ScalarType return_type = ScalarType::I64;
+    bool returns_void = false;
 };
 using NativeSignatures = std::unordered_map<
     std::string, std::unordered_map<std::size_t, NativeCallSignature>>;
@@ -178,17 +224,53 @@ using NativeSignatures = std::unordered_map<
 // This proof is deliberately narrower than the general native scalar guard:
 // an unpublished constructor can read only integer literals and its own
 // explicitly typed scalar parameters, never arbitrary fields or operations.
-bool native_constructor_scalar_tree(const Expression& expr) {
+bool native_constructor_scalar_tree(const Expression& expr,
+                                    std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer || expr.kind == Kind::Variable) return true;
-    if (expr.kind == Kind::Negate)
-        return expr.left && native_constructor_scalar_tree(*expr.left);
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean ||
+            expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
+        return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
-            expr.kind == Kind::Multiply)
+            expr.kind == Kind::Multiply || expr.kind == Kind::Equal ||
+            expr.kind == Kind::NotEqual || expr.kind == Kind::Less ||
+            expr.kind == Kind::LessEqual || expr.kind == Kind::Greater ||
+            expr.kind == Kind::GreaterEqual || expr.kind == Kind::LogicalAnd ||
+            expr.kind == Kind::LogicalOr || expr.kind == Kind::LogicalXor)
         return expr.left && expr.right &&
-            native_constructor_scalar_tree(*expr.left) &&
-            native_constructor_scalar_tree(*expr.right);
+            native_constructor_scalar_tree(*expr.left, depth + 1) &&
+            native_constructor_scalar_tree(*expr.right, depth + 1);
+    if (expr.kind == Kind::Conditional)
+        return (expr.condition || (expr.condition_lhs && expr.condition_rhs)) &&
+            expr.when_true && expr.when_false &&
+            (!expr.condition || native_constructor_scalar_tree(*expr.condition, depth + 1)) &&
+            (!expr.condition_lhs || native_constructor_scalar_tree(*expr.condition_lhs, depth + 1)) &&
+            (!expr.condition_rhs || native_constructor_scalar_tree(*expr.condition_rhs, depth + 1)) &&
+            native_constructor_scalar_tree(*expr.when_true, depth + 1) &&
+            native_constructor_scalar_tree(*expr.when_false, depth + 1);
     return false;
+}
+
+// A runtime callable's code/signature must never be forged as a nominal
+// object or actor identity in the constrained native frontend.
+bool callable_nominal_name(std::string_view name) {
+    return name == "Callable" || name == "Fnc" || name == "Function"
+            || name == "Routine" || name == "Method";
+}
+
+// Entry is a compiler-owned nominal product in the Java/Graal frontend.
+// Until the native backend has a real two-slot representation, projection
+// ownership, value equality, transport traits and ABI tests, it must not be
+// forgeable as an ordinary user class/actor nominal.
+bool entry_builtin_name(std::string_view name) {
+    return name == "Entry";
+}
+
+[[noreturn]] void reject_native_entry_boundary(std::size_t offset) {
+    throw std::runtime_error(
+        "native Entry<K,V> requires nominal product lowering and ownership parity"
+        " at byte " + std::to_string(offset));
 }
 
 class Parser {
@@ -258,6 +340,10 @@ private:
         ActorDecl actor;
         actor.offset = token_.offset;
         actor.name = identifier();
+        if (callable_nominal_name(actor.name))
+            fail("callable signatures cannot be declared as nominal actor types");
+        if (entry_builtin_name(actor.name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
@@ -299,6 +385,10 @@ private:
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
+        if (accept("static")) {
+            if (accept("method")) fail("static method is invalid; use static fnc");
+            fail("native actor static fnc requires separate member lowering");
+        }
         if (!accept("fnc")) accept("method"); // optional method marker
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
@@ -306,6 +396,7 @@ private:
         method.name = identifier();
         if (method.name != "on_message") fail("native actor supports only on_message");
         require("(");
+        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
         require("int");
         Parameter param;
         param.name = identifier();
@@ -337,6 +428,10 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = identifier();
+        if (callable_nominal_name(result.name))
+            fail("callable signatures cannot be declared as nominal class types");
+        if (entry_builtin_name(result.name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal class type");
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
@@ -352,6 +447,8 @@ private:
                     do {
                         if (result.constructor_parameters.size() == 16)
                             fail("native scalar constructor parameter limit exceeded (16)");
+                        if (token_.text == "@")
+                            fail("native @Default constructor formal requires checked constant and constructor ABI lowering");
                         require("int");
                         std::string name = identifier();
                         if (!params.insert(name).second)
@@ -521,8 +618,8 @@ private:
         }
         if (exceptional_control(token_.text))
             fail("native exception/control effect unsupported");
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            fail("native accelerator lowering unsupported");
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            fail("native execution domain lowering unsupported");
         }
         if (token_.text == "suspends" || token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
@@ -574,33 +671,58 @@ private:
         require("(");
         if (!accept(")")) {
             do {
+                if (token_.text == "@")
+                    fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (!accept("int")) {
+                if (accept("int")) {
+                    parameter.scalar_type = ScalarType::I64;
+                } else if (accept("bool")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native bool borrow ABI is not yet admitted; pass bool by value");
+                    parameter.scalar_type = ScalarType::Bool;
+                } else {
+                    const std::size_t type_offset = token_.offset;
                     const std::string type = identifier();
+                    if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
                     if (generic) parameter.generic_type = type;
                     else parameter.class_name = type;
                 }
+                if (token_.text == "?")
+                    fail("native optional type '?' requires versioned Option/default ABI lowering");
                 parameter.name = identifier();
+                if (token_.text == "?")
+                    fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
             require(")");
         }
         require(":");
         value.returns_void = accept("void");
-        if (!value.returns_void && !accept("int")) {
-            const std::string type = identifier();
-            const bool generic = std::any_of(value.generic_parameters.begin(),
-                value.generic_parameters.end(),
-                [&](const GenericParameter& p) { return p.name == type; });
-            if (!generic) fail("native return type requires int or scalar generic slot");
+        if (!value.returns_void) {
+            if (accept("int")) {
+                value.return_type = ScalarType::I64;
+            } else if (accept("bool")) {
+                value.return_type = ScalarType::Bool;
+            } else {
+                const std::size_t type_offset = token_.offset;
+                const std::string type = identifier();
+                if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
+                const bool generic = std::any_of(value.generic_parameters.begin(),
+                    value.generic_parameters.end(),
+                    [&](const GenericParameter& p) { return p.name == type; });
+                if (!generic) fail("native return type requires int, bool or scalar generic slot");
+                value.return_type = ScalarType::I64;
+            }
         }
+        if (token_.text == "?")
+            fail("native optional return type '?' requires versioned Option/default ABI lowering");
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -701,10 +823,20 @@ private:
                         require(">");
                         fail("Future<T> requires native continuation lowering");
                     } else {
+                        if (token_.text == "Entry")
+                            reject_native_entry_boundary(token_.offset);
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
-                        require("int");
+                        if (accept("int")) {
+                            binding.scalar_type = ScalarType::I64;
+                        } else if (accept("bool")) {
+                            if (binding.heap_owned)
+                                fail("native owned bool region lowering is not admitted");
+                            binding.scalar_type = ScalarType::Bool;
+                        } else {
+                            fail("native scalar local requires int or bool");
+                        }
                     }
                 }
                 require("=");
@@ -727,7 +859,7 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires ': int'");
+                if (!explicit_type) fail("scalar local requires an explicit ': int' or ': bool' type");
                 binding.initializer = expression();
             }
             require(";");
@@ -770,7 +902,9 @@ private:
                     statement.branch_local->offset = statement.offset;
                     statement.branch_local->name = identifier();
                     require(":");
-                    require("int");
+                    if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
+                    else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
+                    else fail("native branch-local scalar requires int or bool");
                     require("=");
                     statement.branch_local->initializer = expression();
                     require(";");
@@ -944,24 +1078,19 @@ private:
                 const auto offset = token_.offset;
                 require("if");
                 require("(");
-                auto lhs = expression();
-                if (!accept("eq")) require("==");
-                auto rhs = expression();
-                if (terminal_try_finally &&
-                        (!nonthrowing_protected_read(*lhs) ||
-                         !nonthrowing_protected_read(*rhs)))
-                    fail("native protected try guard requires nonthrowing scalar/field reads");
+                auto condition = expression();
+                if (terminal_try_finally && !native_pure_scalar_tree(*condition))
+                    fail("native protected try guard requires a pure nonthrowing bool expression");
                 require(")");
                 require("{");
                 if (accept("return")) {
                     if (value.returns_void)
-                        fail("guarded early return requires int result");
+                        fail("guarded early return requires a scalar result");
                     if (value.early_returns.size() == 8)
                         fail("native guarded return limit exceeded (8)");
                     GuardedReturn guard;
                     guard.offset = offset;
-                    guard.lhs = std::move(lhs);
-                    guard.rhs = std::move(rhs);
+                    guard.condition = std::move(condition);
                     guard.result = expression();
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
@@ -980,8 +1109,7 @@ private:
                     Statement conditional;
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
-                    conditional.condition_lhs = std::move(lhs);
-                    conditional.condition_rhs = std::move(rhs);
+                    conditional.condition = std::move(condition);
                     conditional.then_statements = branch_arm();
                     require("}");
                     require("else");
@@ -995,6 +1123,22 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+            if (token_.text == "await") {
+                const std::size_t await_offset = token_.offset;
+                advance();
+                if (!value.ready_await_actor.empty())
+                    fail("native source supports only one await get_ready continuation");
+                if (!value.actor_actions.empty() || !value.statements.empty())
+                    fail("await get_ready must precede post-await actor effects");
+                value.ready_await_actor = identifier();
+                value.ready_await_offset = await_offset;
+                require(".");
+                require("get_ready");
+                require("(");
+                require(")");
+                require(";");
+                continue;
+            }
             if (token_.text != "defer" && exceptional_control(token_.text))
                 fail("native exception/control effect unsupported");
             if (accept("defer")) {
@@ -1145,7 +1289,102 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() { return conditional(); }
+
+    std::unique_ptr<Expression> conditional() {
+        if (++conditional_depth_ > kMaxNativeExpressionDepth) {
+            --conditional_depth_;
+            fail("native conditional expression nesting limit exceeded (64)");
+        }
+        struct ConditionalDepthGuard {
+            std::size_t& depth;
+            ~ConditionalDepthGuard() { --depth; }
+        } depth_guard{conditional_depth_};
+
+        auto condition = logical_or();
+        if (!accept("?")) return condition;
+
+        auto result = make_expression(Expression::Kind::Conditional, condition->offset);
+        result->condition = std::move(condition);
+        result->when_true = conditional();
+        require(":");
+        result->when_false = conditional();
+        return result;
+    }
+
+    std::unique_ptr<Expression> logical_or() {
+        auto left = logical_xor();
+        while (token_.text == "||") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalOr, offset);
+            expr->left = std::move(left);
+            expr->right = logical_xor();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_xor() {
+        auto left = logical_and();
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
+            expr->left = std::move(left);
+            expr->right = logical_and();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = equality();
+        while (token_.text == "&&") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
+            expr->left = std::move(left);
+            expr->right = equality();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> equality() {
+        auto left = comparison();
+        while (token_.text == "==" || token_.text == "eq" ||
+                token_.text == "!=" || token_.text == "neq") {
+            const auto offset = token_.offset;
+            const bool equal = token_.text == "==" || token_.text == "eq";
+            advance();
+            auto expr = make_expression(
+                equal ? Expression::Kind::Equal : Expression::Kind::NotEqual, offset);
+            expr->left = std::move(left);
+            expr->right = comparison();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> comparison() {
+        auto left = additive();
+        while (token_.text == "<" || token_.text == "<=" ||
+                token_.text == ">" || token_.text == ">=") {
+            const auto offset = token_.offset;
+            const auto op = token_.text;
+            advance();
+            auto kind = op == "<" ? Expression::Kind::Less
+                : op == "<=" ? Expression::Kind::LessEqual
+                : op == ">" ? Expression::Kind::Greater
+                : Expression::Kind::GreaterEqual;
+            auto expr = make_expression(kind, offset);
+            expr->left = std::move(left);
+            expr->right = additive();
+            left = std::move(expr);
+        }
+        return left;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
@@ -1185,6 +1424,15 @@ private:
     }
 
     std::unique_ptr<Expression> unary() {
+        if (++expression_depth_ > kMaxNativeExpressionDepth) {
+            --expression_depth_;
+            fail("native expression nesting limit exceeded (64)");
+        }
+        struct DepthGuard {
+            std::size_t& depth;
+            ~DepthGuard() { --depth; }
+        } depth_guard{expression_depth_};
+
         if (token_.text == "trap") {
             // Reserved for Option-valued ordinary-error capture. Reject it
             // before IR generation: accepting a normal value here would erase
@@ -1227,13 +1475,28 @@ private:
             expr->left = unary();
             return expr;
         }
+        if (token_.text == "!") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalNot, offset);
+            expr->left = unary();
+            return expr;
+        }
         return primary();
     }
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
         if (accept("(")) {
+            // Java/Graal's () is a zero-slot Tuple, not grouping.
+            // Native scalar lowering must reject all tuple arities before IR.
+            if (token_.text == ")") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
             auto inner = expression();
+            if (token_.text == ",") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
             require(")");
             return inner;
         }
@@ -1241,6 +1504,30 @@ private:
             auto expr = make_expression(Expression::Kind::Integer, offset);
             expr->integer = integer_literal();
             return expr;
+        }
+        if (token_.text == "true" || token_.text == "false") {
+            auto expr = make_expression(Expression::Kind::Boolean, offset);
+            expr->boolean = token_.text == "true";
+            advance();
+            return expr;
+        }
+        // Explicit brace tuples and nominal Entry values have no LLVM native
+        // product ABI. Do not lower them as scalars, and do not steal ordinary
+        // calls to a user function named tuple(...).
+        if (token_.text == "tuple") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "{") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
+        }
+        if (token_.text == "Entry") {
+            Lexer lookahead = lexer_;
+            const Token next = lookahead.next();
+            // '<' in native expressions is currently parsed as generic-call
+            // syntax, so Entry<...> must fail before scalar lowering.
+            if (next.text == "." || next.text == "<") {
+                fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
         }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
@@ -1253,7 +1540,8 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
-        if (accept("<")) {
+        if (generic_call_type_arguments_ahead()) {
+            require("<");
             expr->type_arguments_present = true;
             if (!accept(">")) {
                 bool seen_named = false;
@@ -1328,6 +1616,22 @@ private:
         return expr;
     }
 
+    bool generic_call_type_arguments_ahead() const {
+        if (token_.text != "<") return false;
+        Lexer probe = lexer_; // already positioned immediately after '<'
+        std::size_t budget = 0;
+        while (++budget <= 64) {
+            const Token next = probe.next();
+            if (next.kind == Kind::End) return false;
+            if (next.text == ">") return probe.next().text == "(";
+            if (next.text == "," || next.text == "=" || next.text == "_" ||
+                    next.text == "int" || next.kind == Kind::Identifier)
+                continue;
+            return false;
+        }
+        return false;
+    }
+
     bool named_argument_ahead() const {
         if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
         Lexer lookahead = lexer_;
@@ -1394,9 +1698,13 @@ private:
 
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
-                                    const NativeSignatures& functions) {
+                                    const NativeSignatures& functions,
+                                    std::size_t depth = 1) {
+        require_expression_depth(depth, expr.offset);
         switch (expr.kind) {
-            case Expression::Kind::Integer: return;
+            case Expression::Kind::Integer:
+            case Expression::Kind::Boolean:
+                return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
                     throw std::runtime_error("unknown parameter '" + expr.name
@@ -1404,12 +1712,12 @@ private:
                 }
                 return;
             case Expression::Kind::Field:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
-                    validate_expression(*arg, parameters, functions);
+                    validate_expression(*arg, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Call: {
                 const auto found = functions.find(expr.name);
@@ -1495,43 +1803,243 @@ private:
                                                  + formals[slot] + "'");
                     bound[slot] = true;
                     // Check nested calls in lexical order, not formal-slot order.
-                    validate_expression(*expr.arguments[i], parameters, functions);
+                    validate_expression(*expr.arguments[i], parameters, functions, depth + 1);
                 }
                 return;
             }
             case Expression::Kind::Negate:
+            case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
             case Expression::Kind::Borrow:
             case Expression::Kind::BorrowMut:
-                validate_expression(*expr.left, parameters, functions);
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
-                validate_expression(*expr.left, parameters, functions);
-                validate_expression(*expr.right, parameters, functions);
+            case Expression::Kind::Equal:
+            case Expression::Kind::NotEqual:
+            case Expression::Kind::Less:
+            case Expression::Kind::LessEqual:
+            case Expression::Kind::Greater:
+            case Expression::Kind::GreaterEqual:
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor:
+                validate_expression(*expr.left, parameters, functions, depth + 1);
+                validate_expression(*expr.right, parameters, functions, depth + 1);
+                return;
+            case Expression::Kind::Conditional:
+                if (expr.condition)
+                    validate_expression(*expr.condition, parameters, functions, depth + 1);
+                else {
+                    validate_expression(*expr.condition_lhs, parameters, functions, depth + 1);
+                    validate_expression(*expr.condition_rhs, parameters, functions, depth + 1);
+                }
+                validate_expression(*expr.when_true, parameters, functions, depth + 1);
+                validate_expression(*expr.when_false, parameters, functions, depth + 1);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
     }
 
-    static bool contains_callable_invocation(const Expression* expr) {
+    static const char* scalar_type_name(ScalarType type) {
+        return type == ScalarType::Bool ? "bool" : "int";
+    }
+
+    static ScalarType validate_scalar_expression(
+            const Expression& expr,
+            const std::unordered_map<std::string, ScalarType>& variables,
+            const NativeSignatures& functions,
+            std::size_t depth = 1) {
+        require_expression_depth(depth, expr.offset);
+        auto require_type = [&](ScalarType actual, ScalarType expected, std::string_view where) {
+            if (actual != expected)
+                throw std::runtime_error(std::string(where) + " requires " +
+                    scalar_type_name(expected) + ", got " + scalar_type_name(actual) +
+                    " at byte " + std::to_string(expr.offset));
+        };
+        switch (expr.kind) {
+            case Expression::Kind::Integer:
+                return ScalarType::I64;
+            case Expression::Kind::Boolean:
+                return ScalarType::Bool;
+            case Expression::Kind::Variable: {
+                const auto found = variables.find(expr.name);
+                // Non-scalar class/array/actor names are rejected by ownership
+                // if used as scalar values; treat their placeholder as i64 here
+                // only so field/borrow syntax can reach that stricter pass.
+                return found == variables.end() ? ScalarType::I64 : found->second;
+            }
+            case Expression::Kind::Field:
+                return ScalarType::I64;
+            case Expression::Kind::ArrayCall: {
+                const std::size_t expected = expr.name == "get" || expr.name == "add"
+                    ? 1 : expr.name == "set" ? 2 : 0;
+                if (expected == 0 || expr.arguments.size() != expected)
+                    throw std::runtime_error("unsupported native Array<int> scalar operation at byte " +
+                        std::to_string(expr.offset));
+                for (const auto& argument : expr.arguments) {
+                    const ScalarType actual = validate_scalar_expression(
+                        *argument, variables, functions, depth + 1);
+                    if (actual != ScalarType::I64)
+                        throw std::runtime_error("native Array<int> arguments require int, got " +
+                            std::string(scalar_type_name(actual)) + " at byte " +
+                            std::to_string(argument->offset));
+                }
+                return ScalarType::I64;
+            }
+            case Expression::Kind::Call: {
+                const auto family = functions.find(expr.name);
+                if (family == functions.end() ||
+                        !family->second.count(expr.arguments.size()))
+                    throw std::runtime_error("unknown function or wrong call arity '" +
+                        expr.name + "' at byte " + std::to_string(expr.offset));
+                const auto& signature = family->second.at(expr.arguments.size());
+                std::vector<bool> bound(signature.parameters.size(), false);
+                std::size_t positional = 0;
+                bool named_seen = false;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
+                    if (!label.empty()) {
+                        named_seen = true;
+                        auto it = std::find(signature.parameters.begin(),
+                            signature.parameters.end(), label);
+                        if (it == signature.parameters.end())
+                            throw std::runtime_error("unknown named argument '" + label + "'");
+                        slot = static_cast<std::size_t>(it - signature.parameters.begin());
+                    } else {
+                        if (named_seen)
+                            throw std::runtime_error("positional argument after named argument");
+                        ++positional;
+                    }
+                    if (slot >= signature.parameters.size() || bound[slot])
+                        throw std::runtime_error("duplicate native scalar argument binding");
+                    bound[slot] = true;
+                    const ScalarType actual = validate_scalar_expression(
+                        *expr.arguments[i], variables, functions, depth + 1);
+                    if (signature.parameter_is_scalar[slot] &&
+                            actual != signature.parameter_scalar_types[slot])
+                        throw std::runtime_error("argument '" + signature.parameters[slot] +
+                            "' requires " + scalar_type_name(signature.parameter_scalar_types[slot]) +
+                            ", got " + scalar_type_name(actual) + " at byte " +
+                            std::to_string(expr.arguments[i]->offset));
+                }
+                // Ownership/expression-context admission separately rejects
+                // a void call where a scalar value is required. Returning the
+                // placeholder here lets statement-position void calls reuse the
+                // exact same typed argument binder.
+                return signature.returns_void ? ScalarType::I64 : signature.return_type;
+            }
+            case Expression::Kind::Negate: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::I64, "unary '-'");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::LogicalNot: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::Bool, "logical '!'");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Copy:
+            case Expression::Kind::Take:
+            case Expression::Kind::Share:
+            case Expression::Kind::Borrow:
+            case Expression::Kind::BorrowMut:
+                return validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+            case Expression::Kind::Add:
+            case Expression::Kind::Subtract:
+            case Expression::Kind::Multiply: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::I64, "arithmetic");
+                require_type(right, ScalarType::I64, "arithmetic");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::Less:
+            case Expression::Kind::LessEqual:
+            case Expression::Kind::Greater:
+            case Expression::Kind::GreaterEqual: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::I64, "ordered comparison");
+                require_type(right, ScalarType::I64, "ordered comparison");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Equal:
+            case Expression::Kind::NotEqual: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                if (left != right)
+                    throw std::runtime_error("equality operands require the same scalar type at byte " +
+                        std::to_string(expr.offset));
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor: {
+                ScalarType left = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                ScalarType right = validate_scalar_expression(
+                    *expr.right, variables, functions, depth + 1);
+                require_type(left, ScalarType::Bool, "logical operator");
+                require_type(right, ScalarType::Bool, "logical operator");
+                return ScalarType::Bool;
+            }
+            case Expression::Kind::Conditional: {
+                ScalarType condition = expr.condition
+                    ? validate_scalar_expression(*expr.condition, variables, functions, depth + 1)
+                    : ScalarType::Bool;
+                require_type(condition, ScalarType::Bool, "ternary condition");
+                ScalarType when_true = validate_scalar_expression(
+                    *expr.when_true, variables, functions, depth + 1);
+                ScalarType when_false = validate_scalar_expression(
+                    *expr.when_false, variables, functions, depth + 1);
+                if (when_true != when_false)
+                    throw std::runtime_error("ternary arms require a common scalar type at byte " +
+                        std::to_string(expr.offset));
+                return when_true;
+            }
+        }
+        throw std::runtime_error("internal invalid native scalar expression kind");
+    }
+
+    static bool contains_callable_invocation(
+            const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
+        require_expression_depth(depth, expr->offset);
         if (expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
-        if (contains_callable_invocation(expr->left.get()) ||
-            contains_callable_invocation(expr->right.get())) return true;
+        if (contains_callable_invocation(expr->left.get(), depth + 1) ||
+            contains_callable_invocation(expr->right.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition_lhs.get(), depth + 1) ||
+            contains_callable_invocation(expr->condition_rhs.get(), depth + 1) ||
+            contains_callable_invocation(expr->when_true.get(), depth + 1) ||
+            contains_callable_invocation(expr->when_false.get(), depth + 1)) return true;
         for (const auto& item : expr->arguments)
-            if (contains_callable_invocation(item.get())) return true;
+            if (contains_callable_invocation(item.get(), depth + 1)) return true;
         return false;
     }
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
-        if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
-                || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
+        if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
+                || !fn.actor_sends.empty() || !fn.actor_stops.empty()
+                || !fn.actor_field_writes.empty()) {
             throw std::runtime_error(
                 "using effects on actor actions requires trusted actor effect summaries");
         }
@@ -1552,11 +2060,17 @@ private:
                 throw std::runtime_error(
                     "using effects require transitive call summaries");
         }
-        for (const auto& stmt : fn.statements) {
+        std::function<void(const Statement&)> validate_statement_effects;
+        validate_statement_effects = [&](const Statement& stmt) {
             if (stmt.kind == Statement::Kind::ArrayCommitFilled &&
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error("filled array commit violates using signature without alloc");
-            if (contains_callable_invocation(stmt.expression.get()))
+            if (contains_callable_invocation(stmt.expression.get()) ||
+                    contains_callable_invocation(stmt.condition.get()) ||
+                    contains_callable_invocation(stmt.condition_lhs.get()) ||
+                    contains_callable_invocation(stmt.condition_rhs.get()) ||
+                    (stmt.branch_local &&
+                        contains_callable_invocation(stmt.branch_local->initializer.get())))
                 throw std::runtime_error("using effects require transitive call summaries");
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
                 if (contains_callable_invocation(stmt.array_commit_length.get()))
@@ -1565,9 +2079,16 @@ private:
                     if (contains_callable_invocation(item.get()))
                         throw std::runtime_error("filled array commit requires pure scalar fills");
             }
-        }
+            for (const auto& nested : stmt.then_statements)
+                validate_statement_effects(nested);
+            for (const auto& nested : stmt.else_statements)
+                validate_statement_effects(nested);
+        };
+        for (const auto& stmt : fn.statements)
+            validate_statement_effects(stmt);
         for (const auto& guard : fn.early_returns)
-            if (contains_callable_invocation(guard.lhs.get()) ||
+            if (contains_callable_invocation(guard.condition.get()) ||
+                contains_callable_invocation(guard.lhs.get()) ||
                 contains_callable_invocation(guard.rhs.get()) ||
                 contains_callable_invocation(guard.result.get()))
                 throw std::runtime_error("using effects require transitive call summaries");
@@ -1618,7 +2139,12 @@ private:
             for (const auto& param : fn.parameters) {
                 signature.parameters.push_back(param.name);
                 signature.parameter_generic_types.push_back(param.generic_type);
+                signature.parameter_scalar_types.push_back(param.scalar_type);
+                signature.parameter_is_scalar.push_back(
+                    param.class_name.empty() && param.generic_type.empty());
             }
+            signature.return_type = fn.return_type;
+            signature.returns_void = fn.returns_void;
             if (!functions[fn.name].emplace(fn.parameters.size(), std::move(signature)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
@@ -1665,10 +2191,12 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
-            if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
+            if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
+                    || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
-                    throw std::runtime_error("source actor bootstrap requires zero-argument int main without early returns");
+                    throw std::runtime_error(
+                        "source actor bootstrap requires zero-argument int main without early returns");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
@@ -1677,6 +2205,28 @@ private:
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
+            }
+            if (!fn.ready_await_actor.empty()) {
+                /*
+                 * First executable suspension is deliberately tiny: one actor
+                 * capability, no scalar/class/array owner crossing suspension,
+                 * no defer/guard CFG, and no generic Future<T> representation.
+                 */
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "await get_ready requires one source actor without suspended locals");
+                if (!live_actors.count(fn.ready_await_actor))
+                    throw std::runtime_error(
+                        "await get_ready requires a live direct ActorRef receiver");
+                /*
+                 * The first vertical slice evaluates the final scalar result on
+                 * the root continuation before trusted-main stop. Keep that
+                 * movement observationally inert until stop itself can be
+                 * lowered into nonblocking continuation cleanup.
+                 */
+                if (contains_callable_invocation(fn.result.get()))
+                    throw std::runtime_error(
+                        "await get_ready requires side-effect-free scalar return");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
@@ -1717,8 +2267,11 @@ private:
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
                 if (stmt.kind == Statement::Kind::Conditional) {
-                    validate_expression(*stmt.condition_lhs, names, functions);
-                    validate_expression(*stmt.condition_rhs, names, functions);
+                    if (stmt.condition) validate_expression(*stmt.condition, names, functions);
+                    else {
+                        validate_expression(*stmt.condition_lhs, names, functions);
+                        validate_expression(*stmt.condition_rhs, names, functions);
+                    }
                     NameSet then_names = names;
                     NameSet else_names = names;
                     for (const auto& action : stmt.then_statements)
@@ -1783,20 +2336,133 @@ private:
                         fn.catch_binding + "'");
             }
             for (const auto& guard : fn.early_returns) {
-                validate_expression(*guard.lhs, params, functions);
-                validate_expression(*guard.rhs, params, functions);
+                if (guard.condition) validate_expression(*guard.condition, params, functions);
+                else {
+                    validate_expression(*guard.lhs, params, functions);
+                    validate_expression(*guard.rhs, params, functions);
+                }
                 validate_expression(*guard.result, params, functions);
             }
             if (fn.result) validate_expression(*fn.result, params, functions);
+
+            // Independent scalar type pass. Name/arity validation above must
+            // complete first so this pass never guesses through unresolved
+            // symbols or accidentally turns a typing failure into binding.
+            using TypeMap = std::unordered_map<std::string, ScalarType>;
+            TypeMap scalar_types;
+            for (const auto& param : fn.parameters)
+                scalar_types.emplace(param.name, param.scalar_type);
+
+            auto require_scalar = [&](const Expression& expr, ScalarType expected,
+                                      const char* where, const TypeMap& env) {
+                const ScalarType actual =
+                    validate_scalar_expression(expr, env, functions);
+                if (actual != expected)
+                    throw std::runtime_error(std::string(where) + " requires " +
+                        scalar_type_name(expected) + ", got " +
+                        scalar_type_name(actual) + " at byte " +
+                        std::to_string(expr.offset));
+            };
+
+            for (const auto& binding : fn.locals) {
+                if (binding.int_array || binding.new_class || binding.move_class) {
+                    scalar_types.emplace(binding.name, ScalarType::I64);
+                    if (binding.new_class) {
+                        for (const auto& arg : binding.constructor_arguments)
+                            require_scalar(*arg, ScalarType::I64,
+                                "native class constructor argument", scalar_types);
+                    }
+                    continue;
+                }
+                require_scalar(*binding.initializer, binding.scalar_type,
+                    "native scalar local initializer", scalar_types);
+                scalar_types.emplace(binding.name, binding.scalar_type);
+            }
+
+            std::function<void(const Statement&, TypeMap&)> check_statement_types;
+            check_statement_types = [&](const Statement& stmt, TypeMap& env) {
+                if (stmt.kind == Statement::Kind::Conditional) {
+                    if (stmt.condition) {
+                        require_scalar(*stmt.condition, ScalarType::Bool,
+                            "native if condition", env);
+                    } else {
+                        require_scalar(*stmt.condition_lhs, ScalarType::I64,
+                            "native if equality left operand", env);
+                        require_scalar(*stmt.condition_rhs, ScalarType::I64,
+                            "native if equality right operand", env);
+                    }
+                    TypeMap then_env = env;
+                    TypeMap else_env = env;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, then_env);
+                    for (const auto& action : stmt.else_statements)
+                        check_statement_types(action, else_env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
+                    require_scalar(*stmt.array_commit_length, ScalarType::I64,
+                        "native array commit length", env);
+                    for (const auto& item : stmt.array_commit_values)
+                        require_scalar(*item, ScalarType::I64,
+                            "native array commit fill", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ScopedLocal) {
+                    const LocalBinding& local = *stmt.branch_local;
+                    require_scalar(*local.initializer, local.scalar_type,
+                        "native branch-local initializer", env);
+                    env.emplace(local.name, local.scalar_type);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::FieldWrite ||
+                        (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) {
+                    require_scalar(*stmt.expression, ScalarType::I64,
+                        "native class field write", env);
+                    return;
+                }
+                if (stmt.expression)
+                    (void)validate_scalar_expression(*stmt.expression, env, functions);
+            };
+            for (const auto& stmt : fn.statements)
+                check_statement_types(stmt, scalar_types);
+
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send)
+                    require_scalar(*fn.actor_sends.at(action.index).payload,
+                        ScalarType::I64, "native actor message payload", scalar_types);
+            }
+            if (fn.caught_throw_value)
+                require_scalar(*fn.caught_throw_value, ScalarType::I64,
+                    "native thrown scalar", scalar_types);
+            for (const auto& guard : fn.early_returns) {
+                if (guard.condition) {
+                    require_scalar(*guard.condition, ScalarType::Bool,
+                        "native guarded return condition", scalar_types);
+                } else {
+                    require_scalar(*guard.lhs, ScalarType::I64,
+                        "native return guard left operand", scalar_types);
+                    require_scalar(*guard.rhs, ScalarType::I64,
+                        "native return guard right operand", scalar_types);
+                }
+                require_scalar(*guard.result, fn.return_type,
+                    "native guarded return", scalar_types);
+            }
+            if (fn.result && !fn.returns_void)
+                require_scalar(*fn.result, fn.return_type,
+                    "native function return", scalar_types);
         }
     }
 
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
-        if (token_.text == "gpu" || token_.text == "quantum") {
-            throw std::runtime_error("native gpu/quantum boundary unsupported: "
-                    "validated effects, ownership, device lowering and explicit "
-                    "backend admission required; no implicit CPU fallback at byte "
+        if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
+            const char* domain = token_.text == "cpu"
+                    ? "native cpu execution block boundary unsupported: "
+                    : "native gpu/quantum boundary unsupported: ";
+            throw std::runtime_error(std::string(domain)
+                    + "validated effects, ownership, host/device lowering and explicit "
+                    "backend admission required; nested cpu/gpu blocks cannot "
+                    "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
         }
         if (token_.text == "throw" || token_.text == "raise" ||
@@ -1827,6 +2493,8 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::size_t expression_depth_ = 0;
+    std::size_t conditional_depth_ = 0;
 };
 
 } // namespace
