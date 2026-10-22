@@ -121,6 +121,60 @@ static void test_long_lived_actor_full_drain_recycles_bytes_without_aba() {
     }
 }
 
+// A persistent actor field must not make a zero-GC heap exhaust merely
+// because many ephemeral messages allocate/drop their *last* native object.
+// This verifies alignment padding is rewound along with the allocation and
+// that the persistent allocation is never moved or invalidated.
+static void test_transient_bump_tail_reuse_with_persistent_fields() {
+    using Tiny = ActorOwnedHeap<96, 4>;
+    Tiny heap(97);
+    const auto persistent = heap.allocate(16, 8);
+    check(persistent.has_value(), "persistent field allocation");
+    check(heap.write(*persistent, std::uint64_t{0xA1B2C3D4}),
+          "persistent value initialized");
+    const std::size_t committed = heap.used();
+
+    std::optional<Tiny::Handle> retired;
+    for (std::size_t n = 0; n < 4096; ++n) {
+        const std::size_t alignment = (n & 1) == 0 ? 16 : 8;
+        const auto temporary = heap.allocate(40, alignment);
+        check(temporary.has_value(), "short-lived actor allocation exhausted");
+        check(heap.read<std::uint64_t>(*temporary).value() == 0,
+              "reused temporary allocation must be zero-filled");
+        check(heap.write(*temporary, std::uint64_t{n}),
+              "temporary payload write failed");
+        if (retired) check(!heap.read<std::uint64_t>(*retired),
+                           "stale temporary handle resurrected after reuse");
+        check(heap.remove(*temporary), "temporary native destructor/drop");
+        check(heap.used() == committed,
+              "transient deletion did not restore pre-alignment bump cursor");
+        check(heap.live_allocations() == 1,
+              "persistent actor field must remain live through scratch churn");
+        check(heap.read<std::uint64_t>(*persistent).value() == 0xA1B2C3D4,
+              "persistent actor field was moved or mutated");
+        retired = temporary;
+    }
+    check(heap.remove(*persistent), "persistent field released");
+    check(heap.used() == 0 && heap.live_allocations() == 0,
+          "actor heap not drained after all fields released");
+
+    // A freed interior allocation cannot rewind across a later live object.
+    Tiny partial(98);
+    auto first = partial.allocate(16, 8);
+    auto second = partial.allocate(16, 8);
+    auto third = partial.allocate(16, 8);
+    check(first && second && third, "three native allocations");
+    auto before = partial.used();
+    check(partial.remove(*second), "interior drop");
+    check(partial.used() == before,
+          "interior free rewound over still-live tail allocation");
+    check(partial.remove(*third), "tail drop");
+    check(partial.used() >= 16,
+          "tail free invalidated first still-live allocation");
+    check(partial.read<std::uint64_t>(*first).has_value(),
+          "interior/tail free invalidated persistent handle");
+}
+
 static void test_heap_address_reuse_aba() {
     alignas(Heap) unsigned char storage[sizeof(Heap)];
     Heap* former = new (storage) Heap(33);
@@ -193,6 +247,7 @@ int main() {
         test_bounded_storage_and_invalid_accesses();
         test_heap_address_reuse_aba();
         test_long_lived_actor_full_drain_recycles_bytes_without_aba();
+        test_transient_bump_tail_reuse_with_persistent_fields();
         std::cout << "PASS native actor-owned byte heap contracts\n";
         return 0;
     } catch (const std::exception& failure) {
