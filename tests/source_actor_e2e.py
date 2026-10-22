@@ -40,6 +40,10 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-owned-unknown-initializer-reject.ores":
+            "unknown parameter 'not_yet_declared'",
+        "source-actor-owned-forward-reference-reject.ores":
+            "unknown parameter 'second'",
         "source-actor-unflagged-owned.ores":
             "experimental owned int requires --experimental-owned-int",
         "source-actor-scoped-owned-escape-reject.ores":
@@ -74,8 +78,10 @@ def main():
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
-        flags = ["--experimental-owned-int"] if name.startswith(
-            "source-actor-scoped-owned-") else []
+        flags = ["--experimental-owned-int"] if (
+            name.startswith("source-actor-scoped-owned-")
+            or name.startswith("source-actor-owned-")
+        ) else []
         result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
