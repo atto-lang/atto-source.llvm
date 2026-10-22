@@ -69,6 +69,20 @@ int main() {
     catch (const std::invalid_argument&) { missingProofCaught = true; }
     assert(missingProofCaught);
 
+    // An out-of-range marker and a throwing nominal verifier cannot turn a
+    // failed proof into an allowed worker crossing or uncaught C++ exception.
+    assert(!worker_marker(number, static_cast<WorkerMarker>(99), permissive));
+    const VerifiedNominal throwingProof = [](const WorkerType&, WorkerMarker) -> bool {
+        throw std::runtime_error("nominal proof failed");
+    };
+    assert(!worker_marker(option, WorkerMarker::Send, throwingProof));
+    assert(!worker_marker(WorkerType{Shape::Named, "Throwing", {}},
+                          WorkerMarker::Sync, throwingProof));
+    bool thrownProofCaught = false;
+    try { require_worker_marker(option, WorkerMarker::Send, throwingProof); }
+    catch (const std::invalid_argument&) { thrownProofCaught = true; }
+    assert(thrownProofCaught);
+
     const WorkerType owned{Shape::Named, "OwnedOnly", {}};
     const VerifiedNominal ownerOnly = [](const WorkerType& t, WorkerMarker m) {
         return t.name == "OwnedOnly" && m == WorkerMarker::Send;
