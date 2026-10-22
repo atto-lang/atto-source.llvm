@@ -49,7 +49,9 @@ struct OresNativeActorScheduler {
     uint64_t domain;
     uint64_t accepted, rejected, completed, control_completed;
     uint64_t preferred_carrier_hits, carrier_migrations;
-    uint64_t ready_control_bits[16], ready_data_bits[16];
+    uint64_t *ready_control_bits, *ready_data_bits;
+    size_t ready_word_count;
+    uint64_t ready_control_summary[16], ready_data_summary[16];
     int retired;
     int cpu_affinity_opt_in;
     OresNativeActorTaskFn callback;
@@ -93,16 +95,18 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
-/* Actor count is presently admission-bounded to 1024. Allocate the
- * CONTROL and DATA bitmaps inline with the scheduler, not from actor heaps.
- * Both are derived indexes: admission, dispatch and physical completion
- * synchronize under the existing scheduler mutex. No separate authority. */
-enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_WORDS = 16 };
+/* Bounded, VM-owned ready bitmaps. No per-turn allocations or tracing GC.
+ * Limits are checked before allocating or initializing actor authorities.
+ * They are scheduling hints only; the actor-generation authority wins. */
+enum { ORES_READY_WORD_BITS = 64, ORES_READY_MAX_ACTORS = 65536,
+       ORES_READY_SUMMARY_WORDS = ORES_READY_MAX_ACTORS / (64 * 64) };
+enum { ORES_LARGE_POOL_MAX_MAILBOX_CELLS = 1048576 };
 
 static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
     if (actor >= s->actor_count) abort();
     ActorLane* lane = &s->actors[actor];
     const size_t word = actor / ORES_READY_WORD_BITS;
+    if (word >= s->ready_word_count) abort();
     const uint64_t bit = UINT64_C(1) << (actor % ORES_READY_WORD_BITS);
     if (!lane->active && lane->has_control)
         s->ready_control_bits[word] |= bit;
@@ -112,6 +116,19 @@ static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
         s->ready_data_bits[word] |= bit;
     else
         s->ready_data_bits[word] &= ~bit;
+    /* Mirror leaf-word occupancy into the corresponding one-bit summary.
+     * Both levels are derived indexes, never execution authority. */
+    const size_t summary_word = word / ORES_READY_WORD_BITS;
+    if (summary_word >= ORES_READY_SUMMARY_WORDS) abort();
+    const uint64_t summary_bit = UINT64_C(1) << (word % ORES_READY_WORD_BITS);
+    if (s->ready_control_bits[word])
+        s->ready_control_summary[summary_word] |= summary_bit;
+    else
+        s->ready_control_summary[summary_word] &= ~summary_bit;
+    if (s->ready_data_bits[word])
+        s->ready_data_summary[summary_word] |= summary_bit;
+    else
+        s->ready_data_summary[summary_word] &= ~summary_bit;
 }
 
 /* Scan only occupancy-index words and set actor lanes, preserving the old
@@ -119,29 +136,49 @@ static void refresh_ready_locked(OresNativeActorScheduler* s, size_t actor) {
  * worker may skip eligible DATA lanes, but the global fallback may not.
  * Return SIZE_MAX when no matching entry is present. */
 static size_t select_ready_locked(OresNativeActorScheduler* s,
-                                  const uint64_t bits[ORES_READY_MAX_WORDS],
+                                  const uint64_t* bits,
+                                  const uint64_t summary[ORES_READY_SUMMARY_WORDS],
                                   size_t start, size_t worker,
                                   int require_preferred) {
+    /* Only visit occupied leaf words. At 65,536 actors the root has just
+     * sixteen 64-bit words, instead of scanning all 1,024 leaf words. */
     for (int wrap = 0; wrap < 2; ++wrap) {
         const size_t begin = wrap ? 0 : start;
         const size_t end = wrap ? start : s->actor_count;
         if (begin >= end) continue;
-        const size_t first_word = begin / ORES_READY_WORD_BITS;
-        const size_t final_word = (end - 1) / ORES_READY_WORD_BITS;
-        for (size_t word = first_word; word <= final_word; ++word) {
-            uint64_t eligible = bits[word];
-            if (word == first_word)
-                eligible &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
-            if (word == final_word)
-                eligible &= UINT64_MAX >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
-            while (eligible) {
-                const unsigned bit = (unsigned)__builtin_ctzll(eligible);
-                const size_t actor = word * ORES_READY_WORD_BITS + bit;
-                ActorLane* lane = &s->actors[actor];
-                if (lane->active) abort(); /* stale index is a scheduler bug */
-                if (!require_preferred || lane->last_carrier_plus_one == worker + 1)
-                    return actor;
-                eligible &= eligible - 1;
+        const size_t first_leaf = begin / ORES_READY_WORD_BITS;
+        const size_t last_leaf = (end - 1) / ORES_READY_WORD_BITS;
+        const size_t first_summary = first_leaf / ORES_READY_WORD_BITS;
+        const size_t last_summary = last_leaf / ORES_READY_WORD_BITS;
+        if (last_summary >= ORES_READY_SUMMARY_WORDS) abort();
+        for (size_t sw = first_summary; sw <= last_summary; ++sw) {
+            uint64_t occupied = summary[sw];
+            if (sw == first_summary)
+                occupied &= UINT64_MAX << (first_leaf % ORES_READY_WORD_BITS);
+            if (sw == last_summary)
+                occupied &= UINT64_MAX >> (63 - (last_leaf % ORES_READY_WORD_BITS));
+            while (occupied) {
+                const unsigned index_bit = (unsigned)__builtin_ctzll(occupied);
+                const size_t leaf = sw * ORES_READY_WORD_BITS + index_bit;
+                if (leaf >= s->ready_word_count) abort();
+                uint64_t eligible = bits[leaf];
+                if (!eligible) abort(); /* stale summary */
+                if (leaf == first_leaf)
+                    eligible &= UINT64_MAX << (begin % ORES_READY_WORD_BITS);
+                if (leaf == last_leaf)
+                    eligible &= UINT64_MAX
+                        >> (63 - ((end - 1) % ORES_READY_WORD_BITS));
+                while (eligible) {
+                    const unsigned bit = (unsigned)__builtin_ctzll(eligible);
+                    const size_t actor = leaf * ORES_READY_WORD_BITS + bit;
+                    ActorLane* lane = &s->actors[actor];
+                    if (lane->active) abort(); /* stale execution index */
+                    if (!require_preferred
+                        || lane->last_carrier_plus_one == worker + 1)
+                        return actor;
+                    eligible &= eligible - 1;
+                }
+                occupied &= occupied - 1;
             }
         }
     }
@@ -155,17 +192,17 @@ static int find_ready(OresNativeActorScheduler* s, size_t worker,
      * After eight preferred-carrier DATA turns, skip one affinity pass
      * to guarantee a globally fair DATA selection. */
     size_t i = select_ready_locked(s, s->ready_control_bits,
-                                   s->next_actor, worker, 0);
+                                   s->ready_control_summary, s->next_actor, worker, 0);
     int is_control = i != SIZE_MAX;
     int is_preferred = 0;
     if (!is_control && local_burst < 8) {
         i = select_ready_locked(s, s->ready_data_bits,
-                                s->next_actor, worker, 1);
+                                s->ready_data_summary, s->next_actor, worker, 1);
         is_preferred = i != SIZE_MAX;
     }
     if (i == SIZE_MAX)
         i = select_ready_locked(s, s->ready_data_bits,
-                                s->next_actor, worker, 0);
+                                s->ready_data_summary, s->next_actor, worker, 0);
     if (i == SIZE_MAX) return 0;
     *actor = i;
     *control = is_control;
@@ -312,8 +349,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
     OresNativeActorPanicFn panic_callback, void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
-        || !workers || workers > 128 || actors > SIZE_MAX / capacity)
+    if (!callback || !actors || actors > ORES_READY_MAX_ACTORS
+        || !capacity || capacity > 65536 || !workers || workers > 128
+        || actors > SIZE_MAX / capacity
+        || (actors > 1024 && actors * capacity > ORES_LARGE_POOL_MAX_MAILBOX_CELLS))
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
     if (!s) return NULL;
@@ -321,7 +360,12 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || !s->threads) goto allocation_failed;
+    s->ready_word_count = (actors + ORES_READY_WORD_BITS - 1)
+        / ORES_READY_WORD_BITS;
+    s->ready_control_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    s->ready_data_bits = (uint64_t*)calloc(s->ready_word_count, sizeof(uint64_t));
+    if (!s->actors || !s->slots || !s->threads
+        || !s->ready_control_bits || !s->ready_data_bits) goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
@@ -353,6 +397,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->ready_data_bits);
+    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);
@@ -712,6 +758,8 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->ready_data_bits);
+    free(s->ready_control_bits);
     free(s->threads);
     free(s->slots);
     free(s->actors);

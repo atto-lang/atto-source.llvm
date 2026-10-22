@@ -37,7 +37,8 @@ static void on_control(void* context, size_t actor, uint64_t msg) {
     release_actor(s, actor);
 }
 int main(void) {
-    assert(!ores_native_actor_scheduler_open(ACTORS + 1, 1, 1, on_data, NULL));
+    /* Exact out-of-contract actor count must reject before allocation. */
+    assert(!ores_native_actor_scheduler_open(65537, 1, 1, on_data, NULL));
     State s = {0};
     s.scheduler = ores_native_actor_scheduler_open_control(
         ACTORS, ROUNDS + 2, 4, on_data, on_control, &s);
