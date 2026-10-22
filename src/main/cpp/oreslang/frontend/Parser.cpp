@@ -2217,6 +2217,20 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
+            // Validate in declaration order. An owned actor-handler local
+            // becomes visible only AFTER its initializer is fully checked.
+            // Never treat a forward reference as an arbitrary field or let
+            // an undefined identifier reach LLVM slot lookup.
+            for (const auto& local : method.locals) {
+                if (!local.heap_owned || local.owner_mutable || !local.initializer)
+                    throw std::runtime_error(
+                        "native actor owned local requires immutable initialized slot");
+                validate_expression(*local.initializer, fields, functions);
+                if (!fields.insert(local.name).second)
+                    throw std::runtime_error(
+                        "actor owned local shadows field, parameter or previous owner '" +
+                        local.name + "'");
+            }
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");

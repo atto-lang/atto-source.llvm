@@ -513,6 +513,80 @@ void validate_i64_ownership(const Program& program) {
         class_finals.emplace(cls.name, std::move(finals));
         class_public.emplace(cls.name, std::move(published));
     }
+    // The compiler's actor-owned temporary path is narrower than general
+    // expression lowering. Check source name resolution and purity *before*
+    // emitting any LLVM IR; a syntactically pure but undeclared variable
+    // must never reach codegen's value slot lookup.
+    for (const auto& actor : program.actors) {
+        if (actor.on_message.locals.empty()) continue;
+        const auto& method = actor.on_message;
+        if (method.parameters.size() != 1)
+            throw std::runtime_error(
+                "ownership violation: native actor owned locals require one message argument");
+        std::unordered_set<std::string> visible;
+        visible.insert(method.parameters.front().name);
+        for (const auto& field : actor.fields)
+            if (!visible.insert(field.name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate actor field/message name");
+
+        std::function<void(const Expression&)> pure;
+        pure = [&](const Expression& expr) {
+            using K = Expression::Kind;
+            if (expr.kind == K::Integer || expr.kind == K::Boolean) return;
+            if (expr.kind == K::Variable) {
+                if (!visible.count(expr.name))
+                    throw std::runtime_error(
+                        "ownership violation: actor handler unknown or forward local '" +
+                        expr.name + "'");
+                return;
+            }
+            if (expr.kind == K::Negate || expr.kind == K::LogicalNot) {
+                if (!expr.left)
+                    throw std::runtime_error("ownership violation: missing unary operand");
+                pure(*expr.left);
+                return;
+            }
+            if (expr.kind == K::Add || expr.kind == K::Subtract ||
+                    expr.kind == K::Multiply || expr.kind == K::Equal ||
+                    expr.kind == K::NotEqual || expr.kind == K::Less ||
+                    expr.kind == K::LessEqual || expr.kind == K::Greater ||
+                    expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
+                    expr.kind == K::LogicalOr || expr.kind == K::LogicalXor) {
+                if (!expr.left || !expr.right)
+                    throw std::runtime_error("ownership violation: missing binary operand");
+                pure(*expr.left);
+                pure(*expr.right);
+                return;
+            }
+            if (expr.kind == K::Conditional && expr.when_true && expr.when_false &&
+                    (expr.condition || (expr.condition_lhs && expr.condition_rhs))) {
+                if (expr.condition) pure(*expr.condition);
+                if (expr.condition_lhs) pure(*expr.condition_lhs);
+                if (expr.condition_rhs) pure(*expr.condition_rhs);
+                pure(*expr.when_true);
+                pure(*expr.when_false);
+                return;
+            }
+            throw std::runtime_error(
+                "ownership violation: actor owned temporary may not call, borrow, move, or escape");
+        };
+        for (const auto& local : method.locals) {
+            if (!local.heap_owned || local.owner_mutable || !local.initializer)
+                throw std::runtime_error(
+                    "ownership violation: actor scoped local requires immutable owned initializer");
+            if (visible.count(local.name))
+                throw std::runtime_error(
+                    "ownership violation: actor temporary shadows live owner '" +
+                    local.name + "'");
+            pure(*local.initializer);
+            visible.insert(local.name);
+        }
+        for (const auto& write : method.actor_field_writes)
+            pure(*write.expression);
+        if (method.result) pure(*method.result);
+    }
+
     for (const auto& function : program.functions) {
         Locals locals;
         for (const auto& param : function.parameters) {
