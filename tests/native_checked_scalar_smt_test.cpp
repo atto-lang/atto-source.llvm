@@ -62,8 +62,9 @@ int main(int argc, char** argv) {
         // A parser/type-correct arithmetic return is outside the restricted
         // *pure parameter-return* SMT slice and must reject. No default values
         // or guessed effects are allowed into a proof.
-        const auto arithmetic = replace_once(source, "return right;",
-                                               "return right + 1;");
+        const auto arithmetic = replace_once(source,
+            "if (left < right) { return left; } fi\n  return right;",
+            "if (left < right) { return left; } fi\n  return right + 1;");
         must_reject([&] {
             (void)NativeScalarSmt::from_source(arithmetic, "min_int");
         });
