@@ -108,7 +108,7 @@ def must_run(argv, *, timeout=60, cwd=None):
     return result.stdout
 
 
-def one_execution(compiler, clang, source, fn, args, expected, working, label):
+def one_execution(compiler, clang, source, fn, args, expected, working, label, level):
     # An Oreslang comparison is checked in the *guest*; only its Boolean 0/1
     # result is returned as process status, avoiding i64 exit-code truncation.
     call = fn + "(" + ", ".join(map(str, args)) + ")"
@@ -119,10 +119,12 @@ def one_execution(compiler, clang, source, fn, args, expected, working, label):
             + "  return 1;\n}\n")
     source_path = working / (label + ".ores")
     ll_path = working / (label + ".ll")
-    exe_path = working / (label + ".exe")
+    exe_path = working / (label + "-" + level + ".exe")
     source_path.write_text(source + main, encoding="ascii")
     ll_path.write_bytes(must_run([compiler, "--target=host", str(source_path)]))
-    must_run([clang, "-O1", "-x", "ir", str(ll_path), "-o", str(exe_path)])
+    if level not in ("O0", "O2"):
+        raise ValueError("unknown optimization level")
+    must_run([clang, "-"+level, "-x", "ir", str(ll_path), "-o", str(exe_path)])
     p = subprocess.run([str(exe_path)], capture_output=True, timeout=10,
                        cwd=working, check=False)
     if p.returncode < 0:
@@ -152,20 +154,26 @@ def main():
     with tempfile.TemporaryDirectory(prefix="native-ores-core-") as tmp:
         working = Path(tmp)
         for case_id, fn, args, expected in cases:
-            exit_code = one_execution(compiler, clang, source, fn, args,
-                                      expected, working, case_id)
+            exits = {}
+            for level in ("O0", "O2"):
+                exits[level] = one_execution(compiler, clang, source, fn, args,
+                                             expected, working, case_id, level)
+                if exits[level] != 0:
+                    raise AssertionError(
+                        f"compiled Oreslang result differs: {case_id} {level}")
             results.append({"id": case_id, "expected": str(expected),
-                            "guest_exit": exit_code})
-            if exit_code != 0:
-                raise AssertionError(f"compiled Oreslang result differs: {case_id}")
+                            "guest_exit_by_optimization": exits})
         # Deliberately wrong expectation must be rejected by the *compiled*
         # guest rather than by the Python oracle.
         fn, args, expected = cases[2][1:]
         wrong = expected + 1 if expected < MAX_I64 else expected - 1
-        mutation_exit = one_execution(compiler, clang, source, fn, args,
-                                      wrong, working, "wrong-expected")
-        if mutation_exit != 1:
-            raise AssertionError("compiled native negative control did not fail")
+        mutation_exits = {}
+        for level in ("O0", "O2"):
+            mutation_exits[level] = one_execution(compiler, clang, source, fn, args,
+                                                  wrong, working, "wrong-expected", level)
+            if mutation_exits[level] != 1:
+                raise AssertionError(
+                    f"compiled negative control did not fail under {level}")
 
     report = {
         "contract_git_blob": ORIGIN_GIT_BLOB,
@@ -173,12 +181,12 @@ def main():
         "backend": "llvm-native-host",
         "kind": "actual-compiled-guest",
         "cases": results,
-        "negative_control_exit": mutation_exit,
-        "executed": len(results),
+        "negative_control_exit_by_optimization": mutation_exits,
+        "executed": len(results) * 2,
     }
     (evidence / "aot-core-math-execution.json").write_text(
         json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf8")
-    print(f"NATIVE-AOT-CORE-MATH-OK {len(results)} guest executions + 1 negative")
+    print(f"NATIVE-AOT-CORE-MATH-OK {len(results)} cases x 2 optimization levels + 2 negative")
 
 
 if __name__ == "__main__":
