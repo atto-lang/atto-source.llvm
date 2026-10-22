@@ -1298,6 +1298,18 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_done_resource_quiescence
         COMMAND oreslang-native-actor-retirement-barrier-test)
     set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
+    # Optional source-unwind receipt: cancellation does not imply physical
+    # teardown, and no native allocation can be reclaimed without a receipt.
+    add_executable(oreslang-native-source-cleanup-gate-test
+        tests/native_source_cleanup_gate_test.cpp)
+    target_include_directories(oreslang-native-source-cleanup-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-cleanup-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-cleanup-gate-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_cleanup_deferred_physical_receipt
+        COMMAND oreslang-native-source-cleanup-gate-test)
+    set_tests_properties(native_source_cleanup_deferred_physical_receipt PROPERTIES TIMEOUT 30)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
