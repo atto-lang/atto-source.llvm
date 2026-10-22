@@ -48,11 +48,22 @@ def verify_raw_tracked_blobs() -> None:
         if mode in (b"100644", b"100755"):
             # O_NOFOLLOW ensures a source-file symlink substitution cannot
             # redirect verification outside this checkout.
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            # O_NONBLOCK also prevents a replaced regular file from becoming
+            # a blocking FIFO admission hazard before fstat can reject it.
+            # Production qualification is Linux-only; missing primitives
+            # must deny rather than silently weaken no-follow/nonparking.
+            if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+                raise ValueError("platform cannot safely inspect tracked source files")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 before = os.fstat(fd)
                 if not stat.S_ISREG(before.st_mode):
                     raise ValueError("tracked source is not a regular file: " + repr(path[:120]))
+                # A verified inode with another hardlink can be modified
+                # through a path outside the checkout after verification.
+                # Source-local compilation must not trust such an alias.
+                if before.st_nlink != 1:
+                    raise ValueError("multiply-linked tracked source: " + repr(path[:120]))
                 if bool(before.st_mode & 0o111) != (mode == b"100755"):
                     raise ValueError("tracked source executable mode mismatch: " + repr(path[:120]))
                 digest = hashlib.sha1()
@@ -63,8 +74,10 @@ def verify_raw_tracked_blobs() -> None:
                         break
                     digest.update(chunk)
                 after = os.fstat(fd)
-                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                        after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+                        before.st_ino, before.st_dev, before.st_nlink) != (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                        after.st_ino, after.st_dev, after.st_nlink):
                     raise ValueError("tracked source changed during verification: " + repr(path[:120]))
                 if digest.hexdigest().encode("ascii") != object_id:
                     raise ValueError("raw tracked blob mismatch: " + repr(path[:120]))
