@@ -30,6 +30,13 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                  OresActorSlot slot, int64_t value);
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
                                 OresActorTurn turn, OresActorSlot slot);
+/* Compiler-owned actor-handler temporary ABI: the compiler allocates a
+ * three-word token on the native stack and drops it before handler exit.
+ * Tokens may not escape across await, FFI, or an actor turn boundary. */
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]);
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, uint64_t token[3]);
 /* Shared read loans survive turns/await. They forbid slot writes and drops,
  * plus physical heap release, until the last loan is released. A loan cannot
  * itself dereference memory outside an admitted turn. Exclusive mutable
