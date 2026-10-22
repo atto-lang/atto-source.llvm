@@ -11,12 +11,15 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import resource
 import stat
 import subprocess
 import sys
+import tempfile
 
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
@@ -24,10 +27,14 @@ SOURCE_BRANCH = "main"
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
+CODEOWNERS_PATH = ".github/CODEOWNERS"
 PREFIX = "private-oreslang-source"
 RECEIPT_PATH = "ci/oreslang-receipt.json"
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
+HANDOFF_REF = re.compile(
+    r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
+)
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
@@ -35,6 +42,8 @@ MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
 MAX_POLICY = 64 * 1024
 MAX_PLAN = 64 * 1024
+MAX_CODEOWNERS = 64 * 1024
+MAX_GH_API_RESPONSE_BYTES = 24 * 1024 * 1024
 TTL = dt.timedelta(hours=24)
 
 
@@ -68,38 +77,179 @@ def unique_object(pairs):
     out = {}
     for key, value in pairs:
         if key in out:
-            raise Denied("duplicate JSON key")
+            raise Denied("duplicate JSON key: " + key)
         out[key] = value
     return out
 
 
+def strict_json_loads(text, label):
+    def reject_constant(_value):
+        raise Denied(label + " contains nonfinite JSON constant")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise Denied(label + " contains nonfinite JSON number")
+        return number
+
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
+    except (json.JSONDecodeError, RecursionError, OverflowError) as exc:
+        raise Denied(label) from exc
+
+
+def canonical_security_lines(contents, label):
+    """Accept only printable ASCII records separated by LF."""
+    if (not isinstance(contents, bytes)
+            or any(byte != 10 and not 32 <= byte <= 126 for byte in contents)):
+        raise Denied(label + " contains noncanonical ASCII LF bytes")
+    return contents.decode("ascii").split("\n")
+
+
+def require_source_security_codeowners(contents):
+    rules = [
+        line.strip() for line in canonical_security_lines(
+            contents, "protected source CODEOWNERS"
+        )
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    required_tail = [
+        "/.github/CODEOWNERS @ORESoftware",
+        "/.github/workflows/* @ORESoftware",
+        "/.github/private-ci-approved-repositories.txt @ORESoftware",
+        "/.github/private-ci-carrier-contracts.json @ORESoftware",
+        "/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware",
+        "/scripts/run-in-private-ci-destination.sh @ORESoftware",
+        "/scripts/publish-private-ci-source.py @ORESoftware",
+        "/scripts/publish-private-ci-source-v3.py @ORESoftware",
+        "/scripts/test-publish-private-ci-source-v3.py @ORESoftware",
+        "/scripts/test-private-ci-destination.sh @ORESoftware",
+        "/scripts/test-publish-private-ci-source.py @ORESoftware",
+        "/scripts/audit-private-ci-governance.py @ORESoftware",
+        "/scripts/test-audit-private-ci-governance.py @ORESoftware",
+    ]
+    if len(rules) < len(required_tail) or rules[-len(required_tail):] != required_tail:
+        raise Denied("protected source CODEOWNERS lacks terminal security-owner rules")
+
+
+def require_carrier_security_codeowners(contents):
+    rules = [
+        line.strip() for line in canonical_security_lines(
+            contents, "carrier CODEOWNERS"
+        )
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if rules != [
+        "* @ORESoftware",
+        "/.github/ @ORESoftware",
+        "/.github/CODEOWNERS @ORESoftware",
+    ]:
+        raise Denied("carrier CODEOWNERS must be fully security-owned")
+
+
+def trusted_github_cli():
+    """Resolve GitHub API access only through a root-controlled OS binary."""
+    target = "/usr/bin/gh"
+    for directory in ("/", "/usr", "/usr/bin"):
+        try:
+            info = os.lstat(directory)
+        except OSError as exc:
+            raise Denied("trusted GitHub CLI directory is unavailable") from exc
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022):
+            raise Denied("trusted GitHub CLI directory is not root-controlled")
+    try:
+        info = os.lstat(target)
+    except OSError as exc:
+        raise Denied("trusted GitHub CLI is unavailable") from exc
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o6022 or not info.st_mode & 0o111):
+        raise Denied("trusted GitHub CLI executable is not root-controlled")
+    return target
+
+
+def github_api_environment():
+    """Use only one explicit token and a minimal deterministic environment."""
+    provided = [
+        name for name in ("GH_TOKEN", "GITHUB_TOKEN")
+        if os.environ.get(name)
+    ]
+    if len(provided) != 1:
+        raise Denied("exactly one explicit GitHub API token is required")
+    return {
+        provided[0]: os.environ[provided[0]],
+        "GH_HOST": "github.com",
+        "GH_PROMPT_DISABLED": "1",
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/",
+        "XDG_CONFIG_HOME": "/nonexistent",
+        "LC_ALL": "C.UTF-8",
+    }
+
+
+def run_bounded_gh(argv, *, input=None, env=None, timeout=60):
+    """Run gh with an OS-enforced per-stream byte cap."""
+    limit = MAX_GH_API_RESPONSE_BYTES
+    if (not hasattr(resource, "RLIMIT_FSIZE")
+            or type(limit) is not int or limit < 2):
+        raise Denied("OS cannot safely bound GitHub CLI output")
+
+    def limit_child_files():
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file, \
+                tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            proc = subprocess.run(
+                argv,
+                input=input,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                env=env,
+                timeout=timeout,
+                check=False,
+                start_new_session=True,
+                preexec_fn=limit_child_files,
+            )
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout_bytes = stdout_file.read(limit + 1)
+            stderr_bytes = stderr_file.read(limit + 1)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Denied("authenticated GitHub CLI bounded execution unavailable") from exc
+    if len(stdout_bytes) >= limit or len(stderr_bytes) >= limit:
+        raise Denied("authenticated GitHub API response exceeds size limit")
+    try:
+        stdout = stdout_bytes.decode("utf-8")
+        stderr = stderr_bytes.decode("utf-8")
+    except UnicodeError as exc:
+        raise Denied("authenticated GitHub API response is not UTF-8") from exc
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
 def gh_api(route, method="GET", payload=None):
     argv = [
-        "gh", "api", "--method", method, route,
+        trusted_github_cli(), "api", "--method", method, route,
         "--header", "Accept: application/vnd.github+json",
     ]
     if payload is not None:
         argv.extend(["--input", "-"])
-    env = dict(os.environ, GH_HOST="github.com", GH_PROMPT_DISABLED="1")
-    try:
-        proc = subprocess.run(
-            argv,
-            input=json.dumps(payload) if payload is not None else None,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-            env=env,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise Denied("authenticated GitHub API unavailable") from exc
+    proc = run_bounded_gh(
+        argv,
+        input=json.dumps(payload) if payload is not None else None,
+        env=github_api_environment(),
+        timeout=60,
+    )
     if proc.returncode != 0:
-        # Never echo gh stderr; API failures can include private context.
+        # Never echo stderr: API failures can include private context.
         raise Denied("authenticated GitHub API request failed")
-    try:
-        result = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise Denied("invalid GitHub API response") from exc
+    result = strict_json_loads(proc.stdout, "invalid GitHub API response")
     if not isinstance(result, dict):
         raise Denied("unexpected GitHub API response shape")
     return result
@@ -118,21 +268,71 @@ def decode_contents(item, path, max_bytes):
         raise Denied("invalid base64 for protected file: " + path) from exc
     if not data or len(data) > max_bytes:
         raise Denied("protected file missing or oversized: " + path)
+    blob_sha = valid_sha(item.get("sha"), "protected file blob SHA invalid")
+    if git_blob_sha(data) != blob_sha:
+        raise Denied("protected file blob digest mismatch: " + path)
     return data
 
 
+def safe_descriptor_flags_available():
+    flags = tuple(
+        getattr(os, name, None)
+        for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
+    )
+    if not all(type(value) is int and value > 0 for value in flags):
+        return False
+    return all(
+        (left & right) == 0
+        for index, left in enumerate(flags)
+        for right in flags[index + 1:]
+    )
+
+
 def read_local_regular(path, max_bytes):
-    p = Path(path)
+    """Read one protected file without following any path-component symlink."""
+    if (not isinstance(path, (str, Path))
+            or not isinstance(max_bytes, int) or isinstance(max_bytes, bool)
+            or max_bytes <= 0 or not safe_descriptor_flags_available()):
+        raise Denied("local protected file request is unsafe")
+    text_path = str(path)
+    if "\\" in text_path:
+        raise Denied("local protected file path is unsafe")
+    pure = PurePosixPath(text_path)
+    absolute = pure.is_absolute()
+    parts = pure.parts[1:] if absolute else pure.parts
+    if (not parts
+            or any(part in ("", ".", "..") for part in parts)
+            or any(part.casefold() == ".git" for part in parts)):
+        raise Denied("local protected file path is unsafe")
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    opened = []
     try:
-        meta = p.lstat()
+        current = os.open("/" if absolute else ".", directory_flags)
+        opened.append(current)
+        for component in parts[:-1]:
+            current = os.open(component, directory_flags, dir_fd=current)
+            opened.append(current)
+        file_fd = os.open(parts[-1], file_flags, dir_fd=current)
+        try:
+            stream = os.fdopen(file_fd, "rb")
+        except BaseException:
+            os.close(file_fd)
+            raise
+        with stream:
+            meta = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1
+                    or meta.st_size <= 0 or meta.st_size > max_bytes):
+                raise Denied("local protected file unsafe: " + text_path)
+            data = stream.read(max_bytes + 1)
     except OSError as exc:
-        raise Denied("local protected file unavailable: " + path) from exc
-    if (p.is_symlink() or not stat.S_ISREG(meta.st_mode)
-            or meta.st_nlink != 1 or meta.st_size <= 0 or meta.st_size > max_bytes):
-        raise Denied("local protected file unsafe: " + path)
-    data = p.read_bytes()
-    if len(data) != meta.st_size:
-        raise Denied("local protected file changed while reading: " + path)
+        raise Denied("local protected file unavailable: " + text_path) from exc
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+    if len(data) != meta.st_size or len(data) > max_bytes:
+        raise Denied("local protected file changed while reading: " + text_path)
     return data
 
 
@@ -179,10 +379,7 @@ def remote_source_file(path, main_sha, max_bytes):
 
 
 def parse_allowlist(raw, repository):
-    try:
-        lines = raw.decode("utf-8").splitlines()
-    except UnicodeError as exc:
-        raise Denied("allowlist is not UTF-8") from exc
+    lines = canonical_security_lines(raw, "allowlist")
     seen = set()
     allowed = False
     for line in lines:
@@ -201,16 +398,19 @@ def safe_path(value, prefix, suffix):
     if not isinstance(value, str):
         raise Denied("invalid protected carrier path")
     parts = PurePosixPath(value).parts
-    if (not value.startswith(prefix) or not value.endswith(suffix)
-            or not parts or value.startswith("/") or ".." in parts
-            or ".git" in parts or "\\" in value):
+    if (not re.fullmatch(r"[A-Za-z0-9._/-]+", value)
+            or PurePosixPath(value).as_posix() != value
+            or not value.startswith(prefix) or not value.endswith(suffix)
+            or not parts or value.startswith("/")
+            or any(part in (".", "..") for part in parts)
+            or any(part.casefold() == ".git" for part in parts)):
         raise Denied("invalid protected carrier path")
     return value
 
 
 def parse_contract(raw, repository, source_pr, test_plan):
     try:
-        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+        doc = strict_json_loads(raw.decode("utf-8"), "invalid carrier contract JSON")
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Denied("invalid carrier contract JSON") from exc
     if not isinstance(doc, dict) or doc.get("schema") != 1:
@@ -267,6 +467,14 @@ def protected_authority(repository, source_pr, test_plan):
     if local_self != remote_self or git_blob_sha(local_self) != remote_self_sha:
         raise Denied("publisher bytes differ from protected source main")
 
+    remote_codeowners, _ = remote_source_file(
+        CODEOWNERS_PATH, main_sha, MAX_CODEOWNERS
+    )
+    local_codeowners = read_local_regular(CODEOWNERS_PATH, MAX_CODEOWNERS)
+    if local_codeowners != remote_codeowners:
+        raise Denied("local CODEOWNERS differs from protected source main")
+    require_source_security_codeowners(remote_codeowners)
+
     remote_allow, _ = remote_source_file(POLICY_PATH, main_sha, MAX_POLICY)
     local_allow = read_local_regular(POLICY_PATH, MAX_POLICY)
     if local_allow != remote_allow:
@@ -283,6 +491,50 @@ def protected_authority(repository, source_pr, test_plan):
     return main_sha, contract
 
 
+def checked_carrier_main(repository, expected_sha):
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if (branch.get("name") != "main"
+            or branch.get("protected") is not True):
+        raise Denied("carrier main is not protected")
+    base_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "carrier main SHA"
+    )
+    if base_sha != expected_sha:
+        raise Denied("carrier main advanced beyond reviewed base")
+
+    protection = gh_api(f"repos/{repository}/branches/main/protection")
+    reviews = protection.get("required_pull_request_reviews")
+    if (not isinstance(reviews, dict)
+            or reviews.get("require_code_owner_reviews") is not True
+            or reviews.get("dismiss_stale_reviews") is not True
+            or not isinstance(reviews.get("required_approving_review_count"), int)
+            or isinstance(reviews.get("required_approving_review_count"), bool)
+            or reviews.get("required_approving_review_count", 0) < 1):
+        raise Denied("carrier main does not enforce independent CODEOWNER review")
+    admins = protection.get("enforce_admins")
+    force = protection.get("allow_force_pushes")
+    delete = protection.get("allow_deletions")
+    if (not isinstance(admins, dict) or admins.get("enabled") is not True
+            or not isinstance(force, dict) or force.get("enabled") is not False
+            or not isinstance(delete, dict) or delete.get("enabled") is not False):
+        raise Denied("carrier main admin/force/delete protection incomplete")
+    bypasses = reviews.get("bypass_pull_request_allowances")
+    if bypasses is not None:
+        if (not isinstance(bypasses, dict)
+                or any(not isinstance(bypasses.get(k, []), list)
+                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
+            raise Denied("carrier main has pull-request review bypasses")
+    codeowners = gh_api(
+        f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
+    )
+    carrier_codeowners = decode_contents(
+        codeowners, CODEOWNERS_PATH, MAX_CODEOWNERS
+    )
+    require_carrier_security_codeowners(carrier_codeowners)
+
+    return base_sha
+
+
 def checked_destination(repository, contract):
     repo = gh_api(f"repos/{repository}")
     if (repo.get("id") != contract["repository_id"]
@@ -294,10 +546,7 @@ def checked_destination(repository, contract):
             or repo.get("disabled") is not False
             or repo.get("fork") is not False):
         raise Denied("carrier identity/state differs from protected contract")
-    ref = gh_api(f"repos/{repository}/git/ref/heads/main")
-    base_sha = valid_sha(ref.get("object", {}).get("sha"), "carrier main SHA")
-    if base_sha != contract["base_sha"]:
-        raise Denied("carrier main advanced beyond reviewed base")
+    base_sha = checked_carrier_main(repository, contract["base_sha"])
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
     base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
@@ -329,9 +578,11 @@ def checked_destination(repository, contract):
             or plan.get("sha") != contract["test_plan_blob_sha"]):
         raise Denied("carrier test plan differs from protected contract")
     plan_bytes = decode_contents(plan, contract["test_plan_path"], MAX_PLAN)
+    if git_blob_sha(plan_bytes) != contract["test_plan_blob_sha"]:
+        raise Denied("carrier test plan blob digest mismatch")
     try:
-        plan_doc = json.loads(
-            plan_bytes.decode("utf-8"), object_pairs_hook=unique_object
+        plan_doc = strict_json_loads(
+            plan_bytes.decode("utf-8"), "invalid reviewed carrier test plan"
         )
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Denied("invalid reviewed carrier test plan") from exc
@@ -342,7 +593,7 @@ def checked_destination(repository, contract):
     return base_tree, plan_bytes
 
 
-def exact_source_tree(source_pr, source_commit):
+def verify_source_pr(source_pr, source_commit):
     pr = gh_api(f"repos/{SOURCE_REPO}/pulls/{source_pr}")
     head = pr.get("head")
     base = pr.get("base")
@@ -355,6 +606,11 @@ def exact_source_tree(source_pr, source_commit):
             or not isinstance(base, dict)
             or base.get("ref") != SOURCE_BRANCH):
         raise Denied("source commit is not exact open PR head against main")
+    return SOURCE_REPO_ID
+
+
+def exact_source_tree(source_pr, source_commit):
+    verify_source_pr(source_pr, source_commit)
 
     commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{source_commit}")
     if commit.get("sha") != source_commit:
@@ -366,8 +622,12 @@ def exact_source_tree(source_pr, source_commit):
             or not isinstance(entries, list) or len(entries) > MAX_TREE_ENTRIES):
         raise Denied("source tree incomplete or exceeds safety limit")
 
-    files = []
-    total = 0
+    # Validate all paths, modes, SHAs and declared blob sizes before fetching
+    # any blob bytes. GitHub's tree metadata gives us enough information to
+    # enforce the mirror budget without first allocating a potentially huge
+    # base64 blob response.
+    declared = []
+    declared_total = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
@@ -385,6 +645,20 @@ def exact_source_tree(source_pr, source_commit):
                 or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise Denied("source tree path unsafe")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
+        size = entry.get("size")
+        if (not isinstance(size, int) or isinstance(size, bool)
+                or size < 0 or size > MAX_FILE):
+            raise Denied("source file exceeds mirror limit")
+        declared_total += size
+        if declared_total > MAX_TOTAL or len(declared) >= MAX_FILES:
+            raise Denied("source mirror exceeds bounded capacity")
+        declared.append((path, mode, sha, size))
+
+    if not declared:
+        raise Denied("source tree is empty")
+
+    files = []
+    for path, mode, sha, declared_size in declared:
         blob = gh_api(f"repos/{SOURCE_REPO}/git/blobs/{sha}")
         if (blob.get("sha") != sha or blob.get("encoding") != "base64"):
             raise Denied("source blob metadata mismatch")
@@ -395,19 +669,67 @@ def exact_source_tree(source_pr, source_commit):
             data = base64.b64decode("".join(encoded.split()), validate=True)
         except (ValueError, base64.binascii.Error) as exc:
             raise Denied("source blob base64 invalid") from exc
-        if len(data) > MAX_FILE:
-            raise Denied("source file exceeds mirror limit")
+        if len(data) != declared_size:
+            raise Denied("source blob size differs from tree metadata")
         if git_blob_sha(data) != sha:
             raise Denied("source blob bytes do not match Git SHA")
-        total += len(data)
-        if total > MAX_TOTAL or len(files) >= MAX_FILES:
-            raise Denied("source mirror exceeds bounded capacity")
         files.append((path, mode, sha, data))
-    if not files:
-        raise Denied("source tree is empty")
+
     files.sort(key=lambda item: item[0])
     rows = [[path, mode, sha, len(data)] for path, mode, sha, data in files]
     return root_tree, files, rows, hashlib.sha256(canonical_bytes(rows)).hexdigest()
+
+
+def verify_published_root_and_commit(
+        repository, base_sha, source_tree, receipt_blob_sha,
+        root_tree_sha, commit_sha):
+    """Read back the exact carrier object graph before exposing any ref."""
+    commit = gh_api(f"repos/{repository}/git/commits/{commit_sha}")
+    parents = commit.get("parents")
+    if (commit.get("sha") != commit_sha
+            or commit.get("tree", {}).get("sha") != root_tree_sha
+            or not isinstance(parents, list)
+            or len(parents) != 1
+            or not isinstance(parents[0], dict)
+            or parents[0].get("sha") != base_sha):
+        raise Denied("published carrier commit differs from requested object graph")
+
+    listing = gh_api(
+        f"repos/{repository}/git/trees/{root_tree_sha}?recursive=1"
+    )
+    if (listing.get("sha") != root_tree_sha
+            or listing.get("truncated") is not False
+            or not isinstance(listing.get("tree"), list)):
+        raise Denied("published carrier root tree listing is incomplete")
+
+    expected = {
+        PREFIX: ("040000", "tree", source_tree),
+        RECEIPT_PATH: ("100644", "blob", receipt_blob_sha),
+    }
+    found = {}
+    for entry in listing["tree"]:
+        if not isinstance(entry, dict):
+            raise Denied("published carrier tree entry is malformed")
+        path = entry.get("path")
+        if path not in expected:
+            continue
+        if path in found:
+            raise Denied("published carrier tree contains duplicate protected path")
+        found[path] = (
+            entry.get("mode"),
+            entry.get("type"),
+            valid_sha(entry.get("sha"), "published carrier tree SHA invalid"),
+        )
+    if found != expected:
+        raise Denied("published carrier tree differs from exact source/receipt binding")
+
+
+def require_handoff_refs_absent(
+        repository, branch, authorization, expected_repository_id):
+    if live_ref_sha(repository, branch, expected_repository_id) is not None:
+        raise Denied("exact-tree carrier branch already exists")
+    if live_ref_sha(repository, authorization, expected_repository_id) is not None:
+        raise Denied("exact-tree authorization ref already exists")
 
 
 def recheck_destination_identity(repository, contract):
@@ -417,6 +739,85 @@ def recheck_destination_identity(repository, contract):
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
+
+
+def _gh_ref_request(repository, ref_name, method):
+    if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
+        raise Denied("ref cleanup target is invalid")
+    if method not in ("GET", "DELETE"):
+        raise Denied("ref cleanup method is invalid")
+    encoded = ref_name.replace("/", "%2F")
+    family = "ref" if method == "GET" else "refs"
+    argv = [
+        trusted_github_cli(), "api", "--method", method,
+        f"repos/{repository}/git/{family}/heads/{encoded}",
+        "--header", "Accept: application/vnd.github+json",
+    ]
+    return run_bounded_gh(
+        argv,
+        env=github_api_environment(),
+        timeout=30,
+    )
+
+
+def _is_http_status(stderr, status):
+    if not isinstance(stderr, str):
+        return False
+    first_line = stderr.split("\n", 1)[0]
+    return re.fullmatch(
+        rf"gh: [^\r\n]{{1,4096}} \(HTTP {status}\)", first_line
+    ) is not None
+
+
+def live_ref_sha(repository, ref_name, expected_repository_id):
+    repo = gh_api(f"repos/{repository}")
+    if (repo.get("id") != expected_repository_id
+            or repo.get("full_name") != repository
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False):
+        raise Denied("carrier repository identity changed during ref verification")
+    result = _gh_ref_request(repository, ref_name, "GET")
+    if result.returncode != 0:
+        if _is_http_status(result.stderr, 404):
+            return None
+        raise Denied("carrier ref lookup failed")
+    try:
+        payload = strict_json_loads(
+            result.stdout, "carrier ref lookup returned invalid JSON"
+        )
+    except json.JSONDecodeError as exc:
+        raise Denied("carrier ref lookup returned invalid JSON") from exc
+    if (not isinstance(payload, dict)
+            or payload.get("ref") != "refs/heads/" + ref_name
+            or payload.get("object", {}).get("type") != "commit"):
+        raise Denied("carrier ref lookup returned unexpected identity")
+    return valid_sha(
+        payload.get("object", {}).get("sha"),
+        "carrier ref lookup returned invalid SHA",
+    )
+
+
+def require_exact_ref(repository, ref_name, expected_sha, expected_repository_id):
+    actual = live_ref_sha(repository, ref_name, expected_repository_id)
+    if actual != expected_sha:
+        raise Denied("carrier ref does not point to exact handoff commit")
+
+
+def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id):
+    expected_sha = valid_sha(expected_sha, "invalid rollback commit SHA")
+    actual = live_ref_sha(repository, ref_name, expected_repository_id)
+    if actual is None:
+        return False
+    if actual != expected_sha:
+        raise Denied("carrier ref moved; refusing rollback")
+    result = _gh_ref_request(repository, ref_name, "DELETE")
+    if result.returncode != 0 and not _is_http_status(result.stderr, 404):
+        raise Denied("carrier ref rollback failed")
+    if live_ref_sha(repository, ref_name, expected_repository_id) is not None:
+        raise Denied("carrier ref still exists after rollback")
+    return True
 
 
 def publish(repository, source_pr, source_commit, test_plan, now=None):
@@ -535,6 +936,14 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         },
     )
     carrier_commit = valid_sha(commit.get("sha"), "carrier commit SHA")
+    verify_published_root_and_commit(
+        repository,
+        contract["base_sha"],
+        source_tree,
+        receipt_blob,
+        root_sha,
+        carrier_commit,
+    )
 
     # Full protected-source + immutable-carrier recheck before executable refs.
     again_sha, again_contract = protected_authority(
@@ -543,29 +952,92 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if again_sha != protected_sha or again_contract != contract:
         raise Denied("protected source authority changed during transfer")
     checked_destination(repository, contract)
+    verify_source_pr(source_pr, source_commit)
 
-    branch_ref = gh_api(
-        f"repos/{repository}/git/refs",
-        method="POST",
-        payload={
-            "ref": "refs/heads/" + branch,
-            "sha": carrier_commit,
-        },
-    )
-    if branch_ref.get("ref") != "refs/heads/" + branch:
-        raise Denied("carrier did not confirm exact-tree branch")
-
+    # Create the inert source-bearing ref first. The carrier workflow refuses
+    # to execute without the exact authorization ref. Treat every POST as
+    # potentially successful before it returns so transport ambiguity cannot
+    # strand private source indefinitely.
     authorization = "ci/authorized-" + carrier_commit
-    auth_ref = gh_api(
-        f"repos/{repository}/git/refs",
-        method="POST",
-        payload={
-            "ref": "refs/heads/" + authorization,
-            "sha": carrier_commit,
-        },
+    require_handoff_refs_absent(
+        repository, branch, authorization, contract["repository_id"]
     )
-    if auth_ref.get("ref") != "refs/heads/" + authorization:
-        raise Denied("carrier did not confirm dispatcher authorization ref")
+    payload_attempted = False
+    authorization_attempted = False
+    try:
+        payload_attempted = True
+        branch_ref = gh_api(
+            f"repos/{repository}/git/refs",
+            method="POST",
+            payload={
+                "ref": "refs/heads/" + branch,
+                "sha": carrier_commit,
+            },
+        )
+        if (branch_ref.get("ref") != "refs/heads/" + branch
+                or branch_ref.get("object", {}).get("sha")
+                   not in (None, carrier_commit)):
+            raise Denied("carrier did not confirm exact-tree branch")
+        require_exact_ref(
+            repository, branch, carrier_commit, contract["repository_id"]
+        )
+
+        # Re-run mutable governance checks while the payload is still inert.
+        again_sha, again_contract = protected_authority(
+            repository, source_pr, test_plan
+        )
+        if again_sha != protected_sha or again_contract != contract:
+            raise Denied("protected source authority changed before authorization")
+        checked_destination(repository, contract)
+
+        # The exact open PR head is the last source-side fact checked before
+        # the carrier becomes executable.
+        verify_source_pr(source_pr, source_commit)
+
+        authorization_attempted = True
+        auth_ref = gh_api(
+            f"repos/{repository}/git/refs",
+            method="POST",
+            payload={
+                "ref": "refs/heads/" + authorization,
+                "sha": carrier_commit,
+            },
+        )
+        if (auth_ref.get("ref") != "refs/heads/" + authorization
+                or auth_ref.get("object", {}).get("sha")
+                   not in (None, carrier_commit)):
+            raise Denied("carrier did not confirm dispatcher authorization ref")
+
+        # Never trust create responses alone. Re-read both refs before success.
+        require_exact_ref(
+            repository, branch, carrier_commit, contract["repository_id"]
+        )
+        require_exact_ref(
+            repository, authorization, carrier_commit, contract["repository_id"]
+        )
+    except BaseException:
+        rollback_error = None
+        if authorization_attempted:
+            try:
+                delete_exact_ref(
+                    repository, authorization, carrier_commit,
+                    contract["repository_id"],
+                )
+            except BaseException as rollback_exc:
+                rollback_error = rollback_exc
+        if payload_attempted:
+            try:
+                delete_exact_ref(
+                    repository, branch, carrier_commit,
+                    contract["repository_id"],
+                )
+            except BaseException as rollback_exc:
+                rollback_error = rollback_error or rollback_exc
+        if rollback_error is not None:
+            raise Denied(
+                "private CI handoff failed and carrier ref rollback was incomplete"
+            ) from rollback_error
+        raise
 
     return {
         "commit": carrier_commit,

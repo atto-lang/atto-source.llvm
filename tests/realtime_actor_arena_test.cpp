@@ -175,5 +175,64 @@ int main() {
                 ORES_RT_ARENA_OK,
             "prefault step larger than arena must terminate safely");
 
+    // Failed allocation validation must not consume the free-stack entry.
+    alignas(std::max_align_t) std::array<unsigned char, 4096> corrupt_slots{};
+    OresRealtimeActorArena corrupt_arena{};
+    require(ores_rt_actor_arena_init(
+                &corrupt_arena, corrupt_slots.data(), corrupt_slots.size(),
+                4, 4, 4, 2, 16, 64) == ORES_RT_ARENA_OK,
+            "corrupt-free-stack arena init");
+    require(ores_rt_actor_arena_seal(&corrupt_arena, 4096) ==
+                ORES_RT_ARENA_OK,
+            "corrupt-free-stack arena seal");
+    OresRtArenaTurn corrupt_turn{};
+    require(ores_rt_actor_arena_enter(&corrupt_arena, 4, 4, &corrupt_turn) ==
+                ORES_RT_ARENA_OK,
+            "corrupt-free-stack arena enter");
+
+    const std::size_t original_free_count = corrupt_arena.free_count;
+    const std::size_t top_slot =
+        corrupt_arena.free_slots[original_free_count - 1];
+    OresRtArenaHandle rejected{};
+
+    corrupt_arena.free_slots[original_free_count - 1] =
+        corrupt_arena.slot_count;
+    require(ores_rt_actor_arena_alloc(
+                &corrupt_arena, corrupt_turn, 8, &rejected) ==
+                ORES_RT_ARENA_INVALID,
+            "out-of-range free-stack entry must reject");
+    require(corrupt_arena.free_count == original_free_count,
+            "invalid free-stack entry must not consume capacity");
+
+    corrupt_arena.free_slots[original_free_count - 1] = top_slot;
+    corrupt_arena.slots[top_slot].live = 1;
+    require(ores_rt_actor_arena_alloc(
+                &corrupt_arena, corrupt_turn, 8, &rejected) ==
+                ORES_RT_ARENA_INVALID,
+            "live free-stack slot must reject");
+    require(corrupt_arena.free_count == original_free_count,
+            "live free-stack slot must not consume capacity");
+
+    corrupt_arena.slots[top_slot].live = 0;
+    corrupt_arena.slots[top_slot].generation =
+        std::numeric_limits<std::uint64_t>::max();
+    require(ores_rt_actor_arena_alloc(
+                &corrupt_arena, corrupt_turn, 8, &rejected) ==
+                ORES_RT_ARENA_GENERATION_EXHAUSTED,
+            "generation-exhausted free-stack slot must reject");
+    require(corrupt_arena.free_count == original_free_count,
+            "generation exhaustion must not consume capacity");
+
+    corrupt_arena.slots[top_slot].generation = 1;
+    require(ores_rt_actor_arena_alloc(
+                &corrupt_arena, corrupt_turn, 8, &rejected) ==
+                ORES_RT_ARENA_OK,
+            "restored free-stack slot must still allocate");
+    require(corrupt_arena.free_count == original_free_count - 1,
+            "successful allocation consumes exactly one free-stack entry");
+    require(ores_rt_actor_arena_leave(&corrupt_arena, corrupt_turn) ==
+                ORES_RT_ARENA_OK,
+            "corrupt-free-stack arena leave");
+
     return 0;
 }

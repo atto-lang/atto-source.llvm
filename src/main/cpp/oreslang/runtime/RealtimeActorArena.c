@@ -262,7 +262,8 @@ OresRtArenaStatus ores_rt_actor_arena_alloc(
     if (arena->free_count == 0)
         return ORES_RT_ARENA_CAPACITY;
 
-    const size_t index = arena->free_slots[--arena->free_count];
+    const size_t next_free_count = arena->free_count - 1;
+    const size_t index = arena->free_slots[next_free_count];
     if (index >= arena->slot_count)
         return ORES_RT_ARENA_INVALID;
     OresRealtimeArenaSlot* slot = &arena->slots[index];
@@ -271,6 +272,7 @@ OresRtArenaStatus ores_rt_actor_arena_alloc(
     if (slot->generation == UINT64_MAX)
         return ORES_RT_ARENA_GENERATION_EXHAUSTED;
 
+    arena->free_count = next_free_count;
     slot->live = 1;
     slot->length = bytes;
     out_handle->domain = arena->domain;
