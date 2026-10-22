@@ -5,6 +5,8 @@ on:
       - 'src/main/cpp/oreslang/frontend/NativeScalarSmt.hpp'
       - 'tests/native_checked_scalar_smt_test.cpp'
       - 'tests/fixtures/formal-core-scalar-checked.ores'
+      - 'tests/fixtures/core-math-i64-v1.json'
+      - 'tests/native_aot_core_math_matrix.py'
       - 'formal/native-scalar/**'
       - '.github/workflows/native-checked-scalar-smt.yml'
   workflow_dispatch:
@@ -75,5 +77,64 @@ jobs:
         with:
           name: native-scalar-smt-evidence
           path: build/native-scalar-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+  native-aot-core-math:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact AOT fixture, source and shared semantic contract
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git hash-object tests/fixtures/formal-core-scalar-checked.ores)" = "f1bf58f3e28c2b5a76553f96e23839a9a520a0a4"
+          test "$(git hash-object tests/fixtures/core-math-i64-v1.json)" = "58d2b64a137ede4700593f855e1f0504ff744f90"
+      - name: Install pinned-layout native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-dev clang
+      - name: Build real Oreslang LLVM compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/native-core-aot -G Ninja \
+            -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build/native-core-aot --target oreslang-llvmc -j 2
+      - name: Execute all 24 full signed-i64 guest cases and negative control
+        run: |
+          set -euo pipefail
+          mkdir -p build/core-math-execution
+          python3 tests/native_aot_core_math_matrix.py \
+            --compiler build/native-core-aot/oreslang-llvmc \
+            --clang "$(command -v clang)" \
+            --evidence-dir build/core-math-execution \
+            | tee build/core-math-execution/guest.log
+          grep -Fx 'NATIVE-AOT-CORE-MATH-OK 24 guest executions + 1 negative' \
+            build/core-math-execution/guest.log
+      - name: Record actual execution provenance
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p build/core-math-execution
+          git rev-parse HEAD > build/core-math-execution/head-sha.txt
+          git hash-object tests/fixtures/formal-core-scalar-checked.ores \
+            > build/core-math-execution/fixture-blob.txt
+          llvm-config --version > build/core-math-execution/llvm-version.txt
+          clang --version > build/core-math-execution/clang-version.txt
+          if test -f build/native-core-aot/oreslang-llvmc; then
+            sha256sum build/native-core-aot/oreslang-llvmc \
+              > build/core-math-execution/compiler-sha256.txt
+          fi
+      - name: Archive guest execution, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-core-math-aot-evidence
+          path: build/core-math-execution/
           if-no-files-found: warn
           retention-days: 14
