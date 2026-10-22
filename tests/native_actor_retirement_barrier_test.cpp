@@ -215,8 +215,20 @@ static void deferred_source_cleanup_physically_fences_actor_done() {
     const NativeSourceCleanupTicket ticket{17, 1, 99};
     std::atomic<int> freed{0};
     registry->register_resource(Kind::native_allocation, [&] { ++freed; });
+    // A second suspended child pins the actor even after this one finishes.
+    const auto outstanding_child = registry->acquire_loan();
     NativeActorRetirementBarrier* barrier = nullptr;
     auto ref = group.adopt(410, 17, 1, [&] { barrier->retire(); });
+    bool wrong_incarnation_denied = false;
+    try {
+        auto stale = std::make_shared<NativeSourceCleanupGate>(
+                NativeSourceCleanupTicket{17, 2, 99});
+        NativeActorRetirementBarrier invalid(registry, group.runtime_finalizer(ref),
+                                             quarantine, stale);
+    } catch (const std::invalid_argument&) {
+        wrong_incarnation_denied = true;
+    }
+    require(wrong_incarnation_denied, "foreign cleanup receipt admitted");
     NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
                                        quarantine, receipt);
     barrier = &owned;
@@ -233,6 +245,9 @@ static void deferred_source_cleanup_physically_fences_actor_done() {
     require(owned.poll() == Poll::pending, "yielded cleanup freed arena");
     require(receipt->try_claim_cleanup(ticket), "cleanup resume on owner lane");
     require(receipt->complete_cleanup(ticket), "cleanup completion");
+    require(owned.poll() == Poll::pending && freed == 0,
+            "another suspended continuation lost its physical lifetime pin");
+    registry->release_loan(outstanding_child);
     require(owned.poll() == Poll::completed && freed == 1,
             "physically completed cleanup failed to enable actor retirement");
     ref.get_done().get();
