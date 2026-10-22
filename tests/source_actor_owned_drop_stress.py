@@ -42,10 +42,12 @@ def main():
             "missing generated native source constructor")
     require("define i64 @oreslang_actor_Worker_on_message(" in ir,
             "missing generated actor message handler")
-    new_token = "call void @ores_actor_i64_heap_scoped_new("
+    new_token = "call i32 @ores_actor_i64_heap_scoped_try_new("
     drop_token = "call void @ores_actor_i64_heap_scoped_drop("
-    require(ir.count(new_token) == 2 and ir.count(drop_token) == 2,
-            "missing or duplicate compiler-generated scoped owner calls")
+    require(ir.count(new_token) == 2 and ir.count(drop_token) == 3,
+            "missing checked owner acquisition or partial/normal drop calls")
+    require("actor.owned.exhausted:" in ir,
+            "missing compiler-generated native allocation failure edge")
     require("gc.statepoint" not in ir and "gc.root" not in ir,
             "unexpected LLVM tracing GC root intrinsics")
 
@@ -81,12 +83,12 @@ def main():
                 str(result.returncode) + " stdout=" + result.stdout +
                 " stderr=" + result.stderr)
 
-        # Mutation adequacy: remove *only* the two compiler-owned drop
-        # instructions from otherwise unchanged valid LLVM IR, rebuild the
+        # Mutation adequacy: remove *all three* compiler-owned drop
+        # instructions (including one partial-failure cleanup edge) from otherwise unchanged valid LLVM IR, rebuild the
         # same source handler and require deterministic native fail-stop.
         dropped = [line for line in ir.splitlines(keepends=True)
                    if drop_token in line]
-        require(len(dropped) == 2, "mutation found unexpected drop instruction count")
+        require(len(dropped) == 3, "mutation found unexpected drop instruction count")
         mutant_ir = "".join(line for line in ir.splitlines(keepends=True)
                             if drop_token not in line)
         mutant = linked("actor-owned-missing-drops", mutant_ir)
