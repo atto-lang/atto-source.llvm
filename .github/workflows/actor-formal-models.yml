@@ -30,6 +30,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Establish exact reviewed checkout identity
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SOURCE_SHA"
+          printf 'EXACT_SOURCE_SHA=%s\n' "$actual"
+          git rev-parse 'HEAD^{tree}'
       - name: Show exact evaluated revision
         shell: bash
         run: |
