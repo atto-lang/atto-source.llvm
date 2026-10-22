@@ -1149,6 +1149,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-resource-registry-test)
     set_tests_properties(native_actor_resource_registry_quiescence PROPERTIES TIMEOUT 15)
 
+    add_executable(oreslang-actor-resource-registry-identity-test
+        tests/actor_resource_registry_identity_test.cpp
+        tests/actor_resource_registry_identity_peer.cpp)
+    target_include_directories(oreslang-actor-resource-registry-identity-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-resource-registry-identity-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-resource-registry-identity-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-registry-identity-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_registry_identity
+        COMMAND oreslang-actor-resource-registry-identity-test)
+    set_tests_properties(native_actor_resource_registry_identity PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-actor-group-lifecycle-test tests/actor_group_lifecycle_test.cpp)
     target_include_directories(oreslang-actor-group-lifecycle-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
