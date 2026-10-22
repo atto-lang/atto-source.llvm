@@ -93,8 +93,11 @@ def main():
                             if drop_token not in line)
         mutant = linked("actor-owned-missing-drops", mutant_ir)
         denied = run([str(mutant)], env=env)
-        require(denied.returncode == -signal.SIGABRT,
-                "removing compiler drops was not caught by bounded native heap: " +
+        # The checked compiler path uses llvm.trap (typically SIGILL on
+        # x86), while the legacy C heap guard uses abort (SIGABRT). Both are
+        # hard fail-stop, and a zero exit is always an unsafe mutant pass.
+        require(denied.returncode in (-signal.SIGILL, -signal.SIGABRT),
+                "removing compiler drops was not caught by native fail-stop: " +
                 str(denied.returncode) + " " + denied.stderr)
         require(marker not in denied.stdout, "drop-less mutant wrongly passed")
 
