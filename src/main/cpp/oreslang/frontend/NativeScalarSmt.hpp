@@ -18,6 +18,13 @@ public:
     static std::string from_source(std::string_view source, std::string_view function) {
         if (source.size() > 2'000'000)
             throw std::invalid_argument("source proof budget exceeded");
+        // This first scalar verifier admits an ASCII-only source profile:
+        // do not assume that the lower-level parser applies the launcher's
+        // UTF-8/NUL preflight when invoked directly by tooling.
+        for (unsigned char byte : source) {
+            if (byte == 0 || byte >= 0x80)
+                throw std::invalid_argument("native scalar proof requires ASCII source");
+        }
         // Parser validates names, types and ownership before reaching the adapter.
         const Program program = parse_program(source);
         return from_program(program, function);
