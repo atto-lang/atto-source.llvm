@@ -32,6 +32,34 @@ read. `Observable<T>` multicast requires per-subscriber bounded credits,
 delivery policy and independent cancellation. A channel/stream conversion may
 not invent unbounded buffering or a background guest thread.
 
+## Canonical reactive terminal ABI
+
+A backend must not infer terminal meaning from `Option<T>` alone.
+
+The lossless **consumer signal** is:
+
+`Result<Option<T>, Option<E>>`
+
+- `Ok(Some(value))` = NEXT(value)
+- `Ok(None)` = COMPLETE
+- `Err(None)` = CANCELLED
+- `Err(Some(error))` = ERROR(error)
+
+This nesting deliberately preserves `T = Option<U>` and
+`T = Result<A,B>` as ordinary NEXT data. An optional error payload is also
+unambiguous: ERROR(None) is `Err(Some(None))`, distinct from CANCELLED.
+
+A producer data channel normally carries the three-way frame
+`Result<Option<T>, E>` (NEXT / COMPLETE / explicit ERROR). Consumer
+cancellation is local control and must not be serialized into the producer
+frame unless a higher-level wire protocol explicitly owns such a cancellation
+message.
+
+A backend without source `Channel<T>`, Future selection, or the closed
+Option/Result lowering required by this ABI must reject the reactive source
+before lowering. Native mailbox/Future helpers and syntax-only negative tests
+do not count as implementation.
+
 ## Mailboxes and serial actors
 
 The actor mailbox transports typed `Envelope<Message>` using a private

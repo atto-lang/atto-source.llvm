@@ -96,3 +96,18 @@ Complete migration requires:
 Related Java work: [suffix/continuation PR #522](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/522)
 and [HTTP sendAsync migration PR #584](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/584).
 Neither proves LLVM feature parity or that all Java host I/O is nonblocking.
+
+
+## Linux socket/readiness implementation slice (2026-10-12 draft)
+
+The Linux-only \`NonblockingTcpLinux.hpp\` implements owned CLOEXEC/O_NONBLOCK
+socket creation, a loopback listener, nonblocking accept4, MSG_DONTWAIT TCP
+reads/writes, and epoll readiness with stable numeric tags. The standalone
+\`native_linux_nonblocking_tcp_readiness\` CTest validates a real socket
+round-trip, readiness, EAGAIN and owned FD flags. This is not source-level
+\`std/net\`, compiler async lowering, a scheduler, or a production listener.
+An epoll wait may park a *dedicated I/O reactor* thread, never an actor
+or ROOT execution carrier. Completion callbacks may not touch actor memory.
+Production adoption still requires bounded queues, operation-generation
+validation, buffer lifetime retention, exactly-once completion, cancellation
+and cross-backend differential tests.

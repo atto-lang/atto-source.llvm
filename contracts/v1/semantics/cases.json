@@ -35,6 +35,17 @@
       }
     },
     {
+      "id": "native.owned-identifier",
+      "feature": "lexer.owned-is-identifier",
+      "source": "fixtures/owned-identifier.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
       "id": "native.underscores",
       "feature": "numeric.integer-separators",
       "source": "fixtures/underscores.ores",

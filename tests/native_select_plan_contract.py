@@ -14,7 +14,8 @@ def main():
         fixture = pathlib.Path(args.fixtures) / name
         process = subprocess.run([args.compiler, str(fixture)], capture_output=True,
                                  text=True, check=False, timeout=20)
-        if process.returncode == 0 or process.stdout.strip() or "expected 'return'" not in process.stderr:
+        if (process.returncode != 1 or process.stdout.strip()
+                or "native SelectPlan/SelectCase ownership unsupported" not in process.stderr):
             raise AssertionError(f"{name}: native select descriptor must fail without IR: {process.stderr}")
     print("native linear SelectPlan admission: 2/2 rejected before LLVM IR")
 
