@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/NativeActorScheduler.h"
+#include "oreslang/runtime/NativeActorFuture.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,6 +40,23 @@ typedef struct {
 
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in quota/cpuset-aware carrier admission. An explicit nonzero
+ * carrier_workers is preserved for its domain, while zero-valued domains
+ * divide remaining detected CPU capacity (at least one pthread per domain).
+ * This sizes pools, but does NOT pin them, provide isolation, or implement
+ * region/Task ownership. Legacy open() retains its 0 => 5 contract.
+ */
+OresNativeVM* ores_native_vm_open_cpu_budgeted(const OresNativeVMConfig* config);
+/* Separate opt-in strict cross-domain physical callback concurrency limit,
+ * including under 4 CPUs. Leaves configured per-domain carrier counts
+ * unchanged. A denied callback stays on its scheduler's ready queue and no
+ * Oreslang actor code or Task is run while waiting for a permit.
+ * Host-only; independently owned nb Task schedulers are not covered yet. */
+OresNativeVM* ores_native_vm_open_with_physical_turn_limit(
+    const OresNativeVMConfig* config, size_t maximum);
+size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm);
+/* Host-detected snapshot, 1 minimum; not the count of exclusive CPU cores. */
+size_t ores_native_vm_effective_cpu_budget(void);
 size_t ores_native_vm_workers(const OresNativeVM* vm, enum OresNativeVMDomain domain);
 /* Security admission probe, NOT a capability grant.
  * All four native scheduler domains are in-process host callbacks and have
@@ -99,6 +117,19 @@ int ores_native_vm_wait_done(
 int ores_native_vm_publish_control(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef parent, uint64_t payload);
+
+/*
+ * Trusted continuation bridge helpers. The VM keeps its domain scheduler
+ * private while allowing runtime-owned Future and logical-execution plumbing.
+ * current_execution_context succeeds only from the selected domain's active
+ * carrier callback; it never exposes the scheduler pointer to guest code.
+ */
+OresNativeActorFuture* ores_native_vm_actor_future_open(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef owner, uint64_t control_token);
+int ores_native_vm_current_execution_context(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeExecutionContext* out);
 
 /* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
  * per domain. The host event loop explicitly pumps it; no master pthread or
