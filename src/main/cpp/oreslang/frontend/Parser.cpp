@@ -123,6 +123,20 @@ void reject_unsupported_refinement_surface(std::string_view source) {
             const auto start = at++;
             while (at < source.size() && identifier_part(source[at])) ++at;
             const auto word = source.substr(start, at - start);
+            // Reserved compiler-minted schema capability. The native backend
+            // cannot yet preserve proof identity or enforce checked ownership.
+            // Refuse the standalone identifier as well as nested/qualified
+            // Valid<T,S> syntax before emitting *any* LLVM IR. This lexical
+            // preflight excludes comments and strings above, and must later
+            // be replaced with AST/typechecker admission once generic proofs
+            // are supported.
+            if (word == "Valid") {
+                throw std::runtime_error(
+                    "native Zorde Valid<T, SchemaId> proof unsupported: "
+                    "compiler-owned construction, schema identity and "
+                    "immutable transfer lowering required at byte " +
+                    std::to_string(start));
+            }
             if (word == "newtype") {
                 throw std::runtime_error(
                     "native refinement boundary unsupported: nominal newtype "

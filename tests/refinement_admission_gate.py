@@ -14,7 +14,7 @@ import tempfile
 CONTROL = "fnc main(): int { return 42; }\n"
 CONTROL_WITH_DECOYS = (
     "/* @Range(min=1,max=2) type X = int with value gt 0; */\n"
-    "// define newtype Hidden(int);\n"
+    "// define newtype Hidden(int); Valid<int, Schema> and Zorde.Valid are decoys\n"
     "fnc main(): int { return 42; }\n"
 )
 UNSUPPORTED = {
@@ -62,6 +62,19 @@ UNSUPPORTED = {
 
 }
 
+# Zorde opaque proof admission: no compiler-minted value yet, so a dedicated
+# denial is mandatory even when generic type parsing is otherwise unsupported.
+PROOF_UNSUPPORTED = {
+    "proof-basic": "type Proof = Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
+    "proof-qualified": "type Proof = Zorde.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
+    "proof-stdlib": "type Proof = std.zorde.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
+    "proof-attacker-namespace": "type Proof = adversarial.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
+    "proof-nested-option": "type Proof = Option<Valid<int, UserSchema>>;\nfnc main(): int { return 42; }\n",
+    "proof-nested-result": "type Proof = Result<int, Valid<int, UserSchema>>;\nfnc main(): int { return 42; }\n",
+    "proof-bare": "type Proof = Valid;\nfnc main(): int { return 42; }\n",
+    "proof-new": "fnc main(): int { new Valid<int, UserSchema>(1); return 42; }\n",
+}
+
 def run(compiler: pathlib.Path, source: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run([str(compiler), str(source)], capture_output=True,
                           text=True, timeout=30, check=False)
@@ -83,7 +96,7 @@ def main() -> None:
         decoy_result = run(compiler, decoy)
         if decoy_result.returncode != 0 or "define" not in decoy_result.stdout:
             raise AssertionError("refinement words inside comments caused false-positive admission failure")
-        for case, source in UNSUPPORTED.items():
+        for case, source in {**UNSUPPORTED, **PROOF_UNSUPPORTED}.items():
             candidate = directory / (case + ".ores")
             candidate.write_text(source, encoding="utf-8")
             result = run(compiler, candidate)
@@ -93,11 +106,16 @@ def main() -> None:
                 raise AssertionError(f"{case}: failed admission leaked partial LLVM IR/stdout")
             if not result.stderr.strip():
                 raise AssertionError(f"{case}: failure had no diagnostic")
-            if "native refinement boundary unsupported" not in result.stderr:
+            expected_diagnostic = (
+                "native Zorde Valid<T, SchemaId> proof unsupported"
+                if case in PROOF_UNSUPPORTED else "native refinement boundary unsupported"
+            )
+            if expected_diagnostic not in result.stderr:
                 raise AssertionError(
                     f"{case}: rejection was incidental parser failure, not compiler-owned gate"
                 )
-        print(f"native fail-closed refinements: {len(UNSUPPORTED)} negative cases + positive control")
+        print(f"native fail-closed refinements: {len(UNSUPPORTED)} refinement + "
+              f"{len(PROOF_UNSUPPORTED)} Zorde proof negative cases + positive control")
 
 if __name__ == "__main__":
     main()
