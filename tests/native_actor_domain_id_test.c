@@ -94,7 +94,7 @@ static void run_case(uint64_t partition, uint64_t first, unsigned count, uint64_
             if (ores_native_actor_domain_reserve(&shared_next, expected_partition))
                 fail("terminal state reissued a previously used domain");
         }
-        if (atomic_load_explicit(&shared_next, memory_order_relaxed) != UINT64_MAX)
+        if (atomic_load_explicit(&shared_next, memory_order_relaxed) != final)
             fail("exhausted calls changed terminal state");
     }
 }
