@@ -73,6 +73,9 @@ inline bool worker_marker_proven(const WorkerType& type, WorkerMarker marker,
             if (!child(arg, marker)) return false;
         return true;
     case Shape::Named: {
+        // A missing compiler nominal authority must deny the proof, not
+        // escape as std::bad_function_call during source admission.
+        if (!nominal) return false;
         const auto& n = type.name;
         const auto& args = type.args;
         // Intrinsic identity must be proven by compiler metadata before
