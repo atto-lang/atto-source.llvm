@@ -1800,6 +1800,35 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-ready-summary-test)
     set_tests_properties(native_actor_ready_summary_sparse_65k
         PROPERTIES TIMEOUT 90)
+    # Second-level occupancy summary: 16,384 distinct actor turns across
+    # 1024 bitmap words, priority CONTROL, FIFO and stale-ref rejection.
+    add_executable(oreslang-native-ready-summary-16k-test
+        tests/native_actor_ready_summary_16k_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ready-summary-16k-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ready-summary-16k-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ready-summary-16k-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ready_summary_16k_turns
+        COMMAND oreslang-native-ready-summary-16k-test)
+    set_tests_properties(native_actor_ready_summary_16k_turns
+        PROPERTIES TIMEOUT 90)
+    # Seeded CONTROL/DATA/stop races across 4,096 actor lanes and
+    # multiple producer threads; each accepted envelope must complete once.
+    add_executable(oreslang-native-ready-summary-race-test
+        tests/native_actor_ready_summary_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ready-summary-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    target_link_libraries(oreslang-native-ready-summary-race-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ready-summary-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ready_summary_send_stop_race
+        COMMAND oreslang-native-ready-summary-race-test)
+    set_tests_properties(native_actor_ready_summary_send_stop_race
+        PROPERTIES TIMEOUT 90)
     # Real native scheduler: stable pthread slot preference, bounded fallback,
     # zero allocation in dispatch and preserved per-actor exclusive ownership.
     add_executable(oreslang-native-carrier-locality-test
