@@ -114,7 +114,7 @@ jobs:
             --clang "$(command -v clang)" \
             --evidence-dir build/core-math-execution \
             | tee build/core-math-execution/guest.log
-          grep -Fx 'NATIVE-AOT-CORE-MATH-OK 24 guest executions + 1 negative' \
+          grep -Fx 'NATIVE-AOT-CORE-MATH-OK 24 cases x 2 optimization levels + 2 negative' \
             build/core-math-execution/guest.log
       - name: Record actual execution provenance
         if: always()
