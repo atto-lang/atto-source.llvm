@@ -91,7 +91,33 @@ int main(int argc, char** argv) {
     mutable_ir.CreateRet(stored);
     require(!llvm::verifyFunction(*write, &llvm::errs()), "write LLVM verifier failed");
 
-    // Checked four-byte graph edge at byte 8 avoids the root's i64 at byte 0.\n    // LLVM keeps i32 on both ends; an overlapping offset 4 would corrupt\n    // checked_actor_read's 64-bit root value in the AOT driver.
+    const ActorObjectFieldLayout graph_layout{16, {{0, 8, false}, {8, 4, true}}};
+    const auto edge_field = verify_actor_compressed_ref_field(graph_layout, 1);
+    require(edge_field.offset() == 8, "graph ref layout should begin at byte 8");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(
+            ActorObjectFieldLayout{16, {{0, 8, false}, {4, 4, true}}}, 1);
+    }, "scalar/ref overlap was accepted");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(
+            ActorObjectFieldLayout{16, {{0, 8, false}, {13, 4, true}}}, 1);
+    }, "out-of-bounds or unaligned ref field was accepted");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(
+            ActorObjectFieldLayout{16, {{0, 8, false}, {8, 8, true}}}, 1);
+    }, "wide compact ref field was accepted");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(graph_layout, 0);
+    }, "ordinary scalar passed as graph reference");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(graph_layout, 2);
+    }, "out-of-range field index passed");
+    rejects([&] {
+        (void)verify_actor_compressed_ref_field(
+            ActorObjectFieldLayout{16, {{0, 8, false}, {8, 4, true}, {10, 2, false}}}, 1);
+    }, "overlap between reference and third field passed");
+
+    // Keep the root i64 at bytes 0..7 disjoint from graph edge at 8..11.
     auto* edge_read = llvm::Function::Create(llvm::FunctionType::get(
         i32, {ptr, i64, i64, i32}, false),
         llvm::GlobalValue::ExternalLinkage, "checked_actor_edge_read", module);
@@ -100,7 +126,7 @@ int main(int argc, char** argv) {
     llvm::Value* edge_root = &*args++;
     llvm::IRBuilder<> edge_ir(llvm::BasicBlock::Create(context, "entry", edge_read));
     llvm::Value* edge_target = lower_actor_compact_ref_i32_read(
-        edge_ir, read_plan, edge_read_context, edge_root, 8);
+        edge_ir, read_plan, edge_read_context, edge_root, edge_field);
     edge_ir.CreateRet(edge_target);
     require(!llvm::verifyFunction(*edge_read, &llvm::errs()), "edge read verifier failed");
 
@@ -113,25 +139,22 @@ int main(int argc, char** argv) {
     llvm::Value* edge_child = &*args++;
     llvm::IRBuilder<> edge_mut_ir(llvm::BasicBlock::Create(context, "entry", edge_write));
     lower_actor_compact_ref_i32_write(
-        edge_mut_ir, write_plan, edge_write_context, edge_source, 8, edge_child);
+        edge_mut_ir, write_plan, edge_write_context, edge_source, edge_field, edge_child);
     edge_mut_ir.CreateRetVoid();
     require(!llvm::verifyFunction(*edge_write, &llvm::errs()), "edge write verifier failed");
     rejects([&] {
         lower_actor_compact_ref_i32_write(
-            edge_mut_ir, read_plan, edge_write_context, edge_source, 4, edge_child);
+            edge_mut_ir, read_plan, edge_write_context, edge_source, edge_field, edge_child);
     }, "read-only loan wrote graph edge");
     rejects([&] {
         (void)lower_actor_compact_ref_i32_read(
-            edge_ir, read_plan, edge_read_context, next_value, 4);
+            edge_ir, read_plan, edge_read_context, next_value, edge_field);
     }, "native-width scalar became graph pointer");
     rejects([&] {
         lower_actor_compact_ref_i32_write(
-            edge_mut_ir, write_plan, edge_write_context, edge_source, 4, next_value);
+            edge_mut_ir, write_plan, edge_write_context, edge_source, edge_field, next_value);
     }, "i64 scalar became graph target");
-    rejects([&] {
-        (void)lower_actor_compact_ref_i32_read(
-            edge_ir, read_plan, edge_read_context, edge_root, 1);
-    }, "unaligned graph field was admitted");
+    // The field verifier rejects unaligned physical layouts before LLVM codegen.
 
     rejects([&] {
         lower_actor_compact_i64_publish(
