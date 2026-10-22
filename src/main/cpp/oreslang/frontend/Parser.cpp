@@ -405,8 +405,38 @@ private:
         require(":");
         require("int");
         require("{");
+        // The first compiler-lowered per-message owned value slice is
+        // deliberately synchronous and immutable. Handler temporaries are
+        // allocated in the existing actor heap and dropped before returning;
+        // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (token_.text == "const") {
+                if (!experimental_owned_int_)
+                    fail("experimental owned int requires --experimental-owned-int");
+                LocalBinding local;
+                local.offset = token_.offset;
+                advance();
+                local.name = identifier();
+                if (local.name == method.parameters.front().name ||
+                        names.count(local.name))
+                    fail("actor temporary shadows a field or parameter");
+                if (method.locals.size() >= 8)
+                    fail("native actor temporary owner limit exceeded (8)");
+                require(":");
+                require("owned");
+                require("int");
+                require("=");
+                local.initializer = expression();
+                if (!native_constructor_scalar_tree(*local.initializer))
+                    fail("native actor owned temporary requires pure scalar initializer");
+                require(";");
+                if (!names.insert(local.name).second)
+                    fail("duplicate actor temporary owner");
+                local.heap_owned = true;
+                method.locals.push_back(std::move(local));
+                continue;
+            }
             ActorFieldWrite write;
             write.offset = token_.offset;
             write.field = identifier();
