@@ -112,3 +112,26 @@ CTest, Clang AOT runtime, and sanitizers execute.
 
 Related base PR: LLVM #750. This PR must be reviewed as a stacked dependency
 and retested after any semantic resolution with main.
+
+## Checked intra-actor graph edges (stacked follow-up)
+
+The C actor slab now offers `compact_store_ref_i32` and
+`compact_load_ref_i32`. A verified compiler-generated mutable state loan
+may store a 32-bit reference in a 4-byte-aligned real object field; reading
+it checks that both the source object and non-null referenced target are
+still live, at object starts, and published in the currently admitted
+actor arena. The field is exactly 4 bytes. Null is zero.
+
+The checked operations use one actor-arena lock and never materialize,
+return, or store a native machine pointer. They reject dangling targets,
+unpublished/interior offsets, invalid owner turns, borrowed writes, field
+misalignment, and bounds violations. Already-published slots remain
+quarantined after drop to prevent compact-reference ABA.
+
+This is **runtime and MIR scaffolding only**. An integer matching a valid
+offset is not an actor ownership proof: domain identities live outside the
+four-byte word, and the compiler MUST NOT permit integer casts, mailbox
+transport, or cross-actor raw compact-field copies. The source compiler
+does not yet mint general graph references from parsed Oreslang programs.
+Permanent quarantine also limits allocation churn in long-lived actors;
+proof-based safe reuse or versioned reference layouts need separate work.
