@@ -86,6 +86,17 @@ public:
     std::size_t reserved_count() const { return child_failures_.reserved_count(); }
     std::size_t restarts_used() const noexcept { return restarts_used_; }
 
+    // Nonparking shutdown admission. False means a policy turn is active;
+    // the CONTROL coordinator must requeue and retry before running hooks.
+    // The same lease covers on_restart, so a committed fence cannot race a
+    // later restart callback. Never wait for an actor carrier here.
+    bool try_fence_shutdown() noexcept {
+        if (lease_.test_and_set(std::memory_order_acquire)) return false;
+        shutdown_fenced_ = true;
+        lease_.clear(std::memory_order_release);
+        return true;
+    }
+
     /**
      * At most one CONTROL event per admitted turn. CONTROL takes priority
      * over continuations and user mail; invoke this at the top of the actor
@@ -113,7 +124,7 @@ public:
                     case Decision::Restart:
                         // Budget is supervisor-scoped. A failed attempt must
                         // escalate; no actor generation may be silently reused.
-                        if (restarts_used_ >= restart_budget_) {
+                        if (shutdown_fenced_ || restarts_used_ >= restart_budget_) {
                             hooks.on_escalate(*next);
                         } else {
                             ++restarts_used_;
@@ -136,7 +147,7 @@ public:
             }
             return Admitted::Control;
         }
-        if (!ordinary_mail_ready) return Admitted::None;
+        if (!ordinary_mail_ready || shutdown_fenced_) return Admitted::None;
         hooks.on_user_turn();
         return Admitted::User;
     }
@@ -158,8 +169,10 @@ private:
     SupervisorFailureLane child_failures_;
     const std::size_t restart_budget_;
     std::size_t restarts_used_ = 0; // single-writer supervisor turn
+    bool shutdown_fenced_ = false; // protected by the logical-turn lease
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
 
 };
 
 } // namespace oreslang
+

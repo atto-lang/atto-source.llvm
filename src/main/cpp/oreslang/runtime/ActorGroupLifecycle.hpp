@@ -286,6 +286,24 @@ public:
 
     ~NativeActorGroup() { close(); }
 
+    // Fence spawn/adopt while preserving accepted turns and mailbox drain.
+    // No stop callback runs under this lock.
+    void fence_worker_admissions() {
+        std::lock_guard<std::mutex> guard(mutex_);
+        worker_admission_fenced_ = true;
+    }
+
+    // Unlike worker_count(), this includes workers detached by close().
+    // Only the authenticated physical finalizer erases the owner record.
+    // This certifies managed-actor retirement, not all native/FFI loans.
+    static bool has_live_managed_workers(std::uint64_t group_id) {
+        auto& owners = registry();
+        std::lock_guard<std::mutex> guard(owners.mutex);
+        for (const auto& owner : owners.live)
+            if (owner.second.group_id == group_id) return true;
+        return false;
+    }
+
     /** Immediate native equivalent of spawn: one *exclusive* manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
                          std::uint64_t generation, StopRequest stop_request) {
@@ -297,6 +315,7 @@ public:
         // All paths touching both locks take the same scoped pair.
         std::scoped_lock guard(mutex_, owners.mutex);
         if (closed_) throw std::logic_error("ActorGroup is closed");
+        if (worker_admission_fenced_) throw std::logic_error("ActorGroup worker admission fenced");
         if (workers_.find(actor_id) != workers_.end())
             throw std::logic_error("actor already managed by group");
         if (workers_.size() >= maximum_workers_)
@@ -647,7 +666,9 @@ private:
     const std::uint64_t group_id_;
     mutable std::mutex mutex_;
     bool closed_ = false;
+    bool worker_admission_fenced_ = false;
     std::unordered_map<std::uint64_t, Entry> workers_;
 };
 
 }  // namespace oreslang::runtime
+

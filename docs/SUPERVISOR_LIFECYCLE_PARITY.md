@@ -1,6 +1,7 @@
 # Native supervisor lifecycle parity boundary
 
-This is a host CONTROL reducer, not a scheduler-integrated shutdown tree.
+This is a host CONTROL reducer plus registry/CONTROL admission integration,
+not a complete scheduler-integrated shutdown-hook coordinator.
 Companion: Java PR #1924, dependency #1911. LLVM base commit:
 `b58e43126284a70713a6641f2585edde8a6ca1e5`.
 
@@ -56,15 +57,62 @@ g++ -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
 /tmp/lifecycle-test
 ```
 
-CTest registration: `native_supervisor_lifecycle_fsm`.
+CTest registrations: `native_supervisor_lifecycle_fsm` and
+`native_supervisor_lifecycle_registry`.
+
+## Registry and CONTROL integration
+
+NativeSupervisorRegistry now owns one lifecycle record and one CONTROL lane
+per supervisor. Hosts route policy turns through `control_lane(ref)`.
+`begin_shutdown()` permanently seals registry creation/policy-install admission,
+fences managed-worker adoption on every retained live group, and attempts to
+fence each CONTROL lane using its existing single-flight lease. It returns false
+if any policy turn is active: the coordinator must requeue rather than block a
+carrier. A previously admitted restart callback may finish before this fence
+commits. After successful commit, new restart decisions escalate without
+spending restart budget and ordinary supervisor user turns are suppressed.
+Independently constructed CONTROL lanes are not automatically intercepted.
+
+Shutdown preparation freezes exact child epoch tokens in registration order,
+then atomically publishes every node's BEFORE_HOOK state under the registry
+lock. Allocation failure keeps admission fenced and permits preparation retry;
+no hook executes in this API. Child adjacency is prepared once, avoiding a full
+registry scan per node. `status()` returns a coherent detached value snapshot,
+including distinct admission-fenced and shutdown-committed indicators.
+
+Trusted host hook acknowledgments go through `observe(ref,event)` with the
+captured epoch. It checks registered parent/child identity, waits for parent
+pre-hook completion before accepting child pre-hook completion, checks actual
+child lifecycle before accepting its logical completion, and propagates the
+child failure flag. Actor completion additionally checks the authoritative
+owner registry, including workers detached by group close/destruction. Closed
+groups with still-live actors are not pruned from the registry's accounting.
+This managed-actor retirement check does not certify all native loans.
+
+Registry physical-release/child-reclaimed and restart events deliberately reject
+until real issuers and restart integration exist. Numeric event data is never a
+guest capability. Policy code images already handed out still need explicit
+hot-reload/lease integration; sealing policy installation is not policy-image
+reclamation.
+
+The new executable test drives the actual registry, group finalizer and CONTROL
+lane (no stand-ins), including retained snapshots, depth-three/sibling logical
+barriers, stale/future identities, failure propagation, a dropped group's live
+worker, timeout truth, 100 coordinated STOP-vs-in-flight-restart races and
+100 concurrent spawn-vs-admission-fence races.
+Seven focused optimized tests passed: lifecycle FSM, lifecycle registry,
+existing actor-group lifecycle, supervisor registry, CONTROL turn, policy code
+slot and supervisor hierarchy. New registry tests also passed ASan+UBSan with
+the same leak-check limitation above. These are host integration checks, not
+compiler-generated source actor execution or full repository CTest.
 
 ## Remaining integration gates
 
-1. Freeze the registered tree and fence every worker/restart admission before
-   invoking any hook; preserve reverse sibling order and coherent immutable
-   tree snapshots. NativeSupervisorRegistry and SupervisorControlTurn are not
-   wired to this reducer yet. Its closed admission flag alone does not revoke
-   existing scheduler capabilities or suppress on_restart callbacks.
+1. Route the real OresVM scheduler through registry-owned CONTROL lanes and
+   implement asynchronous hook orchestration after begin_shutdown succeeds.
+   Preserve reverse sibling order, exactly-once hook admission and failure
+   aggregation. The registry currently accepts host hook acknowledgments;
+   it does not invoke/await the actual hooks or close groups automatically.
 2. Feed authenticated actor finalization, native heap/FFI/continuation loan
    retirement and descendant incarnation receipts from the actual runtime.
    Do not manufacture PhysicalRelease from NativeActorGroup::close().
