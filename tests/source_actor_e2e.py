@@ -40,6 +40,8 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-unflagged-owned.ores":
+            "experimental owned int requires --experimental-owned-int",
         "source-actor-scoped-owned-escape-reject.ores":
             "native actor owned temporary return requires pure scalar expression",
         "source-actor-static-method-reject.ores": "static method is invalid",
