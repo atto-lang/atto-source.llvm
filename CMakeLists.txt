@@ -59,6 +59,35 @@ if(BUILD_TESTING)
         set_tests_properties(native_actor_source_${ores_actor_pass} PROPERTIES TIMEOUT 30)
     endforeach()
     find_package(Threads REQUIRED)
+    # Direct native source tests for disjoint process-local actor domain IDs.
+    # These do not certify guest codegen or fencing of external callback owners.
+    add_executable(oreslang-native-domain-id-test tests/native_actor_domain_id_test.c)
+    target_include_directories(oreslang-native-domain-id-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-domain-id-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-domain-id-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-domain-id-test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_domain_partition_exhaustion
+        COMMAND oreslang-native-domain-id-test)
+    set_tests_properties(native_actor_domain_partition_exhaustion PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-domain-runtime-test
+        tests/native_actor_domain_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorArena.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    target_include_directories(oreslang-native-domain-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-domain-runtime-test PRIVATE Threads::Threads)
+    set_target_properties(oreslang-native-domain-runtime-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_compile_options(oreslang-native-domain-runtime-test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_domain_live_heap_and_loan_fencing
+        COMMAND oreslang-native-domain-runtime-test)
+    set_tests_properties(native_actor_domain_live_heap_and_loan_fencing PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-actor-scalar-heap-safety-test
         tests/native_actor_scalar_heap_safety_test.cpp
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)

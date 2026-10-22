@@ -6,6 +6,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorArena.c'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c'
       - 'tests/native_actor_domain_id_test.c'
+      - 'tests/native_actor_domain_runtime_test.c'
       - '.github/workflows/native-actor-domain-id.yml'
   workflow_dispatch:
 
@@ -39,5 +40,18 @@ jobs:
                 -I src/main/cpp -c "src/main/cpp/oreslang/runtime/${source}.c" \
                 -o "/tmp/${source}-${compiler}.o"
             done
+            "$compiler" -std=c11 -Wall -Wextra -Werror -O2 -pthread \
+              -I src/main/cpp tests/native_actor_domain_runtime_test.c \
+              src/main/cpp/oreslang/runtime/ActorArena.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              -o "/tmp/native-runtime-${compiler}"
+            "/tmp/native-runtime-${compiler}"
+            "$compiler" -std=c11 -Wall -Wextra -Werror -g -O1 -pthread \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -I src/main/cpp tests/native_actor_domain_runtime_test.c \
+              src/main/cpp/oreslang/runtime/ActorArena.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              -o "/tmp/native-runtime-${compiler}-asan"
+            ASAN_OPTIONS=detect_leaks=0 "/tmp/native-runtime-${compiler}-asan"
           done
 
