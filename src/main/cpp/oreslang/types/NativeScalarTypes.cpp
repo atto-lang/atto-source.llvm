@@ -15,11 +15,11 @@ struct Type {
 using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type parameter_type(const Parameter& p) {
-    return p.class_name.empty() ? scalar(p.boolean) : Type{Kind::Class, p.class_name};
+    return p.class_name.empty() ? scalar(p.scalar_type == ScalarType::Bool) : Type{Kind::Class, p.class_name};
 }
 Type local_type(const LocalBinding& local) {
     if (local.int_array) return {Kind::Array, {}};
-    return local.class_name.empty() ? scalar(local.boolean) : Type{Kind::Class, local.class_name};
+    return local.class_name.empty() ? scalar(local.scalar_type == ScalarType::Bool) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
     throw std::runtime_error("native scalar type mismatch: " + detail + " at byte " + std::to_string(offset));
@@ -40,22 +40,48 @@ void validate_native_scalar_types(const Program& program) {
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
         for (const auto& field : cls->second->fields)
-            if (field.name == name) return field.int_array ? Type{Kind::Array, {}} : scalar(field.boolean);
+            if (field.name == name) return field.int_array ? Type{Kind::Array, {}} : scalar(field.scalar_type == ScalarType::Bool);
         fail(offset, "unknown class field");
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
-            case E::Integer: return scalar(e.boolean_literal);
+            case E::Integer: return scalar(false);
+            case E::Boolean: return scalar(true);
             case E::Variable: return locals.at(e.name);
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
             case E::Negate:
-                require(expression(*e.left, locals), scalar(e.logical_not), e.offset,
-                        e.logical_not ? "! requires bool" : "unary - requires int");
-                return scalar(e.logical_not);
+                require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
+                return scalar(false);
+            case E::LogicalNot:
+                require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
+                return scalar(true);
+            case E::Equal: case E::NotEqual: {
+                auto left = expression(*e.left, locals), right = expression(*e.right, locals);
+                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool)) fail(e.offset, "equality operand types");
+                return scalar(true);
+            }
+            case E::Less: case E::LessEqual: case E::Greater: case E::GreaterEqual:
+                require(expression(*e.left, locals), scalar(false), e.offset, "ordered comparison requires int");
+                require(expression(*e.right, locals), scalar(false), e.offset, "ordered comparison requires int");
+                return scalar(true);
+            case E::LogicalAnd: case E::LogicalOr: case E::LogicalXor:
+                require(expression(*e.left, locals), scalar(true), e.offset, "logical operator requires bool");
+                require(expression(*e.right, locals), scalar(true), e.offset, "logical operator requires bool");
+                return scalar(true);
+            case E::Conditional: {
+                if (e.condition) require(expression(*e.condition, locals), scalar(true), e.offset, "conditional needs bool");
+                else {
+                    auto lhs = expression(*e.condition_lhs, locals), rhs = expression(*e.condition_rhs, locals);
+                    require(lhs, rhs, e.offset, "conditional equality types");
+                }
+                auto lhs = expression(*e.when_true, locals), rhs = expression(*e.when_false, locals);
+                require(lhs, rhs, e.offset, "conditional arm types");
+                return lhs;
+            }
             case E::Add: case E::Subtract: case E::Multiply:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
@@ -77,7 +103,7 @@ void validate_native_scalar_types(const Program& program) {
                     require(expression(*e.arguments[i], locals), parameter_type(fn.parameters.at(slot)),
                             e.arguments[i]->offset, "argument bool/int/nominal type differs from parameter");
                 }
-                return fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.returns_bool);
+                return fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type == ScalarType::Bool);
             }
         }
         fail(e.offset, "unsupported expression");
@@ -94,7 +120,7 @@ void validate_native_scalar_types(const Program& program) {
         for (const auto& name : cls.constructor_parameters) parameters.emplace(name, scalar(false));
         for (const auto& field : cls.fields)
             if (field.initializer_expression)
-                require(expression(*field.initializer_expression, parameters), scalar(field.boolean),
+                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type == ScalarType::Bool),
                         field.initializer_expression->offset, "class field initializer type");
     }
     std::function<void(const Function&, Locals)> function;
@@ -117,7 +143,8 @@ void validate_native_scalar_types(const Program& program) {
                     require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {
-                    compare(*item.condition_lhs, *item.condition_rhs, scope);
+                    if (item.condition) require(expression(*item.condition, scope), scalar(true), item.offset, "condition requires bool");
+                    else compare(*item.condition_lhs, *item.condition_rhs, scope);
                     statements(item.then_statements, scope); statements(item.else_statements, scope);
                 } else if (item.kind == Statement::Kind::ArrayCommitFilled) {
                     require(expression(*item.array_commit_length, scope), scalar(false), item.offset, "array length requires int");
@@ -133,9 +160,10 @@ void validate_native_scalar_types(const Program& program) {
         if (fn.caught_throw_value)
             require(expression(*fn.caught_throw_value, locals), scalar(false), fn.offset, "throw payload requires int");
         if (!fn.catch_binding.empty()) locals.emplace(fn.catch_binding, scalar(false));
-        const Type result = fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.returns_bool);
+        const Type result = fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type == ScalarType::Bool);
         for (const auto& guard : fn.early_returns) {
-            compare(*guard.lhs, *guard.rhs, locals);
+            if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
+            else compare(*guard.lhs, *guard.rhs, locals);
             require(expression(*guard.result, locals), result, guard.offset, "guarded return type");
         }
         if (fn.result) require(expression(*fn.result, locals), result, fn.offset, "return type");
@@ -145,7 +173,7 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };
     for (const auto& fn : program.functions) {
-        if (fn.name == "main" && fn.returns_bool) fail(fn.offset, "OS entrypoint requires int or void");
+        if (fn.name == "main" && fn.return_type == ScalarType::Bool) fail(fn.offset, "OS entrypoint requires int or void");
         function(fn, {});
     }
     for (const auto& actor : program.actors) {

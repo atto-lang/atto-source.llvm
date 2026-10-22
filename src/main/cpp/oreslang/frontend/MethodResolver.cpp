@@ -23,6 +23,8 @@ void resolve_native_methods(Program& program) {
         std::function<void(Expression*)> expression = [&](Expression* expr) {
             if (!expr) return;
             expression(expr->left.get()); expression(expr->right.get());
+            expression(expr->condition.get()); expression(expr->condition_lhs.get()); expression(expr->condition_rhs.get());
+            expression(expr->when_true.get()); expression(expr->when_false.get());
             for (auto& arg : expr->arguments) expression(arg.get());
             if (expr->kind != Expression::Kind::ArrayCall || !expr->left
                     || expr->left->kind != Expression::Kind::Variable) return;
@@ -41,10 +43,11 @@ void resolve_native_methods(Program& program) {
             loan->offset = expr->offset; loan->left = std::move(expr->left);
             expr->kind = Expression::Kind::Call;
             expr->name = cls->first + "." + method->name;
+            if (!expr->argument_names.empty()) expr->argument_names.insert(expr->argument_names.begin(), "");
             expr->arguments.insert(expr->arguments.begin(), std::move(loan));
         };
         std::function<void(Statement&)> statement = [&](Statement& stmt) {
-            expression(stmt.expression.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
+            expression(stmt.expression.get()); expression(stmt.condition.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
             expression(stmt.array_commit_length.get());
             for (auto& item : stmt.array_commit_values) expression(item.get());
             if (stmt.branch_local) expression(stmt.branch_local->initializer.get());
@@ -57,7 +60,7 @@ void resolve_native_methods(Program& program) {
         }
         for (auto& item : fn.statements) statement(item);
         for (auto& item : fn.caught_throw_defers) statement(item);
-        for (auto& guard : fn.early_returns) { expression(guard.lhs.get()); expression(guard.rhs.get()); expression(guard.result.get()); }
+        for (auto& guard : fn.early_returns) { expression(guard.condition.get()); expression(guard.lhs.get()); expression(guard.rhs.get()); expression(guard.result.get()); }
         for (auto& send : fn.actor_sends) expression(send.payload.get());
         for (auto& write : fn.actor_field_writes) expression(write.expression.get());
         expression(fn.caught_throw_value.get()); expression(fn.result.get());

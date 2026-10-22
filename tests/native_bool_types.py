@@ -31,6 +31,7 @@ def main():
     args = parser.parse_args()
     positive = [
         ('literal-not', 'pub fnc main():int{const flag:bool=!!!false;if(flag){return 42;}fi return 0;}'),
+        ('borrowed-false', 'fnc read(borrow bool flag):bool{return rt copy flag;}pub fnc main():int{const flag:bool=false;const result:bool=read(rt borrow flag);if(!result){return 42;}fi return 0;}'),
         ('typed-let', 'pub fnc main():int{let bool flag=true;if(flag eq true){return 42;}fi return 0;}'),
         ('nested-call', 'fnc flip(bool flag):bool{return !flag;}pub fnc main():int{const flag:bool=flip(flip(true));if(flag){return 42;}fi return 0;}'),
         ('borrow-copy', 'fnc read(borrow bool flag):bool{return rt copy flag;}pub fnc main():int{const flag:bool=true;const result:bool=read(rt borrow flag);if(result){return 42;}fi return 0;}'),
@@ -76,6 +77,25 @@ def main():
         'moved-bool': 'use of explicitly moved int',
         'readonly-mutable-loan': 'cannot mutably borrow immutable owner',
     }
+    scalar_diagnostics = {
+        'bool-as-int': 'native function return requires int, got bool',
+        'int-as-bool': 'native function return requires bool, got int',
+        'local-int-as-bool': 'native scalar local initializer requires bool, got int',
+        'local-bool-as-int': 'native scalar local initializer requires int, got bool',
+        'truthy-int': 'native guarded return condition requires bool, got int',
+        'bool-arithmetic': 'arithmetic requires int, got bool',
+        'negated-bool': "unary '-' requires int, got bool",
+        'not-integer': "logical '!' requires bool, got int",
+        'argument': "argument 'flag' requires bool, got int",
+        'reverse-argument': "argument 'flag' requires int, got bool",
+        'borrow-type': "argument 'flag' requires bool, got int",
+        'reverse-borrow-type': "argument 'flag' requires int, got bool",
+        'comparison-type': 'equality operands require the same scalar type',
+        'class-field-write': "argument 'value' requires bool, got int",
+        'field-into-int': 'native function return requires int, got bool',
+        'array-bool': 'native Array<int> arguments require int, got bool',
+    }
+    ownership_diagnostics.update(scalar_diagnostics)
     compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-bool-') as tmp:
         root = Path(tmp)

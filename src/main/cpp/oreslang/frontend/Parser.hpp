@@ -10,7 +10,11 @@
 
 namespace oreslang {
 
-// Restricted scalar int/bool AST with i64 native storage. Not the full Java Ast.Program.
+// Deliberately restricted native scalar expression AST. The source type system
+// distinguishes int and bool even though the initial same-module ABI canonicalizes
+// both into i64 slots/results; bool values are always normalized to 0 or 1.
+enum class ScalarType { I64, Bool };
+
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -22,15 +26,31 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind {
+        Integer, Boolean, Variable,
+        Negate, LogicalNot,
+        Add, Subtract, Multiply,
+        Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
+        LogicalAnd, LogicalOr, LogicalXor,
+        Conditional,
+        Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field
+    };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
-    bool boolean_literal = false;
-    bool logical_not = false;
+    bool boolean = false;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
+    // Conditional is the native scalar form of Oreslang's lazy `? :`.
+    // condition is a first-class bool expression. condition_lhs/condition_rhs
+    // remain only as compatibility fields for the immediately preceding
+    // equality-only ternary branch while stacked PRs are reviewed.
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition_rhs;
+    std::unique_ptr<Expression> when_true;
+    std::unique_ptr<Expression> when_false;
     std::vector<std::unique_ptr<Expression>> arguments;
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
@@ -42,7 +62,7 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
-    bool boolean = false;
+    ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
 };
 
@@ -50,7 +70,6 @@ struct Parameter {
 struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
-    bool boolean = false;
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
@@ -62,6 +81,7 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
+    ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
 };
 
@@ -70,7 +90,7 @@ struct ClassField {
     std::int64_t initial = 0;
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
-    bool boolean = false;
+    ScalarType scalar_type = ScalarType::I64;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
@@ -145,7 +165,8 @@ struct Statement {
     std::size_t offset = 0;
     // A bounded synchronous if/else statement. Arms contain checked field
     // writes or direct calls; local declarations and suspension fail closed.
-    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> condition_lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
@@ -155,7 +176,8 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
-    std::unique_ptr<Expression> lhs;
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
@@ -179,12 +201,15 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
+    /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
+    std::string ready_await_actor;
+    std::size_t ready_await_offset = 0;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
-    bool returns_bool = false;
+    ScalarType return_type = ScalarType::I64;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -203,6 +228,18 @@ struct ActorDecl {
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
+};
+
+// Compiler-only structural contract evidence for the native i64 subset.
+// Contract declarations do not allocate runtime objects or generate LLVM IR.
+struct ContractMethod {
+    std::string name;
+    std::vector<Parameter::Mode> parameter_modes;
+};
+
+struct ModuleContract {
+    std::string name;
+    std::vector<ContractMethod> methods;
 };
 
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
@@ -229,11 +266,14 @@ struct Program {
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
+    std::vector<ModuleContract> contracts;
+    std::vector<std::string> conforms;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
-// Actors remain incompatible with wasm32 and source-level await/suspension.
+// Actors remain incompatible with wasm32. The only admitted source suspension
+// is one zero-local await ActorRef.get_ready() in trusted zero-argument main.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 

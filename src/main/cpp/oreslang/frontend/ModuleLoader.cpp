@@ -43,6 +43,8 @@ public:
         linked.module = units.front()->program.module;
         for (std::size_t index = 0; index < units.size(); ++index) {
             auto& unit = *units[index];
+            if (!unit.program.contracts.empty() || !unit.program.conforms.empty())
+                fail(unit, "native linked contract conformance requires checked cross-unit contract identity lowering");
             // An init hook has observable ordering/once-only behavior in Java.
             // Never silently treat it as an ordinary never-called function.
             if (unit.functions.count("init")) fail(unit, "native module init hook requires initialization lowering");
@@ -159,6 +161,8 @@ private:
     void expression(const Unit& unit, Expression* expr) {
         if (!expr) return;
         expression(unit, expr->left.get()); expression(unit, expr->right.get());
+        expression(unit, expr->condition.get()); expression(unit, expr->condition_lhs.get()); expression(unit, expr->condition_rhs.get());
+        expression(unit, expr->when_true.get()); expression(unit, expr->when_false.get());
         for (auto& arg : expr->arguments) expression(unit, arg.get());
         if (expr->kind != Expression::Kind::Call) return;
         const auto dot = expr->name.find('.');
@@ -200,7 +204,7 @@ private:
     void statement(const Unit& unit, Statement& stmt) {
         if (stmt.branch_local) local(unit, *stmt.branch_local);
         expression(unit, stmt.expression.get());
-        expression(unit, stmt.condition_lhs.get()); expression(unit, stmt.condition_rhs.get());
+        expression(unit, stmt.condition.get()); expression(unit, stmt.condition_lhs.get()); expression(unit, stmt.condition_rhs.get());
         expression(unit, stmt.array_commit_length.get());
         for (auto& value : stmt.array_commit_values) expression(unit, value.get());
         for (auto& arm : stmt.then_statements) statement(unit, arm);
@@ -217,7 +221,7 @@ private:
         for (auto& stmt : fn.statements) statement(unit, stmt);
         for (auto& stmt : fn.caught_throw_defers) statement(unit, stmt);
         for (auto& guard : fn.early_returns) {
-            expression(unit, guard.lhs.get()); expression(unit, guard.rhs.get()); expression(unit, guard.result.get());
+            expression(unit, guard.condition.get()); expression(unit, guard.lhs.get()); expression(unit, guard.rhs.get()); expression(unit, guard.result.get());
         }
         for (auto& send : fn.actor_sends) expression(unit, send.payload.get());
         for (auto& write : fn.actor_field_writes) expression(unit, write.expression.get());

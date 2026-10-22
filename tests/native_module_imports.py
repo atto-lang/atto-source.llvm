@@ -73,6 +73,14 @@ def main():
         }, 42),
     ]
     library = 'define module Lib as fnc secret():int{return 41;} pub fnc answer():int{return secret()+1;} end'
+    positives.append(('conditional-import-calls', {
+        'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.ready() ? Lib.answer(21) : 0;}',
+        'lib.ores': 'define module Lib as pub fnc ready():bool{return true;}pub fnc answer(int n):int{return n+21;}end',
+    },42))
+    positives.append(('conditional-method-calls', {
+        'main.ores': 'import module Lib from "./lib";pub fnc main():int{return Lib.answer();}',
+        'lib.ores': 'define module Lib as define class Flag as const bool ready=true;pub enabled():bool{return self.ready;}pub result():int{return 42;}end pub fnc answer():int{let Flag f=new Flag();return f.enabled() ? f.result() : 0;}end',
+    },42))
     negatives = [
         ('private-export', 'import module Lib from "./lib"; pub fnc main():int{return Lib.secret();}', library, 'imported function is private'),
         ('wrong-selection', 'import module Other from "./lib"; pub fnc main():int{return 0;}', library, 'does not declare selected module'),
@@ -96,6 +104,10 @@ def main():
         ('foreign-null', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', b'//\x00\n'+library.encode(), 'NUL byte'),
         ('foreign-capability-directive', 'import module Lib from "./lib"; pub fnc main():int{return 0;}', '// ores: target=native\n'+library, 'environment headers require'),
     ]
+    negatives.append(('linked-conformance-not-erased',
+        'import module Lib from "./lib";pub fnc main():int{return Lib.answer();}',
+        'pub define contract Reply as fnc answer() => int;end define module Lib conforms Reply as pub fnc answer():int{return 42;}end',
+        'native linked contract conformance requires'))
     positives.append(('named-arguments-native-only', {
         'main.ores': 'import module Math from "./math"; pub fnc main():int{return Math.add(y:2,x:40);}',
         'math.ores': 'define module Math as pub fnc add(int x,int y):int{return x+y;} end',
