@@ -806,8 +806,8 @@ int main() {
         check(deferred_oom && pipe.buffered_payload_bytes() == 0 &&
               pipe.buffered_message_count() == 0,
               "denied write consumed fault or next reserved allocation leaked");
-        pipe.write_to_async("Producer", "ConsumerA", "recovered").get();
-        check(pipe.read_async(0).get() == "recovered",
+        pipe.write_to_async("Producer", "ConsumerA", "okay").get();
+        check(pipe.read_async(0).get() == "okay",
               "quota denial poisoned later admission");
         pipe.close();
     }
