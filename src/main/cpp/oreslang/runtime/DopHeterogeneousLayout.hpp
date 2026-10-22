@@ -27,6 +27,7 @@ struct SegmentSpec {
     std::uint32_t alignment;
     std::uint64_t bytes;
     std::uint64_t stride;
+    std::uint64_t base = 0;  // aligned location in a single actor-owned allocation
 };
 
 class HeterogeneousPlan final {
@@ -111,15 +112,22 @@ public:
         default:
             throw std::invalid_argument("unknown heterogeneous layout");
         }
-        std::uint64_t total = 0;
-        for (const auto& segment : segments_) {
+        std::uint64_t payload = 0;
+        std::uint64_t physical = 0;
+        for (auto& segment : segments_) {
             if (segment.bytes > max_segment_bytes)
                 throw std::length_error("heterogeneous segment exceeds physical quota");
-            total = checked_add(total, segment.bytes);
-            if (total > max_total_bytes)
+            // All segments inhabit ONE actor-owned allocation. Charge the
+            // base-alignment holes, not only the sum of field payloads.
+            physical = align_up(physical, segment.alignment);
+            segment.base = physical;
+            physical = checked_add(physical, segment.bytes);
+            payload = checked_add(payload, segment.bytes);
+            if (physical > max_total_bytes)
                 throw std::length_error("heterogeneous layout exceeds actor quota");
         }
-        total_bytes_ = total;
+        total_bytes_ = payload;
+        physical_bytes_ = physical;
     }
 
     HeterogeneousLayout layout() const noexcept { return layout_; }
@@ -128,6 +136,12 @@ public:
     std::uint32_t lanes() const noexcept { return lanes_; }
     std::uint64_t total_bytes() const noexcept { return total_bytes_; }
     const std::vector<SegmentSpec>& segments() const noexcept { return segments_; }
+    std::uint64_t physical_bytes() const noexcept { return physical_bytes_; }
+
+    std::uint64_t absolute_address(std::uint64_t row, std::uint32_t field) const {
+        const auto location = address(row, field);
+        return checked_add(segments_.at(location.segment).base, location.byte_offset);
+    }
 
     CellAddress address(std::uint64_t row, std::uint32_t field) const {
         if (row >= rows_ || field >= fields_.size())
@@ -178,6 +192,7 @@ private:
     std::vector<FieldSpec> fields_;
     std::uint32_t lanes_;
     std::uint64_t total_bytes_ = 0;
+    std::uint64_t physical_bytes_ = 0;
     std::vector<FieldLocator> locations_;
     std::vector<SegmentSpec> segments_;
 };
