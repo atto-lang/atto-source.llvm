@@ -36,6 +36,7 @@ int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Control>);
     static_assert(!std::is_copy_constructible_v<SharedDomainArena::LifetimePin>);
     static_assert(std::is_move_constructible_v<SharedDomainArena::LifetimePin>);
+    static_assert(!std::is_move_assignable_v<SharedDomainArena::LifetimePin>);
     static_assert(!std::is_aggregate_v<SharedDomainArena::Grant>);
     static_assert(!std::is_default_constructible_v<SharedDomainArena::Grant>);
     static_assert(!std::is_constructible_v<SharedDomainArena::Grant,
@@ -296,6 +297,10 @@ int main() {
         auto pinnedGrant = pinned.grant(pinnedControl, 301, 7, true, false);
         auto pin = pinned.pin(301, 7, pinnedGrant);
         require(pin.live());
+        require(!pinned.try_revoke(pinnedControl, pinnedGrant));
+        // A fresh incarnation must not replace a member while an old
+        // continuation still pins that membership.
+        reject([&] { (void)pinned.grant(pinnedControl, 301, 8, true, false); });
         require(!pinned.try_retire(pinnedControl));
         reject([&] { (void)pinned.read(301, 7, pinnedGrant); });
         std::thread completion([p = std::move(pin)]() mutable {
@@ -305,6 +310,8 @@ int main() {
             p.release();
         });
         completion.join();
+        // STOP has sealed the domain; an old pin has drained so physical
+        // retirement proceeds, but member grants cannot reopen afterwards.
         require(pinned.try_retire(pinnedControl));
         require(pinned.try_retire(pinnedControl));
         reject([&] { (void)pinned.pin(301, 7, pinnedGrant); });
@@ -329,5 +336,44 @@ int main() {
         require(duplicateCallbacks.try_retire(ownership));
     }
 
+    // Per-member pin counts allow independent CONTROL revocation without
+    // prematurely recycling a still-pinned actor's membership identity.
+    {
+        SharedDomainArena separateMembers;
+        auto authority = separateMembers.take_control();
+        auto old = separateMembers.grant(authority, 1201, 1, true, false);
+        auto other = separateMembers.grant(authority, 1202, 1, true, false);
+        auto outstanding = separateMembers.pin(1201, 1, old);
+        require(!separateMembers.try_revoke(authority, old));
+        require(separateMembers.try_revoke(authority, other));
+        reject([&] { (void)separateMembers.grant(authority, 1201, 2, true, false); });
+        outstanding.release();
+        require(separateMembers.try_revoke(authority, old));
+        auto restarted = separateMembers.grant(authority, 1201, 2, true, false);
+        require(separateMembers.try_revoke(authority, restarted));
+        require(separateMembers.try_retire(authority));
+    }
+    // Two independent actor incarnations own distinct physical lifetime
+    // pins; releasing one member must not authorize recycling the other.
+    for (int trial = 0; trial < 48; ++trial) {
+        SharedDomainArena domain;
+        auto control = domain.take_control();
+        auto a = domain.grant(control, 3501, 1, true, false);
+        auto b = domain.grant(control, 3502, 1, true, false);
+        auto pinA = domain.pin(3501, 1, a);
+        auto pinB = domain.pin(3502, 1, b);
+        require(!domain.try_revoke(control, a));
+        require(!domain.try_revoke(control, b));
+        std::thread offCarrier([&] { pinA.release(); pinA.release(); });
+        offCarrier.join();
+        require(domain.try_revoke(control, a));
+        require(!domain.try_revoke(control, b));
+        reject([&] { (void)domain.grant(control, 3502, 2, true, false); });
+        auto restartedA = domain.grant(control, 3501, 2, true, false);
+        require(domain.try_revoke(control, restartedA));
+        pinB.release();
+        require(domain.try_revoke(control, b));
+        require(domain.try_retire(control));
+    }
     std::cout << "shared domain arena tests passed\n";
 }

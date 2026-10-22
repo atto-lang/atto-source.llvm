@@ -48,24 +48,24 @@ public:
         // A completion token may receive duplicate terminal callbacks on
         // different OS carriers. Atomically consume its one owner pointer.
         std::atomic<SharedDomainArena*> arena_{nullptr};
-        explicit LifetimePin(SharedDomainArena& arena) : arena_(&arena) {}
+        std::size_t member_ = Members;
+        explicit LifetimePin(SharedDomainArena& arena, std::size_t member)
+            : arena_(&arena), member_(member) {}
         void reset() noexcept {
             auto* arena = arena_.exchange(nullptr, std::memory_order_acq_rel);
-            if (arena) arena->release_lifetime_pin();
+            if (arena) arena->release_lifetime_pin(member_);
         }
     public:
         LifetimePin(const LifetimePin&) = delete;
         LifetimePin& operator=(const LifetimePin&) = delete;
         LifetimePin(LifetimePin&& other) noexcept
-            : arena_(other.arena_.exchange(nullptr, std::memory_order_acq_rel)) {}
-        LifetimePin& operator=(LifetimePin&& other) noexcept {
-            if (this != &other) {
-                reset();
-                arena_.store(other.arena_.exchange(nullptr,
-                    std::memory_order_acq_rel), std::memory_order_release);
-            }
-            return *this;
-        }
+            : arena_(other.arena_.exchange(nullptr, std::memory_order_acq_rel)),
+              member_(std::exchange(other.member_, Members)) {}
+        // Do not expose reassignment of a potentially live token: an
+        // off-carrier completion may concurrently call release(). Atomic
+        // release protects duplicate callbacks, not arbitrary object moves
+        // or reuse of the target's memory while another callback runs.
+        LifetimePin& operator=(LifetimePin&&) = delete;
         ~LifetimePin() noexcept { reset(); }
         void release() noexcept { reset(); }
         bool live() const noexcept {
@@ -188,7 +188,13 @@ public:
         }
     };
 
-    SharedDomainArena() : identity_(allocate_identity()) {}
+    SharedDomainArena() : identity_(allocate_identity()) {
+        // C++17 does not promise useful initial values for every default-
+        // constructed atomic specialization. Initialize each member counter
+        // explicitly before permitting any concurrent admission.
+        for (auto& count : member_pins_)
+            count.store(0, std::memory_order_relaxed);
+    }
     Control take_control() {
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
@@ -241,6 +247,11 @@ public:
         if (!lock.owns_lock()) return false;
         validate_control(control);
         validate_grant(grant, 0, 0, false);
+        // An old actor's external continuation may still reference this
+        // member's lifetime. Do not recycle its grant slot/incarnation while
+        // that member owns any pin. Other independent members may revoke.
+        if (member_pins_[grant.member_].load(std::memory_order_acquire) != 0)
+            return false;
         auto& m = members_[grant.member_];
         m.active = false;
         m.actor = 0;
@@ -267,8 +278,14 @@ public:
                 throw std::out_of_range("shared region lifetime pin quota");
             if (lifetime_pins_.compare_exchange_weak(
                     current, current + 1, std::memory_order_acq_rel,
-                    std::memory_order_relaxed))
-                return LifetimePin(*this);
+                    std::memory_order_relaxed)) {
+                // Pin grant validation occurs under the shared arena mutex:
+                // member revocation needs the exclusive mutex, so member
+                // identity cannot be recycled before this counter publishes.
+                member_pins_[grant.member_].fetch_add(
+                        1, std::memory_order_acq_rel);
+                return LifetimePin(*this, grant.member_);
+            }
         }
     }
 
@@ -320,6 +337,7 @@ private:
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
     std::atomic<std::size_t> lifetime_pins_{0};
+    std::array<std::atomic<std::size_t>, Members> member_pins_{};
     std::atomic<bool> control_issued_{false};
     bool retired_ = false;
     std::array<Slot, Slots> slots_{};
@@ -334,7 +352,16 @@ private:
             control.domain_ != identity_)
             throw std::logic_error("foreign or stale shared region control");
     }
-    void release_lifetime_pin() noexcept {
+    void release_lifetime_pin(std::size_t member) noexcept {
+        if (member >= Members) std::terminate();
+        auto member_count = member_pins_[member].load(std::memory_order_acquire);
+        for (;;) {
+            if (member_count == 0) std::terminate();
+            if (member_pins_[member].compare_exchange_weak(
+                    member_count, member_count - 1,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                break;
+        }
         auto current = lifetime_pins_.load(std::memory_order_acquire);
         for (;;) {
             if (current == 0) std::terminate();
