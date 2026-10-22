@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorOwnedHeap.hpp"
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <new>
@@ -22,8 +23,17 @@ static_assert(!std::is_copy_constructible<Heap>::value, "heap cannot be cloned")
 static_assert(!std::is_move_constructible<Heap>::value, "heap cannot be moved");
 
 static void test_independent_actor_storage_and_cycles() {
-    Heap alice(101);
-    Heap bob(102);
+    const ActorHeapIdentity alice_id{77, 0, 11};
+    const ActorHeapIdentity bob_id{77, 1, 12};
+    Heap alice(alice_id);
+    Heap bob(bob_id);
+    check(alice.allocation_domain_bound(), "actor heap must bind allocation authority");
+    check(same_actor_allocation_domain(alice.allocation_domain(), alice_id),
+          "actor heap capability must preserve runtime/slot/generation");
+    check(alice.allocation_domain().owner == 0,
+          "actor slot zero is a valid allocation owner");
+    check(bob.allocation_domain().owner == 1,
+          "distinct actor heap capability must remain distinct");
     auto one = alice.allocate(sizeof(Node), alignof(Node));
     auto two = alice.allocate(sizeof(Node), alignof(Node));
     check(one && two, "two actor-owned nodes must allocate");
@@ -125,9 +135,61 @@ static void test_heap_address_reuse_aba() {
     fresh->~Heap();
 }
 
+// Actor fields can store compact locations (4 bytes per edge), while the
+// trusted runtime keeps the original full-domain/generation proof off-line.
+static void test_compact_actor_local_refs() {
+    using Local = ActorOwnedHeap<128, 4>;
+    static_assert(sizeof(Local::CompactRef) == 4, "compact pointer width");
+    static_assert(sizeof(std::array<Local::CompactRef, 2>) == 8, "compact edges");
+    static_assert(sizeof(std::array<NativeActorManagedRef, 2>) == 16, "native edges");
+    Local alice(501), bob(502);
+    const auto a = alice.allocate(16, 8);
+    const auto b = bob.allocate(16, 8);
+    check(a && b, "two actor heaps allocate");
+    const auto ar = alice.compact(*a);
+    const auto br = bob.compact(*b);
+    check(ar && br, "compact encoding admitted live aligned objects");
+    check(ar->storage() == br->storage(),
+          "independent heaps should permit the same local compressed offset");
+    check(alice.compact_matches(*a, *ar), "own compact reference must match");
+    check(bob.compact_matches(*b, *br), "second own compact reference must match");
+    check(!alice.compact_matches(*b, *ar) && !bob.compact_matches(*a, *br),
+          "foreign actor proof must not authorize a compact reference");
+    check(!alice.compact_matches(*a, Local::CompactRef{}),
+          "null compact reference is not an object");
+    std::array<Local::CompactRef, 2> edges{*ar, *ar};
+    check(alice.write(*a, edges), "two compact edges fit in a 16-byte allocation");
+    const auto roundtrip = alice.read<decltype(edges)>(*a);
+    check(roundtrip && (*roundtrip)[0] == *ar && (*roundtrip)[1] == *ar,
+          "stored compact edges must survive roundtrip");
+    check(alice.remove(*a), "initial allocation retires");
+    check(!alice.compact(*a) && !alice.compact_matches(*a, *ar),
+          "stale generation must fail even when the raw offset remains");
+    const auto fresh = alice.allocate(16, 8);
+    check(fresh && alice.compact(*fresh) && !(*fresh == *a),
+          "new generation must allocate successfully");
+    // A location alone cannot prevent ABA: only the ORIGINAL handle/lifetime
+    // proof may validate it. A fresh proof must never be paired with a stale edge.
+    check(alice.compact(*fresh)->storage() == ar->storage(),
+          "recycled address should expose why bare compact refs are not capabilities");
+    alice.retire_quiesced();
+    check(!alice.compact(*fresh) && !alice.compact_matches(*fresh, *ar),
+          "retirement must revoke compressed views");
+
+    Local misaligned(503);
+    const auto first = misaligned.allocate(1, 1);
+    const auto second = misaligned.allocate(1, 1);
+    check(first && second, "misaligned allocation fixture");
+    check(misaligned.compact(*first).has_value(),
+          "heap-base-aligned allocation is encodable");
+    check(!misaligned.compact(*second),
+          "sub-8-byte-aligned object must not silently truncate its offset");
+}
+
 int main() {
     try {
         test_independent_actor_storage_and_cycles();
+        test_compact_actor_local_refs();
         test_bounded_storage_and_invalid_accesses();
         test_heap_address_reuse_aba();
         test_long_lived_actor_full_drain_recycles_bytes_without_aba();

@@ -61,6 +61,10 @@ int main() {
         auto generated = lower_opencl(k, {64, 4096, 100, true});
         check(generated.required_bytes == p.byte_length());
         check(generated.global_rows == 7 && generated.global_fields == 3);
+        check(generated.artifact_abi_version == 1);
+        check(generated.required_address_bits == 64);
+        check(generated.required_float32);
+        check(generated.required_little_endian);
         check(generated.device_source.find("__kernel void oreslang_dop_f32") != std::string::npos);
         check(generated.device_source.find("get_global_id(1)") != std::string::npos);
         check(generated.device_source.find("dst[slot]") != std::string::npos);

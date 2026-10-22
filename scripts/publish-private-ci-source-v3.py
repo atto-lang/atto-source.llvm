@@ -28,6 +28,9 @@ PREFIX = "private-oreslang-source"
 RECEIPT_PATH = "ci/oreslang-receipt.json"
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
+HANDOFF_REF = re.compile(
+    r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
+)
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
@@ -375,7 +378,7 @@ def checked_destination(repository, contract):
     return base_tree, plan_bytes
 
 
-def exact_source_tree(source_pr, source_commit):
+def verify_source_pr(source_pr, source_commit):
     pr = gh_api(f"repos/{SOURCE_REPO}/pulls/{source_pr}")
     head = pr.get("head")
     base = pr.get("base")
@@ -388,6 +391,11 @@ def exact_source_tree(source_pr, source_commit):
             or not isinstance(base, dict)
             or base.get("ref") != SOURCE_BRANCH):
         raise Denied("source commit is not exact open PR head against main")
+    return SOURCE_REPO_ID
+
+
+def exact_source_tree(source_pr, source_commit):
+    verify_source_pr(source_pr, source_commit)
 
     commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{source_commit}")
     if commit.get("sha") != source_commit:
@@ -399,8 +407,12 @@ def exact_source_tree(source_pr, source_commit):
             or not isinstance(entries, list) or len(entries) > MAX_TREE_ENTRIES):
         raise Denied("source tree incomplete or exceeds safety limit")
 
-    files = []
-    total = 0
+    # Validate all paths, modes, SHAs and declared blob sizes before fetching
+    # any blob bytes. GitHub's tree metadata gives us enough information to
+    # enforce the mirror budget without first allocating a potentially huge
+    # base64 blob response.
+    declared = []
+    declared_total = 0
     for entry in entries:
         if not isinstance(entry, dict):
             raise Denied("malformed source tree entry")
@@ -418,6 +430,20 @@ def exact_source_tree(source_pr, source_commit):
                 or "\\" in path or any(ord(c) < 32 or ord(c) == 127 for c in path)):
             raise Denied("source tree path unsafe")
         sha = valid_sha(entry.get("sha"), "source blob SHA")
+        size = entry.get("size")
+        if (not isinstance(size, int) or isinstance(size, bool)
+                or size < 0 or size > MAX_FILE):
+            raise Denied("source file exceeds mirror limit")
+        declared_total += size
+        if declared_total > MAX_TOTAL or len(declared) >= MAX_FILES:
+            raise Denied("source mirror exceeds bounded capacity")
+        declared.append((path, mode, sha, size))
+
+    if not declared:
+        raise Denied("source tree is empty")
+
+    files = []
+    for path, mode, sha, declared_size in declared:
         blob = gh_api(f"repos/{SOURCE_REPO}/git/blobs/{sha}")
         if (blob.get("sha") != sha or blob.get("encoding") != "base64"):
             raise Denied("source blob metadata mismatch")
@@ -428,16 +454,12 @@ def exact_source_tree(source_pr, source_commit):
             data = base64.b64decode("".join(encoded.split()), validate=True)
         except (ValueError, base64.binascii.Error) as exc:
             raise Denied("source blob base64 invalid") from exc
-        if len(data) > MAX_FILE:
-            raise Denied("source file exceeds mirror limit")
+        if len(data) != declared_size:
+            raise Denied("source blob size differs from tree metadata")
         if git_blob_sha(data) != sha:
             raise Denied("source blob bytes do not match Git SHA")
-        total += len(data)
-        if total > MAX_TOTAL or len(files) >= MAX_FILES:
-            raise Denied("source mirror exceeds bounded capacity")
         files.append((path, mode, sha, data))
-    if not files:
-        raise Denied("source tree is empty")
+
     files.sort(key=lambda item: item[0])
     rows = [[path, mode, sha, len(data)] for path, mode, sha, data in files]
     return root_tree, files, rows, hashlib.sha256(canonical_bytes(rows)).hexdigest()
@@ -450,6 +472,77 @@ def recheck_destination_identity(repository, contract):
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
+
+
+def _gh_ref_request(repository, ref_name, method):
+    if not isinstance(ref_name, str) or not HANDOFF_REF.fullmatch(ref_name):
+        raise Denied("ref cleanup target is invalid")
+    if method not in ("GET", "DELETE"):
+        raise Denied("ref cleanup method is invalid")
+    encoded = ref_name.replace("/", "%2F")
+    family = "ref" if method == "GET" else "refs"
+    argv = [
+        "gh", "api", "--method", method,
+        f"repos/{repository}/git/{family}/heads/{encoded}",
+        "--header", "Accept: application/vnd.github+json",
+    ]
+    env = dict(os.environ, GH_HOST="github.com", GH_PROMPT_DISABLED="1")
+    try:
+        return subprocess.run(
+            argv, capture_output=True, text=True, env=env,
+            timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Denied("carrier ref rollback is unavailable") from exc
+
+
+def live_ref_sha(repository, ref_name, expected_repository_id):
+    repo = gh_api(f"repos/{repository}")
+    if (repo.get("id") != expected_repository_id
+            or repo.get("full_name") != repository
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False):
+        raise Denied("carrier repository identity changed during ref verification")
+    result = _gh_ref_request(repository, ref_name, "GET")
+    if result.returncode != 0:
+        if "HTTP 404" in result.stderr:
+            return None
+        raise Denied("carrier ref lookup failed")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise Denied("carrier ref lookup returned invalid JSON") from exc
+    if (not isinstance(payload, dict)
+            or payload.get("ref") != "refs/heads/" + ref_name
+            or payload.get("object", {}).get("type") != "commit"):
+        raise Denied("carrier ref lookup returned unexpected identity")
+    return valid_sha(
+        payload.get("object", {}).get("sha"),
+        "carrier ref lookup returned invalid SHA",
+    )
+
+
+def require_exact_ref(repository, ref_name, expected_sha, expected_repository_id):
+    actual = live_ref_sha(repository, ref_name, expected_repository_id)
+    if actual != expected_sha:
+        raise Denied("carrier ref does not point to exact handoff commit")
+
+
+def delete_exact_ref(repository, ref_name, expected_sha, expected_repository_id):
+    expected_sha = valid_sha(expected_sha, "invalid rollback commit SHA")
+    actual = live_ref_sha(repository, ref_name, expected_repository_id)
+    if actual is None:
+        return False
+    if actual != expected_sha:
+        raise Denied("carrier ref moved; refusing rollback")
+    result = _gh_ref_request(repository, ref_name, "DELETE")
+    if result.returncode != 0 and "HTTP 404" not in result.stderr:
+        raise Denied("carrier ref rollback failed")
+    if live_ref_sha(repository, ref_name, expected_repository_id) is not None:
+        raise Denied("carrier ref still exists after rollback")
+    return True
 
 
 def publish(repository, source_pr, source_commit, test_plan, now=None):
@@ -576,29 +669,89 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if again_sha != protected_sha or again_contract != contract:
         raise Denied("protected source authority changed during transfer")
     checked_destination(repository, contract)
+    verify_source_pr(source_pr, source_commit)
 
-    branch_ref = gh_api(
-        f"repos/{repository}/git/refs",
-        method="POST",
-        payload={
-            "ref": "refs/heads/" + branch,
-            "sha": carrier_commit,
-        },
-    )
-    if branch_ref.get("ref") != "refs/heads/" + branch:
-        raise Denied("carrier did not confirm exact-tree branch")
-
+    # Create the inert source-bearing ref first. The carrier workflow refuses
+    # to execute without the exact authorization ref. Treat every POST as
+    # potentially successful before it returns so transport ambiguity cannot
+    # strand private source indefinitely.
     authorization = "ci/authorized-" + carrier_commit
-    auth_ref = gh_api(
-        f"repos/{repository}/git/refs",
-        method="POST",
-        payload={
-            "ref": "refs/heads/" + authorization,
-            "sha": carrier_commit,
-        },
-    )
-    if auth_ref.get("ref") != "refs/heads/" + authorization:
-        raise Denied("carrier did not confirm dispatcher authorization ref")
+    payload_attempted = False
+    authorization_attempted = False
+    try:
+        payload_attempted = True
+        branch_ref = gh_api(
+            f"repos/{repository}/git/refs",
+            method="POST",
+            payload={
+                "ref": "refs/heads/" + branch,
+                "sha": carrier_commit,
+            },
+        )
+        if (branch_ref.get("ref") != "refs/heads/" + branch
+                or branch_ref.get("object", {}).get("sha")
+                   not in (None, carrier_commit)):
+            raise Denied("carrier did not confirm exact-tree branch")
+        require_exact_ref(
+            repository, branch, carrier_commit, contract["repository_id"]
+        )
+
+        # Re-run mutable governance checks while the payload is still inert.
+        again_sha, again_contract = protected_authority(
+            repository, source_pr, test_plan
+        )
+        if again_sha != protected_sha or again_contract != contract:
+            raise Denied("protected source authority changed before authorization")
+        checked_destination(repository, contract)
+
+        # The exact open PR head is the last source-side fact checked before
+        # the carrier becomes executable.
+        verify_source_pr(source_pr, source_commit)
+
+        authorization_attempted = True
+        auth_ref = gh_api(
+            f"repos/{repository}/git/refs",
+            method="POST",
+            payload={
+                "ref": "refs/heads/" + authorization,
+                "sha": carrier_commit,
+            },
+        )
+        if (auth_ref.get("ref") != "refs/heads/" + authorization
+                or auth_ref.get("object", {}).get("sha")
+                   not in (None, carrier_commit)):
+            raise Denied("carrier did not confirm dispatcher authorization ref")
+
+        # Never trust create responses alone. Re-read both refs before success.
+        require_exact_ref(
+            repository, branch, carrier_commit, contract["repository_id"]
+        )
+        require_exact_ref(
+            repository, authorization, carrier_commit, contract["repository_id"]
+        )
+    except Denied as exc:
+        rollback_error = None
+        if authorization_attempted:
+            try:
+                delete_exact_ref(
+                    repository, authorization, carrier_commit,
+                    contract["repository_id"],
+                )
+            except Denied as rollback_exc:
+                rollback_error = rollback_exc
+        if payload_attempted:
+            try:
+                delete_exact_ref(
+                    repository, branch, carrier_commit,
+                    contract["repository_id"],
+                )
+            except Denied as rollback_exc:
+                rollback_error = rollback_error or rollback_exc
+        if rollback_error is not None:
+            raise Denied(
+                "private CI handoff failed and carrier ref rollback was incomplete"
+            ) from rollback_error
+        raise exc
 
     return {
         "commit": carrier_commit,

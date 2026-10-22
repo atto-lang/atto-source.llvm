@@ -25,7 +25,7 @@ struct TestState {
     ActorShardBudget vm_budget{64U * 1024U * 1024U};
     std::unique_ptr<ActorShardColumns> region;
     std::vector<std::unique_ptr<ActorColumnSnapshot>> snapshots;
-    std::vector<double> published;
+    std::vector<double> published = std::vector<double>(65, 0.0);
     bool foreign_rejected = false;
     bool failed = false;
 };
@@ -47,6 +47,11 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
                 snapshot_rejected = true;
             }
             assert(snapshot_rejected);
+            double output[65] = {};
+            bool copy_rejected = false;
+            try { state.snapshots.back()->copy_into(output, 65); }
+            catch (const std::logic_error&) { copy_rejected = true; }
+            assert(copy_rejected);
             bool close_rejected = false;
             try { state.snapshots.back()->close(); }
             catch (const std::logic_error&) { close_rejected = true; }
@@ -157,9 +162,28 @@ static void on_message(void* ctx, std::size_t actor, std::uint64_t step) {
                 short_copy_rejected = true;
             }
             assert(short_copy_rejected);
-            state.published = state.region->snapshot_column(0);
-            auto copy = state.region->snapshot_column(1);
-            copy[0] = 123456;
+            state.snapshots.back()->copy_into(
+                state.published.data(), state.published.size());
+            bool raw_snapshot_rejected = false;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+            try {
+                // Deliberately exercise the source-compatibility trap.
+                (void)state.region->snapshot_column(1);
+            } catch (const std::logic_error&) {
+                raw_snapshot_rejected = true;
+            }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+            assert(raw_snapshot_rejected);
             assert(state.region->read(0, 1) == 0);
         } else {
             state.failed = true;
