@@ -1865,6 +1865,21 @@ if(BUILD_TESTING)
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
+    # Host-only native access evidence, not a language-wide race-proof.
+    add_executable(oreslang-actor-heap-access-trace-test
+        tests/actor_heap_access_trace_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    set_target_properties(oreslang-actor-heap-access-trace-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-actor-heap-access-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-heap-access-trace-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_i64_access_evidence_host_only
+        COMMAND oreslang-actor-heap-access-trace-test)
+    set_tests_properties(native_actor_i64_access_evidence_host_only
+        PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-actor-owned-i64-heap-test
         tests/actor_owned_heap_lifecycle_test.cpp
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
