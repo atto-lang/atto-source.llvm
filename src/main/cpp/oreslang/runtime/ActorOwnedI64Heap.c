@@ -93,7 +93,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = ores_native_actor_domain_reserve(&next_domain);
+    const uint64_t id = ores_native_actor_domain_reserve(&next_domain, ORES_NATIVE_DOMAIN_SCALAR);
     if (!id) rejected();
     heap->domain = id;
     heap->owner = actor_id;

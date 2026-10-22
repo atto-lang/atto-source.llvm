@@ -79,7 +79,7 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     a->scratch = (unsigned char*) calloc(1, scratch_bytes);
     if (!a->meta || !a->free_slots || !a->slab || !a->scratch) deny();
     atomic_flag_clear(&a->lock);
-    a->domain = ores_native_actor_domain_reserve(&next_domain);
+    a->domain = ores_native_actor_domain_reserve(&next_domain, ORES_NATIVE_DOMAIN_ARENA);
     if (!a->domain) deny();
     a->owner = owner;
     a->incarnation = incarnation;
