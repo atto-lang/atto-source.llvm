@@ -1648,6 +1648,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_compact32_slab_domain_epoch_and_aba
         PROPERTIES TIMEOUT 25)
 
+    # Actor-local graph links occupy actual 4-byte object fields and are
+    # checked against the same heap's publication, lifetime and borrow rules.
+    add_executable(oreslang-native-actor-compact-graph-test
+        tests/native_actor_compressed32_graph_test.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-compact-graph-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-compact-graph-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_compressed32_graph_edges_checked
+        COMMAND oreslang-native-actor-compact-graph-test)
+    set_tests_properties(native_actor_compressed32_graph_edges_checked
+        PROPERTIES TIMEOUT 25)
+
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
