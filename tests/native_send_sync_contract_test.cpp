@@ -56,6 +56,19 @@ int main() {
     assert(worker_marker(option, WorkerMarker::Send, knownIntrinsic));
     assert(worker_marker(result, WorkerMarker::Sync, knownIntrinsic));
 
+    // No nominal proof callback is a checked denial, never a C++
+    // bad_function_call (which could bypass normal source error handling).
+    const VerifiedNominal missingNominal{};
+    assert(worker_marker(number, WorkerMarker::Send, missingNominal));
+    assert(!worker_marker(option, WorkerMarker::Send, missingNominal));
+    assert(!worker_marker(result, WorkerMarker::Sync, missingNominal));
+    assert(!worker_marker(WorkerType{Shape::Named, "NotVerified", {}},
+                          WorkerMarker::Send, missingNominal));
+    bool missingProofCaught = false;
+    try { require_worker_marker(option, WorkerMarker::Send, missingNominal); }
+    catch (const std::invalid_argument&) { missingProofCaught = true; }
+    assert(missingProofCaught);
+
     const WorkerType owned{Shape::Named, "OwnedOnly", {}};
     const VerifiedNominal ownerOnly = [](const WorkerType& t, WorkerMarker m) {
         return t.name == "OwnedOnly" && m == WorkerMarker::Send;
