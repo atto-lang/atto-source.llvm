@@ -5,6 +5,7 @@ on:
       - 'scripts/verify_actor_carrier_exclusivity.py'
       - 'scripts/verify_actor_dispatch_tickets.py'
       - 'tools/actor-dispatch-tickets/**'
+      - 'tools/actor-carrier-model/**'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h'
@@ -36,7 +37,11 @@ jobs:
           test -z "$(git status --porcelain)"
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
-      - name: Enumerate physical-carrier exclusive admission states (plus negative mutant)
+      - name: Test Rust exclusive carrier safety model and unsafe negative mutant
+        run: cargo test --offline --manifest-path tools/actor-carrier-model/Cargo.toml
+      - name: Enumerate Rust physical carrier states with negative mutant
+        run: cargo run --offline --manifest-path tools/actor-carrier-model/Cargo.toml
+      - name: Legacy carrier Python comparison oracle (pending executed parity)
         run: python3 -I scripts/verify_actor_carrier_exclusivity.py
       - name: Test Rust dispatch-ticket bounded model and unsafe negative mutant
         run: cargo test --offline --manifest-path tools/actor-dispatch-tickets/Cargo.toml
