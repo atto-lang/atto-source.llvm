@@ -61,17 +61,11 @@ public:
         LifetimePin(LifetimePin&& other) noexcept
             : arena_(other.arena_.exchange(nullptr, std::memory_order_acq_rel)),
               member_(std::exchange(other.member_, Members)) {}
-        LifetimePin& operator=(LifetimePin&& other) noexcept {
-            if (this != &other) {
-                reset();
-                // A move is a trusted ownership transfer; do not move a
-                // token concurrently with duplicate release callbacks.
-                member_ = std::exchange(other.member_, Members);
-                arena_.store(other.arena_.exchange(nullptr,
-                    std::memory_order_acq_rel), std::memory_order_release);
-            }
-            return *this;
-        }
+        // Do not expose reassignment of a potentially live token: an
+        // off-carrier completion may concurrently call release(). Atomic
+        // release protects duplicate callbacks, not arbitrary object moves
+        // or reuse of the target's memory while another callback runs.
+        LifetimePin& operator=(LifetimePin&&) = delete;
         ~LifetimePin() noexcept { reset(); }
         void release() noexcept { reset(); }
         bool live() const noexcept {
