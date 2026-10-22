@@ -68,8 +68,9 @@ public:
         case HeterogeneousLayout::SoA:
             for (std::size_t i = 0; i < fields.size(); ++i) {
                 const auto& field = fields_[i];
-                segments_.push_back({field.alignment, checked_mul(rows_, field.bytes), field.bytes});
-                locations_[i] = {static_cast<std::uint32_t>(i), 0, field.bytes};
+                const auto stride = align_up(field.bytes, field.alignment);
+                segments_.push_back({field.alignment, checked_mul(rows_, stride), stride});
+                locations_[i] = {static_cast<std::uint32_t>(i), 0, stride};
             }
             break;
         case HeterogeneousLayout::AoSoA: {
@@ -78,8 +79,9 @@ public:
             for (std::size_t i = 0; i < fields.size(); ++i) {
                 const auto& field = fields_[i];
                 cursor = align_up(cursor, field.alignment);
-                locations_[i] = {0, cursor, field.bytes};
-                cursor = checked_add(cursor, checked_mul(field.bytes, lanes_));
+                const auto stride = align_up(field.bytes, field.alignment);
+                locations_[i] = {0, cursor, stride};
+                cursor = checked_add(cursor, checked_mul(stride, lanes_));
                 if (field.alignment > alignment) alignment = field.alignment;
             }
             const auto stride = align_up(cursor, alignment);

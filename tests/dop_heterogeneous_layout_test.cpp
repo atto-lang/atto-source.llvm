@@ -153,6 +153,22 @@ int main() {
             }
         }
     }
+    // Legal over-aligned narrow scalars must preserve alignment at every row,
+    // including scalar-column layouts whose unpadded width is only one byte.
+    for (const auto layout : {HeterogeneousLayout::AoS, HeterogeneousLayout::SoA,
+                             HeterogeneousLayout::AoSoA, HeterogeneousLayout::SoAoS}) {
+        const HeterogeneousPlan aligned(layout, 3, {{1,8}},
+            layout == HeterogeneousLayout::AoSoA ? 4 : 1,
+            layout == HeterogeneousLayout::SoAoS ?
+                std::vector<std::vector<std::uint32_t>>{{0}} :
+                std::vector<std::vector<std::uint32_t>>{});
+        for (std::uint64_t row = 0; row < 3; ++row) {
+            require(aligned.absolute_address(row,0) == row * 8,
+                    "over-aligned narrow field lost row alignment");
+            require(aligned.absolute_address(row,0) < aligned.physical_bytes(),
+                    "over-aligned narrow field exceeds physical quota");
+        }
+    }
     rejects<std::invalid_argument>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::AoS,1,{}); });
     rejects<std::invalid_argument>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::AoS,1,{{3,4}}); });
     rejects<std::invalid_argument>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::SoAoS,1,schema,1,{{0,1},{1,2,3}}); });
