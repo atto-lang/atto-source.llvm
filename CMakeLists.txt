@@ -1501,6 +1501,29 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_async_io_boundary_matrix.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # General structural shapes are not a scalar-i64 ABI: prove negative
+    # admission with a functioning scalar-positive compiler control.
+    # Rust-only test executable, built with ordinary CMake ALL builds.
+    # If rustc is absent, the CTest deliberately fails rather than claiming coverage.
+    find_program(ORE_STRUCTURAL_RUSTC rustc)
+    if(ORE_STRUCTURAL_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_shape_failclosed.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_shape_failclosed.rs"
+            VERBATIM)
+        add_custom_target(oreslang-native-structural-gate-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate")
+        add_test(NAME native_structural_shape_failclosed
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate"
+                "$<TARGET_FILE:oreslang-llvmc>")
+    else()
+        add_test(NAME native_structural_shape_failclosed
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_structural_shape_failclosed PROPERTIES TIMEOUT 180)
     oreslang_contract_test(pure_user_blocking_suffix pure-user-blocking-suffix.ores --ir "call i64 @pure_math_blocking")
     # The terminal-state gate is a standalone native safety primitive, not
     # an async I/O reactor or source-level await implementation.
