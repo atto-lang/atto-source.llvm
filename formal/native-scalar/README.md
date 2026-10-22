@@ -15,7 +15,11 @@ owned locals, statements, actor operations, declared effects, pending
 suspension, generic parameters, class objects or other unsupported features.
 It rejects unsupported operations and calls before constructing a proof.
 A per-guard bound and pre-concatenation SMT size limit defend against
-unbounded expansion.
+unbounded expansion. Because this adapter calls `parse_program` directly
+rather than the production launcher's outer UTF-8 preflight, it also restricts
+this initial proof subset to **ASCII-only source** and rejects NUL/non-ASCII
+bytes before native parser admission. This is a conservative pilot limitation,
+not a proposal to prohibit Unicode throughout Oreslang.
 
 The exporter constructs its implementation BV64 expression directly from
 the checked native AST and compares that against an **independent** mathematical
