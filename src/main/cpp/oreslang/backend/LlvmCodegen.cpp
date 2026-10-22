@@ -285,6 +285,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (actor.state_declared)
+                throw std::runtime_error("wasm32 sealed actor state loans require dedicated lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -1311,6 +1313,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // Native source actors execute only on OresVM scheduler turns. The
     // portable guest below uses an independent, no-import single-actor ABI.
     if (!wasm32_target) for (const auto& actor : source.actors) {
+        if (actor.state_declared) {
+            if (!actor.on_message.actor_state_loan)
+                throw std::runtime_error("sealed actor state lowering requires verified handle_state loan");
+            const auto required = actor.on_message.actor_state_loan->mode == ActorStateLoan::Mode::Write
+                ? FunctionEffect::StateWrite : FunctionEffect::StateRead;
+            if (!actor.on_message.has_declared_effects ||
+                    !actor.on_message.declared_effects.has(required))
+                throw std::runtime_error("sealed actor state lowering requires matching declared effect");
+            if (!actor.on_message.actor_field_writes.empty())
+                throw std::runtime_error("sealed actor state lowering rejects legacy field writes");
+        }
         auto* ctor = actorInits.at(actor.name);
         llvm::BasicBlock* initial = llvm::BasicBlock::Create(context, "entry", ctor);
         llvm::IRBuilder<> init(initial);
@@ -1337,7 +1350,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Value* currentDomain = &*args++;
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
-        std::unordered_map<std::string, llvm::Value*> values, emptyFields;
+        std::unordered_map<std::string, llvm::Value*> values, stateFields, emptyFields;
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
@@ -1349,18 +1362,43 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 field.name + ".read");
             llvm::Value* slot = builder.CreateAlloca(i64, nullptr, field.name + ".slot");
             builder.CreateStore(value, slot);
-            values.emplace(field.name, slot);
+            if (actor.state_declared)
+                stateFields.emplace(field_key("state", field.name), slot);
+            else
+                values.emplace(field.name, slot);
         }
-        for (const auto& write : actor.on_message.actor_field_writes) {
-            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                [&](const LocalBinding& f) { return f.name == write.field; });
-            if (field == actor.fields.end() || !field->field_mutable)
-                throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
-            const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
-            builder.CreateStore(value, values.at(write.field));
+        if (actor.state_declared) {
+            const auto& loan = *actor.on_message.actor_state_loan;
+            for (const auto& write : loan.writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end())
+                    throw std::runtime_error("invalid actor state write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64, values,
+                    stateFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, stateFields.at(field_key("state", write.field)));
+            }
+            llvm::Value* loanResult = lower(*loan.result, builder, i64, values,
+                stateFields, declarations);
+            llvm::Value* resultSlot = builder.CreateAlloca(i64, nullptr,
+                loan.result_binding + ".state.loan.result");
+            builder.CreateStore(loanResult, resultSlot);
+            values.emplace(loan.result_binding, resultSlot);
+        } else {
+            for (const auto& write : actor.on_message.actor_field_writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() || !field->field_mutable)
+                    throw std::runtime_error("invalid actor field write lowering");
+                llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, values.at(write.field));
+            }
         }
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
             emptyFields, declarations);

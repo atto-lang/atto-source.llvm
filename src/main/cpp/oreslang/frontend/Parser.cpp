@@ -52,7 +52,8 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "using", "with", "requires", "serial", "state", "read", "write",
+        "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -116,8 +117,8 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        // Contiguous multi-character operators are single tokens.
+        if (source_.substr(at_, 2) == "==" || source_.substr(at_, 2) == "->") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -136,7 +137,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -313,29 +314,53 @@ private:
             fail("builtin Entry is compiler-owned and cannot be declared as a nominal actor type");
         require("as");
         const bool braced = accept("{");
-        if (token_.text == "state") {
-            fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
-        }
         std::unordered_set<std::string> names;
-        while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
-            if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
-            LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
-            if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
-            require("=");
-            field.initializer = expression();
-            require(";");
-            actor.fields.push_back(std::move(field));
+        if (accept("state")) {
+            actor.state_declared = true;
+            require("{");
+            while (!accept("}")) {
+                if (token_.kind == Kind::End)
+                    fail("actor state requires closing '}'");
+                if (actor.fields.size() == 16)
+                    fail("native actor state field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.name = identifier();
+                if (!names.insert(field.name).second)
+                    fail("duplicate actor state field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                field.field_mutable = true;
+                actor.fields.push_back(std::move(field));
+            }
+            accept(";");
+            if (token_.text == "state" || token_.text == "let" ||
+                    token_.text == "const" || token_.text == "val" ||
+                    token_.text == "final")
+                fail("actor instance data must be declared in one state map");
+        } else {
+            while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+                if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
+                LocalBinding field;
+                field.offset = token_.offset;
+                field.field_mutable = token_.text == "let";
+                advance();
+                field.name = identifier();
+                if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
+                require(":");
+                require("int");
+                require("=");
+                field.initializer = expression();
+                require(";");
+                actor.fields.push_back(std::move(field));
+            }
+            if (token_.text == "final")
+                fail("native final actor fields require typed field initialization and ownership lowering");
+            if (actor.fields.empty()) fail("actor requires at least one scalar field");
         }
-        if (token_.text == "final") {
-            fail("native final actor fields require typed field initialization and ownership lowering");
-        }
-        if (actor.fields.empty()) fail("actor requires at least one scalar field");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
@@ -371,20 +396,82 @@ private:
         require(")");
         require(":");
         require("int");
-        require("{");
-        while (token_.text != "return") {
-            if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
-            ActorFieldWrite write;
-            write.offset = token_.offset;
-            write.field = identifier();
-            require("=");
-            write.expression = expression();
-            require(";");
-            method.actor_field_writes.push_back(std::move(write));
+        if (accept("with")) {
+            method.has_declared_effects = true;
+            do {
+                require("state");
+                require(".");
+                FunctionEffect effect;
+                if (accept("read")) effect = FunctionEffect::StateRead;
+                else if (accept("write")) effect = FunctionEffect::StateWrite;
+                else fail("actor with clause supports only state.read/state.write");
+                const auto bit = static_cast<std::uint32_t>(effect);
+                if (method.declared_effects.bits & bit)
+                    fail("duplicate actor state effect");
+                method.declared_effects.bits |= bit;
+            } while (accept(","));
         }
-        require("return");
-        method.result = expression();
-        require(";");
+        if (actor.state_declared && token_.text == "using")
+            fail("signature using is not actor state authority; declare with state.read/state.write");
+        require("{");
+        if (actor.state_declared) {
+            if (accept("const")) {
+                auto loan = std::make_unique<ActorStateLoan>();
+                loan->offset = token_.offset;
+                loan->result_binding = identifier();
+                require("=");
+                require("self"); require("."); require("handle_state"); require("(");
+                loan->mode = ActorStateLoan::Mode::Read;
+                if (accept("critical")) {
+                    loan->mode = ActorStateLoan::Mode::Write;
+                    if (accept("read")) loan->mode = ActorStateLoan::Mode::Read;
+                    else (void)accept("write");
+                }
+                require("|");
+                if (identifier() != "state")
+                    fail("handle_state callback binding must be 'state'");
+                require("|"); require("->"); require("{");
+                while (token_.text == "state") {
+                    if (loan->mode != ActorStateLoan::Mode::Write)
+                        fail("read-only actor state loan cannot mutate state");
+                    ActorFieldWrite write;
+                    write.offset = token_.offset;
+                    require("state"); require(".");
+                    write.field = identifier();
+                    require("=");
+                    write.expression = expression();
+                    require(";");
+                    loan->writes.push_back(std::move(write));
+                }
+                if (token_.text == "await" || token_.text == "select" ||
+                        token_.text == "nb-select" || token_.text == "using" ||
+                        token_.text == "self")
+                    fail("actor state loan cannot suspend, nest, or escape");
+                require("return");
+                loan->result = expression();
+                require(";"); require("}"); require(")"); require(";");
+                method.actor_state_loan = std::move(loan);
+            }
+            if (!method.actor_state_loan)
+                fail("actor state access requires scoped handle_state callback");
+            require("return");
+            method.result = expression();
+            require(";");
+        } else {
+            while (token_.text != "return") {
+                if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+                ActorFieldWrite write;
+                write.offset = token_.offset;
+                write.field = identifier();
+                require("=");
+                write.expression = expression();
+                require(";");
+                method.actor_field_writes.push_back(std::move(write));
+            }
+            require("return");
+            method.result = expression();
+            require(";");
+        }
         require("}");
         actor.on_message = std::move(method);
         if (braced) require("}");
@@ -1761,12 +1848,65 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
-            for (const auto& write : method.actor_field_writes) {
-                if (!mutables.count(write.field))
-                    throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
-                validate_expression(*write.expression, fields, functions);
+            if (actor.state_declared) {
+                if (!method.actor_state_loan)
+                    throw std::runtime_error("state actor requires sealed handle_state loan");
+                const auto& loan = *method.actor_state_loan;
+                const FunctionEffect required = loan.mode == ActorStateLoan::Mode::Write
+                    ? FunctionEffect::StateWrite : FunctionEffect::StateRead;
+                if (!method.has_declared_effects || !method.declared_effects.has(required))
+                    throw std::runtime_error(loan.mode == ActorStateLoan::Mode::Write
+                        ? "with clause omits state.write effect"
+                        : "with clause omits state.read effect");
+                std::unordered_set<std::string> state_fields;
+                for (const auto& field : actor.fields) state_fields.insert(field.name);
+                const auto validate_state_expr = [&](const Expression& root) {
+                    std::function<void(const Expression&)> visit;
+                    visit = [&](const Expression& expr) {
+                        if (expr.kind == Expression::Kind::Field) {
+                            if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
+                                    expr.left->name != "state" ||
+                                    !state_fields.count(expr.name))
+                                throw std::runtime_error("state loan may access only declared state fields");
+                            return;
+                        }
+                        if (expr.kind == Expression::Kind::Call ||
+                                expr.kind == Expression::Kind::ArrayCall ||
+                                expr.kind == Expression::Kind::Copy ||
+                                expr.kind == Expression::Kind::Take ||
+                                expr.kind == Expression::Kind::Share ||
+                                expr.kind == Expression::Kind::Borrow ||
+                                expr.kind == Expression::Kind::BorrowMut)
+                            throw std::runtime_error("state loan cannot call, transfer, or borrow");
+                        if (expr.kind == Expression::Kind::Variable &&
+                                expr.name != parameter)
+                            throw std::runtime_error("state loan references unavailable value '" + expr.name + "'");
+                        if (expr.left) visit(*expr.left);
+                        if (expr.right) visit(*expr.right);
+                        for (const auto& arg : expr.arguments) visit(*arg);
+                    };
+                    visit(root);
+                };
+                for (const auto& write : loan.writes) {
+                    if (loan.mode != ActorStateLoan::Mode::Write)
+                        throw std::runtime_error("read state loan contains write");
+                    if (!state_fields.count(write.field))
+                        throw std::runtime_error("unknown actor state field '" + write.field + "'");
+                    validate_state_expr(*write.expression);
+                }
+                validate_state_expr(*loan.result);
+                std::unordered_set<std::string> result_names{loan.result_binding, parameter};
+                validate_expression(*method.result, result_names, functions);
+                if (!method.actor_field_writes.empty())
+                    throw std::runtime_error("state actor cannot contain legacy field writes");
+            } else {
+                for (const auto& write : method.actor_field_writes) {
+                    if (!mutables.count(write.field))
+                        throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
+                    validate_expression(*write.expression, fields, functions);
+                }
+                validate_expression(*method.result, fields, functions);
             }
-            validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
