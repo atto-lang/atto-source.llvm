@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
+#include <atomic>
+#include <array>
 #if defined(__unix__) || defined(__APPLE__)
 #include <signal.h>
 #include <sys/resource.h>
@@ -119,7 +121,62 @@ static int second_carrier(void* argument) {
     return 0;
 }
 
+/* Adversarial scheduler admission: contenders never spin inside the heap
+ * on an expected busy state; they yield and resubmit. This native serial
+ * backend implements max executing turns=1, not the future opt-in >1 ABI. */
+static int concurrent_nonparking_admission_stress() {
+    constexpr int carriers = 4;
+    constexpr int per_carrier = 128;
+    constexpr int max_attempts = 100000;
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(990, 1, 2);
+    std::atomic<int> executing{0};
+    std::atomic<int> peak{0};
+    std::atomic<int> completed{0};
+    std::atomic<int> failures{0};
+    std::array<std::thread, carriers> threads;
+    for (auto& worker : threads) {
+        worker = std::thread([&] {
+            for (int iteration = 0; iteration < per_carrier; ++iteration) {
+                OresActorTurn turn{77, 88};
+                OresActorTryEnterResult result = ORES_ACTOR_TRY_LOCK_BUSY;
+                bool admitted = false;
+                for (int attempt = 0; attempt < max_attempts; ++attempt) {
+                    result = ores_actor_i64_heap_try_enter(heap, 990, 1, &turn);
+                    if (result == ORES_ACTOR_TRY_ENTERED) {
+                        admitted = true;
+                        break;
+                    }
+                    if (turn.domain != 0 || turn.epoch != 0) ++failures;
+                    if (result != ORES_ACTOR_TRY_LOCK_BUSY
+                            && result != ORES_ACTOR_TRY_ACTOR_ACTIVE) {
+                        ++failures;
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+                if (!admitted) { ++failures; return; }
+                const int active = executing.fetch_add(1) + 1;
+                if (active != 1) ++failures;
+                int observed = peak.load();
+                while (active > observed && !peak.compare_exchange_weak(observed, active)) { }
+                if (turn.domain == 0 || turn.epoch == 0) ++failures;
+                std::this_thread::yield();
+                executing.fetch_sub(1);
+                ores_actor_i64_heap_leave(heap, turn);
+                ++completed;
+            }
+        });
+    }
+    for (auto& worker : threads) worker.join();
+    int failed = failures.load() || peak.load() != 1
+        || completed.load() != carriers * per_carrier || executing.load() != 0;
+    ores_actor_i64_heap_retire(heap);
+    if (!ores_actor_i64_heap_try_destroy(heap)) failed = 1;
+    return failed;
+}
+
 int main(void) {
+    CHECK(concurrent_nonparking_admission_stress() == 0);
     /* One actor heap survives between logical turns and native carriers. */
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn first = ores_actor_i64_heap_enter(heap, 29, 7);
