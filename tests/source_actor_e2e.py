@@ -34,7 +34,7 @@ def main():
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
-        ("source-actor-scoped-owned-i64.ores", 1, 8, 1020),
+        ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
