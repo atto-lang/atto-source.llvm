@@ -1061,7 +1061,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
-        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
     target_include_directories(oreslang-source-actor-await-trace-runtime-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-source-actor-await-trace-runtime-test PRIVATE
@@ -2254,6 +2255,25 @@ if(BUILD_TESTING)
     add_test(NAME native_execution_continuation_aosoa_trace
         COMMAND oreslang-native-execution-continuation-store-test)
     set_tests_properties(native_execution_continuation_aosoa_trace
+        PROPERTIES TIMEOUT 30)
+
+    # Allocation-free logical failure rendering for throw/raise/panic after
+    # lexical unwind has selected the effective control-plane failure kind.
+    add_executable(oreslang-native-failure-trace-test
+        tests/native_failure_trace_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
+    target_include_directories(oreslang-native-failure-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-failure-trace-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-failure-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_failure_trace_throw_raise_panic_render
+        COMMAND oreslang-native-failure-trace-test)
+    set_tests_properties(native_failure_trace_throw_raise_panic_render
         PROPERTIES TIMEOUT 30)
 
     # Stop one child without waiting for an unrelated actor's busy turn.

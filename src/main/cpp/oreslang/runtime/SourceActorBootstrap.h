@@ -1,6 +1,6 @@
 #pragma once
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
-#include "oreslang/runtime/NativeLogicalTrace.h"
+#include "oreslang/runtime/NativeFailureTrace.h"
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -56,6 +56,21 @@ int oreslang_source_actor_snapshot_current_trace(
     OresNativeContinuationTraceFrame* continuation_frames,
     size_t continuation_capacity,
     OresNativeLogicalTraceResult* out);
+
+/*
+ * Failure-side convenience bridge for future lowered throw/raise/panic paths.
+ * The source runtime owns the stores; callers provide only the effect metadata
+ * and bounded output arrays. Returns zero outside an active resumed source
+ * continuation or for a stale/invalid current execution.
+ */
+int oreslang_source_actor_capture_failure_trace(
+    OresNativeFailureTraceKind kind,
+    uint32_t code,
+    OresNativeExecutionTraceFrame* execution_frames,
+    size_t execution_capacity,
+    OresNativeContinuationTraceFrame* continuation_frames,
+    size_t continuation_capacity,
+    OresNativeFailureTraceReport* out);
 
 #ifdef __cplusplus
 }

@@ -1,7 +1,9 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
+#include "oreslang/runtime/NativeFailureTrace.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void check(int ok) { if (!ok) abort(); }
 
@@ -51,6 +53,42 @@ static int64_t resumed(void* actor) {
     check(continuations[0].record.boundary
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     check(continuations[0].record.source_token == UINT64_C(0x1234));
+
+    const OresNativeFailureTraceKind kinds[] = {
+        ORES_FAILURE_TRACE_THROW,
+        ORES_FAILURE_TRACE_RAISE,
+        ORES_FAILURE_TRACE_PANIC
+    };
+    const char* names[] = {"throw", "raise", "panic"};
+    for (size_t i = 0; i < 3; ++i) {
+        OresNativeExecutionTraceFrame failure_executions[4] = {0};
+        OresNativeContinuationTraceFrame failure_continuations[4] = {0};
+        OresNativeFailureTraceReport failure = {0};
+        check(oreslang_source_actor_capture_failure_trace(
+            kinds[i],
+            (uint32_t)(100 + i),
+            failure_executions,
+            4,
+            failure_continuations,
+            4,
+            &failure));
+        check(failure.current_execution.slot == current.slot);
+        check(failure.current_execution.generation == current.generation);
+        check(failure.logical.execution_count == 2);
+        check(failure.logical.continuation_count == 1);
+
+        char rendered[2048];
+        check(ores_native_failure_trace_render(
+            &failure,
+            failure_executions,
+            failure_continuations,
+            rendered,
+            sizeof(rendered)));
+        check(!failure.text_truncated);
+        check(strstr(rendered, names[i]) == rendered);
+        check(strstr(rendered, "boundary await source=4660") != NULL);
+        check(strstr(rendered, "allocation=actor:") != NULL);
+    }
 
     oreslang_source_actor_send(actor, 1);
     oreslang_source_actor_send(actor, 2);
