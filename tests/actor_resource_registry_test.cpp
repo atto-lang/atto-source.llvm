@@ -169,6 +169,25 @@ int main() {
     assert(lockRevocations == 1);
     assert(!logicalLock.release(lockWaiting.token));
 
+    // Unknown lock revocation outcome cannot authorize reuse of protected
+    // actor-owned allocations: quarantine rather than incorrectly regrant.
+    ActorResourceRegistry failedLockRevoke(45, 3);
+    int protectedArenaDrops = 0;
+    failedLockRevoke.register_resource(Kind::native_allocation,
+                                       [&] { ++protectedArenaDrops; });
+    failedLockRevoke.register_lock_permit([] {
+        throw std::runtime_error("logical lock permit revocation failed");
+    });
+    failedLockRevoke.retire();
+    auto failedLockResult = failedLockRevoke.try_reclaim();
+    assert(failedLockResult.status == Reclaim::failed);
+    assert(failedLockResult.failures == 1);
+    assert(failedLockResult.skipped == 1);
+    assert(failedLockRevoke.quarantined_resources() == 2);
+    assert(protectedArenaDrops == 0);
+    assert(failedLockRevoke.try_reclaim().status == Reclaim::failed);
+    assert(protectedArenaDrops == 0);
+
     ActorResourceRegistry quarantine(30, 1);
     int allocationDrops = 0;
     auto nativeOwnership = std::make_shared<int>(42);
