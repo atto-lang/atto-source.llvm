@@ -62,7 +62,9 @@ static size_t checked_mul(size_t a, size_t b) {
 }
 OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
                                        size_t slots, size_t slot_bytes, size_t scratch_bytes) {
-    if (!owner || !incarnation || !slots || slots > ORES_MAX_SLOTS
+    // Actor slot/index zero is valid in the authenticated runtime domain.
+    // Incarnation/generation zero is not valid actor authority.
+    if (!incarnation || !slots || slots > ORES_MAX_SLOTS
         || !slot_bytes || slot_bytes > ORES_MAX_SLOT_BYTES
         || !scratch_bytes || scratch_bytes > ORES_MAX_SCRATCH_BYTES) deny();
     const size_t slab_bytes = checked_mul(slots, slot_bytes);
