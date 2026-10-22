@@ -67,6 +67,31 @@ static void expect_foreign_ticket_abort() {
           "foreign actor's continuation ticket was permitted to pin heap");
 }
 
+// A retired heap may remain physically alive because an external lease pins
+// it, but retirement must permanently close new actor-turn admission.
+static void expect_retired_heap_admission_abort() {
+    const pid_t child = fork();
+    check(child >= 0, "fork failed");
+    if (child == 0) {
+        struct rlimit limit = {0, 0};
+        (void) setrlimit(RLIMIT_CORE, &limit);
+        constexpr std::uint64_t actor = 900003;
+        OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 1);
+        OresActorTurn turn = ores_actor_i64_heap_enter(heap, actor, 1);
+        OresActorExternalLease pin =
+                ores_actor_i64_heap_external_acquire_for_actor(heap, turn, actor);
+        ores_actor_i64_heap_leave(heap, turn);
+        ores_actor_i64_heap_retire(heap);
+        (void)pin; // Intentionally keep heap physically pinned.
+        (void)ores_actor_i64_heap_enter(heap, actor, 1);
+        _exit(0); // Must never admit another turn.
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "waitpid failed");
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "retired actor heap admitted a new actor turn");
+}
+
 static void expect_field_write_abort(OresActorI64Heap* heap,
                                      std::uint64_t actor, std::uint64_t index) {
     const pid_t child = fork();
@@ -87,6 +112,7 @@ static void expect_field_write_abort(OresActorI64Heap* heap,
 int main() {
     expect_unretired_frame_abort();
     expect_foreign_ticket_abort();
+    expect_retired_heap_admission_abort();
     for (std::uint64_t round = 1; round <= 128; ++round) {
         const std::uint64_t actor = round + 400;
         OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 2);

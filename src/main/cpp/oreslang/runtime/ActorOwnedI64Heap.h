@@ -15,6 +15,19 @@ typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
 typedef struct { uint64_t domain, index, generation; } OresActorExternalLease;
 
+/* Allocation contract (current native implementation):
+ * - This experimental heap is a fixed-capacity, calloc-backed scalar-slot
+ *   allocation, NOT a general-purpose arena allocator.
+ * - Each actor incarnation owns a distinct allocation. Shared objects must
+ *   live in independently owned storage, never in a reclaimable actor heap.
+ * - External leases delay physical reclamation; they do not grant actor-field
+ *   access or make a private heap shareable.
+ * - Untrusted actors additionally require enforced memory bounds and an
+ *   execution isolation boundary; ownership metadata alone is insufficient.
+ * - The caller must fence every raw heap-pointer user before a successful
+ *   try_destroy(). Concurrent callers cannot safely probe a freed pointer.
+ * Future variable-sized actor arenas must preserve these invariants.
+ */
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
                                            uint64_t incarnation,
