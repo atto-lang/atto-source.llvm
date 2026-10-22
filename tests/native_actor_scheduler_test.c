@@ -12,10 +12,49 @@
 static void check(int ok) { if (!ok) abort(); }
 typedef struct {
     atomic_int active[ACTORS], peak[ACTORS], next[ACTORS], total, errors;
+    atomic_uint_fast64_t last_execution[ACTORS];
+    atomic_uint_fast64_t allocation_domain[ACTORS];
+    atomic_uint_fast64_t allocation_generation[ACTORS];
     atomic_int hold;
+    OresNativeActorScheduler* scheduler;
 } State;
 static void run(void* raw, size_t actor, uint64_t msg) {
     State* s = (State*)raw;
+    OresNativeExecutionContext execution = {0};
+    if (!s->scheduler
+            || !ores_native_actor_scheduler_current_execution_context(
+                    s->scheduler, &execution)
+            || execution.id.runtime_domain == 0
+            || execution.id.execution == 0
+            || execution.allocation.kind != ORES_ALLOCATION_DOMAIN_ACTOR
+            || execution.allocation.domain != execution.id.runtime_domain
+            || execution.allocation.owner != actor
+            || execution.allocation.generation == 0
+            || ores_native_store_handle_valid(execution.parent_execution)
+            || ores_native_store_handle_valid(execution.continuation)) {
+        atomic_fetch_add(&s->errors, 1);
+    } else {
+        uint64_t previous = atomic_exchange(
+                &s->last_execution[actor], execution.id.execution);
+        if (previous && execution.id.execution <= previous)
+            atomic_fetch_add(&s->errors, 1);
+
+        uint64_t expected_domain = 0;
+        if (!atomic_compare_exchange_strong(
+                &s->allocation_domain[actor],
+                &expected_domain,
+                execution.allocation.domain)
+                && expected_domain != execution.allocation.domain)
+            atomic_fetch_add(&s->errors, 1);
+
+        uint64_t expected_generation = 0;
+        if (!atomic_compare_exchange_strong(
+                &s->allocation_generation[actor],
+                &expected_generation,
+                execution.allocation.generation)
+                && expected_generation != execution.allocation.generation)
+            atomic_fetch_add(&s->errors, 1);
+    }
     int current = atomic_fetch_add(&s->active[actor], 1) + 1;
     int previous = atomic_load(&s->peak[actor]);
     while (current > previous &&
@@ -43,6 +82,9 @@ int main(void) {
 #else
     check(!ores_native_actor_scheduler_priority_inheritance_enabled(scheduler));
 #endif
+    s.scheduler = scheduler;
+    OresNativeExecutionContext outside = {0};
+    check(!ores_native_actor_scheduler_current_execution_context(scheduler, &outside));
     OresNativeActorRef refs[ACTORS];
     for (int a = 0; a < ACTORS; ++a) {
         refs[a] = ores_native_actor_scheduler_spawn(scheduler, (size_t)a);
@@ -73,6 +115,7 @@ int main(void) {
     atomic_store(&pressure.hold, 1);
     scheduler = ores_native_actor_scheduler_open(1, 1, 2, run, &pressure);
     check(scheduler != NULL);
+    pressure.scheduler = scheduler;
     OresNativeActorRef one = ores_native_actor_scheduler_spawn(scheduler, 0);
     check(one.scheduler_domain != 0);
     check(ores_native_actor_scheduler_try_send(scheduler, refs[0], 0)

@@ -1,6 +1,8 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "oreslang/runtime/NativeExecutionContext.h"
+typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +29,15 @@ typedef void (*OresNativeActorPanicFn)(
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
  */
+/* Trusted host-only pre-admission wiring. Must be called before the first
+ * actor message/carrier starts. Gate outlives this scheduler and is released
+ * after its last callback finishes. A NULL gate leaves legacy dispatch intact. */
+int ores_native_actor_scheduler_configure_turn_gate(
+    OresNativeActorScheduler* scheduler, OresNativePhysicalTurnGate* gate);
+/* Wake idle carriers that lost a cross-domain permit race, including while
+ * the scheduler is retiring and still has admitted work to drain. Trusted
+ * VM-only call; not a guest CONTROL message. */
+void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* scheduler);
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
 /* Send succeeds only after atomic admission to a live, generation-matched
@@ -112,6 +123,12 @@ int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* sch
 /* Exact live actor identity for trusted callback/FFI bridges only. */
 int ores_native_actor_scheduler_is_current_actor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Logical execution identity for the current guest turn. The execution id is
+ * not a heap id and is not a carrier/thread id. For actor turns the allocation
+ * domain names the actor-owned domain independently. Returns zero outside an
+ * authenticated current turn. */
+int ores_native_actor_scheduler_current_execution_context(
+    OresNativeActorScheduler* scheduler, OresNativeExecutionContext* out);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
@@ -152,6 +169,11 @@ uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* schedul
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 /* Test-only deterministic worker-create failure; no production symbol. */
 void ores_native_actor_scheduler_test_fail_next_create(void);
+#endif
+#ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
+/* Test-only execution-id exhaustion control; no production symbol. */
+int ores_native_actor_scheduler_test_set_next_execution(
+    OresNativeActorScheduler* scheduler, uint64_t next_execution);
 #endif
 #ifdef __cplusplus
 }

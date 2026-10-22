@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fail-closed Java keyword parity: unsupported syntax must never emit LLVM IR."""
+import json
 import pathlib
 import subprocess
 import sys
@@ -22,6 +23,57 @@ CASES = {
     "pattern-parameter": (
         "pub fnc main(int pattern): int { return 42; }",
         "expected non-keyword identifier",
+    ),
+    # Host/device scopes are currently reserved, never interpreted as i64
+    # expressions or silently executed on the CPU. The same applies at
+    # callable declarations and inside nested blocks.
+    "gpu-callable": (
+        "pub gpu fnc kernel(): int { return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "cpu-callable": (
+        "pub cpu fnc kernel(): int { return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-block": (
+        "pub fnc main(): int { cpu { return 7; } return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-task-block": (
+        "pub fnc main(): int { return cpu task { 42 }; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "gpu-task-block": (
+        "pub fnc main(): int { return gpu task { 42 }; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "default-task-block": (
+        "pub fnc main(): int { return task { 42 }; }",
+        "native execution task lowering unsupported",
+    ),
+    "gpu-block": (
+        "pub fnc main(): int { gpu { return 7; } return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-in-cpu": (
+        "pub fnc main(): int { cpu { gpu { return 7; } } return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "cpu-in-gpu": (
+        "pub fnc main(): int { gpu { cpu { return 7; } } return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "gpu-identifier": (
+        "pub fnc gpu(): int { return 42; }",
+        "native gpu/quantum boundary unsupported",
+    ),
+    "cpu-identifier": (
+        "pub fnc cpu(): int { return 42; }",
+        "native cpu execution block boundary unsupported",
+    ),
+    "quantum-callable": (
+        "pub quantum fnc kernel(): int { return 42; }",
+        "native gpu/quantum boundary unsupported",
     ),
     "over-function": (
         "pub fnc over(): int { return 42; }",
@@ -119,6 +171,28 @@ def main():
                     f"{name}: expected rejection without LLVM IR, "
                     f"returncode={result.returncode}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
+
+        contract = pathlib.Path(__file__).resolve().parents[1] / (
+            "contracts/v2/cpu-gpu-task-unsupported-v2.json")
+        shared = json.loads(contract.read_text(encoding="utf-8"))
+        if len(shared) != 10:
+            raise AssertionError("CPU/GPU task v2 corpus must contain exactly 10 cases")
+        for name, source in shared.items():
+            fixture = pathlib.Path(tmp) / ("v2-" + name + ".ores")
+            fixture.write_text(source + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.argv[1], str(fixture)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
+            if result.returncode == 0 or result.stdout.strip():
+                raise AssertionError(
+                    f"{name}: v2 execution form admitted or emitted LLVM IR, "
+                    f"returncode={result.returncode}, stdout={result.stdout!r}, "
+                    f"stderr={result.stderr!r}"
                 )
 
 
