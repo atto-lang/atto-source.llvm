@@ -79,3 +79,34 @@ cancellation cleanup require effect and continuation lowering that is not
 yet implemented. The failure edge therefore cleans up and **traps** rather
 than inventing a source-visible exception. This is *failure-atomic fail-stop
 cleanup*, not a successful recoverable allocation error protocol.
+
+
+## Independent compiled-source partial rollback observer
+
+The stress harness now executes the *allocation failure path* of LLVM-generated
+source actor handler code, not just the normal drop epilogue. It builds a
+test-only IR variant with the emitted calls to `llvm.trap()` replaced by
+`ores_test_capture_failure()`. The observer uses a native C `longjmp`
+directly to its caller **after** the generated rollback drops have executed.
+All allocation, field-access and drop instructions remain unchanged.
+
+A C driver fills one of the actor's two temporary slots before entering
+`on_message`. The first source `owned int` allocation succeeds, the second
+encounters capacity exhaustion, and the generated failure CFG must drop the
+first local. After observation, the driver checks that the persistent actor
+field and preexisting owner are unchanged, that one native temporary slot
+can be reacquired, and that a further allocation remains denied. It then
+drops the test owner, leaves the admitted turn and retires the heap.
+
+An independent negative mutant removes **only** the first-owner cleanup
+instruction from the second local's failure block; the same native observer
+must then fail to reacquire the slot. This supplies mutation sensitivity to
+detect accidentally omitted compiler cleanup rather than accepting any
+process crash as proof. The unmodified emitted guest IR is also linked and
+exercised in a separate 10,000-turn successful run. These are tests awaiting
+exact-head CI execution, not recorded passes.
+
+The interception mechanism is strictly part of the test-compiled LLVM
+module. Production source never sees a catchable panic, resumable trap,
+borrowed pointer escape or a fake `Result`. No async/FFI/OS carrier parity
+claim follows from this test.
