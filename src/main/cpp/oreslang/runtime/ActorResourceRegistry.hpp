@@ -189,6 +189,11 @@ public:
 
 private:
     friend class NativeActorResourceQuarantine;
+#ifdef ORESLANG_NATIVE_TEST_REGISTRY_DOMAIN_EXHAUSTION
+    // Isolated single-translation-unit test only. Production exposes no
+    // counter mutation API, and no issued domain may ever be recycled.
+    friend struct ActorResourceRegistryDomainTestAccess;
+#endif
 
     // Actor/incarnation numbers can coincide in different runtimes. Neither
     // those numbers nor this object's address identifies a registry lifetime.

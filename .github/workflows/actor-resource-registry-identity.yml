@@ -45,6 +45,11 @@ jobs:
             tests/actor_resource_registry_identity_test.cpp \
             tests/actor_resource_registry_identity_peer.cpp -o /tmp/registry-identity
           /tmp/registry-identity
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread \
+            "${flags[@]}" -DORESLANG_NATIVE_TEST_REGISTRY_DOMAIN_EXHAUSTION \
+            -I src/main/cpp tests/actor_resource_registry_exhaustion_test.cpp \
+            -o /tmp/registry-exhaustion
+          /tmp/registry-exhaustion
           cc=gcc
           if [[ "$CXX" == clang++ ]]; then cc=clang; fi
           "$cc" -std=c11 -Wall -Wextra -Wpedantic -Werror \
