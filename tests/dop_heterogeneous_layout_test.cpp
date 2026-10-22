@@ -19,6 +19,71 @@ template<typename T, typename F> static void rejects(F&& operation) {
     require(rejected,"invalid heterogeneous layout admitted");
 }
 
+// Materialize host bytes independently of the geometry planner. Using explicit
+// little-endian shifts avoids accidentally testing only the machine's native
+// endian order. This remains a host ABI test, not compiled Oreslang guest code.
+static void write_le(std::vector<std::uint8_t>& bytes, std::uint64_t offset,
+                     std::uint64_t value, std::uint32_t width) {
+    require(offset <= bytes.size() && width <= bytes.size() - offset,
+            "heterogeneous scalar escaped physical actor allocation");
+    for (std::uint32_t i = 0; i < width; ++i)
+        bytes[static_cast<std::size_t>(offset + i)] =
+            static_cast<std::uint8_t>((value >> (i * 8)) & 0xffU);
+}
+static std::uint64_t read_le(const std::vector<std::uint8_t>& bytes,
+                             std::uint64_t offset, std::uint32_t width) {
+    require(offset <= bytes.size() && width <= bytes.size() - offset,
+            "heterogeneous scalar read escaped physical actor allocation");
+    std::uint64_t value = 0;
+    for (std::uint32_t i = 0; i < width; ++i)
+        value |= static_cast<std::uint64_t>(bytes[
+            static_cast<std::size_t>(offset + i)]) << (i * 8);
+    return value;
+}
+static void check_mixed_bytes(const HeterogeneousPlan& plan) {
+    require(plan.physical_bytes() <= 144, "host byte corpus must stay bounded");
+    std::vector<std::uint8_t> bytes(
+        static_cast<std::size_t>(plan.physical_bytes()), 0);
+    std::unordered_set<std::uint64_t> occupied;
+    for (std::uint64_t row = 0; row < plan.rows(); ++row) {
+        const std::uint32_t id = 0xffffffffU - static_cast<std::uint32_t>(row);
+        const std::uint32_t next = 0x80000000U + static_cast<std::uint32_t>(row);
+        const std::uint64_t f64_bits = row == 0 ? 0x8000000000000000ULL :
+            row == 1 ? 0x3ff4000000000000ULL :
+            row == 2 ? 0x4045400000000000ULL :
+            0x3ff0000000000000ULL + (row << 40);
+        const std::uint64_t expected[] = {id, f64_bits,
+                                          row % 2 == 0 ? 1ULL : 0ULL, next};
+        const std::uint32_t widths[] = {4, 8, 1, 4};
+        for (std::uint32_t field = 0; field < 4; ++field) {
+            const auto at = plan.absolute_address(row,field);
+            for (std::uint32_t i = 0; i < widths[field]; ++i)
+                require(occupied.insert(at + i).second,
+                        "native mixed-width scalar bytes aliased");
+            write_le(bytes,at,expected[field],widths[field]);
+        }
+    }
+    for (std::uint64_t row = 0; row < plan.rows(); ++row) {
+        const std::uint32_t id = 0xffffffffU - static_cast<std::uint32_t>(row);
+        const std::uint32_t next = 0x80000000U + static_cast<std::uint32_t>(row);
+        const std::uint64_t f64_bits = row == 0 ? 0x8000000000000000ULL :
+            row == 1 ? 0x3ff4000000000000ULL :
+            row == 2 ? 0x4045400000000000ULL :
+            0x3ff0000000000000ULL + (row << 40);
+        const std::uint64_t expected[] = {id, f64_bits,
+                                          row % 2 == 0 ? 1ULL : 0ULL, next};
+        const std::uint32_t widths[] = {4, 8, 1, 4};
+        for (std::uint32_t field = 0; field < 4; ++field)
+            require(read_le(bytes,plan.absolute_address(row,field),
+                            widths[field]) == expected[field],
+                    "native mixed-width scalar bytes corrupted another cell");
+    }
+    for (std::uint64_t byte = 0; byte < plan.physical_bytes(); ++byte)
+        if (occupied.count(byte) == 0)
+            require(bytes[static_cast<std::size_t>(byte)] == 0,
+                    "native mixed-width padding was mutated");
+}
+
 int main() {
     // Normative heterogeneous fixture: u32 id, f64 x, bool flag, ref32 next.
     const std::vector<FieldSpec> schema{{4,4}, {8,8}, {1,1}, {4,4}};
@@ -40,6 +105,11 @@ int main() {
     require(soaos.segments()[0].stride == 8 && soaos.segments()[1].stride == 16 &&
             soaos.address(2,3).segment == 1 && soaos.address(2,3).byte_offset == 40,
             "SoAoS is not correct grouped AoS geometry");
+
+    check_mixed_bytes(aos);
+    check_mixed_bytes(soa);
+    check_mixed_bytes(tile);
+    check_mixed_bytes(soaos);
 
     // Exhaustive small-capacity byte-level alias, alignment and bounds oracle.
     for (const auto layout : {HeterogeneousLayout::AoS,HeterogeneousLayout::SoA,
