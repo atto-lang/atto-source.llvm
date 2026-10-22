@@ -73,3 +73,33 @@ repos. Until an actual run records executed steps and proof transcripts,
 Related: [Java checked-AST draft #1885](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1885),
 [common-source proof prototype #126](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/126),
 [cross-backend program #150](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/issues/150).
+
+## Actual AOT guest contract track (separate CI job)
+
+`tests/native_aot_core_math_matrix.py` compiles and executes the **real native
+guest** once per shared contract vector, using the LLVM compiler binary built
+from the exact checkout followed by Clang. Its input is
+`tests/fixtures/core-math-i64-v1.json`: a manually synchronized snapshot of
+common-source Git blob `58d2b64a137ede4700593f855e1f0504ff744f90`.
+Any bytes changed without explicit contract review are rejected.
+
+The test generates a guest `main()` which binds a call result to an immutable
+local and compares the entire **signed-i64 value inside Oreslang**, returning
+exit status 0 if equal and 1 otherwise. This avoids truncating a 64-bit result
+through the host process exit status. It runs 24 independent compiled cases and
+one deliberately incorrect expected-value case, which must exit with 1.
+No compiled output is substituted with host-computed oracle values. The
+script writes `aot-core-math-execution.json` only after every guest
+execution and the negative control have succeeded; it is an observation
+record, not independently authenticated CI provenance.
+
+Because Java's Oreslang module source syntax differs from the native subset,
+matching this shared **semantic corpus** is a cross-backend behavioral gate,
+not an identical-source backend equivalence theorem. Exact-source attestations
+remain per-backend.
+
+**Current state:** hosted
+[LLVM workflow run #39744468044](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/39744468044)
+failed before allocating either AOT or scalar-proof job
+(`runner_id:0`, zero steps). Neither executed. The added script and
+workflow are pending compiler and runtime qualification.
