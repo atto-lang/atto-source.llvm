@@ -53,6 +53,20 @@ if(BUILD_TESTING)
     add_test(NAME native_send_sync_marker_contract
         COMMAND oreslang-native-send-sync-contract-test)
     set_tests_properties(native_send_sync_marker_contract PROPERTIES TIMEOUT 15)
+    # Host-only tagged Symbol property identity / static layout parity.
+    # This is NOT compiled guest Symbol source, a Unicode NFC decoder,
+    # actor admission or property-key codegen.
+    add_executable(oreslang-native-symbol-property-layout-v1-test
+        tests/symbol_property_layout_v1_test.cpp)
+    target_include_directories(oreslang-native-symbol-property-layout-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-symbol-property-layout-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_symbol_property_layout_host_only_v1
+        COMMAND oreslang-native-symbol-property-layout-v1-test)
+    set_tests_properties(native_symbol_property_layout_host_only_v1
+        PROPERTIES TIMEOUT 15)
+
     find_package(Threads REQUIRED)
     # Host-only generational reply slab proof; not source-level actor RPC.
     add_executable(oreslang-native-generational-reply-test
