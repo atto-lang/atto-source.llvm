@@ -1786,8 +1786,8 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-dynamic-ready-test)
     set_tests_properties(native_actor_dynamic_ready_large_actor_count
         PROPERTIES TIMEOUT 90)
-    # Second-level occupancy summary: 16,384 distinct actor turns across
-    # 1024 bitmap words, priority CONTROL, FIFO and stale-ref rejection.
+    # Sparse actor hotset across 65k logical lanes; root/leaf summaries,
+    # rotating fairness, actor-exclusive CONTROL and DATA, no per-turn GC.
     add_executable(oreslang-native-ready-summary-test
         tests/native_actor_ready_summary_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
@@ -1796,8 +1796,22 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-ready-summary-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-ready-summary-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
-    add_test(NAME native_actor_ready_summary_16k_turns
+    add_test(NAME native_actor_ready_summary_sparse_65k
         COMMAND oreslang-native-ready-summary-test)
+    set_tests_properties(native_actor_ready_summary_sparse_65k
+        PROPERTIES TIMEOUT 90)
+    # Second-level occupancy summary: 16,384 distinct actor turns across
+    # 1024 bitmap words, priority CONTROL, FIFO and stale-ref rejection.
+    add_executable(oreslang-native-ready-summary-16k-test
+        tests/native_actor_ready_summary_16k_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-ready-summary-16k-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-ready-summary-16k-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-ready-summary-16k-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_ready_summary_16k_turns
+        COMMAND oreslang-native-ready-summary-16k-test)
     set_tests_properties(native_actor_ready_summary_16k_turns
         PROPERTIES TIMEOUT 90)
     # Seeded CONTROL/DATA/stop races across 4,096 actor lanes and
