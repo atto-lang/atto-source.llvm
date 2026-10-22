@@ -2217,6 +2217,13 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
+            // Physical i64 payload encoding is NOT source int type evidence:
+            // bool comparisons also lower to i64, but may not initialize an
+            // owned int or escape from an actor handler returning int.
+            std::unordered_map<std::string, ScalarType> actor_scalar_types;
+            for (const auto& field : actor.fields)
+                actor_scalar_types.emplace(field.name, ScalarType::I64);
+            actor_scalar_types.emplace(parameter, ScalarType::I64);
             // Validate in declaration order. An owned actor-handler local
             // becomes visible only AFTER its initializer is fully checked.
             // Never treat a forward reference as an arbitrary field or let
@@ -2226,17 +2233,32 @@ private:
                     throw std::runtime_error(
                         "native actor owned local requires immutable initialized slot");
                 validate_expression(*local.initializer, fields, functions);
+                if (validate_scalar_expression(*local.initializer,
+                        actor_scalar_types, functions) != ScalarType::I64)
+                    throw std::runtime_error(
+                        "native actor owned int initializer requires int");
                 if (!fields.insert(local.name).second)
                     throw std::runtime_error(
                         "actor owned local shadows field, parameter or previous owner '" +
                         local.name + "'");
+                actor_scalar_types.emplace(local.name, ScalarType::I64);
             }
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
+                if (!method.locals.empty() &&
+                        validate_scalar_expression(*write.expression,
+                            actor_scalar_types, functions) != ScalarType::I64)
+                    throw std::runtime_error(
+                        "native actor owned handler field write requires int");
             }
             validate_expression(*method.result, fields, functions);
+            if (!method.locals.empty() &&
+                    validate_scalar_expression(*method.result,
+                        actor_scalar_types, functions) != ScalarType::I64)
+                throw std::runtime_error(
+                    "native actor owned handler return requires int");
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
