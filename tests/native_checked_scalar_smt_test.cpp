@@ -74,6 +74,12 @@ int main(int argc, char** argv) {
             (void)NativeScalarSmt::from_source(
                 std::string(2'000'001, ' '), "min_int");
         });
+        must_reject([&] {
+            (void)NativeScalarSmt::from_source(source + std::string(1, '\0'), "min_int");
+        });
+        must_reject([&] {
+            (void)NativeScalarSmt::from_source(source + std::string(1, char(0xff)), "min_int");
+        });
         std::cout << "NATIVE-CHECKED-SMT-FIXTURES-EMITTED\n";
         return 0;
     } catch (const std::exception& e) {
