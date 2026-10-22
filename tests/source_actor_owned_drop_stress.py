@@ -61,13 +61,13 @@ def main():
         if args.sanitize:
             flags += ["-fsanitize=address,undefined"]
 
-        def linked(name, source_ir):
+        def linked(name, source_ir, source_driver=driver):
             ll = work / (name + ".ll")
             binary = work / name
             ll.write_text(source_ir)
             command = [args.clang, *flags, "-x", "ir", str(ll),
                        "-x", "c", "-std=c11", "-pthread",
-                       "-I", str(header_root), str(native_heap), str(driver),
+                       "-I", str(header_root), str(native_heap), str(source_driver),
                        "-o", str(binary)]
             built = run(command)
             require(built.returncode == 0,
@@ -101,9 +101,58 @@ def main():
                 str(denied.returncode) + " " + denied.stderr)
         require(marker not in denied.stdout, "drop-less mutant wrongly passed")
 
+        # Independently execute the *compiler-generated failure cleanup*.
+        # Pre-fill one temporary slot so the first handler allocation
+        # succeeds but the second exhausts the actor's three-slot heap.
+        # Replace ONLY the terminal trap with an observing test hook that
+        # longjmps after all compiler drops have already executed. This is
+        # a test-mutated IR image, never a production error continuation.
+        trap_call = "call void @llvm.trap()"
+        require(ir.count(trap_call) == 2,
+                "expected exactly two native allocation failure terminals")
+        observed_ir = (ir.replace(
+            trap_call, "call void @ores_test_capture_failure()")
+            + "\\ndeclare void @ores_test_capture_failure()\\n")
+        rollback_driver = root / "tests/source_actor_owned_partial_rollback.c"
+        rollback = linked(
+            "actor-owned-partial-rollback", observed_ir, rollback_driver)
+        observed = run([str(rollback)], env=env)
+        rollback_marker = "SOURCE_ACTOR_PARTIAL_FAILURE_ROLLBACK_PASS"
+        require(observed.returncode == 0 and
+                observed.stdout.splitlines().count(rollback_marker) == 1,
+                "compiler-generated partial rollback did not free first owner: " +
+                str(observed.returncode) + " " + observed.stderr)
+
+        # Mutation adequacy: remove ONLY the earlier-owner drop from the
+        # second allocation's failure block. The independent heap observer
+        # must now fail to reacquire its slot, never falsely report success.
+        failure_label = "doubled.actor.owned.exhausted:"
+        require(observed_ir.count(failure_label) == 1,
+                "unexpected LLVM allocation failure block name")
+        mutated_lines = []
+        in_failure = False
+        removed = 0
+        for line in observed_ir.splitlines(keepends=True):
+            if line.strip() == failure_label:
+                in_failure = True
+            elif in_failure and line.strip().endswith(":") and not line.startswith((" ", "\\t")):
+                in_failure = False
+            if in_failure and drop_token in line:
+                removed += 1
+                continue
+            mutated_lines.append(line)
+        require(removed == 1, "must remove exactly one failure-path owner drop")
+        rollback_mutant = linked(
+            "actor-owned-failure-drop-omitted", "".join(mutated_lines),
+            rollback_driver)
+        missed = run([str(rollback_mutant)], env=env)
+        require(missed.returncode != 0 and
+                rollback_marker not in missed.stdout,
+                "missing partial-failure drop escaped real heap observer")
+
     print("PASS: actual Oreslang source actor compiled native, 10000 admitted turns,"
-          " owned drops exactly twice/turn, no-drop mutation SIGABRT,"
-          " sanitized=" + str(args.sanitize))
+          " checked owner drops, no-drop fail-stop, observed partial rollback,"
+          " rollback mutation rejected, sanitized=" + str(args.sanitize))
 
 
 if __name__ == "__main__":
