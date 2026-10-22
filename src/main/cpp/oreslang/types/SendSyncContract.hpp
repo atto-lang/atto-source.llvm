@@ -115,8 +115,15 @@ inline bool worker_marker_proven(const WorkerType& type, WorkerMarker marker,
 
 inline bool worker_marker(const WorkerType& type, WorkerMarker marker,
                           const VerifiedNominal& nominal) {
+    // Invalid enum representations and failing trusted proof callbacks must
+    // never promote a type to Send/Sync or escape as guest-visible exceptions.
+    if (marker != WorkerMarker::Send && marker != WorkerMarker::Sync) return false;
     std::size_t remaining = 4096;
-    return worker_marker_proven(type, marker, nominal, 0, remaining);
+    try {
+        return worker_marker_proven(type, marker, nominal, 0, remaining);
+    } catch (...) {
+        return false;
+    }
 }
 
 inline void require_worker_marker(const WorkerType& type, WorkerMarker marker,
