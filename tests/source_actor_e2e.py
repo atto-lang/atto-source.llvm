@@ -105,9 +105,13 @@ def main():
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-scoped-owned-i64.ores":
                 assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_new(") == 2, name
+                    "call i32 @ores_actor_i64_heap_scoped_try_new(") == 2, name
+                # Two normal drop calls plus a guarded cleanup of the first
+                # owner if allocating the second owner fails.
                 assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
+                    "call void @ores_actor_i64_heap_scoped_drop(") == 3, name
+                assert "actor.owned.exhausted:" in guest.stdout, (
+                    name, "missing native owner partial-failure cleanup edge")
                 # One actor-native heap for the retained field plus two
                 # reusable temporary slots: the second mailbox delivery
                 # must fail if either compiler drop was omitted.
