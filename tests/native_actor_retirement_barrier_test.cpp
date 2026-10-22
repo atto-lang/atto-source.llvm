@@ -205,7 +205,70 @@ static void done_waits_for_group_detachment() {
     ref.get_done().get();
 }
 
+
+static void deferred_source_cleanup_physically_fences_actor_done() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(410, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(17, 1);
+    auto receipt = std::make_shared<NativeSourceCleanupGate>(
+            NativeSourceCleanupTicket{17, 1, 99});
+    const NativeSourceCleanupTicket ticket{17, 1, 99};
+    std::atomic<int> freed{0};
+    registry->register_resource(Kind::native_allocation, [&] { ++freed; });
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(410, 17, 1, [&] { barrier->retire(); });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
+                                       quarantine, receipt);
+    barrier = &owned;
+    require(group.mark_ready(ref), "cleanup proof actor ready");
+    group.close();
+    require(owned.poll() == Poll::pending && freed == 0,
+            "scheduler close without cleanup proof freed arena");
+    require(receipt->request_cancel(ticket), "cancel request");
+    require(owned.poll() == Poll::pending, "cancel request faked physical done");
+    require(receipt->try_claim_cleanup(ticket), "cleanup turn claim");
+    require(!receipt->try_claim_cleanup(ticket), "duplicate cleanup turn claim");
+    require(owned.poll() == Poll::pending, "incomplete cleanup turn freed arena");
+    require(receipt->yield_cleanup(ticket), "cleanup await yield");
+    require(owned.poll() == Poll::pending, "yielded cleanup freed arena");
+    require(receipt->try_claim_cleanup(ticket), "cleanup resume on owner lane");
+    require(receipt->complete_cleanup(ticket), "cleanup completion");
+    require(owned.poll() == Poll::completed && freed == 1,
+            "physically completed cleanup failed to enable actor retirement");
+    ref.get_done().get();
+    require(!receipt->request_cancel(ticket), "late cancel after physical done");
+}
+
+static void failed_source_cleanup_keeps_actor_arena_retained() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(411, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(18, 1);
+    auto receipt = std::make_shared<NativeSourceCleanupGate>(
+            NativeSourceCleanupTicket{18, 1, 102});
+    const NativeSourceCleanupTicket ticket{18, 1, 102};
+    std::atomic<int> freed{0};
+    registry->register_resource(Kind::native_allocation, [&] { ++freed; });
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(411, 18, 1, [&] { barrier->retire(); });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
+                                       quarantine, receipt);
+    barrier = &owned;
+    require(group.mark_ready(ref), "failed cleanup actor ready");
+    group.close();
+    require(receipt->request_cancel(ticket), "failed cleanup cancel request");
+    require(receipt->try_claim_cleanup(ticket), "failed cleanup claim");
+    require(receipt->fail_cleanup(ticket), "failed cleanup marker");
+    require(!receipt->complete_cleanup(ticket), "failed cleanup claimed completion");
+    require(owned.poll() == Poll::cleanup_incomplete && freed == 0,
+            "failed cleanup closed actor-owned arena");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                 == std::future_status::timeout,
+            "missing cleanup created a false get_done");
+}
+
 int main() {
+    deferred_source_cleanup_physically_fences_actor_done();
+    failed_source_cleanup_keeps_actor_arena_retained();
     successful_heap_retirement();
     failed_ffi_revocation_is_quarantined();
     quarantine_saturation_does_not_settle_done();
