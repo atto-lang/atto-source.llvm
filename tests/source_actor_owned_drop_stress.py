@@ -133,9 +133,10 @@ def main():
         in_failure = False
         removed = 0
         for line in observed_ir.splitlines(keepends=True):
-            if line.strip() == failure_label:
+            if line.startswith(failure_label):
                 in_failure = True
-            elif in_failure and line.strip().endswith(":") and not line.startswith((" ", "\\t")):
+            elif (in_failure and line and not line[0].isspace() and
+                  ":" in line and not line.startswith(";")):
                 in_failure = False
             if in_failure and drop_token in line:
                 removed += 1
