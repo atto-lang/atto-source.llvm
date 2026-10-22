@@ -29,8 +29,12 @@ int main() {
     const HeterogeneousPlan soaos(HeterogeneousLayout::SoAoS,3,schema,1,groups);
     require(aos.segments()[0].stride == 24 && aos.address(1,1).byte_offset == 32,
             "AoS mixed-width reference geometry mismatch");
-    require(soa.total_bytes() == 51 && soa.address(2,1).byte_offset == 16 &&
-            soa.address(2,1).segment == 1, "SoA mixed-width reference geometry mismatch");
+    require(soa.total_bytes() == 51 && soa.physical_bytes() == 56 &&
+            soa.address(2,1).byte_offset == 16 && soa.absolute_address(2,1) == 32 &&
+            soa.address(2,1).segment == 1 &&
+            soa.segments()[0].base == 0 && soa.segments()[1].base == 16 &&
+            soa.segments()[2].base == 40 && soa.segments()[3].base == 44,
+            "SoA mixed-width reference geometry mismatch");
     require(tile.segments()[0].bytes == 144 && tile.address(4,0).byte_offset == 72,
             "AoSoA mixed-width padded geometry mismatch");
     require(soaos.segments()[0].stride == 8 && soaos.segments()[1].stride == 16 &&
@@ -46,7 +50,16 @@ int main() {
                 const HeterogeneousPlan plan(layout,capacity,schema,lanes,
                                              layout == HeterogeneousLayout::SoAoS ? groups :
                                              std::vector<std::vector<std::uint32_t>>{});
-                std::unordered_set<std::string> occupied;
+                std::unordered_set<std::uint64_t> occupied;
+                std::uint64_t next = 0;
+                for (const auto& segment : plan.segments()) {
+                    require(segment.base >= next &&
+                            segment.base % segment.alignment == 0,
+                            "invalid native segment-base alignment");
+                    next = checked_add(segment.base, segment.bytes);
+                }
+                require(plan.physical_bytes() == next,
+                        "actor physical byte cap does not include segment padding");
                 for (std::uint32_t row = 0; row < capacity; ++row) {
                     for (std::uint32_t field = 0; field < schema.size(); ++field) {
                         const auto loc = plan.address(row,field);
@@ -56,10 +69,12 @@ int main() {
                         require(loc.byte_offset <= segment.bytes &&
                                 schema[field].bytes <= segment.bytes - loc.byte_offset,
                                 "mixed-width field exceeds segment");
+                        const auto absolute = plan.absolute_address(row,field);
+                        require(absolute % schema[field].alignment == 0,
+                                "unnaturally aligned native actor field");
                         for (std::uint64_t byte = 0; byte < schema[field].bytes; ++byte) {
-                            const std::string key = std::to_string(loc.segment) + ":" +
-                                std::to_string(loc.byte_offset + byte);
-                            require(occupied.insert(key).second,"mixed-width fields overlap");
+                            require(occupied.insert(checked_add(absolute,byte)).second,
+                                    "mixed-width fields overlap in physical arena");
                         }
                     }
                 }
@@ -80,6 +95,13 @@ int main() {
         3,schema,1,{},23,51); });
     rejects<std::length_error>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::SoA,
         3,schema,1,{},24,50); });
+    rejects<std::length_error>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::SoA,
+        3,schema,1,{},24,51); });
+    rejects<std::length_error>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::SoA,
+        3,schema,1,{},24,55); });
+    const HeterogeneousPlan soa_exact(HeterogeneousLayout::SoA,3,schema,1,{},24,56);
+    require(soa_exact.physical_bytes() == 56,
+            "aligned actor allocation rejected at exact physical byte cap");
     rejects<std::length_error>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::AoSoA,
         5,schema,4,{},144,143); });
     rejects<std::length_error>([&]{ (void)HeterogeneousPlan(HeterogeneousLayout::SoAoS,
