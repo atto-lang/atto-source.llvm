@@ -673,6 +673,10 @@ private:
             do {
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
+                if (token_.text == "structural")
+                    fail("native structural positional tuple requires verified readonly-width and nonescape lowering");
+                if (token_.text == "tuple" || token_.text == "(")
+                    fail("native positional tuple parameter requires verified readonly-slot and optional-tail lowering");
                 Parameter parameter;
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
@@ -704,6 +708,8 @@ private:
             require(")");
         }
         require(":");
+        if (token_.text == "structural" || token_.text == "tuple" || token_.text == "(")
+            fail("native positional tuple return requires verified tuple ABI lowering");
         value.returns_void = accept("void");
         if (!value.returns_void) {
             if (accept("int")) {
