@@ -17,6 +17,22 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Numeric division fail-closed parity boundary
+
+Java source revision `4fc9148` defines `int / int` with a `float`
+result (the real guest runtime evaluates it as `Double`), so LLVM's
+i64-only expression emitter must **not** infer an i64 quotient or treat
+a lexical rejection as a successful implementation.
+
+The native frontend now recognizes `/` and `%` as operators, then
+rejects each with an **operator-specific diagnostic before LLVM IR**
+because floating-point result typing, division-by-zero policy, and native
+remainder contracts have not yet been lowered or verified. Three
+dedicated CTest negative fixtures require nonzero compiler exit and
+**empty emitted IR**. This is rejection parity, *not* implementation
+or runtime parity. Subsequent work must add typed float IR, promotion,
+zero-divisor/overflow semantics, and differential JVM/AOT/LLVM tests.
+
 ## Native I/O naming contract (future binding admission)
 
 All source-visible **synchronous-looking I/O** APIs must end in `_blocking`; the runtime must **transparently suspend the calling continuation and release the actor carrier** while I/O is in flight, then resume with a `T` result or an error. They must not block an OS scheduler carrier. **Asynchronous I/O** APIs may, but need not, end in `_async`, and return `Future<T>`. This includes filesystem metadata operations, sockets, DNS, terminal/stdio and HTTP operations that can block the caller. Pure functions and host-internal C++ methods do not acquire suffixes.

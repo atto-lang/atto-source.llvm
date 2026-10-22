@@ -15,9 +15,11 @@ enum class ResultVariant : std::uint8_t { Ok = 0, Err = 1 };
 
 struct AppendResult final {
     ResultVariant variant = ResultVariant::Ok;
-    ArrayError error = ArrayError::Limit; // ignored for Ok; never observed
+    // Zero means absent error for Ok; it is NOT a public ArrayError variant.
+    ArrayError error = static_cast<ArrayError>(0);
 };
 static_assert(std::is_trivially_copyable_v<AppendResult>);
+static_assert(static_cast<std::uint8_t>(AppendResult{}.error) == 0);
 static_assert(!std::is_convertible_v<AppendResult, std::uint32_t>);
 static_assert(!std::is_convertible_v<AppendResult, std::int64_t>);
 
@@ -39,6 +41,62 @@ static_assert(!std::is_convertible_v<AppendResult, std::int64_t>);
             candidate.error = ArrayError::NoMemory;
             break;
         default: return false;
+    }
+    output = candidate;
+    return true;
+}
+
+// Canonical wire/storage boundary for the *closed* void specialization only.
+// Exactly three bytes: schema version, variant tag, error tag. Ok encodes
+// zero error payload, and Err requires a known nominal ArrayError. Never
+// memcpy a padded C++ AppendResult across Java, actors, or the native ABI.
+inline constexpr std::uint8_t kAppendResultWireVersion = 1;
+inline constexpr std::size_t kAppendResultWireSize = 3;
+
+[[nodiscard]] constexpr bool encode_append_result(
+        const AppendResult& value,
+        std::uint8_t (&bytes)[kAppendResultWireSize]) noexcept {
+    std::uint8_t variant = 0;
+    std::uint8_t error = 0;
+    switch (value.variant) {
+        case ResultVariant::Ok:
+            // A forged or stale error tag on success is not canonical.
+            // Fail before modifying the caller's wire output.
+            if (static_cast<std::uint8_t>(value.error) != 0) return false;
+            variant = 0;
+            break;
+        case ResultVariant::Err:
+            variant = 1;
+            switch (value.error) {
+                case ArrayError::Limit: error = 1; break;
+                case ArrayError::NoMemory: error = 2; break;
+                default: return false;
+            }
+            break;
+        default: return false;
+    }
+    // Validate everything before touching the caller's output.
+    bytes[0] = kAppendResultWireVersion;
+    bytes[1] = variant;
+    bytes[2] = error;
+    return true;
+}
+
+[[nodiscard]] constexpr bool decode_append_result(
+        const std::uint8_t* bytes, std::size_t length,
+        AppendResult& output) noexcept {
+    if (bytes == nullptr || length != kAppendResultWireSize ||
+            bytes[0] != kAppendResultWireVersion)
+        return false;
+    AppendResult candidate{};
+    if (bytes[1] == 0 && bytes[2] == 0) {
+        candidate.variant = ResultVariant::Ok;
+    } else if (bytes[1] == 1 &&
+            (bytes[2] == 1 || bytes[2] == 2)) {
+        candidate.variant = ResultVariant::Err;
+        candidate.error = static_cast<ArrayError>(bytes[2]);
+    } else {
+        return false;
     }
     output = candidate;
     return true;
