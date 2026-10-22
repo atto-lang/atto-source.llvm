@@ -47,6 +47,9 @@ private:
     struct Slot {
         std::size_t offset = 0;
         std::size_t length = 0;
+        // Cursor before alignment padding. Tail frees can restore this
+        // exact value without moving any other live actor allocation.
+        std::size_t rewind_to = 0;
         std::uint64_t generation = 1;
         bool live = false;
     };
@@ -184,6 +187,7 @@ public:
         const std::size_t slot_id = free_count_ != 0
             ? free_slots_[--free_count_] : next_slot_++;
         auto& slot = slots_[slot_id];
+        slot.rewind_to = used_;
         slot.offset = used_ + padding;
         slot.length = count;
         slot.live = true;
@@ -198,6 +202,8 @@ public:
         // Refuse ABA if the slot-generation space is exhausted.
         if (slot.generation == std::numeric_limits<std::uint64_t>::max())
             return false;
+        const bool was_bump_tail = slot.offset + slot.length == used_;
+        const std::size_t previous_cursor = slot.rewind_to;
         std::fill_n(memory_.data() + slot.offset, slot.length, std::byte{0});
         slot.live = false;
         ++slot.generation;
@@ -211,6 +217,12 @@ public:
         if (live_count_ == 0) {
             used_ = 0;
             std::fill(memory_.begin(), memory_.end(), std::byte{0});
+        } else if (was_bump_tail) {
+            // Critical for long-lived actors: a persistent field can coexist
+            // with thousands of short-lived allocations. Rewind only when the
+            // removed allocation still occupies the physical bump tail;
+            // interior free slots never move other live memory.
+            used_ = previous_cursor;
         }
         return true;
     }
