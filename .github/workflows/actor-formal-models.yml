@@ -16,6 +16,8 @@ on:
     paths:
       - 'scripts/verify_actor_carrier_exclusivity.py'
       - 'scripts/verify_actor_dispatch_tickets.py'
+      - 'tools/actor-dispatch-tickets/**'
+      - 'tools/actor-carrier-model/**'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
       - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
       - 'src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h'
