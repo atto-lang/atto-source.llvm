@@ -68,6 +68,7 @@ PROOF_UNSUPPORTED = {
     "proof-basic": "type Proof = Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
     "proof-qualified": "type Proof = Zorde.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
     "proof-stdlib": "type Proof = std.zorde.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
+    "proof-attacker-namespace": "type Proof = adversarial.Valid<int, UserSchema>;\nfnc main(): int { return 42; }\n",
     "proof-nested-option": "type Proof = Option<Valid<int, UserSchema>>;\nfnc main(): int { return 42; }\n",
     "proof-nested-result": "type Proof = Result<int, Valid<int, UserSchema>>;\nfnc main(): int { return 42; }\n",
     "proof-bare": "type Proof = Valid;\nfnc main(): int { return 42; }\n",
