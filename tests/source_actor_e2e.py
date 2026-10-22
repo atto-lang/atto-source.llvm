@@ -40,6 +40,10 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-owned-bool-init-reject.ores":
+            "native actor owned int initializer requires int",
+        "source-actor-owned-bool-return-reject.ores":
+            "native actor owned handler return requires int",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
