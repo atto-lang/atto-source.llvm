@@ -1398,6 +1398,8 @@ if(BUILD_TESTING)
             class-constructor-arity-order-independent-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(reject_constructor_arity_seventeen
             class-constructor-arity-seventeen-reject.ores --diagnostic "native scalar constructor parameter limit exceeded (16)")
+        oreslang_contract_test(reject_constructor_call_seventeen
+            class-constructor-call-seventeen-reject.ores --diagnostic "native scalar constructor call argument limit exceeded (16)")
         oreslang_contract_test(reject_constructor_keyword_as_identifier
             class-constructor-keyword-identifier-reject.ores --diagnostic "expected non-keyword identifier")
         # The restricted native frontend must not compile comma indexing or

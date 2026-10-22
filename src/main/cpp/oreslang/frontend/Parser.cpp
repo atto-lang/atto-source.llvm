@@ -673,8 +673,15 @@ private:
                     if (ctor != binding.class_name) fail("class constructor type mismatch");
                     require("(");
                     if (!accept(")")) {
-                        do binding.constructor_arguments.push_back(expression());
-                        while (accept(","));
+                        do {
+                            // Enforce the same 16-scalar ABI ceiling at the
+                            // CALL site before recursively parsing/evaluating
+                            // unbounded extra arguments. Valid constructor
+                            // overloads cannot exceed 16 formal slots.
+                            if (binding.constructor_arguments.size() >= 16)
+                                fail("native scalar constructor call argument limit exceeded (16)");
+                            binding.constructor_arguments.push_back(expression());
+                        } while (accept(","));
                         require(")");
                     }
                     binding.new_class = true;
