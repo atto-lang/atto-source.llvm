@@ -289,6 +289,58 @@ void ores_actor_arena_compact_store_i64(
     ores_actor_arena_compact_write(a, turn, ref,
                                    (size_t)byte_offset, &value, sizeof(value));
 }
+/* A compressed graph field is always an i32, never a host pointer.
+ * Validate the source and referenced target under one arena lock so an
+ * invalid or stale intra-object edge cannot be followed. Bare i32 bits are
+ * only meaningful with the authenticated actor context and verified MIR. */
+static size_t ref_field_offset(uint64_t field_offset) {
+#if SIZE_MAX < UINT64_MAX
+    if (field_offset > SIZE_MAX) deny();
+#endif
+    if ((field_offset & UINT64_C(3)) != 0) deny();
+    return (size_t) field_offset;
+}
+uint32_t ores_actor_arena_compact_load_ref_i32(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint32_t source_bits, uint64_t field_offset) {
+    enter_lock(a);
+    require_turn(a, (OresArenaTurn) {domain, epoch});
+    size_t source_index = 0;
+    Slot* source = require_compact(
+        a, (OresArenaCompactHandle) {domain, source_bits}, &source_index);
+    const size_t off = ref_field_offset(field_offset);
+    require_span(source->length, off, sizeof(uint32_t));
+    uint32_t target_bits = 0;
+    memcpy(&target_bits, a->slab + source_index * a->slot_bytes + off,
+           sizeof(target_bits));
+    if (target_bits) {
+        size_t target_index = 0;
+        (void) require_compact(
+            a, (OresArenaCompactHandle) {domain, target_bits}, &target_index);
+    }
+    leave_lock(a);
+    return target_bits;
+}
+void ores_actor_arena_compact_store_ref_i32(
+        OresActorArena* a, uint64_t domain, uint64_t epoch,
+        uint32_t source_bits, uint64_t field_offset, uint32_t target_bits) {
+    enter_lock(a);
+    require_turn(a, (OresArenaTurn) {domain, epoch});
+    size_t source_index = 0;
+    Slot* source = require_compact(
+        a, (OresArenaCompactHandle) {domain, source_bits}, &source_index);
+    const size_t off = ref_field_offset(field_offset);
+    require_span(source->length, off, sizeof(uint32_t));
+    if (source->loans) deny();
+    if (target_bits) {
+        size_t target_index = 0;
+        (void) require_compact(
+            a, (OresArenaCompactHandle) {domain, target_bits}, &target_index);
+    }
+    memcpy(a->slab + source_index * a->slot_bytes + off,
+           &target_bits, sizeof(target_bits));
+    leave_lock(a);
+}
 OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
     enter_lock(a);
     require_turn(a, turn);
