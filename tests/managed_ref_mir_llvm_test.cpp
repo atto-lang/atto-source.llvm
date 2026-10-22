@@ -91,6 +91,48 @@ int main(int argc, char** argv) {
     mutable_ir.CreateRet(stored);
     require(!llvm::verifyFunction(*write, &llvm::errs()), "write LLVM verifier failed");
 
+    // Checked four-byte object graph field: LLVM keeps i32 on both ends.
+    auto* edge_read = llvm::Function::Create(llvm::FunctionType::get(
+        i32, {ptr, i64, i64, i32}, false),
+        llvm::GlobalValue::ExternalLinkage, "checked_actor_edge_read", module);
+    args = edge_read->arg_begin();
+    ActorCompactRuntimeContext edge_read_context{&*args++, &*args++, &*args++};
+    llvm::Value* edge_root = &*args++;
+    llvm::IRBuilder<> edge_ir(llvm::BasicBlock::Create(context, "entry", edge_read));
+    llvm::Value* edge_target = lower_actor_compact_ref_i32_read(
+        edge_ir, read_plan, edge_read_context, edge_root, 4);
+    edge_ir.CreateRet(edge_target);
+    require(!llvm::verifyFunction(*edge_read, &llvm::errs()), "edge read verifier failed");
+
+    auto* edge_write = llvm::Function::Create(llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context), {ptr, i64, i64, i32, i32}, false),
+        llvm::GlobalValue::ExternalLinkage, "checked_actor_edge_write", module);
+    args = edge_write->arg_begin();
+    ActorCompactRuntimeContext edge_write_context{&*args++, &*args++, &*args++};
+    llvm::Value* edge_source = &*args++;
+    llvm::Value* edge_child = &*args++;
+    llvm::IRBuilder<> edge_mut_ir(llvm::BasicBlock::Create(context, "entry", edge_write));
+    lower_actor_compact_ref_i32_write(
+        edge_mut_ir, write_plan, edge_write_context, edge_source, 4, edge_child);
+    edge_mut_ir.CreateRetVoid();
+    require(!llvm::verifyFunction(*edge_write, &llvm::errs()), "edge write verifier failed");
+    rejects([&] {
+        lower_actor_compact_ref_i32_write(
+            edge_mut_ir, read_plan, edge_write_context, edge_source, 4, edge_child);
+    }, "read-only loan wrote graph edge");
+    rejects([&] {
+        (void)lower_actor_compact_ref_i32_read(
+            edge_ir, read_plan, edge_read_context, next_value, 4);
+    }, "native-width scalar became graph pointer");
+    rejects([&] {
+        lower_actor_compact_ref_i32_write(
+            edge_mut_ir, write_plan, edge_write_context, edge_source, 4, next_value);
+    }, "i64 scalar became graph target");
+    rejects([&] {
+        (void)lower_actor_compact_ref_i32_read(
+            edge_ir, read_plan, edge_read_context, edge_root, 1);
+    }, "unaligned graph field was admitted");
+
     rejects([&] {
         lower_actor_compact_i64_publish(
             mutable_ir, read_plan, mutable_context, index, generation);
@@ -115,6 +157,9 @@ int main(int argc, char** argv) {
             "LLVM load function not linked to checked C actor runtime");
     require(output.find("@ores_actor_arena_compact_store_i64") != std::string::npos,
             "LLVM store function not linked to checked C actor runtime");
+    require(output.find("@ores_actor_arena_compact_load_ref_i32") != std::string::npos &&
+            output.find("@ores_actor_arena_compact_store_ref_i32") != std::string::npos,
+            "LLVM graph edge missing checked C runtime symbols");
     require(output.find("actor.compact32.published") != std::string::npos,
             "LLVM storage type was not compiler-generated i32");
     require(output.find("getelementptr") == std::string::npos &&
@@ -127,7 +172,9 @@ int main(int argc, char** argv) {
     for (const char* symbol : {
             "ores_actor_arena_compact_publish_i32",
             "ores_actor_arena_compact_load_i64",
-            "ores_actor_arena_compact_store_i64"}) {
+            "ores_actor_arena_compact_store_i64",
+            "ores_actor_arena_compact_load_ref_i32",
+            "ores_actor_arena_compact_store_ref_i32"}) {
         llvm::Module collision("actor.runtime.declaration.collision", context);
         auto* bad_sig = llvm::FunctionType::get(i64, {}, false);
         llvm::Function::Create(bad_sig, llvm::GlobalValue::ExternalLinkage,
