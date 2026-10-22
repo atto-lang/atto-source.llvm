@@ -217,6 +217,18 @@ struct ActorDecl {
     std::size_t offset = 0;
 };
 
+// Compiler-only structural contract evidence for the native i64 subset.
+// Contract declarations do not allocate runtime objects or generate LLVM IR.
+struct ContractMethod {
+    std::string name;
+    std::vector<Parameter::Mode> parameter_modes;
+};
+
+struct ModuleContract {
+    std::string name;
+    std::vector<ContractMethod> methods;
+};
+
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
 // lexical cleanup or actor scheduler integration is admitted yet.
 // The host supplies a zeroed, single-owner two-i64 continuation frame.
@@ -233,6 +245,8 @@ struct Program {
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
+    std::vector<ModuleContract> contracts;
+    std::vector<std::string> conforms;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
