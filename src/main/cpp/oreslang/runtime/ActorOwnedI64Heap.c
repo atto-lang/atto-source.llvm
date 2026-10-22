@@ -84,7 +84,9 @@ static ActorSlot* checked_slot(OresActorI64Heap* heap, OresActorSlot slot) {
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
                                             uint64_t incarnation,
                                             uint64_t slot_capacity) {
-    if (!actor_id || !incarnation || !slot_capacity || slot_capacity > MAX_SLOTS) rejected();
+    // Logical actor slot zero is allowed; incarnation remains a required
+    // nonzero authority fence, consistent with ActorHeapIdentity.
+    if (!incarnation || !slot_capacity || slot_capacity > MAX_SLOTS) rejected();
     if (slot_capacity > (SIZE_MAX - offsetof(OresActorI64Heap, slots)) / sizeof(ActorSlot))
         rejected();
     const size_t bytes = offsetof(OresActorI64Heap, slots)
