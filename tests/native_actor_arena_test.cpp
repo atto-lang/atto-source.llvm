@@ -161,6 +161,19 @@ static int other_carrier(void* p) {
     return 0;
 }
 int main(void) {
+    // Actor IDs are scheduler slot identities, not truthy booleans.
+    // Slot 0 must be as valid as any other when its incarnation is nonzero.
+    OresActorArena* zero = ores_actor_arena_open(0, 9, 1, 32, 32);
+    OresArenaTurn zero_turn = ores_actor_arena_enter(zero, 0, 9);
+    OresArenaHandle zero_value = ores_actor_arena_alloc(zero, zero_turn, sizeof(int));
+    const int sent = 90210;
+    int received = 0;
+    ores_actor_arena_write(zero, zero_turn, zero_value, 0, &sent, sizeof(sent));
+    ores_actor_arena_read(zero, zero_turn, zero_value, 0, &received, sizeof(received));
+    CHECK(received == sent);
+    ores_actor_arena_leave(zero, zero_turn);
+    ores_actor_arena_retire(zero);
+    CHECK(ores_actor_arena_try_destroy(zero) == 1);
     OresActorArena* a = ores_actor_arena_open(23, 2, 2, 64, 128);
 #if defined(ORES_ARENA_TEST_ALLOCATIONS)
     forbid_allocation = true;

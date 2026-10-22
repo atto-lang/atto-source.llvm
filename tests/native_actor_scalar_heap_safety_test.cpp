@@ -113,6 +113,15 @@ static bool rejects(Misuse which) {
 }
 #endif
 int main() {
+    // Actor slot zero is a legitimate scheduler identity. It must not be
+    // confused with a missing heap domain or incarnation authority.
+    auto* zero = ores_actor_i64_heap_open(0, 9, 2);
+    auto zero_turn = ores_actor_i64_heap_enter(zero, 0, 9);
+    auto zero_slot = ores_actor_i64_heap_new(zero, zero_turn, 90210);
+    CHECK(ores_actor_i64_heap_read(zero, zero_turn, zero_slot) == 90210);
+    ores_actor_i64_heap_leave(zero, zero_turn);
+    ores_actor_i64_heap_retire(zero);
+    CHECK(ores_actor_i64_heap_try_destroy(zero) == 1);
     auto* heap = ores_actor_i64_heap_open(17, 3, 4096);
 #if defined(ORES_ARENA_TEST_ALLOCATIONS)
     forbid_allocation = true;
