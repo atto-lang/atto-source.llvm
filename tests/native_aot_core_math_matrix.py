@@ -113,7 +113,8 @@ def one_execution(compiler, clang, source, fn, args, expected, working, label):
     # result is returned as process status, avoiding i64 exit-code truncation.
     call = fn + "(" + ", ".join(map(str, args)) + ")"
     main = ("\nfnc main(): int {\n"
-            + "  if (" + call + " eq " + str(expected) + ") "
+            + "  const actual: int = " + call + ";\n"
+            + "  if (actual eq " + str(expected) + ") "
             + "{ return 0; } fi\n"
             + "  return 1;\n}\n")
     source_path = working / (label + ".ores")
