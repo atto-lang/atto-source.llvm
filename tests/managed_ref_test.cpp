@@ -45,6 +45,39 @@ int main() {
     assert(!CompressedActorRef::encode(base, arena.size(), base + arena.size()));
     assert(!third->decode(base, 8));
 
+    // Cross-backend golden words: the Java/Graal actor arena codec uses the
+    // exact same unsigned little-endian-independent 32-bit value semantics.
+    // These are synthetic addresses: no multi-GiB reservation/dereference.
+#if UINTPTR_MAX > UINT32_MAX
+    constexpr std::uintptr_t synthetic_base = UINT64_C(0x100000000);
+    constexpr auto synthetic_span = CompressedActorRef::max_addressable_span;
+    const auto low = CompressedActorRef::encode(
+        synthetic_base, synthetic_span, synthetic_base);
+    const auto high = CompressedActorRef::encode(
+        synthetic_base, synthetic_span,
+        synthetic_base + CompressedActorRef::max_offset);
+    assert(low && low->storage() == 1u);
+    assert(high && high->storage() == UINT32_MAX);
+    assert(high->decode(synthetic_base, synthetic_span).value() ==
+           synthetic_base + CompressedActorRef::max_offset);
+    assert(!CompressedActorRef::encode(
+        synthetic_base, synthetic_span, synthetic_base + synthetic_span));
+    assert(!CompressedActorRef::encode(
+        synthetic_base, synthetic_span,
+        synthetic_base + CompressedActorRef::max_offset - 1));
+
+    // Identical compact bits in two actors are not a globally meaningful
+    // pointer or capability; owner/lifetime admission is required separately.
+    constexpr std::uintptr_t different_actor_base = UINT64_C(0x1000000000);
+    const auto second_actor_first = CompressedActorRef::encode(
+        different_actor_base, 256, different_actor_base);
+    assert(second_actor_first && second_actor_first->storage() == low->storage());
+    assert(second_actor_first->decode(different_actor_base, 256).value() ==
+           different_actor_base);
+    assert(second_actor_first->decode(synthetic_base, 256).value() ==
+           synthetic_base); // proof compact bits alone carry no provenance
+#endif
+
     auto native = NativeActorManagedRef::encode(base, arena.size(), base + 24);
     assert(native);
     assert(native->storage() == static_cast<std::uint64_t>(base + 24));
