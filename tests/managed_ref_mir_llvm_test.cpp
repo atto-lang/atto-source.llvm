@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
     mutable_ir.CreateRet(stored);
     require(!llvm::verifyFunction(*write, &llvm::errs()), "write LLVM verifier failed");
 
-    // Checked four-byte object graph field: LLVM keeps i32 on both ends.
+    // Checked four-byte graph edge at byte 8 avoids the root's i64 at byte 0.\n    // LLVM keeps i32 on both ends; an overlapping offset 4 would corrupt\n    // checked_actor_read's 64-bit root value in the AOT driver.
     auto* edge_read = llvm::Function::Create(llvm::FunctionType::get(
         i32, {ptr, i64, i64, i32}, false),
         llvm::GlobalValue::ExternalLinkage, "checked_actor_edge_read", module);
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     llvm::Value* edge_root = &*args++;
     llvm::IRBuilder<> edge_ir(llvm::BasicBlock::Create(context, "entry", edge_read));
     llvm::Value* edge_target = lower_actor_compact_ref_i32_read(
-        edge_ir, read_plan, edge_read_context, edge_root, 4);
+        edge_ir, read_plan, edge_read_context, edge_root, 8);
     edge_ir.CreateRet(edge_target);
     require(!llvm::verifyFunction(*edge_read, &llvm::errs()), "edge read verifier failed");
 
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     llvm::Value* edge_child = &*args++;
     llvm::IRBuilder<> edge_mut_ir(llvm::BasicBlock::Create(context, "entry", edge_write));
     lower_actor_compact_ref_i32_write(
-        edge_mut_ir, write_plan, edge_write_context, edge_source, 4, edge_child);
+        edge_mut_ir, write_plan, edge_write_context, edge_source, 8, edge_child);
     edge_mut_ir.CreateRetVoid();
     require(!llvm::verifyFunction(*edge_write, &llvm::errs()), "edge write verifier failed");
     rejects([&] {
