@@ -1134,6 +1134,25 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
+
+        # Real Oreslang source actor -> LLVM -> Clang -> native owned heap.
+        # This exercises 10,000 admitted turns with only two reusable
+        # temporary slots, plus an independent omitted-drop mutation.
+        foreach(profile optimized sanitized)
+            set(stress_flags)
+            if(profile STREQUAL "sanitized")
+                set(stress_flags --sanitize)
+            endif()
+            add_test(NAME source_actor_owned_drop_10000_${profile}
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_owned_drop_stress.py"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                    --clang "${ORE_CLANG}"
+                    --root "${CMAKE_CURRENT_SOURCE_DIR}"
+                    ${stress_flags})
+            set_tests_properties(source_actor_owned_drop_10000_${profile}
+                PROPERTIES TIMEOUT 180)
+        endforeach()
     endif()
 
     # Trusted host resource reclamation: close in reverse acquisition order only
