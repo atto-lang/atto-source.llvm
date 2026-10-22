@@ -132,6 +132,8 @@ jobs:
               "tests/source_actor_owned_drop_stress.py",
               "tests/source_actor_owned_drop_10000.c",
               "tests/native_actor_scoped_alloc_status_test.c",
+              "tests/source_actor_owned_partial_rollback.c",
+              "tests/fixtures/source-actor-owned-drop-turn-stress.ores",
           ]
           receipt = {
               "schema": "oreslang.native_source_actor_owned_drop_v1",
