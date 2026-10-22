@@ -328,6 +328,11 @@ private:
     }
     void require_forward(const Handle& frame) const {
         require_active(frame);
+        // A physical mailbox publisher may have installed the claim but not
+        // yet committed/aborted the DATA enqueue. Other scheduler carriers
+        // must not route, branch or reverse this same uncommitted frame.
+        if (frame->publication_state_.load(std::memory_order_acquire) == 1)
+            throw std::logic_error("cannot route an in-flight mailbox publication");
         if (frame->returning_) throw std::logic_error("reverse DATA cannot forward");
     }
     const std::vector<std::size_t>& connected(const std::string& source) const {
