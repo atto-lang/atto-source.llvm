@@ -284,13 +284,25 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
-        if (accept("define")) {
+        if (token_.text == "import")
+            fail("native contract imports require a validated cross-unit linker");
+        while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
+            const bool exported = accept("pub");
+            require("define");
+            if (accept("contract")) {
+                program.contracts.push_back(contract());
+                continue;
+            }
+            if (exported) fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
                 program.module = identifier();
+                if (accept("conforms")) {
+                    do program.conforms.push_back(identifier()); while (accept(","));
+                }
                 accept("as");
                 wrapped_module = true;
             } else {
@@ -301,9 +313,12 @@ public:
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
                 } else fail("expected 'module', 'class' or 'actor'");
             }
+            break;
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "import")
+                fail("native contract imports require a validated cross-unit linker");
             if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
@@ -336,6 +351,58 @@ public:
     }
 
 private:
+    Token peek_next() const {
+        Lexer next_lexer = lexer_;
+        return next_lexer.next();
+    }
+
+    ModuleContract contract() {
+        ModuleContract result;
+        result.name = identifier();
+        require("as");
+        const bool braced = accept("{");
+        std::unordered_set<std::string> seen;
+        while (token_.kind != Kind::End
+               && token_.text != (braced ? "}" : "end")) {
+            ContractMethod method;
+            if (!accept("fnc")) {
+                fail("native i64 contracts only admit fnc signatures");
+            }
+            method.name = identifier();
+            if (!seen.insert(method.name).second) {
+                fail("duplicate native module contract method");
+            }
+            require("(");
+            std::unordered_set<std::string> parameter_names;
+            if (!accept(")")) {
+                do {
+                    Parameter::Mode mode = Parameter::Mode::Value;
+                    if (accept("borrow")) {
+                        mode = accept("mut") ? Parameter::Mode::BorrowMut
+                                             : Parameter::Mode::Borrow;
+                    }
+                    require("int");
+                    if (!parameter_names.insert(identifier()).second)
+                        fail("duplicate native module contract parameter");
+                    method.parameter_modes.push_back(mode);
+                } while (accept(","));
+                require(")");
+            }
+            const auto arrow_next = peek_next();
+            if (token_.text != "=" || arrow_next.text != ">"
+                    || arrow_next.offset != token_.offset + 1)
+                fail("contract signatures require contiguous '=>'");
+            require("=");
+            require(">");
+            require("int");
+            require(";");
+            result.methods.push_back(std::move(method));
+        }
+        require(braced ? "}" : "end");
+        if (result.methods.empty()) fail("empty native module contract is unsupported");
+        return result;
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -2185,6 +2252,48 @@ private:
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
+        }
+        // Same-file contracts are compile-time structural checks. Requiring
+        // matching *public* members prevents accidental admission through
+        // private functions that external callers cannot invoke.
+        std::unordered_map<std::string, const ModuleContract*> available_contracts;
+        for (const auto& contract : program.contracts) {
+            if (!available_contracts.emplace(contract.name, &contract).second) {
+                throw std::runtime_error("duplicate native module contract '" + contract.name + "'");
+            }
+        }
+        std::unordered_set<std::string> seen_contracts;
+        for (const auto& ref : program.conforms) {
+            if (!seen_contracts.insert(ref).second) {
+                throw std::runtime_error("duplicate native conforms contract '" + ref + "'");
+            }
+            const auto contract_it = available_contracts.find(ref);
+            if (contract_it == available_contracts.end()) {
+                throw std::runtime_error("unknown native module contract '" + ref + "'");
+            }
+            for (const auto& required : contract_it->second->methods) {
+                const auto fn = std::find_if(program.functions.begin(),
+                        program.functions.end(), [&](const Function& candidate) {
+                            return candidate.name == required.name;
+                        });
+                if (fn == program.functions.end() || !fn->exported) {
+                    throw std::runtime_error("missing public native module contract method '"
+                            + ref + "." + required.name + "'");
+                }
+                if (fn->returns_void) {
+                    throw std::runtime_error("native module contract requires int return");
+                }
+                if (fn->parameters.size() != required.parameter_modes.size()) {
+                    throw std::runtime_error("native module contract parameter arity mismatch '"
+                            + ref + "." + required.name + "'");
+                }
+                for (std::size_t n = 0; n < required.parameter_modes.size(); ++n) {
+                    if (!fn->parameters[n].class_name.empty() || fn->parameters[n].mode != required.parameter_modes[n]) {
+                        throw std::runtime_error("native module contract ownership mode mismatch '"
+                                + ref + "." + required.name + "'");
+                    }
+                }
+            }
         }
         for (const auto& fn : program.functions) {
             std::unordered_set<std::string> params;
