@@ -135,3 +135,60 @@ inline void lower_actor_compact_i64_write(
 }
 
 } // namespace oreslang::backend
+
+/* Actor-local graph edges are stored in exactly four bytes. Caller-provided
+ * heap/turn identities are supplied by the trusted scheduler; the checked C
+ * runtime resolves both source and non-null target while holding one lock.
+ * Source language must NEVER construct these i32 values by integer cast. */
+namespace oreslang::backend {
+
+inline llvm::Value* lower_actor_compact_ref_i32_read(
+        llvm::IRBuilder<>& ir, VerifiedActorCompressed32 /*verified*/,
+        const ActorCompactRuntimeContext& context,
+        llvm::Value* source_ref32, std::uint64_t field_offset) {
+    auto* module = validate_actor_compact_context(ir, context);
+    auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
+    auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+    if (!source_ref32 || source_ref32->getType() != i32)
+        throw std::invalid_argument("graph edge read requires verified i32 source reference");
+    if (field_offset > UINT64_MAX - sizeof(std::uint32_t))
+        throw std::invalid_argument("graph edge read overflows uint64 range");
+    if ((field_offset & 3u) != 0)
+        throw std::invalid_argument("graph edge field must be 4-byte-aligned");
+    const auto callee = actor_checked_runtime_decl(
+        module, "ores_actor_arena_compact_load_ref_i32",
+        llvm::FunctionType::get(i32,
+            {context.actor_arena->getType(), i64, i64, i32, i64}, false));
+    return ir.CreateCall(callee,
+        {context.actor_arena, context.actor_domain, context.actor_epoch,
+         source_ref32, llvm::ConstantInt::get(i64, field_offset)},
+        "actor.compact32.edge");
+}
+
+inline void lower_actor_compact_ref_i32_write(
+        llvm::IRBuilder<>& ir, VerifiedActorCompressed32 verified,
+        const ActorCompactRuntimeContext& context,
+        llvm::Value* source_ref32, std::uint64_t field_offset,
+        llvm::Value* target_ref32) {
+    if (verified.access() != ManagedRefAccess::Write)
+        throw std::invalid_argument("graph edge mutation requires mutable critical loan");
+    auto* module = validate_actor_compact_context(ir, context);
+    auto* i64 = llvm::Type::getInt64Ty(ir.getContext());
+    auto* i32 = llvm::Type::getInt32Ty(ir.getContext());
+    if (!source_ref32 || source_ref32->getType() != i32 ||
+            !target_ref32 || target_ref32->getType() != i32)
+        throw std::invalid_argument("graph edge write requires verified i32 references");
+    if (field_offset > UINT64_MAX - sizeof(std::uint32_t))
+        throw std::invalid_argument("graph edge write overflows uint64 range");
+    if ((field_offset & 3u) != 0)
+        throw std::invalid_argument("graph edge field must be 4-byte-aligned");
+    const auto callee = actor_checked_runtime_decl(
+        module, "ores_actor_arena_compact_store_ref_i32",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ir.getContext()),
+            {context.actor_arena->getType(), i64, i64, i32, i64, i32}, false));
+    ir.CreateCall(callee,
+        {context.actor_arena, context.actor_domain, context.actor_epoch,
+         source_ref32, llvm::ConstantInt::get(i64, field_offset), target_ref32});
+}
+
+} // namespace oreslang::backend
