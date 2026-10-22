@@ -86,8 +86,9 @@ Any bytes changed without explicit contract review are rejected.
 The test generates a guest `main()` which binds a call result to an immutable
 local and compares the entire **signed-i64 value inside Oreslang**, returning
 exit status 0 if equal and 1 otherwise. This avoids truncating a 64-bit result
-through the host process exit status. It runs 24 independent compiled cases and
-one deliberately incorrect expected-value case, which must exit with 1.
+through the host process exit status. It runs all 24 independent cases under **Clang -O0 and -O2** (48 compiled
+executables), plus a deliberately incorrect expected-value case in each
+optimization mode (2 more compiled executables), which must exit with 1.
 No compiled output is substituted with host-computed oracle values. The
 script writes `aot-core-math-execution.json` only after every guest
 execution and the negative control have succeeded; it is an observation
