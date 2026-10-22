@@ -254,6 +254,9 @@ static void deferred_source_cleanup_physically_fences_actor_done() {
     require(!receipt->request_cancel(ticket), "late cancel after physical done");
 }
 
+// No synthetic native-allocation callback here: a deliberately incomplete
+// cleanup must remain unreclaimed, and a sanitizing test must not leak a
+// fake arena during process teardown. The success test checks real closers.
 static void failed_source_cleanup_keeps_actor_arena_retained() {
     NativeActorResourceQuarantine quarantine(1);
     NativeActorGroup group(411, 1);
@@ -261,8 +264,6 @@ static void failed_source_cleanup_keeps_actor_arena_retained() {
     auto receipt = std::make_shared<NativeSourceCleanupGate>(
             NativeSourceCleanupTicket{18, 1, 102});
     const NativeSourceCleanupTicket ticket{18, 1, 102};
-    std::atomic<int> freed{0};
-    registry->register_resource(Kind::native_allocation, [&] { ++freed; });
     NativeActorRetirementBarrier* barrier = nullptr;
     auto ref = group.adopt(411, 18, 1, [&] { barrier->retire(); });
     NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
@@ -274,8 +275,9 @@ static void failed_source_cleanup_keeps_actor_arena_retained() {
     require(receipt->try_claim_cleanup(ticket), "failed cleanup claim");
     require(receipt->fail_cleanup(ticket), "failed cleanup marker");
     require(!receipt->complete_cleanup(ticket), "failed cleanup claimed completion");
-    require(owned.poll() == Poll::cleanup_incomplete && freed == 0,
-            "failed cleanup closed actor-owned arena");
+    require(owned.poll() == Poll::cleanup_incomplete
+                && registry->phase() == ActorResourceRegistry::Phase::retiring,
+            "failed cleanup reclaimed actor resources");
     require(ref.get_done().wait_for(std::chrono::milliseconds(0))
                  == std::future_status::timeout,
             "missing cleanup created a false get_done");
