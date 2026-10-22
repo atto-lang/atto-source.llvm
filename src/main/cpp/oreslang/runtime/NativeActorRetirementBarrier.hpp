@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
+#include "oreslang/runtime/NativeSourceCleanupGate.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -137,15 +138,17 @@ private:
  */
 class NativeActorRetirementBarrier final {
 public:
-    enum class Poll { not_retired, pending, quarantine_full, not_admitted,
-                      completed, failed };
+    enum class Poll { not_retired, pending, cleanup_incomplete, quarantine_full,
+                      not_admitted, completed, failed };
 
     NativeActorRetirementBarrier(
             std::shared_ptr<ActorResourceRegistry> resources,
             NativeActorGroup::RuntimeFinalizer finalizer,
-            NativeActorResourceQuarantine& quarantine)
+            NativeActorResourceQuarantine& quarantine,
+            std::shared_ptr<NativeSourceCleanupGate> cleanup = {})
         : resources_(std::move(resources)),
-          finalizer_(std::move(finalizer)), quarantine_(quarantine) {
+          finalizer_(std::move(finalizer)), quarantine_(quarantine),
+          cleanup_(std::move(cleanup)) {
         if (!resources_) throw std::invalid_argument("actor registry required");
     }
 
@@ -179,6 +182,15 @@ public:
         // to detach AND for its single-writer execution lease to quiesce
         // before running any native resource destructor.
         if (!finalizer_.ready_for_resource_reclamation()) return Poll::not_admitted;
+
+        // Optional source-continuation receipt. A logical cancellation is not
+        // physical cleanup: do not run ANY native resource closer while the
+        // continuation may still own defers, guards, FFI references or loans.
+        // On missing cleanup executor, deliberately refuse DONE and reclamation.
+        if (cleanup_) {
+            if (cleanup_->incomplete()) return Poll::cleanup_incomplete;
+            if (!cleanup_->ready_for_reclaim()) return Poll::pending;
+        }
 
         auto result = resources_->try_reclaim();
         if (result.status == ActorResourceRegistry::Reclaim::not_retired ||
@@ -214,6 +226,7 @@ private:
     std::shared_ptr<ActorResourceRegistry> resources_;
     NativeActorGroup::RuntimeFinalizer finalizer_;
     NativeActorResourceQuarantine& quarantine_;
+    std::shared_ptr<NativeSourceCleanupGate> cleanup_;
     std::atomic<bool> retired_{false};
     std::atomic<bool> polling_{false};
     std::atomic<Poll> terminal_{Poll::not_retired};
