@@ -47,3 +47,35 @@ layouts, asynchronous actor handlers, `await` spills, throw/raise unwind,
 actor cancellation, FFI loans, duplicate owned handles or compiler-generated
 continuation drops. All of those remain required before broad zero-GC
 source-language claims or merging without exact-head native tests.
+
+
+## Checked actor temporary allocation / partial-construction failure
+
+The experimental synchronous native actor owned-local lowering uses
+`ores_actor_i64_heap_scoped_try_new` to return an internal success or
+capacity-exhaustion status. The native runtime validates the active heap
+turn, requires an unpublished zero-initialized destination token, publishes
+the token only after completing the slot allocation under its lock, and
+returns `0` with the token unchanged when no recyclable native slot remains.
+Misused actor authority, nonzero destination tokens, corrupted loan
+accounting and stale generational handles are **not** recoverable quota
+errors: those fail closed.
+
+LLVM emits one guarded `allocation.status` branch per source owned local.
+A failed allocation drops all previously acquired local tokens in reverse
+order before a hard `llvm.trap`. The successful handler exit retains its
+original reverse-order drops. Neither route publishes a partially
+initialized source value or reenters a callback with dropped owners.
+The independent native status test verifies quota denial, unchanged output
+token, zeroed drop tokens and bounded generation-checked reuse across
+10,000 turns. The compiled-source actor stress test checks both the
+success-path drops and failure-path drop *instructions*; it also removes
+drop instructions in a deliberately broken IR mutant and expects fail-stop.
+
+**The source actor method still returns only int.** Its declared `raises`
+or `Result` effect cannot be inferred from this internal C allocation
+status; source-level error recovery, supervisor escalation and recoverable
+cancellation cleanup require effect and continuation lowering that is not
+yet implemented. The failure edge therefore cleans up and **traps** rather
+than inventing a source-visible exception. This is *failure-atomic fail-stop
+cleanup*, not a successful recoverable allocation error protocol.
