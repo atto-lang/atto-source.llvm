@@ -137,13 +137,14 @@ mod tests {
     #[test]
     fn safe_model_has_no_violation() {
         let actual = explore(false);
-        assert!(actual.states >= 10);
+        assert_eq!(actual.states, 88);
         assert_eq!(actual.error, None);
     }
 
     #[test]
     fn negative_mutant_has_counterexample_with_stale_release() {
         let mutated = explore(true);
+        assert_eq!(mutated.states, 84);
         assert!(mutated.error.is_some());
         assert!(mutated.trace.last().unwrap().starts_with("UNSAFE_stale_release"));
     }
