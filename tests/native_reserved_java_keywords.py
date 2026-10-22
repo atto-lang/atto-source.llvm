@@ -50,6 +50,47 @@ CASES = {
         "pub fnc choose(int value): int { return value ? 1 : 0; }",
         "native ternary expression requires typed bool conditions and branch-merge lowering",
     ),
+    # No rebranding opaque values as i64, not even behind nesting, comments,
+    # an immediate return, or a local statement. These tests intentionally
+    # require a diagnostic and ZERO bytes of emitted LLVM IR.
+    "unknown-return-type": (
+        "pub fnc normalize(int value): unknown { return value; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "unknown-local-type": (
+        "pub fnc main(): int { const value: unknown = 1; return 0; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    "any-second-parameter": (
+        "pub fnc normalize(int tag, any value): int { return tag; }",
+        "native opaque top type requires tagged value ABI",
+    ),
+    # The scalar-only frontend rejects the boolean condition before reaching
+    # '?'. This proves rejection, not typed-bool or ternary lowering.
+    "ternary-unsupported-bool-condition": (
+        "pub fnc choose(int ignored): int { return true ? 1 : 0; }",
+        "expected int expression",
+    ),
+    "ternary-nested-parentheses": (
+        "pub fnc choose(int value): int { return (value ? 1 : 0); }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
+    "ternary-chained": (
+        "pub fnc choose(int value): int { return value ? 1 : value ? 2 : 3; }",
+        "native ternary expression requires typed bool conditions and branch-merge lowering",
+    ),
+    "trusted-integer-runtime-guard": (
+        "pub fnc choose(int value): int { return Integer.is_int(value); }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
+    "trusted-double-runtime-guard": (
+        "pub fnc choose(int value): int { return Double.is_double(value); }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
+    "trusted-guarded-ternary": (
+        "pub fnc choose(int value): int { return Integer.is_int(value) ? value : 0; }",
+        "native trusted runtime type predicate requires tagged opaque ABI",
+    ),
     # Enum/pattern declaration kinds are reserved; not executable source support yet.
     "enum-function": (
         "pub fnc enum(): int { return 42; }",

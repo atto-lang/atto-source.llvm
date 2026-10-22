@@ -1303,6 +1303,17 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        // The Java/Graal opaque-top predicates are trusted tagged-value
+        // runtime intrinsics, not ordinary scalar module calls. This LLVM
+        // frontend must not reinterpret them as user functions/i64 truth
+        // checks before dynamic descriptors, ownership, and guarded CFG exist.
+        if (token_.kind == Kind::Identifier
+                && (token_.text == "Integer" || token_.text == "Double")) {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == ".") {
+                fail("native trusted runtime type predicate requires tagged opaque ABI and branch flow narrowing");
+            }
+        }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.
         if (token_.text == "ActorGroup" ||
