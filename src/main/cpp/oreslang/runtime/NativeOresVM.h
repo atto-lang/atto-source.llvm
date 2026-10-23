@@ -91,10 +91,13 @@ int ores_native_vm_confirm_supervised_finalized(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
 /* Trusted runtime terminal notice, never a guest-authorized public syscall.
  * Requires exact registered child, same-domain supervisor, STOP + quiescence,
- * and an explicit host finalization receipt BEFORE publication. On a full
- * parent CONTROL slot, returns 0 without consuming the terminal notice:
- * caller owns retry/escalation. On success publishes exactly once; it does
- * not itself restart, reclaim, or invoke policy synchronously. */
+ * and an explicit host finalization receipt BEFORE publication. The
+ * child's pre-bound scheduler receipt survives any ordinary CONTROL saturation
+ * and other children's pending failures; no caller-held capacity retry is
+ * required after a successful admission. Other failures (stale identity,
+ * unbound parent, retired parent, resource exhaustion) return 0, retaining
+ * trusted host responsibility for fail-closed escalation. The callback runs
+ * asynchronously on the parent's exclusive lane; this is not restart policy. */
 int ores_native_vm_publish_supervised_failure(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorTerminalFailure failure);
