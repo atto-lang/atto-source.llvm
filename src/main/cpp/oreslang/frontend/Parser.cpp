@@ -432,16 +432,13 @@ private:
             advance();
             return type;
         }
-        // Method signatures retain only verified native scalar ABI spellings.
-        // A preceding, already-resolved alias can be canonicalized here.
+        // Store all alias spellings in method metadata until the entire
+        // declaration catalog is checked. An already-declared alias may itself
+        // depend on a forward promise completed later in the source.
         if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
-                forward_scalar_alias_names_.count(std::string(token_.text))) {
-            return identifier(); // resolved and canonicalized after type completion
-        }
-        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
-                scalar_alias_targets_.count(std::string(token_.text))) {
-            const std::string name = identifier();
-            return resolve_scalar_alias(name) == ScalarType::Bool ? "bool" : "int";
+                (forward_scalar_alias_names_.count(std::string(token_.text)) ||
+                 scalar_alias_targets_.count(std::string(token_.text)))) {
+            return identifier();
         }
         fail("TYPE_ONLY_UNSUPPORTED_TYPE: native v1 admits only int/bool scalar"
              " signatures and void results; nominal/generic lowering is not verified");
@@ -974,10 +971,7 @@ private:
                     } else if (forward_scalar_alias_names_.count(type)) {
                         parameter.pending_scalar_alias = type;
                     } else if (scalar_alias_targets_.count(type)) {
-                        parameter.scalar_type = resolve_scalar_alias(type);
-                        if (parameter.scalar_type == ScalarType::Bool &&
-                                parameter.mode != Parameter::Mode::Value)
-                            fail("native bool borrow ABI is not yet admitted; pass bool by value");
+                        parameter.pending_scalar_alias = type;
                     } else if (type_only_nominals_.count(type)) {
                         fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar parameter");
                     } else {
@@ -1012,7 +1006,7 @@ private:
                 } else if (forward_scalar_alias_names_.count(type)) {
                     value.pending_return_alias = type;
                 } else if (scalar_alias_targets_.count(type)) {
-                    value.return_type = resolve_scalar_alias(type);
+                    value.pending_return_alias = type;
                 } else if (type_only_nominals_.count(type)) {
                     fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar return type");
                 } else {
@@ -1136,7 +1130,7 @@ private:
                             binding.pending_scalar_alias = identifier();
                         } else if (token_.kind == Kind::Identifier &&
                                    scalar_alias_targets_.count(std::string(token_.text))) {
-                            binding.scalar_type = resolve_scalar_alias(identifier());
+                            binding.pending_scalar_alias = identifier();
                         } else {
                             fail("native scalar local requires int, bool or checked scalar alias");
                         }
@@ -1214,7 +1208,7 @@ private:
                         statement.branch_local->pending_scalar_alias = identifier();
                     else if (token_.kind == Kind::Identifier &&
                              scalar_alias_targets_.count(std::string(token_.text)))
-                        statement.branch_local->scalar_type = resolve_scalar_alias(identifier());
+                        statement.branch_local->pending_scalar_alias = identifier();
                     else fail("native branch-local scalar requires int, bool or checked scalar alias");
                     require("=");
                     statement.branch_local->initializer = expression();
