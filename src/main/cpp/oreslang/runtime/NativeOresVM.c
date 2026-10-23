@@ -188,10 +188,20 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
          * reused slot; only a successful spawn can install parentage. */
         child = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
         if (child.scheduler_domain) {
-            OresVMSupervisorRegistration* entry =
-                &vm->supervisors[domain][actor_slot];
-            entry->child = child;
-            entry->supervisor = supervisor;
+            /* The VM registration and the scheduler's allocation-free failure
+             * receipt must name the same immutable parent generation before
+             * exposing the child. This is a trusted VM CONTROL boundary. */
+            if (!ores_native_actor_scheduler_bind_supervisor(
+                    vm->schedulers[domain], supervisor, child)) {
+                if (!ores_native_actor_scheduler_stop(
+                        vm->schedulers[domain], child)) abort();
+                child = invalid; /* Never expose an unbound supervised child. */
+            } else {
+                OresVMSupervisorRegistration* entry =
+                    &vm->supervisors[domain][actor_slot];
+                entry->child = child;
+                entry->supervisor = supervisor;
+            }
         }
     }
     control_unlock(vm);
