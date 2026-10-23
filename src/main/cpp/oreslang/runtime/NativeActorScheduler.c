@@ -294,6 +294,10 @@ static void* carrier(void* raw) {
         lane->active = 0;
         s->outstanding--;
         s->completed++;
+        if (!control) {
+            if (lane->processed_user_messages == UINT64_MAX) abort();
+            ++lane->processed_user_messages;
+        }
         /* A lane contributes at most one runnable turn regardless of how
          * many DATA/CONTROL messages it owns. */
         if (!lane->queued && !lane->has_control) {
@@ -306,6 +310,7 @@ static void* carrier(void* raw) {
             if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
                 && !ores_execution_retired(&lane->authority, lane->generation))
                 abort();
+            publish_terminal_locked(s, i);
             pthread_cond_broadcast(&s->drained);
         }
         if (!s->outstanding) {
@@ -522,6 +527,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    if (a->accepted_user_messages == UINT64_MAX) abort();
+    ++a->accepted_user_messages;
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
