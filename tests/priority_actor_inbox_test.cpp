@@ -259,13 +259,16 @@ static void native_dispatch_does_not_steal_mail_from_active_carrier() {
 static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() {
     NativeActorGroup group(8841, 1);
     std::atomic<int> stop_requests{0};
+    Inbox inbox({1, 8}, {1, 8}, {1, 8}, 3);
     auto actor = group.adopt(8841, 19, 7, [&] {
         ++stop_requests;
+        // Trusted STOP hook seals admission immediately, then the runtime
+        // waits for physical actor-turn quiescence before retiring payloads.
+        try { inbox.close(); }
+        catch (const std::logic_error&) { /* owned frames remain outstanding */ }
     });
     auto finalizer = group.runtime_finalizer(actor);
     CHECK(group.mark_ready(actor));
-
-    Inbox inbox({1, 8}, {1, 8}, {1, 8}, 3);
     inbox.bind_target(actor);
     CHECK(inbox.offer_to(actor, Lane::Normal, 101, 8)); // sequence 1
     CHECK(inbox.offer_to(actor, Lane::Urgent, 202, 8)); // sequence 2
@@ -303,6 +306,11 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     group.close();
     CHECK(group.closed());
     CHECK(stop_requests.load() == 1);
+    int refused_payload = 909;
+    bool stop_refused_send = false;
+    try { (void)inbox.offer_to(actor, Lane::Normal, std::move(refused_payload), 8); }
+    catch (const std::logic_error&) { stop_refused_send = true; }
+    CHECK(stop_refused_send && refused_payload == 909);
     CHECK(actor.control_delivery_lost()); // pending CONTROL dropped, not ACKed
     CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery&) {
         CHECK(false && "closed actor received user mail");
@@ -617,6 +625,21 @@ static void actor_binding_rejects_unpublished_preparation_and_unguarded_send() {
     }
     CHECK(bound.completed_through(2));
     bound.close();
+
+    PrepInbox sealed_empty({1, 8}, {1, 8}, {1, 8}, 2);
+    sealed_empty.close();
+    rejected = false;
+    try { sealed_empty.bind_target(actor); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && sealed_empty.snapshot() == 0);
+    std::atomic<int> unexpected_moves{0};
+    PausedPublication retained([&] { ++unexpected_moves; });
+    rejected = false;
+    try { (void)sealed_empty.offer(PrepLane::Normal, std::move(retained), 8); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && unexpected_moves.load() == 0);
+    CHECK(sealed_empty.used_frames(PrepLane::Normal) == 0);
+
     CHECK(group.finalized(actor));
     actor.get_done().get();
 }
