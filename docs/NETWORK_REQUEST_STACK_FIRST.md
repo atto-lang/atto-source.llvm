@@ -105,3 +105,45 @@ retirement, stale generations, in-progress writer cancellation, deferred
 reclamation, owner handoff, 25k allocation-instrumented scoped cycles, and
 native exception cleanup. GCC/Clang ASan+UBSan local harness passes do NOT
 satisfy exact-head hosted CTest or guest-language execution gates.
+
+## Security audit and hardening (October 23)
+
+The host-only actor authority directory previously forgot an actor's old
+generation when the directory entry retired. It now retains a bounded,
+non-evicting high-water generation record per distinct actor ID.
+Every subsequent activate(id, generation) must increase that generation
+strictly. When the history budget fills, activation for a *new* ID fails
+closed rather than evicting identity history. HistoryCapacity is a configurable
+template parameter; default ActorCapacity * 64. This is a deliberate bounded
+host proof, not a production long-lived actor-registry sizing policy.
+
+Request-slot free-ring invariants, reader-count underflow and begin-generation
+checks are now enforced via std::terminate rather than debug-only assert. Bad
+internal bookkeeping cannot silently corrupt the queue in release builds.
+
+HttpRequestHeadView now has safe_unframed_request(), an intentionally
+restricted *whole-buffer* admission gate that permits only complete, bodyless
+HTTP/1 GET/HEAD metadata. It rejects ambiguous/multiple Host, noncanonical or
+duplicate Content-Length, Transfer-Encoding, Expect, Upgrade, pipelined bytes,
+extra body bytes and proxy-ambiguous Host spellings. It is NOT a general
+RFC 9112 framing implementation or a body/streaming/HTTP/2/TLS parser. The
+existing parse() and first_header() remain metadata-only and must not be used
+to decide framing on production ingress.
+
+Host-side regression probes additionally cover replaying an old actor
+generation, monotonically restarting the same actor ID, exhausting the
+fixed identity-history budget without eviction, 256 concurrent borrow vs
+retire races, and malformed unframed HTTP request-head cases.
+
+IMPORTANT unresolved integration boundary: RequestSlotTable's 8-byte Handle
+only encodes (slot, generation), NOT transport-table provenance.
+ActorBoundRequestTable's numeric ActorIncarnation is also NOT an unforgeable
+guest capability. A future dispatcher must bind message routing to the
+particular transport-table/process epoch and obtain actor identity from
+trusted runtime execution context; it must not resolve arbitrary user-supplied
+handles into arbitrary tables. Table destruction/recreation and process
+restart replay MUST be tested once that binding exists. No public guest
+API or deployment should bypass that gate.
+
+Local compiler/sanitizer harnesses are not the exact GitHub PR-head CTest or
+JDK25/Native Image/compiled guest evidence required to advance from draft.
