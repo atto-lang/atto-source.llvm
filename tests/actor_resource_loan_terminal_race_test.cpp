@@ -28,8 +28,31 @@ static void live_group_rejects_outstanding_loan() {
     CHECK(rejected);
 }
 
+static void recycled_numeric_ref_cannot_inspect_next_control_slot() {
+    NativeActorGroup group(191003, 1);
+    auto old_ref = group.adopt(191003, 99, 1, [] {});
+    CHECK(group.mark_ready(old_ref));
+    CHECK(group.finalized(old_ref));
+    old_ref.get_done().get();
+
+    auto new_ref = group.adopt(191003, 99, 1, [] {});
+    CHECK(group.mark_ready(new_ref));
+    CHECK(old_ref == new_ref);
+    CHECK(!old_ref.same_incarnation(new_ref));
+    int ran = 0;
+    CHECK(group.enqueue_control(new_ref, [&] { ++ran; }));
+    CHECK(!group.has_pending_control(old_ref));
+    CHECK(group.has_pending_control(new_ref));
+    CHECK(group.run_control_turn(old_ref) == NativeActorGroup::ControlTurn::retired);
+    CHECK(ran == 0);
+    CHECK(group.run_control_turn(new_ref) == NativeActorGroup::ControlTurn::executed);
+    CHECK(ran == 1);
+    CHECK(group.finalized(new_ref));
+    new_ref.get_done().get();
+}
+
 static void concurrent_registration_and_finalization_have_one_winner() {
-    // A source-free native deterministic-seed contention probe against the
+    // A native contention probe against the
     // real NativeActorGroup generation ticket and terminal resource bit.
     // Every trial joins both threads before checking terminal invariants.
     std::uint32_t registration_wins = 0;
@@ -85,5 +108,6 @@ static void concurrent_registration_and_finalization_have_one_winner() {
 
 int main() {
     live_group_rejects_outstanding_loan();
+    recycled_numeric_ref_cannot_inspect_next_control_slot();
     concurrent_registration_and_finalization_have_one_winner();
 }
