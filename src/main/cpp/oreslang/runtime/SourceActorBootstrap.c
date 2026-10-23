@@ -508,7 +508,7 @@ void oreslang_source_actor_stop(void* opaque) {
         ensure(ores_actor_i64_heap_try_destroy(retired->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         fprintf(stderr,
-            "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\\n",
+            "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
             (unsigned long long)atomic_load_explicit(
                 &retired->processed, memory_order_acquire),
             (long long)atomic_load_explicit(
@@ -533,7 +533,7 @@ void oreslang_source_actor_stop(void* opaque) {
         group.executions = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         fprintf(stderr,
-            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\\n",
+            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
             group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
 #endif
         group.next_slot = 0;
