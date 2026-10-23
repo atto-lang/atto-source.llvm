@@ -271,6 +271,42 @@ int main() {
         check(parent_finalizer->finalized(), "detached parent finalizer failed");
         parent->get_done().get();
     }
+    // Four simultaneous recovery callers must deliver a failed parent
+    // notification at most once; only one caller owns the moved retry.
+    for (int round = 0; round < 128; ++round) {
+        const auto rid = static_cast<std::uint64_t>(9300 + round);
+        NativeActorGroup group(rid, 2);
+        auto parent = group.adopt(rid, 1, 1, [] {});
+        auto child = group.adopt_child(parent, rid, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "contended wake startup failed");
+        std::atomic<int> invocations{0}, recovered{0};
+        check(!group.register_children_drained(parent, [&] {
+            if (invocations.fetch_add(1) == 0)
+                throw std::runtime_error("first parent wake enqueue rejected");
+        }), "contended wake registration empty");
+        check(group.finalized(child), "contended child did not retire");
+        check(parent.child_join_notification_failed(),
+              "contended initial parent wake failure missing");
+        std::atomic<bool> start{false};
+        std::vector<std::thread> retries;
+        retries.reserve(4);
+        for (int i = 0; i < 4; ++i) {
+            retries.emplace_back([&] {
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                if (NativeActorGroup::retry_failed_children_drained(parent))
+                    recovered.fetch_add(1);
+            });
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& retry : retries) retry.join();
+        check(recovered == 1 && invocations == 2,
+              "failed parent notification delivered more than once");
+        check(!parent.child_join_notification_failed(),
+              "contended wake left stale failure receipt");
+        check(group.finalized(parent), "contended parent could not retire");
+    }
     // Concurrent last-child finalization versus observer registration has
     // exactly one legal outcome: synchronous already-drained, or one wakeup.
     {
