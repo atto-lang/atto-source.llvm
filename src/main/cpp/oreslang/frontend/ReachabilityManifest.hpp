@@ -240,19 +240,25 @@ inline OresReachabilityManifestV1 make_reachability_manifest_v1(
 
     std::map<std::string, std::size_t> function_family_sizes;
     std::set<SemanticDeclarationId> expected_declarations;
+    auto add_expected = [&](SemanticDeclarationId id) {
+        if (!expected_declarations.insert(id).second)
+            throw std::runtime_error(
+                "duplicate semantic declaration at manifest boundary: " +
+                semantic_declaration_key(id));
+    };
+
     for (const auto& function : program.functions) {
         ++function_family_sizes[function.name];
-        expected_declarations.insert(
+        add_expected(
             function_declaration_id(
                 CallableId{function.name, function.parameters.size()}));
     }
     for (const auto& klass : program.classes)
-        expected_declarations.insert(class_declaration_id(klass.name));
+        add_expected(class_declaration_id(klass.name));
     for (const auto& actor : program.actors)
-        expected_declarations.insert(actor_declaration_id(actor.name));
+        add_expected(actor_declaration_id(actor.name));
     for (const auto& loop : program.cooperative_loops)
-        expected_declarations.insert(
-            continuation_declaration_id(loop.name));
+        add_expected(continuation_declaration_id(loop.name));
 
     std::set<SemanticDeclarationId> classified(
         reachability.retained.begin(), reachability.retained.end());
