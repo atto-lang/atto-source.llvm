@@ -203,9 +203,12 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
     OresNativeActorScheduler* scheduler);
 /* Before any runnable DATA/CONTROL is admitted, prestart the complete
  * configured carrier set and permanently forbid additional pthread creation.
- * Used by the zero-GC real-time VM bootstrap. Partial failure requires
- * retiring/closing the unexposed scheduler; it cannot be retried on hot path.
- * This does not prove OS-level hard real-time scheduling or WCET.
+ * This transition requires a truly cold scheduler with zero carriers: an
+ * ordinary or partially completed throughput prestart cannot later be promoted
+ * into the real-time profile. Used by the zero-GC real-time VM bootstrap.
+ * Partial failure requires retiring/closing the unexposed scheduler; it cannot
+ * be retried on hot path. This does not prove OS-level hard real-time
+ * scheduling or WCET.
  */
 int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* scheduler);
 /* Carrier count starts at zero for ordinary throughput profile. RT profile

@@ -562,7 +562,9 @@ int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* s) {
     int ok = 0;
     if (!s->retired && !s->realtime_preallocated
             && !s->realtime_prestart_failed
-            && s->accepted == 0 && s->outstanding == 0) {
+            && s->started_workers == 0
+            && s->accepted == 0 && s->outstanding == 0
+            && s->runnable_lanes == 0) {
         ok = ensure_workers_locked(s, s->worker_count);
         if (ok) {
             s->realtime_preallocated = 1;
