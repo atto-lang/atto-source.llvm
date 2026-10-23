@@ -72,7 +72,7 @@ done
 
 # Rebuild both implementations from the exact pinned source trees; a stale
 # compiler/guest runtime may not be credited to the source revisions.
-for tool in cmake mvn; do
+for tool in cmake mvn jq; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "required build tool is missing: $tool" >&2
     exit 66
@@ -119,7 +119,44 @@ trap 'rm -f "$staging"' EXIT
 [[ "$llvm_sha" == "$(git -C "$source_root" rev-parse --verify HEAD)" ]]
 [[ "$java_sha" == "$(git -C "$java_root" rev-parse --verify HEAD)" ]]
 require_clean_checkout
-test -s "$staging"
+if [[ ! -f "$staging" || -L "$staging" || ! -s "$staging" ]]; then
+  echo "qualification did not produce a regular, nonempty receipt" >&2
+  exit 65
+fi
+# An exit-zero subprocess, a nonempty file or a self-reported PASS are not
+# enough. Independently check provenance, corpus completeness and binary
+# parity before publishing a durable receipt.
+if ! jq -e --arg llvm "$llvm_sha" --arg java "$java_sha" '
+  .schema == "oreslang.java-llvm.source-parity.v1" and
+  .status == "passed" and
+  .llvm_revision == $llvm and
+  .java_revision == $java and
+  .positive_programs == 9 and
+  .native_executions == 45 and
+  .java_executions == 18 and
+  .llvm_only_negative_rejections == 16 and
+  .sanitized == false and
+  ((.cases | type) == "array") and
+  ((.cases | length) == 9) and
+  ((.cases | map(.name) | sort) == ([
+    "exact-user-program", "string-content-equality",
+    "string-equality-embedded-nul-and-unicode",
+    "http-string-routing-primitives", "source-effect-order",
+    "parameters-and-return", "lazy-conditional",
+    "escaped-unicode", "empty-and-embedded-nul"
+  ] | sort)) and
+  all(.cases[];
+    .native_exit == 0 and .java_exit == 0 and
+    .native_runs == 5 and .java_runs == 2 and
+    ((.native_stdout_hex | type) == "string") and
+    ((.java_stdout_hex | type) == "string") and
+    (.native_stdout_hex == .java_stdout_hex) and
+    (.native_stdout_hex | test("^([0-9a-f]{2})*$"))
+  )
+' "$staging" >/dev/null; then
+  echo "invalid strict parity receipt; refusing release qualification" >&2
+  exit 65
+fi
 # Atomic no-clobber publish only after Java/LLVM source integrity is rechecked.
 ln "$staging" "$report"
 rm "$staging"
