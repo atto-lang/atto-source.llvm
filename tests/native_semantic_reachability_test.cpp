@@ -78,6 +78,16 @@ int main() {
             rejected = true;
         }
         assert(rejected);
+
+        for (const std::string bad : {"work/02", "work/2/3"}) {
+            rejected = false;
+            try {
+                (void)parse_analysis_callable_key(bad);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            assert(rejected);
+        }
     }
 
     {
