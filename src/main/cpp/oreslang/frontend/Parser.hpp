@@ -229,6 +229,25 @@ struct ModuleContract {
     std::vector<ContractMethod> methods;
 };
 
+// Compiler-only type declarations. Neither traits nor interfaces nor
+// transparent scalar aliases create runtime values, LLVM globals or
+// constructors. The native scalar backend records the distinct source kinds
+// without claiming full generic/typeclass or cross-unit linker support.
+struct TypeOnlyDecl {
+    enum class Kind { Alias, Trait, Interface };
+    struct Method {
+        std::string name;
+        std::vector<std::string> parameter_types;
+        std::string return_type;
+    };
+    Kind kind = Kind::Alias;
+    std::string name;
+    bool exported = false;
+    std::string alias_target; // native v1 accepts only int/bool, not nominal types
+    std::vector<std::string> parents;
+    std::vector<Method> methods;
+};
+
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
 // lexical cleanup or actor scheduler integration is admitted yet.
 // The host supplies a zeroed, single-owner two-i64 continuation frame.
@@ -246,6 +265,7 @@ struct Program {
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
+    std::vector<TypeOnlyDecl> type_only_declarations;
     std::vector<std::string> conforms;
 };
 
