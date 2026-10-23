@@ -21,8 +21,8 @@ void* operator new(std::size_t count) {
     if (void* ptr = std::malloc(count == 0 ? 1 : count)) return ptr;
     throw std::bad_alloc();
 }
-void operator delete(void* ptr) noexcept { std::free(ptr); }
-void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
+__attribute__((noinline)) void operator delete(void* ptr) noexcept { std::free(ptr); }
+__attribute__((noinline)) void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
 
 static void check(bool condition) {
     if (!condition) throw std::runtime_error("owned mailbox allocator fault invariant");
