@@ -1,0 +1,107 @@
+#include "oreslang/runtime/SourceActorBootstrap.h"
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+/* Runs real compiler-ABI callbacks through SourceActorBootstrap and the
+ * NativeOresVM scheduler, not the C++ NativeActorGroup test double. */
+static atomic_int child_spawned, grandchild_spawned, grandchild_entered;
+static atomic_int release_grandchild, stop_started, stop_finished;
+static atomic_int grandchild_exited;
+static void* top_actor;
+
+static void check(int condition) { if (!condition) abort(); }
+
+static void wait_for(atomic_int* flag) {
+    /* Deadline-bounded test, never sleeps on an actor carrier. */
+    for (int i = 0; i < 10000; ++i) {
+        if (atomic_load_explicit(flag, memory_order_acquire)) return;
+        struct timespec pause = {0, 1000000};
+        nanosleep(&pause, NULL);
+    }
+    abort();
+}
+
+static void init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
+    (void)heap;
+    check(domain && epoch);
+}
+
+static int64_t grandchild_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 3);
+    atomic_store_explicit(&grandchild_entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&release_grandchild, memory_order_acquire))
+        sched_yield();
+    atomic_store_explicit(&grandchild_exited, 1, memory_order_release);
+    return 3;
+}
+
+static int64_t child_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 2);
+    void* grandchild = oreslang_source_actor_spawn(
+        init, grandchild_message, 1);
+    check(grandchild != NULL);
+    atomic_store_explicit(&grandchild_spawned, 1, memory_order_release);
+    oreslang_source_actor_send(grandchild, 3);
+    return 2;
+}
+
+static int64_t parent_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 1);
+    void* child = oreslang_source_actor_spawn(init, child_message, 1);
+    check(child != NULL);
+    atomic_store_explicit(&child_spawned, 1, memory_order_release);
+    oreslang_source_actor_send(child, 2);
+    return 1;
+}
+
+static void* stop_on_trusted_host(void* opaque) {
+    atomic_store_explicit(&stop_started, 1, memory_order_release);
+    oreslang_source_actor_stop(opaque);
+    atomic_store_explicit(&stop_finished, 1, memory_order_release);
+    return NULL;
+}
+
+int main(void) {
+    for (int round = 0; round < 10; ++round) {
+        atomic_store(&child_spawned, 0);
+        atomic_store(&grandchild_spawned, 0);
+        atomic_store(&grandchild_entered, 0);
+        atomic_store(&release_grandchild, 0);
+        atomic_store(&grandchild_exited, 0);
+        atomic_store(&stop_started, 0);
+        atomic_store(&stop_finished, 0);
+
+        top_actor = oreslang_source_actor_spawn(init, parent_message, 1);
+        check(top_actor != NULL);
+        oreslang_source_actor_send(top_actor, 1);
+        wait_for(&child_spawned);
+        wait_for(&grandchild_spawned);
+        wait_for(&grandchild_entered);
+        /* Stop is called by a trusted host thread, never a carrier. */
+        pthread_t closer;
+        check(pthread_create(&closer, NULL, stop_on_trusted_host, top_actor) == 0);
+        wait_for(&stop_started);
+        /* Deliberately delay the leaf's physical completion: parent STOP
+         * must not return merely because child STOP was requested. */
+        struct timespec pause = {0, 10000000};
+        nanosleep(&pause, NULL);
+        check(!atomic_load_explicit(&stop_finished, memory_order_acquire));
+        atomic_store_explicit(&release_grandchild, 1, memory_order_release);
+        check(pthread_join(closer, NULL) == 0);
+        check(atomic_load(&stop_finished));
+        check(atomic_load(&grandchild_exited));
+    }
+    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS iterations=10 depth=3");
+    return 0;
+}
