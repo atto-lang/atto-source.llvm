@@ -104,6 +104,19 @@ Native I/O API naming: blocking I/O operations will require the `_blocking` suff
 See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
 and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
 
+## LLVM ORC JIT (opt-in compiled execution)
+
+`oreslang-llvmc --jit path/to/program.ores` executes the existing
+compiler-generated, verified **host** IR through LLVM ORC LLJIT and returns
+the generated native `main()` status. Default `oreslang-llvmc` still emits IR,
+and `scripts/compile-aot.sh` still produces a separate AOT executable.
+This is **not** Truffle-style self-profiling/tiered compilation, a safe
+untrusted-actor isolate, async lowering or Java/GraalVM behavioral parity.
+Unsupported dependencies and non-host modes fail closed.
+
+See [trusted ORC JIT execution contract](docs/ORC_JIT_HOST_SOURCE.md)
+and the `native_orc_jit_compiled_source` CTest execution gate.
+
 ## Standalone AOT executable
 
 After building the compiler, compile its supported **host** subset without a JIT:
