@@ -74,20 +74,12 @@ public:
                 || pages_.size() != (count + page_words_ - 1) / page_words_) {
             throw std::invalid_argument("invalid arena-backed proxy pages");
         }
-        // These pages are exclusively owned by this logical slab. Refuse
-        // duplicate aliases before zeroing any caller-provided arena data.
-        for (std::size_t i = 0; i < pages_.size(); ++i) {
-            const auto& left = pages_[i];
-            if (!left.domain || !left.generation) {
-                throw std::invalid_argument("invalid actor arena page handle");
-            }
-            for (std::size_t j = 0; j < i; ++j) {
-                const auto& right = pages_[j];
-                if (left.domain == right.domain && left.index == right.index
-                        && left.generation == right.generation) {
-                    throw std::invalid_argument("duplicate proxy arena page");
-                }
-            }
+        // Check every generation and page length against the *actual* arena
+        // before the first zeroing write. Syntactic handle checks cannot
+        // distinguish a stale or foreign live slot from a valid one.
+        if (!ores_actor_arena_validate_pages(arena_, turn_, pages_.data(),
+                pages_.size(), page_words_ * sizeof(std::uint32_t))) {
+            throw std::invalid_argument("proxy pages do not belong to arena");
         }
         rows_ = layout_ == Layout::AoSoA
             ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
