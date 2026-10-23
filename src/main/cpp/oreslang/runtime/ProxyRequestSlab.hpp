@@ -24,7 +24,11 @@ public:
 
     static std::size_t required_words(Layout layout, std::uint32_t capacity,
                                       std::uint32_t lanes) {
-        if (capacity == 0 || capacity > 65536
+        // Reject forged/invalid enum discriminants before using lane math.
+        // Otherwise an unknown layout with lanes=0 reaches row/lanes in
+        // offset() and can trigger undefined behavior in the host runtime.
+        if ((layout != Layout::SoA && layout != Layout::AoSoA)
+            || capacity == 0 || capacity > 65536
             || (layout == Layout::SoA && lanes != 1)
             || (layout == Layout::AoSoA && lanes != 16 && lanes != 32 && lanes != 64)) {
             throw std::invalid_argument("invalid native proxy capacity/tile width");
