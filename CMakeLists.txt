@@ -313,6 +313,10 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
+    add_test(NAME native_nominal_type_binder_boundary
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+            nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_nominal_type_binder_boundary PROPERTIES TIMEOUT 35)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
