@@ -2713,3 +2713,14 @@ if(BUILD_TESTING)
     set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Source-compiled JVM/native declaration parity slice. This deliberately tests
+# native scalar aliases only; generic and trait/interface forms MUST fail closed.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_declare_type_scalar_source_parity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_declare_type_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_declare_type_scalar_source_parity PROPERTIES TIMEOUT 90)
+endif()
