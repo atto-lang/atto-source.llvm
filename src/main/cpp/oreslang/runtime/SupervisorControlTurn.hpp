@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -42,7 +43,14 @@ public:
                                    std::size_t restart_budget = 0)
         : child_failures_(capacity), restart_budget_(restart_budget) {}
 
+    // Child reservation is admission, not terminal failure publication.
+    // Bind it to the same shutdown boundary even for callers retaining a
+    // CONTROL-lane pointer after their registry has committed shutdown.
+    // Existing reservations may still publish during the drain.
     void reserve_child(const SupervisorFailureLane::ActorKey& child) {
+        std::lock_guard<std::mutex> admission(admission_mutex_);
+        if (shutdown_fenced_)
+            throw std::logic_error("supervisor child reservation after shutdown fence");
         child_failures_.reserve(child);
     }
 
@@ -92,6 +100,14 @@ public:
     // later restart callback. Never wait for an actor carrier here.
     bool try_fence_shutdown() noexcept {
         if (lease_.test_and_set(std::memory_order_acquire)) return false;
+        // Never park a carrier behind concurrent child reservation. Retry
+        // after the registrar releases admission; the registry is already
+        // fenced for new groups and workers while this returns false.
+        std::unique_lock<std::mutex> admission(admission_mutex_, std::try_to_lock);
+        if (!admission.owns_lock()) {
+            lease_.clear(std::memory_order_release);
+            return false;
+        }
         shutdown_fenced_ = true;
         lease_.clear(std::memory_order_release);
         return true;
@@ -127,8 +143,12 @@ public:
                         if (shutdown_fenced_ || restarts_used_ >= restart_budget_) {
                             hooks.on_escalate(*next);
                         } else {
-                            ++restarts_used_;
-                            if (!hooks.on_restart(*next)) hooks.on_escalate(*next);
+                            // Failed or throwing attempts must not consume
+                            // budget again when the failure event is retried.
+                            // Hosts must make externally visible restarts
+                            // idempotent across an ambiguous callback failure.
+                            if (hooks.on_restart(*next)) ++restarts_used_;
+                            else hooks.on_escalate(*next);
                         }
                         break;
                     default:
@@ -169,7 +189,10 @@ private:
     SupervisorFailureLane child_failures_;
     const std::size_t restart_budget_;
     std::size_t restarts_used_ = 0; // single-writer supervisor turn
-    bool shutdown_fenced_ = false; // protected by the logical-turn lease
+    // Written with BOTH the logical-turn lease and admission mutex; readers
+    // take either the lease (policy turns) or the mutex (child reservation).
+    bool shutdown_fenced_ = false;
+    std::mutex admission_mutex_;
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
 
 };
