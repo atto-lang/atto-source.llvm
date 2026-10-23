@@ -540,6 +540,23 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("main", integer(0), true));
+        program.functions.push_back(fn("dead", integer(1)));
+        auto result = analyze_semantic_reachability(program);
+        result.removed.clear();
+
+        bool rejected = false;
+        try {
+            (void)make_reachability_manifest_v1(program, result);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected &&
+               "manifest adapter must reject incomplete declaration classification");
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("orphan", integer(1)));
         SemanticRootPolicy policy;
         policy.root_default_main = false;
