@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -343,8 +344,8 @@ public:
             std::ostringstream fn;
             current_ = &fn;
             next_ = 0;
-            fn << "define ptr @\\"ores." << unit_.class_name << "." << method.name
-               << "\\"(ptr %self) {\nentry:\n";
+            fn << "define ptr @\"ores." << unit_.class_name << "." << method.name
+               << "\"(ptr %self) {\nentry:\n";
             auto value = expression(*method.result, "%self");
             fn << "  ret ptr " << value << "\n}\n";
             functions_ += fn.str();
@@ -383,7 +384,7 @@ public:
         }
         std::ostringstream ir;
         ir << "; Oreslang checked, host-only native text/class slice\n"
-              "source_filename = \\"oreslang-native-text\\"\n"
+              "source_filename = \"oreslang-native-text\"\n"
               "declare ptr @strdup(ptr)\n"
               "declare i32 @asprintf(ptr, ptr, ...)\n"
               "declare i32 @printf(ptr, ...)\n"
@@ -393,14 +394,14 @@ public:
         for (std::size_t i = 0; i < strings_.size(); ++i) {
             const auto& s = strings_[i];
             ir << "@.ore.str." << i << " = private unnamed_addr constant ["
-               << s.size() + 1 << " x i8] c\\"";
+               << s.size() + 1 << " x i8] c\"";
             static const char hex[] = "0123456789ABCDEF";
             for (unsigned char b : s) {
                 if (b >= 32 && b <= 126 && b != '"' && b != '\\')
                     ir << static_cast<char>(b);
                 else ir << "\\" << hex[b >> 4] << hex[b & 15];
             }
-            ir << "\\00\\"\n";
+            ir << "\\00\"\n";
         }
         ir << functions_;
         return ir.str();
@@ -437,8 +438,8 @@ private:
         if (expr.kind == Expr::Kind::Method) {
             auto instance = expr.receiver == "self" ? receiver : objects.at(expr.receiver);
             auto value = reg();
-            *current_ << "  " << value << " = call ptr @\\"ores." << unit_.class_name
-                      << "." << expr.name << "\\"(ptr " << instance << ")\n";
+            *current_ << "  " << value << " = call ptr @\"ores." << unit_.class_name
+                      << "." << expr.name << "\"(ptr " << instance << ")\n";
             nonnull(value);
             return value;
         }
@@ -451,7 +452,6 @@ private:
                   << "  " << code << " = call i32 (ptr, ptr, ...) @asprintf(ptr "
                   << output << ", ptr " << literal("%s%s") << ", ptr "
                   << lhs << ", ptr " << rhs << ")\n"
-                  << "  " << value << " = load ptr, ptr " << output << "\n"
                   << "  call void @free(ptr " << lhs << ")\n"
                   << "  call void @free(ptr " << rhs << ")\n";
         auto failed = reg();
@@ -462,7 +462,8 @@ private:
                   << "ore.oom." << label << ":\n"
                   << "  call void @abort()\n"
                   << "  unreachable\n"
-                  << "ore.ok." << label << ":\n";
+                  << "ore.ok." << label << ":\n"
+                  << "  " << value << " = load ptr, ptr " << output << "\n";
         return value;
     }
     const Unit& unit_;
@@ -490,7 +491,8 @@ std::string emit_native_text_class_import(const std::filesystem::path& entry,
     Parser root(source);
     const auto [class_name, relative] = root.import();
     Unit unit;
-    Parser dependency(read_import(entry, relative));
+    const auto imported_source = read_import(entry, relative);
+    Parser dependency(imported_source);
     dependency.imported_class(unit, class_name);
     root.entry(unit);
     validate(unit);
