@@ -161,5 +161,42 @@ int main() {
     assert(!small.activate(Identity{42,1}));
     assert(small.activate(Identity{41,3})); // existing ID still has authority
     assert(small.retire(Identity{41,3}).value() == 0);
+    // Retire and borrow must linearize without recycling a buffer that a
+    // concurrent reader already leased. Repeating fresh incarnations probes
+    // races at several generations without expanding the authority budget.
+    using RaceBroker = oreslang::runtime::ActorBoundRequestTable<1, 1, 32, 1>;
+    RaceBroker raced;
+    for (std::uint64_t generation = 1; generation <= 256; ++generation) {
+        Identity actor{77, generation};
+        assert(raced.activate(actor));
+        auto incoming = raced.begin(actor);
+        assert(incoming);
+        std::memcpy(incoming->data(), "stable", 6);
+        auto live = incoming->publish(6);
+        assert(live.value);
+        std::atomic<bool> beginRace{false}, wasRetired{false};
+        std::thread reader([&] {
+            while (!beginRace.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            while (!wasRetired.load(std::memory_order_acquire)) {
+                auto maybe = raced.borrow(actor, live);
+                if (maybe) {
+                    assert(maybe->view() == "stable");
+                    std::this_thread::yield();
+                    assert(maybe->view() == "stable");
+                }
+            }
+        });
+        std::thread revoker([&] {
+            beginRace.store(true, std::memory_order_release);
+            auto count = raced.retire(actor);
+            assert(count && *count == 1);
+            wasRetired.store(true, std::memory_order_release);
+        });
+        revoker.join();
+        reader.join();
+        assert(!raced.borrow(actor, live));
+        assert(raced.available() == 1);
+    }
     return 0;
 }
