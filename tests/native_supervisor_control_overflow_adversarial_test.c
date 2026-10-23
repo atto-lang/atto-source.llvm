@@ -123,6 +123,15 @@ int main(void) {
         s.scheduler, s.parent, s.child_a));
     require(ores_native_actor_scheduler_bind_supervisor(
         s.scheduler, s.parent, s.child_b));
+    OresNativeActorTerminalFailure premature = {
+        ORES_NATIVE_CONTROL_PANIC, s.child_a, 99, 101
+    };
+    require(!ores_native_actor_scheduler_publish_failure(
+        s.scheduler, s.parent, premature));
+    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_a));
+    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_b));
+    require(ores_native_actor_scheduler_wait_done(s.scheduler, s.child_a));
+    require(ores_native_actor_scheduler_wait_done(s.scheduler, s.child_b));
 
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 11));
     await_flag(&s.first_started);
@@ -155,8 +164,8 @@ int main(void) {
 
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
-    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_a));
-    require(ores_native_actor_scheduler_stop(s.scheduler, s.child_b));
+    require(ores_native_actor_scheduler_poll_done(s.scheduler, s.child_a));
+    require(ores_native_actor_scheduler_poll_done(s.scheduler, s.child_b));
     ores_native_actor_scheduler_retire(s.scheduler);
     require(ores_native_actor_scheduler_try_destroy(s.scheduler));
     puts("NATIVE_SUPERVISOR_CONTROL_OVERFLOW_PASS: distinct=2 retained=2");
