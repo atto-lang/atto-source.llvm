@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -156,10 +157,15 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("actor_init", integer(0)));
         program.functions.push_back(fn("actor_helper", integer(1)));
 
         ActorDecl worker;
         worker.name = "Worker";
+        LocalBinding seed;
+        seed.name = "seed";
+        seed.initializer = call("actor_init");
+        worker.fields.push_back(std::move(seed));
         worker.on_message =
             fn("on_message", call("actor_helper"), true);
         program.actors.push_back(std::move(worker));
@@ -175,14 +181,20 @@ int main() {
         const auto main_id =
             function_declaration_id(CallableId{"main", 0});
         const auto actor_id = actor_declaration_id("Worker");
+        const auto init_id =
+            function_declaration_id(CallableId{"actor_init", 0});
         const auto helper_id =
             function_declaration_id(CallableId{"actor_helper", 0});
 
         assert(contains(result.retained, actor_id));
+        assert(contains(result.retained, init_id));
         assert(contains(result.retained, helper_id));
         assert(has_edge(
             result, main_id, actor_id,
             SemanticReachabilityReason::ActorSpawn));
+        assert(has_edge(
+            result, actor_id, init_id,
+            SemanticReachabilityReason::ActorInitializer));
         assert(has_edge(
             result, actor_id, helper_id,
             SemanticReachabilityReason::ActorHandler));
@@ -199,6 +211,8 @@ int main() {
 
         SemanticRootPolicy policy;
         policy.build_kind = SemanticBuildKind::Library;
+        policy.explicit_function_roots.push_back(
+            CallableId{"unused", 0});
         const auto result =
             analyze_semantic_reachability(program, policy);
 
@@ -210,8 +224,9 @@ int main() {
             function_declaration_id(CallableId{"unused", 0});
 
         assert(contains(result.roots, api_id));
+        assert(contains(result.roots, unused_id));
         assert(contains(result.retained, helper_id));
-        assert(contains(result.removed, unused_id));
+        assert(!contains(result.removed, unused_id));
 
         const auto api =
             explain_semantic_reachability(result, api_id);
