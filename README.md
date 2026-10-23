@@ -11,6 +11,26 @@ Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
 are **not implemented** in the LLVM compiler. The CI regression fixtures
 reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
 
+## Data-oriented design and programming priorities
+
+**Prioritize data-oriented design and data-oriented programming** throughout the
+LLVM compiler and native runtime. Design data representations around access
+patterns, locality and efficient processing, while preserving Oreslang semantics,
+ownership safety, full AOT compilation and zero tracing GC.
+
+Choose and evaluate layouts explicitly:
+
+- **AoS — Array of Structures:** keep fields together when work consumes whole records.
+- **SoA — Structure of Arrays:** keep each field contiguous when work scans selected fields or benefits from SIMD.
+- **AoSoA — Array of Structures of Arrays:** group field arrays into blocks suited to cache locality and vectorized processing.
+- **SoAoS — Structure of Arrays of Structures:** keep related fields together in records within separate arrays when access patterns favor those groups.
+
+Apply these choices to compiler tables, actor state, mailboxes, scheduling and I/O
+metadata. Favor compact contiguous storage, batching and fewer allocations or
+pointer indirections. Select layouts using representative benchmarks and profiles,
+including cache behavior, throughput and tail latency; no single layout is best
+for every workload.
+
 ## Implemented and verified native functionality (October 2026)
 
 - Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
