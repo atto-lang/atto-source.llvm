@@ -201,7 +201,11 @@ int main(void) {
     /* DONE plus finalized still owes terminal CONTROL. */
     check(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(ores_native_vm_publish_control(vm, ORES_NATIVE_VM_MAIN, parent, 21));
-    check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
+    /* Typed child receipt no longer contends with occupied ordinary CONTROL. */
+    check(ores_native_vm_publish_supervised_failure(
+        vm, ORES_NATIVE_VM_MAIN, failure));
+    check(!ores_native_vm_publish_supervised_failure(
+        vm, ORES_NATIVE_VM_MAIN, failure));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_SHARED, failure));
     check(!ores_native_vm_publish_supervised_failure(vm, (enum OresNativeVMDomain)99, failure));
     failure.child = fake;
@@ -211,8 +215,8 @@ int main(void) {
     failure.child = s->child;
     atomic_store(&s->release_parent, 1);
     until(&s->control_seen, 1);
-    /* Race duplicate publish attempts. Exactly one may claim this terminal
-     * identity, irrespective of the parent carrier already consuming it. */
+    /* The terminal identity has already been durably claimed. Racing repeat
+     * publication and supervisor-stop cannot create another terminal event. */
     atomic_int admitted = 0;
     Sender sender = {vm, failure, &admitted};
     atomic_int parent_stopped = 0;
@@ -223,10 +227,9 @@ int main(void) {
     check(pthread_create(&p[1], NULL, publish, &sender) == 0);
     for (int i=0; i<2; ++i) check(pthread_join(p[i], NULL) == 0);
     check(pthread_join(stopper_thread, NULL) == 0);
-    check(atomic_load(&admitted) == 1);
-    /* Either STOP lost the race and was correctly rejected, or it won
-     * only after terminal CONTROL was already admitted. In both cases the
-     * parent's handler must still execute exactly once. */
+    check(atomic_load(&admitted) == 0);
+    /* STOP can succeed only after the child's terminal receipt was accepted.
+     * Already admitted callbacks must still drain exactly once. */
     if (!atomic_load(&parent_stopped))
         check(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, parent));
     check(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, failure));
