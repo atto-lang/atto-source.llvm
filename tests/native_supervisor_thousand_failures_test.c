@@ -81,6 +81,13 @@ int main(void) {
             s.scheduler, s.parent, children[i]));
         require(!ores_native_actor_scheduler_bind_supervisor(
             s.scheduler, s.parent, children[i]));
+        OresNativeActorTerminalFailure premature = {
+            ORES_NATIVE_CONTROL_PANIC, children[i], 99, i + 1
+        };
+        require(!ores_native_actor_scheduler_publish_failure(
+            s.scheduler, s.parent, premature));
+        require(ores_native_actor_scheduler_stop(s.scheduler, children[i]));
+        require(ores_native_actor_scheduler_wait_done(s.scheduler, children[i]));
     }
 
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 7));
@@ -97,6 +104,8 @@ int main(void) {
         s.scheduler, s.parent, forged));
     require(!ores_native_actor_scheduler_bind_supervisor(
         s.scheduler, children[0], children[0]));
+    require(!ores_native_actor_scheduler_bind_supervisor(
+        s.scheduler, children[0], s.parent)); /* Parent already active. */
 
     for (size_t i = 0; i < CHILDREN; ++i) {
         OresNativeActorTerminalFailure event = {
@@ -118,7 +127,7 @@ int main(void) {
     require(ores_native_actor_scheduler_control_completed(s.scheduler) == CHILDREN);
     for (size_t i = 0; i < CHILDREN; ++i) {
         require(s.seen[i] == 1);
-        require(ores_native_actor_scheduler_stop(s.scheduler, children[i]));
+        require(ores_native_actor_scheduler_poll_done(s.scheduler, children[i]));
     }
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(ores_native_actor_scheduler_wait_done(s.scheduler, s.parent));
