@@ -13,7 +13,7 @@ must fail closed instead of producing misleading native code.
 |---|---|---|---|---|
 | throw(E) | yes, typed | `None` | not needed | `on_throw` |
 | raise(E) | no | no | yes, explicit | `on_raise` |
-| panic(PanicInfo) | no | no | restricted recovery | `on_panic` |
+| panic(PanicInfo) | no | no | **never** | `on_panic` |
 | cancel | no | no | no | `on_cancel` |
 | fatal host failure | no | no | no | `on_host_failure` when containable |
 
@@ -25,6 +25,36 @@ returns `Option<T>` for synchronous calls and eventually
 `throw`. `Option<Option<T>>` must not flatten. Existing detailed trap
 contract: `docs/TRAP.md` in Java.
 
+## Native compiler exceptional CFG milestone (experimental)
+
+The LLVM frontend now admits one local synchronous `int` throw inside a
+terminal `try`, where a matching `catch` always consumes the thrown scalar.
+Its nonthrowing class-field defers run in LIFO order on dedicated LLVM
+`throw.cleanup` -> `throw.catch` edges, and the existing `finally` path
+runs after the catch-return snapshot. No general source exceptional-effect
+propagation, arbitrary cleanup throws, async unwind or supervisor hook
+lowering is implemented. Java's production parser still rejects the explicit
+`throw` statement; this is **not cross-backend parity**.
+
+## Bootstrap catch versus trap admission (Java/GraalVM PR #781)
+
+Java distinguishes *explicit recovery* from *silent conversion to None*.
+Wrapped and suppressed causes receive bounded fail-closed classification.
+
+| Runtime failure origin | Explicit guest catch | Callable trap |
+| --- | --- | --- |
+| Ordinary recoverable throw/assertion | Yes | Yes (`None`) |
+| Denied filesystem/HTTP permission | Yes | No |
+| Recoverable operation timeout | Yes | No |
+| Panic/raise, cancellation, interruption, rejected scheduling | No | No |
+| Process exit, host-fatal error, unknown control | No | No |
+
+Handling a permission denial does not grant the denied side effect.
+The native `GuestFailureBoundary` and `GuestFailureOrigin` admission
+helper in `ExceptionPolicy.hpp` is a tested host control-plane contract,
+**not compiled LLVM guest `try/catch` or `trap` support**. Unsupported
+guest exception source forms must continue to fail closed.
+
 `defer` is lexical and LIFO; `finally` always runs on normal/exceptional
 unwind **while the runtime remains executable**. Neither can be promised after
 SIGKILL, native UB, OOM exhaustion or externally killed isolates. Under
@@ -35,11 +65,19 @@ a stronger failure. An ordinary cleanup throw may replace an ordinary return.
 Cleanup operations cannot extend a borrow past its lifetime or resume a dead
 actor.
 
-A `recover` is an explicit, restricted effect boundary, not an implicit
-`catch all`. The compiler must require recovery capability for panic and
-validate actor state restoration before resumption. No resumable panic is
-claimed in either backend yet. Host panics should not be translated to normal
-Oreslang `throw` automatically.
+A `recover()` is an explicit, restricted **same-logical-invocation** effect
+boundary, not an implicit `catch all`. A direct deferred `recover()` may
+consume an active ordinary `throw` or `raise` exactly once, subject to
+definite-return checking after unwind; it cannot jump back to the failing
+statement. It **cannot consume `panic`**, cancellation, process exit, or fatal
+host control. Indirect helper calls, detached tasks, sibling invocations,
+and supervisor callbacks cannot recover an originating actor's effect.
+A failed actor's `on_panic` is an independent supervisor CONTROL event on a
+new ExecutionContext: it may select stop/restart/escalate policy but cannot
+resurrect the child or unwind the child's stack. Never translate a host panic
+or native fatal failure into a normal Oreslang `throw`.
+This matches the Java `docs/EXCEPTION_EFFECT_ADMISSION.md` normative contract;
+no Java/LLVM source-language parity is claimed before executable guest tests.
 
 ## Typed supervisor protocol
 

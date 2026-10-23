@@ -31,6 +31,28 @@ constexpr int failure_priority(FailureKind kind) noexcept {
     return 0;
 }
 
+// Guest catch and trap admission differ from native supervisor priority.
+// Origin is assigned by the runtime, never derived from diagnostic text.
+// This host policy is not yet wired to native guest exception lowering.
+enum class GuestFailureBoundary : std::uint8_t { Trap, ExplicitCatch };
+enum class GuestFailureOrigin : std::uint8_t {
+    OrdinaryThrow, PermissionDenied, DeadlineExceeded, Cancellation,
+    SchedulerRejected, Interrupted, Panic, Raise, ProcessExit, HostFatal, Unknown
+};
+
+constexpr bool admits_guest_failure(
+        GuestFailureBoundary boundary, GuestFailureOrigin origin) noexcept {
+    switch (boundary) {
+        case GuestFailureBoundary::Trap:
+            return origin == GuestFailureOrigin::OrdinaryThrow;
+        case GuestFailureBoundary::ExplicitCatch:
+            return origin == GuestFailureOrigin::OrdinaryThrow
+                || origin == GuestFailureOrigin::PermissionDenied
+                || origin == GuestFailureOrigin::DeadlineExceeded;
+    }
+    return false; // malformed native boundary tag fails closed
+}
+
 constexpr std::size_t max_control_diagnostic_bytes = 1024;
 
 // Immutable-on-delivery, value-only metadata for a native supervisor.

@@ -17,6 +17,22 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Numeric division fail-closed parity boundary
+
+Java source revision `4fc9148` defines `int / int` with a `float`
+result (the real guest runtime evaluates it as `Double`), so LLVM's
+i64-only expression emitter must **not** infer an i64 quotient or treat
+a lexical rejection as a successful implementation.
+
+The native frontend now recognizes `/` and `%` as operators, then
+rejects each with an **operator-specific diagnostic before LLVM IR**
+because floating-point result typing, division-by-zero policy, and native
+remainder contracts have not yet been lowered or verified. Three
+dedicated CTest negative fixtures require nonzero compiler exit and
+**empty emitted IR**. This is rejection parity, *not* implementation
+or runtime parity. Subsequent work must add typed float IR, promotion,
+zero-divisor/overflow semantics, and differential JVM/AOT/LLVM tests.
+
 ## Native I/O naming contract (future binding admission)
 
 All source-visible **synchronous-looking I/O** APIs must end in `_blocking`; the runtime must **transparently suspend the calling continuation and release the actor carrier** while I/O is in flight, then resume with a `T` result or an error. They must not block an OS scheduler carrier. **Asynchronous I/O** APIs may, but need not, end in `_async`, and return `Future<T>`. This includes filesystem metadata operations, sockets, DNS, terminal/stdio and HTTP operations that can block the caller. Pure functions and host-internal C++ methods do not acquire suffixes.
@@ -102,3 +118,36 @@ Record the exact Java source SHA in future differential fixtures, rather than cl
 Next priorities: imported Java lexer golden cases, unambiguous checked integer semantics,
 structured control flow, typed return analysis, precise ownership and actor ABI,
 before introducing scheduler or pinned-frame execution.
+
+
+## Executed LLVM i64-only module contract slice (2026-10-10)
+
+The native parser now admits **same-source, compile-time** `define contract`
+declarations with public module `conforms` constraints in the existing
+`int`-only function subset. The front-end rejects missing or private required
+functions, wrong argument arity, mismatched borrowed-value/exclusive argument
+modes, duplicate contract methods, duplicate conformance declarations,
+and unknown contracts **before** emitting LLVM IR. The compiled contract is
+type-only: no actors, heap-allocated interface objects, dynamic method tables,
+runtime reflection or implicit ownership conversion are added.
+
+The first private-funded native proof ran the real C++ compiler against LLVM
+17.0.6 and Clang: the positive fixture generated verified LLVM IR, and an
+explicit test-only C shim invoked the module-qualified `Math.main` code to
+verify the actual process exit result `42`. Eight negative fixtures rejected
+the source with no emitted LLVM IR. All **18 exact source Git blobs** were
+validated before building:
+[funded LLVM native conformance](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38102461292).
+
+The public `RouteContract.ores` source is pinned here as a negative test with
+the reviewed Git blob `5bfd8552d4c6cc5bd369f43d81a7004ba01c2d45`.
+It contains `String` request/response signatures, which are **not** supported
+by this LLVM i64-only compiler. Importing a contract from another source unit
+also deliberately fails closed because there is not yet a matching native
+cross-unit import graph and ownership-aware type environment.
+
+**Do not describe this as Java feature parity.** Next LLVM work must add a
+typed source graph, full `String`/record ABI and safe memory ownership,
+cross-file contract resolution, JVM/LLVM shared conformance fixtures,
+native actor/HTTP transport execution, and full CTest/ASan gates. No native
+SDK or executable release is admitted by this focused test.

@@ -5,10 +5,10 @@
 ## Guarantees
 
 - Actor, supervisor, and root logical lanes remain single-flight: no simultaneous guest execution on one lane, regardless of carrier thread.
-- `critical handle_state` is a sealed intrinsic. It permits `await`, `select`, and compiler-approved reentrancy; its callback is **not** an atomic transaction spanning suspension.
+- `critical handle_state` is a sealed intrinsic with exclusive state-loan admission. A live state-backed loan **must not cross** `await`, `select`, channel suspension, cancellation, or another logical suspension boundary. Release the loan before suspending, and reacquire a fresh capability afterward. Its callback is **not** an atomic transaction spanning suspension.
 - An **atomic evaluation** is the smallest compiler-proven non-suspending state operation (for example, primitive `s.count += 1` as one protected read-modify-write). A source line or arbitrary function call is **not** inherently atomic.
 - **Reduction region:** an optimizable section of guest code whose uninterrupted work is bounded, or whose control-flow is subdivided into bounded chunks. Region boundaries are the only *implicit* yield candidates.
-- **Reentrancy point:** a region boundary with verified continuation state and no conflicting live state-backed loans. It can admit a different continuation of the same actor after the current continuation is saved.
+- **Reentrancy point:** an **explicitly permitted logical suspension** (such as await/select/readch) with verified continuation state and no conflicting live state-backed loans. A reduction-region boundary for automatic CPU fairness is **not** by itself a same-actor reentrancy point.
 - Explicit `await`, `select`, `readch`, potentially blocking `writech`, and `rt cooperate` retain their own suspension semantics.
 
 ## High-performance lowering
@@ -44,14 +44,29 @@ IDs are stable within a compiled artifact, not across builds. The backend must p
 
 ## Scheduling and cancellation
 
-A reduction budget is charged at region boundaries, not every instruction. Once exhausted, the runtime saves the continuation at a verified boundary, releases the actor's exclusive logical lane, and requeues it fairly. On resume, revalidate state capabilities and restore locals; cancellation must run cleanup and retire loans exactly once. No JVM monitor or OS mutex may be held across suspension. Blocking or unbounded FFI must be isolated or explicitly declared; metadata cannot preempt arbitrary native calls safely.
+A reduction budget is charged at region boundaries, not every instruction. Once exhausted, the runtime saves the continuation at a verified boundary and releases its **physical carrier**, but retains exclusive **logical same-actor continuation admission**. An automatic preemption resume has priority over unrelated same-actor callbacks and user messages. On resume, revalidate state capabilities and restore locals; cancellation must run cleanup and retire loans exactly once. No JVM monitor or OS mutex may be held across suspension. Blocking or unbounded FFI must be isolated or explicitly declared; metadata cannot preempt arbitrary native calls safely.
+
+## Callback delivery and borrow-checker safety
+
+Callable effects and callback delivery timing are orthogonal. A synchronous
+callback can execute inline (map/filter or synchronous emitters), while a
+deferred callback must enter through the owning actor's authorized scheduler
+lane, never from a producer thread. `suspends` marks a possible logical
+suspension; it does not guarantee deferred invocation.
+
+A callback cannot retain an ordinary borrowed local, a live mutable
+actor-state loan, or a guard across asynchronous admission. Move-only
+captures transfer ownership and remain unavailable to the old caller.
+An implicit CPU-preemption point may change the carrier but does **not**
+permit an unrelated same-actor callback to interleave with the saved
+synchronous continuation.
 
 ## Required conformance gates
 
 1. Pure finite arithmetic: no unnecessary scheduling calls.
 2. Infinite primitive loop: another actor progresses within the configured work bound.
 3. State compound assignment: no lost updates or mid-operation reentrancy.
-4. `await` / `select` inside `critical handle_state`: interleaving but never simultaneous state access.
+4. `await` / `select` while a `critical handle_state` loan is live: compile-time rejection (or verified lowering that ends the loan before suspension), with no simultaneous actor-state access.
 5. Nested same-continuation state access; queued different-continuation access.
 6. Mutable continuation local survives yield; live mutable state borrow crossing yield is rejected.
 7. Infinite loop with live state borrow: diagnostic or proven segmented transformation, never silent starvation.

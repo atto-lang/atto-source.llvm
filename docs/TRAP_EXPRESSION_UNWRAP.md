@@ -86,13 +86,14 @@ a context-dependent version of `unwrap()` inside `trap`.
 An arbitrary host-language `RuntimeException` is **not** an Ores `throw`.
 The current Java bootstrap explicitly treats `OresCastError` (failed
 checked cast) as a recoverable guest error for compatibility until typed
-`Throw<E>` is admitted. A type error, scheduler interruption, cancellation,
-`SecurityException`, host `ArithmeticException`, internal invariant
-failure, and unknown exception must **not** be silently collapsed to `None`
-by either `trap` or ordinary `try/catch`. Catch/cleanup may process only
-the explicitly admitted ordinary guest failure class. Preserve the original
-exception identity and source-boundary diagnostics rather than wrapping it
-with a generic trappable exception.
+`Throw<E>` is admitted. A scheduler interruption, cancellation, panic, `raise`, host-fatal
+error, or unknown runtime control must neither become `None` through
+`trap` nor be intercepted by ordinary guest `catch`. An explicit
+guest `catch` may handle permission denial or a recoverable timeout
+without granting the denied operation; `trap` must not silently
+downgrade either into `None`. Java's bootstrap admits some ordinary
+runtime exceptions for compatibility until source-level typed effects
+are implemented and proven on both backends.
 
 In particular, no code path is allowed to turn an `unwrap(None)` panic
 into a recoverable error before it reaches `trap`: the control category is
