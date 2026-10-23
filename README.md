@@ -25,13 +25,45 @@ Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
 are **not implemented** in the LLVM compiler. The CI regression fixtures
 reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
 
+## Data-oriented design and programming priorities
+
+**Prioritize data-oriented design and data-oriented programming** throughout the
+LLVM compiler and native runtime. Design data representations around access
+patterns, locality and efficient processing, while preserving Oreslang semantics,
+ownership safety, full AOT compilation and zero tracing GC.
+
+Choose and evaluate layouts explicitly:
+
+- **AoS — Array of Structures:** keep fields together when work consumes whole records.
+- **SoA — Structure of Arrays:** keep each field contiguous when work scans selected fields or benefits from SIMD.
+- **AoSoA — Array of Structures of Arrays:** group field arrays into blocks suited to cache locality and vectorized processing.
+- **SoAoS — Structure of Arrays of Structures:** keep related fields together in records within separate arrays when access patterns favor those groups.
+
+Apply these choices to compiler tables, actor state, mailboxes, scheduling and I/O
+metadata. Favor compact contiguous storage, batching and fewer allocations or
+pointer indirections. Select layouts using representative benchmarks and profiles,
+including cache behavior, throughput and tail latency; no single layout is best
+for every workload.
+
 ## Implemented and verified native functionality (October 2026)
 
-- Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional
+- The two-file `Foo` example now compiles natively with class imports,
+  fieldless instance methods, typed `val` declarations, string returns and
+  concatenation, and nonblocking console output. See
+  [native class/string parity and remaining limits](docs/NATIVE_CLASS_STRING_PARITY.md).
+- Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
-- Typed `int` parameters, `return` expressions, integer literals with underscores,
+- Typed `int` and `bool` parameters, scalar fields and loans; checked bool operators
+  and lazy ternary expressions. See [native bool types](docs/NATIVE_BOOL_TYPES.md).
+- `return` expressions, integer literals with underscores,
   unary `-`, parentheses, `+`, `-`, `*`, parameter references and same-module function calls.
 - Forward declarations enable calls before definitions and recursion (not bounded recursion).
+- Scalar instance methods lower with implicit read/exclusive receiver loans,
+  lexical private access and qualified public class identity. See
+  [native class methods and remaining limits](docs/NATIVE_CLASS_METHODS.md).
+- Relative module selections are statically linked across files, preserving private
+  helpers, overload slots and whole-program ownership checking. See
+  [native module linking and limits](docs/NATIVE_MODULE_LINKING.md).
 - Reject undeclared names, duplicate function/parameter names, mismatched call arities,
   overflowed positive i64 literals, malformed syntax, and unsupported language features.
 - Lower each function to i64 LLVM IR, verify the entire LLVM module before printing IR.
@@ -68,7 +100,12 @@ Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
 
 ## Build and test
 
-Requires LLVM development libraries 14+, CMake 3.20+, C++17, Python3 and ideally Clang.
+Requires LLVM development libraries 14+, CMake 3.20+, C++17, Rust and ideally Clang.
+The remaining legacy test harnesses also require Python3 during migration.
+
+Use Rust for new and replacement test runners, benchmarks, build utilities and
+CI tooling. Keep shell scripts as thin entrypoints. Port existing Python tooling
+without losing its checks; invoking Python from Rust does not count as a port.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
@@ -84,7 +121,7 @@ The compiler CLI prints LLVM IR; the AOT driver below links it into a host execu
 Direct object output and a versioned ABI remain unimplemented.
 
 **Mandatory parity work remaining:** actors, async/await, channels, traits,
-general heap-allocated classes, imports, tuples, recursive/cyclic owned objects,
+general heap-allocated classes, package/std imports, tuples, recursive/cyclic owned objects,
 memory management, scheduler semantics and compiler-integrated native actor
 memory domains. Currently unsupported constructs **fail closed**.
 The stack-only class subset and native RAII primitives above are verified
@@ -132,8 +169,16 @@ an executable. It needs the compiler and Clang only at build time; the output
 requires neither Java nor an Ores interpreter. A failed compile/link preserves
 any existing output. No unsupported source falls back to interpretation.
 This is not a static-linking or cross-compilation guarantee, and it does not
-make Spin compile: imports, actors, channels and async HTTP still require guest
-lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
+make Spin compile: public module object/method surfaces, channels and async HTTP
+still require guest lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
+
+## Native HTTP actor integration
+
+An experimental same-process HTTP adapter now dispatches every valid request
+through the native bounded mailbox to an LLVM-compiled scalar Oreslang actor.
+It uses kqueue/epoll, actor-owned heaps, generation-fenced exchange ownership,
+keep-alive and a sustained benchmark. It does **not** compile the Spin framework
+or its async/OTel modules. See [build, ownership and limits](examples/native-http/README.md).
 
 ## Experimental Cortex-M3 native AOT (scalar subset)
 

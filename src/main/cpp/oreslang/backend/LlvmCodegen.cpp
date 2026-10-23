@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -84,6 +85,19 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::String: {
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto runtime = module->getOrInsertFunction("ores_string_literal",
+                llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
+            return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
+        }
+        case Expression::Kind::Console: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_print",
+                llvm::FunctionType::get(i64, {i64, i64}, false));
+            return builder.CreateCall(runtime, {value, llvm::ConstantInt::get(i64, expr.name == "println")}, "console.status");
+        }
         case Expression::Kind::Integer:
             return llvm::ConstantInt::getSigned(i64, expr.integer);
         case Expression::Kind::Boolean:
@@ -206,6 +220,11 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Add: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.resolved_type == ScalarType::String) {
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_concat",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                return builder.CreateCall(runtime, {left, right}, "string.concat");
+            }
             return builder.CreateAdd(left, right, "add");
         }
         case Expression::Kind::Subtract: {
@@ -391,6 +410,11 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+    for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_string_", 0) == 0)
+            throw std::runtime_error("reserved native string runtime symbol collision");
+    if (!source.imports.empty())
+        throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())
@@ -442,6 +466,47 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
+    bool string_runtime = false, console_runtime = false;
+    std::function<void(const Expression*)> scan_string = [&](const Expression* e) {
+        if (!e) return;
+        if (e->kind == Expression::Kind::String || e->resolved_type == ScalarType::String) string_runtime = true;
+        if (e->kind == Expression::Kind::Console) console_runtime = string_runtime = true;
+        scan_string(e->left.get()); scan_string(e->right.get()); scan_string(e->condition.get());
+        scan_string(e->condition_lhs.get()); scan_string(e->condition_rhs.get());
+        scan_string(e->when_true.get()); scan_string(e->when_false.get());
+        for (const auto& arg : e->arguments) scan_string(arg.get());
+    };
+    std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
+        scan_string(s.expression.get()); scan_string(s.condition.get());
+        scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
+        if (s.branch_local) scan_string(s.branch_local->initializer.get());
+        for (const auto& child : s.then_statements) scan_statement(child);
+        for (const auto& child : s.else_statements) scan_statement(child);
+    };
+    auto scan_function = [&](const Function& fn) {
+        if (fn.return_type == ScalarType::String) string_runtime = true;
+        for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
+        for (const auto& local : fn.locals) scan_string(local.initializer.get());
+        for (const auto& s : fn.statements) scan_statement(s);
+        for (const auto& g : fn.early_returns) {
+            scan_string(g.condition.get()); scan_string(g.lhs.get()); scan_string(g.rhs.get()); scan_string(g.result.get());
+        }
+        for (const auto& s : fn.caught_throw_defers) scan_statement(s);
+        for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
+        scan_string(fn.caught_throw_value.get());
+        scan_string(fn.result.get());
+    };
+    for (const auto& fn : source.functions) scan_function(fn);
+    for (const auto& actor : source.actors) {
+        for (const auto& field : actor.fields) scan_string(field.initializer.get());
+        scan_function(actor.on_message);
+    }
+    if (string_runtime) {
+        if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& f) { return !f.ready_await_actor.empty() || f.caught_throw_value || f.scalar_while; }))
+            throw std::runtime_error("native strings currently require a synchronous host main region without actors, suspension or exception frames");
+    }
     if (native_main) {
         if (!main_it->parameters.empty())
             throw std::runtime_error("native main() must have zero arguments");
@@ -638,7 +703,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
-            signature, llvm::Function::ExternalLinkage, symbol, module);
+            signature, fn.native_internal ? llvm::Function::InternalLinkage : llvm::Function::ExternalLinkage, symbol, module);
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args())
@@ -1704,12 +1769,29 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         auto* entry = llvm::BasicBlock::Create(context, "entry", host_main);
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
+        llvm::FunctionCallee string_end;
+        if (string_runtime) {
+            auto begin = module.getOrInsertFunction("ores_string_region_begin",
+                llvm::FunctionType::get(i64, {i64}, false));
+            string_end = module.getOrInsertFunction("ores_string_region_end",
+                llvm::FunctionType::get(i64, {}, false));
+            auto* status = builder.CreateCall(begin, {llvm::ConstantInt::get(i64, console_runtime)});
+            auto* ready = llvm::BasicBlock::Create(context, "string.region.ready", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "string.region.error", host_main);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), ready, failed);
+            builder.SetInsertPoint(failed); builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(ready);
+        }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* output_ok = string_runtime
+            ? builder.CreateICmpEQ(builder.CreateCall(string_end), llvm::ConstantInt::get(i64, 0))
+            : llvm::ConstantInt::getTrue(context);
         if (main_it->returns_void) {
-            builder.CreateRet(llvm::ConstantInt::get(i32, 0));
+            builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
             llvm::Value* valid = builder.CreateICmpULE(
                 result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
+            valid = builder.CreateAnd(valid, output_ok);
             llvm::Value* narrowed = builder.CreateTrunc(result, i32);
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));

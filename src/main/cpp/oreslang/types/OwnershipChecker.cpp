@@ -71,8 +71,9 @@ LocalOwnership& checked_field(const std::string& receiver, const std::string& fi
     if (found == locals.end() || found->second.class_name.empty() ||
             found->second.class_fields.count(field) == 0)
         throw std::runtime_error("unknown class field or receiver at byte " + std::to_string(offset));
-    // The native subset has no instance methods. All member projections
-    // therefore originate outside the declaring class.
+    // This is the lexical accessibility set for the currently checked frame.
+    // Only methods of this exact nominal class receive its private fields;
+    // forwarding a receiver to an ordinary function does not forward privilege.
     if (!found->second.public_fields.count(field))
         throw std::runtime_error("ownership violation: private class field '" +
                                  found->second.class_name + "." + field +
@@ -125,10 +126,10 @@ struct Loan {
     bool exclusive = false;
 };
 
-// Only named, OWNED int parameter storage is currently addressable. A loan
-// exists only as a call argument and must be returned at the call boundary.
-// No borrow of a temporary, return of a reference, or reborrow of an existing
-// borrowed parameter can enter native LLVM lowering.
+// Only named scalar storage and admitted scalar-class layouts are addressable.
+// A call loan lasts through evaluation of every later argument and the call.
+// Reborrows retain the caller's provenance; shared-to-exclusive escalation,
+// temporary loans, escaping references and unsupported projections fail closed.
 Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     const bool exclusive = expr.kind == Expression::Kind::BorrowMut;
     if (expr.kind != Expression::Kind::Borrow &&
@@ -237,6 +238,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     switch (expr.kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
+        case Expression::Kind::String:
+            return;
+        case Expression::Kind::Console:
+            check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
@@ -386,6 +391,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
     switch (expr.kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
+        case Expression::Kind::String:
         case Expression::Kind::Variable:
         case Expression::Kind::Field:
             check_value(expr, locals, functions);
@@ -425,6 +431,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
     reject(expr, "unsupported guarded condition");
@@ -436,6 +443,9 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
 void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
                                    const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::String:
+        case Expression::Kind::Console:
+            reject(expr, "native caught throw cannot own string region effects");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
             return;
@@ -536,7 +546,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.final_fields = class_finals.at(param.class_name);
-                entry.public_fields = class_public.at(param.class_name);
+                entry.public_fields = function.method_owner == param.class_name
+                    ? class_fields.at(param.class_name) : class_public.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -595,7 +606,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
-                entry.public_fields = class_public.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -857,6 +869,11 @@ void validate_i64_ownership(const Program& program) {
             if (owner.class_name.empty()) {
                 cfg.entry.emplace(name, state);
             } else {
+                // A fieldless nominal object still owns identity/liveness.
+                // Track an unspellable proof slot so whole-object reads and
+                // moves retain the same CFG checks as nonempty classes.
+                if (owner.class_fields.empty())
+                    cfg.entry.emplace(name + ".$identity", state);
                 for (const auto& field : owner.class_fields) {
                     auto field_state = state;
                     if (owner.moved_fields.count(field))

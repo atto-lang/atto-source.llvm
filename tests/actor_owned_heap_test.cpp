@@ -137,7 +137,8 @@ static void test_transient_bump_tail_reuse_with_persistent_fields() {
 
     std::optional<Tiny::Handle> retired;
     for (std::size_t n = 0; n < 4096; ++n) {
-        const std::size_t alignment = (n & 1) == 0 ? 16 : 8;
+        const std::size_t alignment = (n & 1) == 0
+            ? alignof(std::max_align_t) : alignof(std::uint32_t);
         const auto temporary = heap.allocate(40, alignment);
         check(temporary.has_value(), "short-lived actor allocation exhausted");
         check(heap.read<std::uint64_t>(*temporary).value() == 0,
