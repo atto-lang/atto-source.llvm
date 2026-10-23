@@ -31,16 +31,10 @@ inline std::string semantic_module_name(const Program& program) {
     return program.module.empty() ? "__root__" : program.module;
 }
 
-inline void validate_utf8_symbol(const std::string& value) {
-    if (value.empty())
-        throw std::runtime_error("reachability symbol cannot be empty");
-
+inline std::size_t validate_utf8_text(const std::string& value) {
     std::size_t code_points = 0;
     for (std::size_t i = 0; i < value.size();) {
         const auto lead = static_cast<unsigned char>(value[i]);
-        if (lead <= 0x1f || lead == 0x7f)
-            throw std::runtime_error(
-                "reachability symbol contains forbidden control character");
 
         std::size_t continuation_count = 0;
         unsigned char min_first = 0x80;
@@ -58,28 +52,38 @@ inline void validate_utf8_symbol(const std::string& value) {
             if (lead == 0xf0) min_first = 0x90;
             if (lead == 0xf4) max_first = 0x8f;
         } else {
-            throw std::runtime_error(
-                "reachability symbol is not valid UTF-8");
+            throw std::runtime_error("JSON text is not valid UTF-8");
         }
 
         if (value.size() - i <= continuation_count)
-            throw std::runtime_error(
-                "reachability symbol is truncated UTF-8");
+            throw std::runtime_error("JSON text is truncated UTF-8");
 
         for (std::size_t j = 1; j <= continuation_count; ++j) {
             const auto byte =
                 static_cast<unsigned char>(value[i + j]);
             if (byte < (j == 1 ? min_first : 0x80) ||
                     byte > (j == 1 ? max_first : 0xbf))
-                throw std::runtime_error(
-                    "reachability symbol is not valid UTF-8");
+                throw std::runtime_error("JSON text is not valid UTF-8");
         }
 
         ++code_points;
-        if (code_points > 1024)
-            throw std::runtime_error(
-                "reachability symbol exceeds 1024 Unicode scalar values");
         i += continuation_count + 1;
+    }
+    return code_points;
+}
+
+inline void validate_utf8_symbol(const std::string& value) {
+    const std::size_t code_points = validate_utf8_text(value);
+    if (code_points == 0)
+        throw std::runtime_error("reachability symbol cannot be empty");
+    if (code_points > 1024)
+        throw std::runtime_error(
+            "reachability symbol exceeds 1024 Unicode scalar values");
+
+    for (const unsigned char ch : value) {
+        if (ch <= 0x1f || ch == 0x7f)
+            throw std::runtime_error(
+                "reachability symbol contains forbidden control character");
     }
 }
 
@@ -119,6 +123,7 @@ inline void validate_sorted_unique_symbols(
 }
 
 inline std::string json_quote(const std::string& value) {
+    (void)validate_utf8_text(value);
     std::string out;
     out.reserve(value.size() + 2);
     out.push_back('"');
