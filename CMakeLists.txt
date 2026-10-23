@@ -2211,6 +2211,7 @@ if(BUILD_TESTING)
         tests/native_vm_control_plane_test.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2227,6 +2228,7 @@ if(BUILD_TESTING)
         tests/native_ores_vm_test.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-ores-vm-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2256,6 +2258,7 @@ if(BUILD_TESTING)
         tests/native_vm_cpu_budget_test.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-cpu-budget-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2272,6 +2275,7 @@ if(BUILD_TESTING)
         tests/native_vm_physical_turn_gate_test.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-turn-gate-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2354,6 +2358,7 @@ if(BUILD_TESTING)
         tests/native_vm_supervisor_owner_test.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-supervisor-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2430,6 +2435,31 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_lazy_carrier_creation_failure_fence
         COMMAND oreslang-native-carrier-create-failure-test)
     set_tests_properties(native_actor_lazy_carrier_creation_failure_fence PROPERTIES TIMEOUT 30)
+
+    # SCHED_FIFO is a bootstrap-time qualification step. Unprivileged hosts may
+    # reject the carrier creation, but no actor work may be admitted first.
+    add_executable(oreslang-native-realtime-policy-test
+        tests/native_actor_realtime_policy_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-realtime-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-realtime-policy-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-realtime-policy-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_realtime_policy_fail_closed
+        COMMAND oreslang-native-realtime-policy-test)
+    set_tests_properties(native_actor_realtime_policy_fail_closed PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-linux-realtime-environment-test
+        tests/linux_realtime_environment_test.c
+        src/main/cpp/oreslang/runtime/LinuxRealtimeEnvironment.c)
+    target_include_directories(oreslang-linux-realtime-environment-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-linux-realtime-environment-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME linux_realtime_memory_lock_fail_closed
+        COMMAND oreslang-linux-realtime-environment-test)
+    set_tests_properties(linux_realtime_memory_lock_fail_closed PROPERTIES TIMEOUT 20)
 
     # Send and stop contend on one linearizable actor admission authority.
     add_executable(oreslang-native-send-stop-race-test
@@ -2756,4 +2786,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-ipc-receipt-ledger-test)
     set_tests_properties(native_ipc_receipt_correlation_host_reference
         PROPERTIES TIMEOUT 10)
+endif()
+
+
+# Advisory v0 only: compiler-backed literal-main facts, no actor/termination claims.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME llvm_static_facts_v0_negative
+        COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/static_facts_v0.py" --self-test)
+    add_test(NAME llvm_static_facts_v0_real_compiler
+        COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/static_facts_v0.py"
+        --compiler "$<TARGET_FILE:oreslang-llvmc>"
+        --source "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/fixtures/literal-42.ores")
+    set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
+        PROPERTIES TIMEOUT 30)
 endif()
