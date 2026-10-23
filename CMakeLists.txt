@@ -1272,6 +1272,19 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
     set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
 
+    # Real BoundedActorPort/ActorMailboxCompletion race tests: 3k ACK/abort
+    # plus 3k exclusive-owner send/close interleavings per invocation.
+    add_executable(oreslang-native-mailbox-parallel-terminal-test
+        tests/native_mailbox_parallel_terminal_test.cpp)
+    target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-mailbox-parallel-terminal-test PRIVATE Threads::Threads)
+    add_test(NAME native_mailbox_parallel_terminal_races
+        COMMAND oreslang-native-mailbox-parallel-terminal-test)
+    set_tests_properties(native_mailbox_parallel_terminal_races PROPERTIES TIMEOUT 60)
+
     # Host-runtime QoS admission primitive only. Supervisor CONTROL scheduling
     # and actor-turn exclusivity are explicitly exercised by the test.
     # Allocation faults must not steal an exclusive handle, consume the
