@@ -116,6 +116,51 @@ int main() {
         check(group.finalized(replacement), "replacement did not retire");
         check(group.finalized(parent), "parent join did not release after replacement");
     }
+    {
+        // A nonparking finalizer retry can be armed after group detachment.
+        // Completing the last child wakes it, but never publishes parent DONE
+        // until the trusted runtime finalizer actually retries.
+        NativeActorGroup group(6106, 3);
+        auto parent = group.adopt(6106, 1, 1, [] {});
+        auto child = group.adopt_child(parent, 6106, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "child join notifier startup failed");
+        auto parent_finalizer = group.runtime_finalizer(parent);
+        auto child_finalizer = group.runtime_finalizer(child);
+        group.close();
+        check(!parent_finalizer.finalized(),
+              "parent detached finalizer bypassed live child");
+        std::atomic<int> wakeups{0};
+        bool already_joined = group.register_children_drained(
+            parent, [&] { wakeups.fetch_add(1); });
+        check(!already_joined, "live child was reported as already drained");
+        bool duplicate_denied = false;
+        try {
+            (void) group.register_children_drained(parent, [] {});
+        } catch (const std::logic_error&) { duplicate_denied = true; }
+        check(duplicate_denied, "duplicate join observer retained indefinitely");
+        check(child_finalizer.finalized(), "child detached finalization failed");
+        check(wakeups.load() == 1, "last child did not wake parent exactly once");
+        check(parent.get_done().wait_for(0ms) == std::future_status::timeout,
+              "child wakeup fabricated parent physical completion");
+        check(parent_finalizer.finalized(), "parent finalizer retry rejected");
+        parent.get_done().get();
+        check(!parent_finalizer.finalized(), "duplicate parent finalization accepted");
+    }
+    {
+        NativeActorGroup group(6107, 3);
+        auto parent = group.adopt(6107, 1, 1, [] {});
+        auto child = group.adopt_child(parent, 6107, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "post-join registration startup failed");
+        check(group.finalized(child), "last child physical finalization failed");
+        std::atomic<int> wakeups{0};
+        bool immediate = group.register_children_drained(
+            parent, [&] { wakeups.fetch_add(1); });
+        check(immediate && wakeups.load() == 0,
+              "registering after drain must not manufacture asynchronous event");
+        check(group.finalized(parent), "already-drained parent could not retire");
+    }
     for (int round = 0; round < 100; ++round) {
         const auto rid = static_cast<std::uint64_t>(7000 + round);
         NativeActorGroup group(rid, 2);
