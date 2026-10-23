@@ -53,13 +53,13 @@ end
 
 ## Explicitly unsupported (must fail, not silently lower)
 
-- Using an alias without either an earlier completed declaration or an
-  earlier `declare type Id;` promise. Standalone promises now require exactly
-  one subsequent definition with matching name, declaration kind and visibility
-  in the same native compilation unit. The compiler holds executable scalar
-  signatures/locals until completion and checks bool borrowing before LLVM IR.
-  Alias-based class fields and materializing trait/interface instances are
-  still unsupported.
+- A bare `declare type Id;` or `define type Id;` is invalid. Both source
+  introducers require a complete `= target;` definition. An alias must be
+  declared before use in native executable signatures or locals; a *complete*
+  alias definition may refer to another alias defined later in the same unit,
+  with all targets checked before LLVM IR.
+  Alias-based class fields and materializing trait/interface instances remain
+  unsupported.
 - Generic aliases/traits/interfaces, structural fields, default implementations,
   implicit trait evidence/dictionaries and cross-unit import/link resolution.
 - Arbitrary nominal, owned, borrowed, floating, string or generic members,
@@ -87,25 +87,21 @@ end
 5. Independently approve any private-source cross-organization CI carrier
    through protected source repository policy before exporting a tree.
 
-## Forward-declared scalar alias example
+## Equivalent completed type aliases
+
+Both forms compile to the **same** type-only alias metadata and native scalar ABI:
 
 ```oreslang
-declare type Code;
-
-fnc identity(Code value): Code {
-  return value;
-}
-
-define type Code = int;
+declare type Code = int;
+// Equivalent source spelling:
+// define type Code = int;
 ```
 
-The promise is not emitted to LLVM as a runtime value. The compiler requires
-one same-unit completed type of identical visibility, rejects unresolved,
-repeated and incompatible completions, resolves pending scalar parameter,
-return, local and trait/interface method metadata after completion, and
-rechecks bool-ownership constraints before code generation. Full opaque
-nominal types, generic forward aliases, cross-module resolution, and
-`with`/refinement constraint codegen still require separate semantic proofs.
+Do not write both lines as active definitions in the same module: that would
+redeclare `Code`. The language has **no opaque forward type promise** in this
+syntax, and neither spelling creates an instantiable runtime value. Native
+source type checking resolves declared aliases to the existing i64/bool ABI.
+The alias spelling is compile-time metadata, not a newtype/refinement proof.
 
 ## Executable scalar alias example
 
@@ -126,5 +122,5 @@ pub fnc main(): int {
 Native source type checking uses the underlying i64/bool ABI while maintaining
 compile-time alias source identity; this example does not create a heap owner,
 dictionary or alias object. It does **not** establish that aliases provide newtype
-nominality: use `define type` newtype/refinement semantics only after their
-separate checked validation and ABI proof.
+nominality: neither `define type` nor `declare type` implies refinement or
+newtype validation without a separately checked constrained-type contract.
