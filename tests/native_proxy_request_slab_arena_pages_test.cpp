@@ -47,6 +47,36 @@ int main() {
             arena, turn, extra, kPageWords);
     } catch (const std::invalid_argument&) { extra_rejected = true; }
     assert(alias_rejected && extra_rejected);
+    // Forged handles previously could reach a checked write only after
+    // earlier valid pages had already been scrubbed. Preflight must instead
+    // reject the whole vector before changing the first page.
+    auto rejects_before_mutation = [&](OresArenaHandle forged) {
+        std::array<OresArenaHandle, 2> proposed{pages[0], forged};
+        bool denied = false;
+        try {
+            ProxyRequestSlab bad(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
+                arena, turn, proposed, kPageWords);
+        } catch (const std::invalid_argument&) { denied = true; }
+        assert(denied);
+        std::uint32_t first_unchanged = 0;
+        ores_actor_arena_read(arena, turn, pages[0], 0,
+                              &first_unchanged, sizeof(first_unchanged));
+        assert(first_unchanged == secret);
+    };
+    auto foreign = pages[1];
+    ++foreign.domain;
+    rejects_before_mutation(foreign);
+    auto stale = pages[1];
+    ++stale.generation;
+    rejects_before_mutation(stale);
+    auto nonexistent = pages[1];
+    nonexistent.index = 2;
+    rejects_before_mutation(nonexistent);
+    // Same slot with a changed generation is also an alias, not a new page.
+    auto forged_alias = pages[0];
+    ++forged_alias.generation;
+    rejects_before_mutation(forged_alias);
+
     std::uint32_t unchanged = 0;
     ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
                           &unchanged, sizeof(unchanged));
