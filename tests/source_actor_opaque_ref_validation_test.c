@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
             oreslang_source_actor_stop(target);
         }
         check(!oreslang_source_actor_try_send(target, 42));
+        check(!oreslang_source_actor_try_stop(target));
         invoke_bad(target, action);
         return 0;  /* any return is a failed expected rejection */
     }
@@ -75,11 +76,31 @@ int main(int argc, char** argv) {
     void* live = oreslang_source_actor_spawn(init, message, 1);
     check(live != NULL);
     check(oreslang_source_actor_try_send(live, 42));
-    oreslang_source_actor_stop(live);
+    check(oreslang_source_actor_try_stop(live));
+    check(!oreslang_source_actor_try_stop(live));
     check(!oreslang_source_actor_try_send(live, 42));
+
+    /* A released allocator address MUST NOT resurrect an older actor
+     * capability. Monotonic opaque IDs stay distinct even if malloc
+     * repeatedly returns exactly the same object address. */
+    void* earliest = live;
+    void* previous = live;
+    for (int i = 0; i < 32; ++i) {
+        void* next = oreslang_source_actor_spawn(init, message, 1);
+        check(next != NULL);
+        check((uintptr_t)next != (uintptr_t)earliest);
+        check((uintptr_t)next != (uintptr_t)previous);
+        check(!oreslang_source_actor_try_send(earliest, 1));
+        check(!oreslang_source_actor_try_stop(earliest));
+        check(!oreslang_source_actor_try_send(previous, 1));
+        check(!oreslang_source_actor_try_stop(previous));
+        check(oreslang_source_actor_try_send(next, 2));
+        check(oreslang_source_actor_try_stop(next));
+        previous = next;
+    }
     for (int phase = 0; phase < 3; ++phase)
         for (int action = 0; action < 3; ++action)
             expect_abort(argv[0], phase, action);
-    puts("SOURCE_ACTOR_OPAQUE_REF_VALIDATION_PASS rejection_scenarios=9");
+    puts("SOURCE_ACTOR_OPAQUE_REF_VALIDATION_PASS rejection_scenarios=9 retired_reuse_cycles=32");
     return 0;
 }
