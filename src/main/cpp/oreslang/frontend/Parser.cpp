@@ -408,7 +408,7 @@ private:
             const bool prefix_public = accept("pub");
             require("declare");
             const bool postfix_public = accept("pub");
-            if (prefix_public && postfix_public)
+            if (prefix_public && postfix_public || token_.text == "pub")
                 fail("TYPE_ONLY_DUPLICATE_VISIBILITY: duplicate pub");
             exported = prefix_public || postfix_public;
         }
