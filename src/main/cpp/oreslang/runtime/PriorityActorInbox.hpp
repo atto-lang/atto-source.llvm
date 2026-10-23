@@ -119,6 +119,25 @@ public:
     }
 
     /**
+     * Prefer this over offer(T&&) for exclusive kernel/arena/FFI handles.
+     * The prebuilt unique owner transfers only after publication succeeds.
+     * Authority for URGENT still belongs to the trusted runtime caller.
+     */
+    bool offer_owned(Lane lane, std::unique_ptr<T>& value, std::size_t bytes) {
+        return port(lane).offer_owned(value, bytes);
+    }
+
+    bool offer_owned_to(const NativeActorRef& target, Lane lane,
+                        std::unique_ptr<T>& value, std::size_t bytes) {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (!bound_target_ || !same_target(target))
+                throw std::logic_error("stale or foreign actor mailbox target");
+        }
+        return offer_owned(lane, value, bytes);
+    }
+
+    /**
      * One fair dequeue opportunity. The 8:4:1 static weighted service cycle
      * is work-conserving: empty lanes are skipped; live NORMAL/BULK traffic
      * cannot be starved by continuously refilled URGENT traffic. Every lane
