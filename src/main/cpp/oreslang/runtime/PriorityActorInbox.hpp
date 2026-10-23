@@ -261,6 +261,15 @@ private:
             // Expected: outstanding queued/checked-out/preparing credits;
             // every lane has already been sealed by close().
         }
+        // A sender may pass the inbox gate but be descheduled before it
+        // enters a port. The port's pending_prepares() is then still zero.
+        // Seal first, and require the outer admission guard to have exited.
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (active_admissions_ != 0)
+                throw std::logic_error(
+                    "actor mailbox terminal retirement requires admission quiescence");
+        }
         // Closing admits no *new* sends, but an already reserved producer
         // can still publish after close(). Returning successfully now would
         // orphan that envelope and leave both mailbox credits and drain
