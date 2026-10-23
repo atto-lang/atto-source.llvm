@@ -100,6 +100,7 @@ Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 | Function calls, expressions | i64 arithmetic and same-module calls |
 | Type/ownership checking | Name/arity, i64 explicit moves and scoped nonescaping scalar loans; heap references and async unsupported |
 | LLVM IR verification | Implemented |
+| ORC JIT compiled host execution | Opt-in `--jit` branch proposed in PR #885; LLVM/Clang differential source tests added but runner execution not verified |
 | Compile and execute native guest | Clang can link i64 main on supported host |
 | General target-specific ABI/object emission | Not implemented |
 | Actors/supervisors, async frames, channels | Not implemented |
