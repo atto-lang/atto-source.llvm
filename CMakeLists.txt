@@ -1413,6 +1413,19 @@ if(BUILD_TESTING)
     add_test(NAME native_supervisor_hierarchy_control COMMAND oreslang-supervisor-hierarchy-test)
 
     # Runtime-only child lifetime ledger; separate from recovery supervisor.
+    # Real NativeActorGroup integration: nested adoption, parent finalization
+    # barrier, detached runtime finalizers, and concurrent spawn versus STOP.
+    add_executable(oreslang-native-nested-scope-integration-test
+        tests/native_actor_nested_scope_integration_test.cpp)
+    target_include_directories(oreslang-native-nested-scope-integration-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-nested-scope-integration-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-nested-scope-integration-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_nested_scope_integration
+        COMMAND oreslang-native-nested-scope-integration-test)
+    set_tests_properties(native_actor_nested_scope_integration PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-child-scope-test tests/native_child_scope_test.cpp)
     target_include_directories(oreslang-native-child-scope-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-child-scope-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
