@@ -33,8 +33,11 @@ end
   for alias/trait/interface and emits no constructor, global, actor or IR
   representation. Separate class, actor and module-contract type identity
   collisions are rejected before native lowering.
-- Missing inheritance parents, incompatible kinds, cycles, duplicate names
-  and duplicate (name,arity) slots are rejected with stable `TYPE_*` diagnostics.
+- Missing inheritance parents, incompatible kinds, cycles, duplicate names,
+  duplicate formal parameter names and duplicate (name,arity) slots are rejected
+  with stable `TYPE_*` diagnostics. Admission is bounded by 1,024 type-only
+  declarations per unit, 128 inheritance edges of depth, 32 direct parents,
+  128 method signatures per interface/trait, and 32 parameters per method.
 - Source-level test matrix: `tests/native_type_only_declarations.py`; the
   `native_type_only_declaration_boundaries` CTest runs it through
   `oreslang-llvmc` and checks for IR-only positives and fail-closed negatives.
