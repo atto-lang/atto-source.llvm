@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <future>
 
 using oreslang::runtime::PriorityActorInbox;
 using oreslang::runtime::NativeActorGroup;
@@ -183,6 +184,73 @@ static void supervisor_control_and_actor_single_flight_precede_user_priority() {
 }
 
 
+static void actual_native_dispatch_obeys_control_and_logical_actor_turn() {
+    NativeActorGroup group(700, 1);
+    auto actor = group.adopt(700, 5, 4, [] {});
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    CHECK(inbox.offer(Lane::Normal, 1, 8));
+    CHECK(inbox.offer(Lane::Urgent, 2, 8));
+    CHECK(inbox.offer(Lane::Bulk, 3, 8));
+    std::vector<int> delivered;
+    auto consume = [&](Inbox::Delivery& receipt) {
+        delivered.push_back(receipt.value());
+        CHECK(receipt.acknowledge_released());
+    };
+    // Unready actor may not run guest mail, even if messages were buffered.
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::Retired);
+    CHECK(group.mark_ready(actor));
+    int controls = 0;
+    CHECK(group.enqueue_control(actor, [&] { ++controls; }));
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::Control);
+    CHECK(controls == 1 && delivered.empty());
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::User);
+    CHECK(delivered == std::vector<int>({2}));
+    CHECK(inbox.watermark() == 0); // earlier NORMAL remains unresolved
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::User);
+    CHECK(delivered == std::vector<int>({2, 1}));
+    CHECK(inbox.watermark() == 2);
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::User);
+    CHECK(delivered == std::vector<int>({2, 1, 3}));
+    CHECK(inbox.dispatch_next(group, actor, consume) == Inbox::Dispatch::Idle);
+    CHECK(inbox.completed_through(3));
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+    inbox.close();
+}
+
+static void native_dispatch_does_not_steal_mail_from_active_carrier() {
+    NativeActorGroup group(701, 1);
+    auto actor = group.adopt(701, 5, 4, [] {});
+    CHECK(group.mark_ready(actor));
+    Inbox inbox({1, 8}, {1, 8}, {1, 8});
+    CHECK(inbox.offer(Lane::Urgent, 77, 8));
+    std::promise<void> active, release;
+    auto ready = active.get_future();
+    auto gate = release.get_future().share();
+    std::thread carrier([&] {
+        CHECK(group.run_user_turn(actor, [&] {
+            active.set_value();
+            gate.wait(); // host-only deterministic race; not guest scheduling
+        }) == NativeActorGroup::UserTurn::executed);
+    });
+    ready.wait();
+    int received = 0;
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery&) { ++received; })
+          == Inbox::Dispatch::Busy);
+    CHECK(received == 0 && inbox.used_frames(Lane::Urgent) == 1);
+    release.set_value();
+    carrier.join();
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery& receipt) {
+        CHECK(receipt.value() == 77);
+        CHECK(receipt.acknowledge_released());
+        ++received;
+    }) == Inbox::Dispatch::User);
+    CHECK(received == 1 && inbox.watermark() == 1);
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+    inbox.close();
+}
+
 static void failed_queue_publication_retains_sequence_and_window_credit() {
     oreslang::runtime::ActorMailboxCompletion ledger(2);
     CHECK(ledger.reserve_prepare());
@@ -346,6 +414,8 @@ int main() {
     sustained_urgent_flood_cannot_starve_normal_or_bulk();
     seal_rejects_all_lanes_but_keeps_admitted_receipts_drainable();
     supervisor_control_and_actor_single_flight_precede_user_priority();
+    actual_native_dispatch_obeys_control_and_logical_actor_turn();
+    native_dispatch_does_not_steal_mail_from_active_carrier();
     failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
