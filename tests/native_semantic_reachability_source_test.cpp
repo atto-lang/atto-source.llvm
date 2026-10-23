@@ -1,8 +1,10 @@
 #include "oreslang/frontend/Parser.hpp"
-#include "oreslang/frontend/SemanticReachability.hpp"
+#include "oreslang/frontend/ReachabilityManifest.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 using namespace oreslang;
@@ -17,7 +19,31 @@ bool contains(
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 3) return 2;
+
+    {
+        std::ifstream source_file(argv[1], std::ios::binary);
+        std::ifstream expected_file(argv[2], std::ios::binary);
+        assert(source_file.good());
+        assert(expected_file.good());
+
+        std::ostringstream source_buffer;
+        std::ostringstream expected_buffer;
+        source_buffer << source_file.rdbuf();
+        expected_buffer << expected_file.rdbuf();
+
+        const Program program = parse_program(source_buffer.str());
+        const auto result = analyze_semantic_reachability(program);
+        const auto manifest = make_reachability_manifest_v1(
+            program, result, SemanticBuildKind::Executable);
+        std::string expected = expected_buffer.str();
+        if (!expected.empty() && expected.back() == '\n')
+            expected.pop_back();
+        assert(canonical_reachability_manifest_json(manifest) == expected);
+    }
+
+
     {
         const std::string source = R"ores(
 fnc branch_only(): int { return 42; }
