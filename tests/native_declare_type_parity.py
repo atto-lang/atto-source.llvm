@@ -8,6 +8,10 @@ import tempfile
 ENTRY = "pub fnc main(): int { return 7; }\n"
 
 POSITIVE = {
+    "shared-java-llvm-executable-fixture": (
+        Path(__file__).with_name("fixtures")
+        / "forward-scalar-alias-parity.ores"
+    ).read_text(encoding="utf-8"),
     "scalar-int-forward": (
         "declare type Code;\n"
         "define type Code = int;\n"
