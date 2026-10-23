@@ -213,9 +213,23 @@ def main():
             if result.returncode or result.stderr or not result.stdout.startswith("; ModuleID"):
                 raise AssertionError((label, result.returncode, result.stderr, result.stdout[:500]))
             # Type-only declarations cannot silently lower a named runtime value.
-            for forbidden in ("@Tagged", "@Endpoint", "@LocalId", "@PublicId"):
+            for forbidden in (
+                "@Tagged", "@Endpoint", "@LocalId", "@PublicId",
+                "@UserId", "@BaseId", "@Outer", "@Inner", "@Flag",
+                "@Ready", "@Count", "@Id"
+            ):
                 if forbidden in result.stdout:
                     raise AssertionError((label, "type-only runtime emission", forbidden))
+            if label in (
+                "transparent int alias in function parameter and return",
+                "transparent bool alias in function parameter and return",
+                "alias chaining preserves scalar ABI",
+                "forward target aliases validated before IR",
+            ):
+                # Both scalar kinds use the native i64 transport representation.
+                # A nominal object or extra pointer slot would violate ABI parity.
+                if "define i64 @identity(i64 " not in result.stdout:
+                    raise AssertionError((label, "scalar alias changed ABI", result.stdout[:800]))
         for label, program, diagnostic in negative:
             result = compile_source(opts.compiler, program, source)
             if result.returncode == 0 or result.stdout.strip():
