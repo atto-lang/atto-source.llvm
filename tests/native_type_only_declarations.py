@@ -41,6 +41,12 @@ def main():
         ("compatibility public visibility order",
          "pub declare type Id = int;\npub declare trait Tagged as end\n"
          "pub declare interface Endpoint as end\n" + main_fn),
+        ("legacy public defined types inside a module",
+         "define module api as\n"
+         " pub define type Id = int;\n"
+         " pub define trait Tagged as end\n"
+         " pub define interface Endpoint as end\n"
+         " pub fnc main(): int { return 0; }\nend\n"),
         ("same-kind inheritance",
          "declare trait Parent as end\n"
          "declare pub trait Child extends Parent as end\n"
