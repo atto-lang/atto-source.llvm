@@ -139,6 +139,19 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
 }
 
 int main() {
+    // Identity exhaustion must be permanent, not a 64-bit wrap to reused
+    // slab IDs. This test is single-threaded and resets the process-local
+    // counter before constructing any actor slabs.
+    auto& counter = oreslang::runtime::next_proxy_slab_identity;
+    const auto starting_identity = counter.load();
+    counter.store(UINT64_MAX - 1U);
+    assert(oreslang::runtime::reserve_proxy_slab_identity() == UINT64_MAX - 1U);
+    bool identity_exhausted = false;
+    try {
+        (void) oreslang::runtime::reserve_proxy_slab_identity();
+    } catch (const std::overflow_error&) { identity_exhausted = true; }
+    assert(identity_exhausted && counter.load() == UINT64_MAX);
+    counter.store(starting_identity);
     for (auto layout : {ProxyRequestSlab::Layout::SoA,
                          ProxyRequestSlab::Layout::AoSoA}) {
         for (auto lanes : {1U, 16U, 32U, 64U}) {
