@@ -105,6 +105,30 @@ int main() {
     ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
                           &padded_tail, sizeof(padded_tail));
     assert(first == 0 && last == 0 && padded_tail == 0);
+    // Atomic claim prevents a second slab from zeroing even the *first*
+    // page while this slab still owns both. Include subset overlap.
+    auto rejects_claimed_pages = [&](std::span<const OresArenaHandle> claim_pages,
+                                     std::uint32_t capacity) {
+        bool denied = false;
+        try {
+            ProxyRequestSlab bad(ProxyRequestSlab::Layout::SoA, capacity, 1,
+                arena, turn, claim_pages, kPageWords);
+        } catch (const std::invalid_argument&) { denied = true; }
+        assert(denied);
+    };
+    rejects_claimed_pages(pages, kCapacity);
+    std::array<OresArenaHandle, 1> first_page{pages[0]};
+    std::array<OresArenaHandle, 1> second_page{pages[1]};
+    rejects_claimed_pages(first_page, 1);
+    rejects_claimed_pages(second_page, 1);
+    assert(ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), pages.size(), kPageBytes) == 0);
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), pages.size(), UINT64_MAX) == 0);
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), pages.size(), 0) == 0);
+    assert(slab.live() == 0);
+
     // Caller-owned span may be changed or destroyed after construction.
     // The slab must use an immutable by-value handle snapshot instead.
     const auto saved_second_page = pages[1];
@@ -143,6 +167,26 @@ int main() {
             count * sizeof(std::uint32_t));
         for (std::size_t i = 0; i < count; ++i) assert(check[i] == 0);
         off += count;
+    }
+    // Full close releases ownership. Distinct pages may now be safely
+    // reused as two separate slabs, while overlap remains disallowed.
+    {
+        ProxyRequestSlab left(ProxyRequestSlab::Layout::SoA, 1, 1,
+            arena, turn, first_page, kPageWords);
+        ProxyRequestSlab right(ProxyRequestSlab::Layout::SoA, 1, 1,
+            arena, turn, second_page, kPageWords);
+        const auto left_ticket = left.admit(2, 3, 4);
+        const auto right_ticket = right.admit(3, 4, 5);
+        assert(left_ticket != 0 && right_ticket != 0);
+        rejects_claimed_pages(first_page, 1);
+        assert(left.retire(left_ticket));
+        assert(right.retire(right_ticket));
+        left.close();
+        right.close();
+        // Same physical slot can be reclaimed after real quiescence.
+        ProxyRequestSlab retry(ProxyRequestSlab::Layout::SoA, 1, 1,
+            arena, turn, first_page, kPageWords);
+        retry.close();
     }
     ores_actor_arena_leave(arena, turn);
     ores_actor_arena_retire(arena);
