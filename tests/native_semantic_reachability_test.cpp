@@ -129,8 +129,7 @@ int main() {
 
         auto manifest = make_reachability_manifest_v1(
             program,
-            result,
-            SemanticBuildKind::Executable);
+            result);
         assert(manifest.roots ==
                std::vector<std::string>{"__root__.main"});
         assert(manifest.retained_symbols ==
@@ -461,7 +460,7 @@ int main() {
         bool rejected = false;
         try {
             (void)make_reachability_manifest_v1(
-                program, result, SemanticBuildKind::Executable);
+                program, result);
         } catch (const std::runtime_error&) {
             rejected = true;
         }
@@ -481,7 +480,7 @@ int main() {
         bool rejected = false;
         try {
             (void)make_reachability_manifest_v1(
-                program, result, SemanticBuildKind::Executable);
+                program, result);
         } catch (const std::runtime_error&) {
             rejected = true;
         }
