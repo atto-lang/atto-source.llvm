@@ -2416,6 +2416,41 @@ private:
             throw std::runtime_error("using effects require transitive call summaries");
     }
 
+    void resolve_forward_alias_uses(Program& program) const {
+        std::function<void(Statement&)> check_statement = [&](Statement& stmt) {
+            if (stmt.branch_local && !stmt.branch_local->pending_scalar_alias.empty()) {
+                stmt.branch_local->scalar_type = resolve_scalar_alias(
+                    stmt.branch_local->pending_scalar_alias);
+                stmt.branch_local->pending_scalar_alias.clear();
+            }
+            for (auto& child : stmt.then_statements) check_statement(child);
+            for (auto& child : stmt.else_statements) check_statement(child);
+        };
+        for (auto& fn : program.functions) {
+            for (auto& param : fn.parameters) {
+                if (param.pending_scalar_alias.empty()) continue;
+                param.scalar_type = resolve_scalar_alias(param.pending_scalar_alias);
+                param.pending_scalar_alias.clear();
+                if (param.scalar_type == ScalarType::Bool &&
+                        param.mode != Parameter::Mode::Value)
+                    throw std::runtime_error("native bool borrow ABI is not yet admitted;"
+                                             " forward type cannot bypass value-only bool");
+            }
+            if (!fn.pending_return_alias.empty()) {
+                fn.return_type = resolve_scalar_alias(fn.pending_return_alias);
+                fn.pending_return_alias.clear();
+            }
+            for (auto& local : fn.locals) {
+                if (local.pending_scalar_alias.empty()) continue;
+                local.scalar_type = resolve_scalar_alias(local.pending_scalar_alias);
+                local.pending_scalar_alias.clear();
+                if (local.heap_owned && local.scalar_type == ScalarType::Bool)
+                    throw std::runtime_error("native owned bool region lowering is not admitted");
+            }
+            for (auto& statement : fn.statements) check_statement(statement);
+        }
+    }
+
     static void validate_type_only_declarations(const Program& program) {
         using TypeKind = TypeOnlyDecl::Kind;
         std::unordered_map<std::string, std::size_t> declarations;
