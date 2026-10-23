@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/BoundedActorPort.hpp"
+#include "oreslang/runtime/ActorGroupLifecycle.hpp"
 
 #include <array>
 #include <cstddef>
@@ -31,6 +32,7 @@ template <typename T>
 class PriorityActorInbox final {
 public:
     enum class Lane { Urgent, Normal, Bulk };
+    enum class Dispatch { Control, User, Idle, Busy, Retired };
     struct Limits {
         std::size_t frames;
         std::size_t bytes;
@@ -97,6 +99,38 @@ public:
             if (receipt) return Delivery(lane, std::move(*receipt), completion_);
         }
         return std::nullopt;
+    }
+
+    /**
+     * Actual native host actor-turn integration. The group, not the mailbox,
+     * decides whether a logical turn is admitted, and CONTROL is polled first.
+     * Work is dequeued ONLY from inside a granted single-flight user turn.
+     * A raced CONTROL enqueue makes run_user_turn() return Busy instead.
+     *
+     * process(receipt) must acknowledge physical release or move the receipt
+     * to its own tracked completion path. Dropping an unacknowledged receipt
+     * remains fail-closed and deliberately leaks the credit pending teardown.
+     * Guest compiler/runtime dispatch remains a separate integration gate.
+     */
+    template<class Process>
+    Dispatch dispatch_next(NativeActorGroup& group, const NativeActorRef& actor,
+                           Process&& process) {
+        switch (group.run_control_turn(actor)) {
+            case NativeActorGroup::ControlTurn::executed: return Dispatch::Control;
+            case NativeActorGroup::ControlTurn::busy: return Dispatch::Busy;
+            case NativeActorGroup::ControlTurn::retired: return Dispatch::Retired;
+            case NativeActorGroup::ControlTurn::idle: break;
+        }
+        bool consumed = false;
+        const auto outcome = group.run_user_turn(actor, [&] {
+            auto next = try_receive();
+            if (!next) return;
+            consumed = true;
+            process(*next);
+        });
+        if (outcome == NativeActorGroup::UserTurn::retired) return Dispatch::Retired;
+        if (outcome == NativeActorGroup::UserTurn::busy) return Dispatch::Busy;
+        return consumed ? Dispatch::User : Dispatch::Idle;
     }
 
     std::size_t used_frames(Lane lane) const { return port(lane).used_frames(); }
