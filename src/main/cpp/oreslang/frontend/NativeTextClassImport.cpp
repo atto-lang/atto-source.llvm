@@ -1,4 +1,9 @@
 #include "oreslang/frontend/NativeTextClassImport.hpp"
+#include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
 #include <cstdint>
@@ -488,6 +493,9 @@ bool is_native_text_class_import(std::string_view source) {
 
 std::string emit_native_text_class_import(const std::filesystem::path& entry,
                                           std::string_view source) {
+#if defined(_WIN32)
+    throw std::runtime_error("native string/class libc ABI is not yet supported on Windows");
+#endif
     Parser root(source);
     const auto [class_name, relative] = root.import();
     Unit unit;
@@ -496,7 +504,21 @@ std::string emit_native_text_class_import(const std::filesystem::path& entry,
     dependency.imported_class(unit, class_name);
     root.entry(unit);
     validate(unit);
-    return Emit(unit).result();
+    const auto ir = Emit(unit).result();
+    llvm::LLVMContext ctx;
+    llvm::SMDiagnostic diagnostic;
+    auto module = llvm::parseAssemblyString(ir, diagnostic, ctx);
+    if (!module) {
+        std::string detail;
+        llvm::raw_string_ostream sink(detail);
+        diagnostic.print("oreslang native text LLVM", sink);
+        throw std::runtime_error("native text lowering generated invalid LLVM IR: " + sink.str());
+    }
+    std::string detail;
+    llvm::raw_string_ostream sink(detail);
+    if (llvm::verifyModule(*module, &sink))
+        throw std::runtime_error("native text lowering failed LLVM verifier: " + sink.str());
+    return ir;
 }
 
 } // namespace oreslang
