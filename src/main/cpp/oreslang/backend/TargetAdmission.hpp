@@ -149,6 +149,18 @@ inline void validate_cortex_m() {
 
 } // namespace target_admission_detail
 
+inline void validate_lowering_structure(const Program& source) {
+    using namespace target_admission_detail;
+    for (const auto& actor : source.actors) {
+        for (const auto& field : actor.fields) {
+            if (!field.initializer)
+                throw std::runtime_error(
+                    "actor field lowering requires an initializer");
+        }
+        validate_actor_field_writes(actor);
+    }
+}
+
 inline void validate_target_admission(
         const Program& source,
         NativeTargetKind target) {
@@ -156,15 +168,14 @@ inline void validate_target_admission(
 
     if (source.functions.size() == 1 &&
             source.functions.front().scalar_while) {
-        if (target == NativeTargetKind::Wasm32 ||
+        if (target != NativeTargetKind::Host ||
                 !source.classes.empty() ||
                 !source.actors.empty())
             throw std::runtime_error(
                 "experimental scalar loop unsupported target/owners");
     }
 
-    for (const auto& actor : source.actors)
-        validate_actor_field_writes(actor);
+    validate_lowering_structure(source);
 
     switch (target) {
         case NativeTargetKind::Host:
