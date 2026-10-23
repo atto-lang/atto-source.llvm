@@ -44,6 +44,20 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Direct production LLJIT invocation, without Clang or the source parser.
+    # Unlike the larger source parity gate, this checks closed-module
+    # admission and native symbol lookup independently of subprocess exits.
+    add_executable(oreslang-orc-jit-host-admission-test
+        tests/orc_jit_host_admission.cpp
+        src/main/cpp/oreslang/backend/OrcJitRunner.cpp)
+    target_include_directories(oreslang-orc-jit-host-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-orc-jit-host-admission-test
+        PRIVATE ${ORE_LLVM_LIBS})
+    add_test(NAME native_orc_jit_host_admission
+        COMMAND "$<TARGET_FILE:oreslang-orc-jit-host-admission-test>")
+    set_tests_properties(native_orc_jit_host_admission PROPERTIES TIMEOUT 30)
     # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
     add_executable(oreslang-native-send-sync-contract-test
         tests/native_send_sync_contract_test.cpp)
