@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,6 +27,8 @@ struct OresReachabilityManifestV1 {
 };
 
 namespace reachability_manifest_detail {
+
+inline constexpr std::size_t kManifestMaxItems = 1000000;
 
 inline std::string semantic_module_name(const Program& program) {
     return program.module.empty() ? "__root__" : program.module;
@@ -179,6 +182,13 @@ inline std::string canonical_constant_json(
 
 inline void validate_manifest(
         const OresReachabilityManifestV1& manifest) {
+    if (manifest.roots.size() > kManifestMaxItems ||
+            manifest.retained_symbols.size() > kManifestMaxItems ||
+            manifest.removed_symbols.size() > kManifestMaxItems ||
+            manifest.compile_time_constants.size() > kManifestMaxItems)
+        throw std::runtime_error(
+            "ores-reachability/1 manifest exceeds schema cardinality limit");
+
     if (manifest.build_kind != "executable" &&
             manifest.build_kind != "library")
         throw std::runtime_error(
@@ -229,8 +239,28 @@ inline OresReachabilityManifestV1 make_reachability_manifest_v1(
     using namespace reachability_manifest_detail;
 
     std::map<std::string, std::size_t> function_family_sizes;
-    for (const auto& function : program.functions)
+    std::set<SemanticDeclarationId> expected_declarations;
+    for (const auto& function : program.functions) {
         ++function_family_sizes[function.name];
+        expected_declarations.insert(
+            function_declaration_id(
+                CallableId{function.name, function.parameters.size()}));
+    }
+    for (const auto& klass : program.classes)
+        expected_declarations.insert(class_declaration_id(klass.name));
+    for (const auto& actor : program.actors)
+        expected_declarations.insert(actor_declaration_id(actor.name));
+    for (const auto& loop : program.cooperative_loops)
+        expected_declarations.insert(
+            continuation_declaration_id(loop.name));
+
+    std::set<SemanticDeclarationId> classified(
+        reachability.retained.begin(), reachability.retained.end());
+    classified.insert(
+        reachability.removed.begin(), reachability.removed.end());
+    if (classified != expected_declarations)
+        throw std::runtime_error(
+            "semantic reachability result does not completely classify program declarations");
 
     OresReachabilityManifestV1 manifest;
     manifest.build_kind =
