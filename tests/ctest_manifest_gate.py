@@ -59,6 +59,8 @@ CRITICAL_TESTS = (
     "reject_panic_effect",
     *VISIBILITY_NEGATIVE_FIXTURES,
     VISIBILITY_POSITIVE,
+    "native_borrow_alias_matrix_release",
+    "native_borrow_alias_matrix_sanitizer",
 )
 
 TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
@@ -66,6 +68,8 @@ TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
 NATIVE_EXECUTABLES = {
+    "native_borrow_alias_matrix_release": "oreslang-native-borrow-alias-matrix",
+    "native_borrow_alias_matrix_sanitizer": "oreslang-native-borrow-alias-matrix",
     "native_actor_owned_heap_contract": "oreslang-actor-owned-heap-test",
     "native_ownership_cfg_dataflow_fixed_point": "oreslang-ownership-cfg-dataflow-test",
     "portable_target_abi_v1": "oreslang-target-abi-test",
@@ -283,6 +287,15 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure("source object CTest does not invoke contract.py")
             if not any(arg.endswith("constant-main.ores") for arg in command):
                 raise ManifestFailure("source object CTest does not compile positive guest source")
+        if name.startswith("native_borrow_alias_matrix_"):
+            for flag in ("--compiler", "--clang"):
+                if command.count(flag) != 1:
+                    raise ManifestFailure(f"borrow matrix missing/duplicate {flag}: {name}")
+                index = command.index(flag)
+                if index + 1 >= len(command) or command[index + 1].startswith("--"):
+                    raise ManifestFailure(f"borrow matrix missing value for {flag}: {name}")
+            if name.endswith("_sanitizer") and "--sanitize" not in command:
+                raise ManifestFailure("borrow matrix sanitizer missing --sanitize")
         if name == "source_actor_compiled_native_asan_ubsan" and "--sanitize" not in command:
             raise ManifestFailure("source actor sanitizer CTest is missing --sanitize")
         properties = entry.get("properties", [])
