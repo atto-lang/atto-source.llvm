@@ -53,6 +53,11 @@ public:
         return ticket_->control_dropped.load(std::memory_order_acquire);
     }
 
+    /** Trusted runtime only: STOP delivery failed; no DONE receipt implied. */
+    bool stop_delivery_failed() const noexcept {
+        return ticket_->stop_delivery_failed.load(std::memory_order_acquire);
+    }
+
     /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
@@ -111,6 +116,9 @@ private:
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
+        std::atomic<bool> stop_delivery_failed{false};
+        // Immutable host callback outlives group.close() on the actor ticket.
+        std::function<void()> stop_retry;
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
         std::atomic<bool> detached_from_group{false};
@@ -350,6 +358,20 @@ public:
      * closure objects. Callbacks are host-only enqueue signals, not permission
      * to execute guest actor or CONTROL turns inline.
      */
+    /**
+     * A trusted scheduler can re-attempt a failed STOP after group.close()
+     * or manager destruction. Stop callback MUST be idempotent and throw
+     * only when admission is unconfirmed (never after confirmed delivery).
+     * This does not settle physical DONE or execute actor code inline.
+     */
+    static bool retry_failed_stop(const NativeActorRef& ref) noexcept {
+        if (!ref.ticket_->stop_delivery_failed.load(std::memory_order_acquire))
+            return false;
+        dispatch_stop(ref, ref.ticket_->stop_retry);
+        return ref.ticket_->stop_issued.load(std::memory_order_acquire)
+            && !ref.ticket_->stop_delivery_failed.load(std::memory_order_acquire);
+    }
+
     bool register_children_drained(const NativeActorRef& parent,
                                    std::function<void()> notify) {
         if (!notify) throw std::invalid_argument("missing child join notifier");
@@ -411,7 +433,10 @@ public:
                         break;
                     it = parent_it;
                 }
-                if (!descendant || entry.phase == Phase::stopping) continue;
+                if (!descendant ||
+                    (entry.phase == Phase::stopping &&
+                     entry.ref.ticket_->stop_issued.load(std::memory_order_acquire)))
+                    continue;
                 stops.emplace_back(entry.ref, entry.stop_request);
                 if (entry.phase == Phase::starting) rejected.push_back(Rejection{entry.ref, {}});
             }
@@ -541,7 +566,9 @@ public:
             rejections.reserve(workers_.size());
             for (const auto& item : workers_) {
                 const Entry& worker = item.second;
-                if (worker.phase == Phase::stopping) continue;
+                if (worker.phase == Phase::stopping &&
+                    worker.ref.ticket_->stop_issued.load(std::memory_order_acquire))
+                    continue;
                 stops.emplace_back(worker.ref, worker.stop_request);
                 if (worker.phase == Phase::starting) {
                     // Construct every failure string BEFORE touching any
@@ -602,7 +629,8 @@ public:
                     // prevent the group from requesting actor shutdown.
                 }
             }
-            if (worker.phase != Phase::stopping)
+            if (worker.phase != Phase::stopping ||
+                !worker.ref.ticket_->stop_issued.load(std::memory_order_acquire))
                 dispatch_stop(worker.ref, worker.stop_request);
         }
     }
@@ -693,6 +721,9 @@ private:
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        // Copy before mutating the authoritative registry; throws leave no
+        // partially adopted actor. Retain for recovery after group detaches.
+        ticket->stop_retry = stop_request;
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
         try {
@@ -832,7 +863,15 @@ private:
         if (ref.ticket_->physically_done.load(std::memory_order_acquire)) return;
         if (ref.ticket_->stop_issued.exchange(true, std::memory_order_acq_rel))
             return;
-        try { stop(); } catch (...) { /* do not strand sibling workers */ }
+        try {
+            stop();
+            ref.ticket_->stop_delivery_failed.store(false, std::memory_order_release);
+        } catch (...) {
+            // Callback failure cannot fabricate STOP delivery. Preserve
+            // the retryable obligation on the incarnation ticket.
+            ref.ticket_->stop_delivery_failed.store(true, std::memory_order_release);
+            ref.ticket_->stop_issued.store(false, std::memory_order_release);
+        }
     }
 
     static void request_stops(
