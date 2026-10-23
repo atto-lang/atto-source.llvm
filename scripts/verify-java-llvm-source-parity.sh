@@ -20,12 +20,10 @@ case "$java_launcher" in
   *) echo "Java launcher must resolve inside the pinned Java checkout" >&2; exit 65 ;;
 esac
 
-for required in "$build_root/oreslang-llvmc" "$build_root/oreslang-native-class-string-parity" "$java_launcher"; do
-  if [[ ! -x "$required" ]]; then
-    echo "missing executable: $required" >&2
-    exit 66
-  fi
-done
+if [[ ! -x "$java_launcher" ]]; then
+  echo "missing executable Java source launcher: $java_launcher" >&2
+  exit 66
+fi
 if [[ ! -f "$source_root/src/main/cpp/oreslang/runtime/NativeStringRegion.c" ]]; then
   echo "native String runtime is missing" >&2
   exit 66
@@ -50,6 +48,28 @@ java_sha="$(git -C "$java_root" rev-parse --verify HEAD)"
 for tree in "$source_root" "$java_root"; do
   git -C "$tree" diff --quiet --exit-code
   git -C "$tree" diff --cached --quiet --exit-code
+done
+
+# Rebuild both implementations from the exact pinned source trees; a stale
+# compiler/guest runtime may not be credited to the source revisions.
+for tool in cmake mvn; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "required build tool is missing: $tool" >&2
+    exit 66
+  fi
+done
+cmake -S "$source_root" -B "$build_root" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build "$build_root" --parallel 2 --target oreslang-llvmc oreslang-native-class-string-parity-build
+(
+  cd "$java_root"
+  mvn -B -ntp -DskipTests clean package
+  mvn -B -ntp -q dependency:build-classpath -Dmdep.outputFile=target/conformance-classpath.txt
+)
+for required in "$build_root/oreslang-llvmc" "$build_root/oreslang-native-class-string-parity"; do
+  if [[ ! -x "$required" ]]; then
+    echo "missing executable after pinned source build: $required" >&2
+    exit 66
+  fi
 done
 
 report="$build_root/java-llvm-source-parity.json"
