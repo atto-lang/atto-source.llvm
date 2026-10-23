@@ -26,7 +26,7 @@ public:
     enum class Kind { socket, file, timer, ffi_callback, lock_permit, native_allocation };
     enum class Phase { live, retiring, closing, reclaimed, failed };
     enum class Reclaim { not_retired, busy, closing, complete, failed };
-    enum class Activity { turn, loan, callback };
+    enum class Activity { turn, loan, callback, handoff };
 
     class Ticket final {
     public:
@@ -102,9 +102,14 @@ public:
     Ticket acquire_turn() { return acquire(turns_, Activity::turn); }
     Ticket acquire_loan() { return acquire(loans_, Activity::loan); }
     Ticket acquire_callback() { return acquire(callbacks_, Activity::callback); }
+    // Scheduler claims this receipt BEFORE exposing a queued grant. It is
+    // released only after publication or cancellation reclaim is PHYSICAL.
+    // Actor STOP cannot forge settlement by completing a public Future.
+    Ticket acquire_handoff() { return acquire(handoffs_, Activity::handoff); }
     void release_turn(Ticket token) { release(turns_, Activity::turn, token); }
     void release_loan(Ticket token) { release(loans_, Activity::loan, token); }
     void release_callback(Ticket token) { release(callbacks_, Activity::callback, token); }
+    void release_handoff(Ticket token) { release(handoffs_, Activity::handoff, token); }
 
     void retire() {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -133,7 +138,11 @@ public:
             if (phase_ == Phase::live) return {Reclaim::not_retired, 0, {}};
             if (phase_ == Phase::closing) return {Reclaim::closing, 0, {}};
             if (phase_ == Phase::reclaimed || phase_ == Phase::failed) return last_result_;
-            if (!turns_.empty() || !loans_.empty() || !callbacks_.empty())
+            // A dequeued-but-undelivered grant can outlive the request's
+            // cancelled result; its scheduler-minted handoff ticket must
+            // retire before revoking locks or reclaiming actor arenas.
+            if (!turns_.empty() || !loans_.empty() || !callbacks_.empty()
+                    || !handoffs_.empty())
                 return {Reclaim::busy, 0, {}};
             phase_ = Phase::closing;
             pending.swap(entries_);
@@ -259,7 +268,7 @@ private:
     std::uint64_t next_token_ = 0;
     std::vector<Entry> entries_;
     std::vector<Entry> quarantined_;
-    std::unordered_set<std::uint64_t> turns_, loans_, callbacks_;
+    std::unordered_set<std::uint64_t> turns_, loans_, callbacks_, handoffs_;
     Result last_result_{Reclaim::not_retired, 0, {}};
 };
 
