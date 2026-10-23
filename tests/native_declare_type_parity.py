@@ -113,6 +113,28 @@ NEGATIVE = {
         "define type Code = int as positive integer;\n" + ENTRY,
         "proof-preserving lowering"
     ),
+    "string-length-charset-not-lowered": (
+        "declare type Code;\n"
+        "fnc identity(Code value): Code { return value; }\n"
+        "define type Code = string with min_length 2 and max_length 4 "
+        "and chars ascii_letters;\n" + ENTRY,
+        "native refined string aliases require Zorde UTF-8/charset checks"
+    ),
+    "string-ascii-uppercase-not-lowered": (
+        "declare type Code;\n"
+        "define type Code = string with chars ascii_uppercase;\n" + ENTRY,
+        "native refined string aliases require Zorde UTF-8/charset checks"
+    ),
+    "string-unicode-uppercase-not-lowered": (
+        "declare type Code;\n"
+        "define type Code = string with chars uppercase;\n" + ENTRY,
+        "native refined string aliases require Zorde UTF-8/charset checks"
+    ),
+    "string-han-not-lowered": (
+        "declare type Code;\n"
+        "define type Code = string with chars han;\n" + ENTRY,
+        "native refined string aliases require Zorde UTF-8/charset checks"
+    ),
     "generic-forward": (
         "declare type Code<T>;\ndefine type Code = int;\n"+ENTRY,
         "generic type alias forward"
