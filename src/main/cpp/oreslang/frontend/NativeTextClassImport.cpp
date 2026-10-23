@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -356,10 +357,46 @@ void validate_expr(const Expr& expr, const Unit& unit,
     throw std::runtime_error("unknown native class method: " + expr.name);
 }
 
+// Until native method frames and recursion bounds are part of the shared
+// typed IR, a method-call cycle cannot be safely admitted by this isolated
+// host-native slice. Reject it during semantic admission, before emitting IR.
+void require_acyclic_methods(const Unit& unit) {
+    std::unordered_map<std::string, const Expr*> bodies;
+    for (const auto& method : unit.methods)
+        bodies.emplace(method.name, method.result.get());
+    std::unordered_map<std::string, unsigned char> states;
+    std::function<void(const std::string&)> visit;
+    visit = [&](const std::string& name) {
+        const auto state = states[name];
+        if (state == 1)
+            throw std::runtime_error("recursive native string method cycle: " + name);
+        if (state == 2) return;
+        states[name] = 1;
+        std::function<void(const Expr&, std::size_t)> walk =
+            [&](const Expr& expr, std::size_t depth) {
+                if (depth > 32)
+                    throw std::runtime_error("native string method expression exceeds depth bound");
+                if (expr.kind == Expr::Kind::Method) {
+                    const auto it = bodies.find(expr.name);
+                    if (it == bodies.end())
+                        throw std::runtime_error("unknown native class method: " + expr.name);
+                    visit(expr.name);
+                } else if (expr.kind == Expr::Kind::Concat) {
+                    walk(*expr.lhs, depth + 1);
+                    walk(*expr.rhs, depth + 1);
+                }
+            };
+        walk(*bodies.at(name), 0);
+        states[name] = 2;
+    };
+    for (const auto& method : unit.methods) visit(method.name);
+}
+
 void validate(const Unit& unit) {
     const std::unordered_map<std::string, bool> empty;
     for (const auto& method : unit.methods)
         validate_expr(*method.result, unit, empty, true);
+    require_acyclic_methods(unit);
     std::unordered_map<std::string, bool> locals;
     for (const auto& action : unit.actions) {
         if (action.kind == Action::Kind::Create) {
