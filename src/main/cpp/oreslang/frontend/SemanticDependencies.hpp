@@ -221,26 +221,48 @@ inline SemanticDependencyFacts scan_semantic_dependencies(
     return facts;
 }
 
+struct SemanticActorDependencyFacts {
+    SemanticDependencyFacts initializers;
+    SemanticDependencyFacts handler;
+};
+
+inline SemanticActorDependencyFacts scan_actor_semantic_dependencies(
+        const ActorDecl& actor,
+        const SemanticScanBudget& budget = {}) {
+    SemanticActorDependencyFacts facts;
+    for (const auto& field : actor.fields)
+        semantic_dependency_detail::scan_binding(
+            field, facts.initializers, budget, 1);
+    facts.handler = scan_semantic_dependencies(
+        actor.on_message, budget);
+    if (facts.initializers.ast_nodes >
+            budget.max_ast_nodes - facts.handler.ast_nodes)
+        throw std::runtime_error(
+            "semantic dependency AST node budget exceeded");
+    if (semantic_dependency_detail::dependency_count(facts.initializers) >
+            budget.max_dependency_edges -
+            std::min(
+                budget.max_dependency_edges,
+                semantic_dependency_detail::dependency_count(facts.handler)))
+        throw std::runtime_error(
+            "semantic dependency edge budget exceeded");
+    return facts;
+}
+
 inline SemanticDependencyFacts scan_semantic_dependencies(
         const ActorDecl& actor,
         const SemanticScanBudget& budget = {}) {
-    SemanticDependencyFacts facts;
-    for (const auto& field : actor.fields)
-        semantic_dependency_detail::scan_binding(
-            field, facts, budget, 1);
-
-    const auto handler = scan_semantic_dependencies(
-        actor.on_message, budget);
-    facts.ast_nodes += handler.ast_nodes;
-    if (facts.ast_nodes > budget.max_ast_nodes)
-        throw std::runtime_error(
-            "semantic dependency AST node budget exceeded");
+    const auto split = scan_actor_semantic_dependencies(actor, budget);
+    SemanticDependencyFacts facts = split.initializers;
+    facts.ast_nodes += split.handler.ast_nodes;
     facts.direct_calls.insert(
-        handler.direct_calls.begin(), handler.direct_calls.end());
+        split.handler.direct_calls.begin(), split.handler.direct_calls.end());
     facts.class_references.insert(
-        handler.class_references.begin(), handler.class_references.end());
+        split.handler.class_references.begin(),
+        split.handler.class_references.end());
     facts.actor_spawns.insert(
-        handler.actor_spawns.begin(), handler.actor_spawns.end());
+        split.handler.actor_spawns.begin(),
+        split.handler.actor_spawns.end());
     semantic_dependency_detail::check_edge_budget(facts, budget);
     return facts;
 }
