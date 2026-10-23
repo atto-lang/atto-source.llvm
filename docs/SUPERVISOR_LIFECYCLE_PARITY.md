@@ -301,3 +301,31 @@ source execution. The review-only private carrier [Java draft #1959]
 (https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1959)
 does not authorize cross-organization transfers; issue #962 remains the
 security gate.
+
+### Retryable last-child wakeup and parent completion fence
+
+The native C++ group now retains failed enqueue-only parent wakeups after
+the last child physically retires. The original mutable callback is stored
+on the parent incarnation ticket, including after group destruction.
+A trusted scheduler can call
+`NativeActorGroup::retry_failed_children_drained(parent)`; the parent ref
+exposes `child_join_notification_failed()` for observability.
+
+Child-owner retirement sets a parent-ticket pending flag **before**
+releasing the registry lock. Parent `finalized` and detached
+`RuntimeFinalizer::finalized` fail closed until the callback successfully
+enqueues. Subsequent observer registration cannot replace a failed/in-flight
+notification. An enqueue receipt does not itself publish parent DONE or
+guarantee native loan/arena reclamation.
+
+The callback MUST be idempotent, enqueue only (never guest code or inline
+parent finalization), have safe captures across group close, and throw
+only if delivery was not confirmed. This is a narrow C++ host boundary,
+not source-level ActorRef Future lowering. New native nested-scope tests
+exercise two transient failures, new child admission and observer rearming,
+parent DONE rejection, and retry after manager destruction.
+
+Exact-head production CTest and sanitizers remain **unverified** because
+source-org GitHub Actions jobs complete with zero recorded steps. The
+source-free private runner is not authorized to receive source without
+independent approval under Java security issue #962.
