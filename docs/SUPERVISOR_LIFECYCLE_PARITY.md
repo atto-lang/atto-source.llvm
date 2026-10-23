@@ -379,3 +379,51 @@ and isolated Git-fixture tests confirmed wrong-HEAD and dirty-worktree
 inputs fail closed with exit code 2. **The OresVM production source was not
 available in that local execution environment**; therefore compilation,
 CTest and sanitizer results for the LLVM PR remain unverified.
+
+### Executed native C++ nested-scope integration (2026-10-23)
+
+A local test container without network/GitHub credentials reconstructed
+`src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp` and
+`tests/native_actor_nested_scope_integration_test.cpp` directly from their
+private GitHub connector file contents. The reconstruction **removed comments
+and blank lines only** for transport, preserving executable statements, test
+assertions and the native implementation. The verified source blobs are:
+
+- Header: `04199cae7d0152429e2550e7435b47a28ba8d326`
+- Test after fix: `47ed4f8e2405f2878c7757eebed516b7149e6a4f`
+
+The original test compiled at the prior commit but aborted at runtime
+with `std::runtime_error("ActorGroup closed before ready")`. The
+mutable-STOP callback test had **not** called `group.mark_ready(*detached)`
+before `group.close()`, yet then expected successful `get_done().get()`.
+That was a bad test precondition: an uninitialized actor correctly receives
+a failed-ready / failed-DONE terminal result on close. Fixed the test by
+marking the actor ready before the successful-shutdown expectation.
+
+**Post-fix locally executed evidence** using the production C++ header and
+the repository's entire C++ nested-scope integration test main():
+
+- GCC C++17, `-O2 -Wall -Wextra -Wpedantic -Werror -pthread`: **25/25 passed**
+- Clang C++17, `-O1 -fsanitize=address,undefined` with leak and
+  undefined-behavior failure enforcement: **10/10 passed**
+- GCC C++17, `-O1 -fsanitize=thread`: **5/5 passed**
+
+Each execution includes the committed concurrent actor-adoption/STOP,
+parent-child finalization, durable join notification, four-way retry and
+manager-destruction test cases. The syntax-compiled full header and suite
+also passed both GCC and Clang with strict warnings.
+
+**Scope caveat:** the local environment did not have the entire private
+OresVM repository checkout. These are real production C++ header/source
+test executions from connector-retrieved, comment-stripped files, not
+full-source CMake, CTest, C ABI scheduler, source compiler, GraalVM parity
+or complete repository integration results.
+
+**Actions infrastructure isolated independently:** checkout-free workflow
+[run 40038927071](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/40038927071)
+in the source org ran two shell-only jobs; both `ubuntu-latest` and
+`ubuntu-24.04` failed with **zero executed steps** before any checkout.
+The temporary diagnostic branch was reset after testing, and the evidence
+was recorded on issue #159. Hosted-runner entitlements, organization Actions
+policy, billing and other pre-job failures require administrator inspection.
+The private cross-organization source-transfer allowlist remains empty.
