@@ -271,13 +271,6 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    # Source -> verified LLVM IR -> in-process ORC JIT -> observed exit.
-    # Deliberately separate from the Clang AOT conformance gate.
-    add_test(NAME native_orc_jit_compiled_source
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orc_jit_execution.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>")
-    set_tests_properties(native_orc_jit_compiled_source PROPERTIES TIMEOUT 90)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"
@@ -310,6 +303,14 @@ if(BUILD_TESTING)
         message(WARNING "Portable native i64 execution gate will fail: Clang not found")
         set(ORE_SOURCE_I64_CLANG "${CMAKE_CURRENT_BINARY_DIR}/missing-source-i64-clang")
     endif()
+    # ORC and Clang execute the same compiler-generated source IR with
+    # identical observable process status; no interpreter fallback.
+    add_test(NAME native_orc_jit_compiled_source
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orc_jit_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_orc_jit_compiled_source PROPERTIES TIMEOUT 120)
     add_test(NAME native_source_i64_os_exit_subset
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"
