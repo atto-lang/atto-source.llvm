@@ -21,6 +21,18 @@ fn valid_git_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+// Binary-safe stdout evidence; unlike UTF-8 conversion, this also retains
+// embedded NUL and exact source output bytes.
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[usize::from(byte >> 4)]);
+        out.push(DIGITS[usize::from(byte & 0x0f)]);
+    }
+    String::from_utf8(out).expect("hex alphabet is ASCII")
+}
+
 fn evidence_admission(
     require_java: bool,
     java: Option<&str>,
@@ -34,8 +46,8 @@ fn evidence_admission(
         }
         return Ok(());
     }
-    if java.is_none() {
-        return Err("--require-java requires --java-command; missing Java must fail closed");
+    if java.is_none_or(|value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --java-command; missing Java must fail closed");
     }
     if !java_revision.is_some_and(valid_git_revision) {
         return Err("--require-java requires a 40-hex --java-revision");
@@ -43,15 +55,15 @@ fn evidence_admission(
     if !llvm_revision.is_some_and(valid_git_revision) {
         return Err("--require-java requires a 40-hex --llvm-revision");
     }
-    if report.is_none() {
-        return Err("--require-java requires --report for a durable execution receipt");
+    if report.is_none_or(|value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --report for a durable execution receipt");
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{evidence_admission, valid_git_revision};
+    use super::{evidence_admission, hex_encode, valid_git_revision};
 
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -63,6 +75,14 @@ mod tests {
         assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), None).is_err());
         assert!(evidence_admission(false, None, None, None, Some("r.json")).is_err());
         assert!(evidence_admission(false, None, Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(true, Some(""), Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("")).is_err());
+    }
+
+    #[test]
+    fn preserves_binary_stdout_evidence() {
+        assert_eq!(hex_encode(b"a\x00b"), "610062");
+        assert_eq!(hex_encode("é".as_bytes()), "c3a9");
     }
 
     #[test]
@@ -191,6 +211,7 @@ fn main() {
         ),
     ];
     let mut comparisons = 0;
+    let mut case_evidence = Vec::<String>::new();
     for (name, source, expected) in &positives {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
@@ -230,6 +251,7 @@ fn main() {
             "{name}: {}",
             String::from_utf8_lossy(&linked.stderr)
         );
+        let mut native_stdout = Vec::new();
         for _ in 0..5 {
             let native = run(&mut Command::new(&binary));
             assert_eq!(
@@ -239,6 +261,7 @@ fn main() {
                 String::from_utf8_lossy(&native.stderr)
             );
             assert_eq!(native.stdout, expected.as_bytes(), "{name}: native output");
+            native_stdout = native.stdout;
             assert!(
                 native.stderr.is_empty(),
                 "{name}: sanitizer/runtime diagnostics: {}",
@@ -246,6 +269,7 @@ fn main() {
             );
         }
         if let Some(launcher) = &java {
+            let mut java_stdout = Vec::new();
             // Independent repeat is intentional: Java and LLVM must each produce
             // stable source behavior, not merely a coincidental one-shot output.
             for _ in 0..2 {
@@ -259,7 +283,13 @@ fn main() {
                     String::from_utf8_lossy(&reference.stderr)
                 );
                 assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+                java_stdout = reference.stdout;
             }
+            case_evidence.push(format!(
+                r#"{{"name":"{name}","native_stdout_hex":"{}","java_stdout_hex":"{}","native_exit":0,"java_exit":0,"native_runs":5,"java_runs":2}}"#,
+                hex_encode(&native_stdout),
+                hex_encode(&java_stdout)
+            ));
             comparisons += 1;
         }
     }
@@ -397,14 +427,15 @@ fn main() {
             .open(report.expect("validated --report"))
             .expect("parity receipt must be a new file");
         let body = format!(
-            r#"{{"schema":"oreslang.java-llvm.source-parity.v1","status":"passed","llvm_revision":"{}","java_revision":"{}","positive_programs":{},"native_executions":{},"java_executions":{},"llvm_only_negative_rejections":{},"sanitized":{}}}"#,
+            r#"{{"schema":"oreslang.java-llvm.source-parity.v1","status":"passed","llvm_revision":"{}","java_revision":"{}","positive_programs":{},"native_executions":{},"java_executions":{},"llvm_only_negative_rejections":{},"sanitized":{},"cases":[{}]}}"#,
             llvm_revision.expect("validated --llvm-revision"),
             java_revision.expect("validated --java-revision"),
             comparisons,
             positives.len() * 5,
             comparisons * 2,
             negatives.len() + 2,
-            sanitize
+            sanitize,
+            case_evidence.join(",")
         );
         receipt.write_all(body.as_bytes()).expect("write parity receipt");
         receipt.write_all(b"\n").expect("finish parity receipt");
