@@ -37,13 +37,17 @@ ctest --test-dir build -R '^native_orc_jit_compiled_source$' --output-on-failure
 scalar-loop modes, hard-real-time reporting/check modes, and source programs
 without a native entry wrapper. Standard IR output and Clang AOT are unaffected.
 
-The source/ORC CTest gate runs seven positive source programs twice each
-(exercising direct calls, forward calls, nested calls and main exit-code policy),
-compares every one against actual Clang-linked AOT execution, checks a
-tree-shaken source program, and runs eight fail-closed negatives. This gate
-tests **real JIT execution**, rather than checking emitted LLVM IR alone.
-It does **not** test equivalent execution by Java/GraalVM. The complete
-conformance ledger remains open.
+The proposed source/ORC CTest gate executes seven synthetic source
+programs twice each, six existing Oreslang source fixtures (function calls,
+borrow/reborrow, overload resolution, named arguments, class field access),
+and four SHA-pinned portable i64 corpus cases. This makes **24 proposed JIT
+executions, 17 Clang-linked AOT comparisons, one tree-shaken JIT execution,
+and eight fail-closed negatives**. The other three i64 corpus cases cannot
+be observed losslessly through the OS exit status; a typed-result ABI is
+still required. All counts are test **definitions**, not executed results.
+The gate must pass on a real LLVM builder before any claims of verified
+ORC execution. It does **not** test equivalent execution by Java/GraalVM.
+The complete cross-backend conformance ledger remains open.
 
 ## Parity milestones after the initial JIT runner
 
