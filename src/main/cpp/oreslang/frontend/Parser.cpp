@@ -947,8 +947,18 @@ private:
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
-                    if (generic) parameter.generic_type = type;
-                    else parameter.class_name = type;
+                    if (generic) {
+                        parameter.generic_type = type;
+                    } else if (scalar_alias_targets_.count(type)) {
+                        parameter.scalar_type = resolve_scalar_alias(type);
+                        if (parameter.scalar_type == ScalarType::Bool &&
+                                parameter.mode != Parameter::Mode::Value)
+                            fail("native bool borrow ABI is not yet admitted; pass bool by value");
+                    } else if (type_only_nominals_.count(type)) {
+                        fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar parameter");
+                    } else {
+                        parameter.class_name = type;
+                    }
                 }
                 if (token_.text == "?")
                     fail("native optional type '?' requires versioned Option/default ABI lowering");
@@ -973,8 +983,15 @@ private:
                 const bool generic = std::any_of(value.generic_parameters.begin(),
                     value.generic_parameters.end(),
                     [&](const GenericParameter& p) { return p.name == type; });
-                if (!generic) fail("native return type requires int, bool or scalar generic slot");
-                value.return_type = ScalarType::I64;
+                if (generic) {
+                    value.return_type = ScalarType::I64;
+                } else if (scalar_alias_targets_.count(type)) {
+                    value.return_type = resolve_scalar_alias(type);
+                } else if (type_only_nominals_.count(type)) {
+                    fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar return type");
+                } else {
+                    fail("native return type requires int, bool or checked scalar alias");
+                }
             }
         }
         if (token_.text == "?")
@@ -1087,12 +1104,15 @@ private:
                         if (accept("int")) {
                             binding.scalar_type = ScalarType::I64;
                         } else if (accept("bool")) {
-                            if (binding.heap_owned)
-                                fail("native owned bool region lowering is not admitted");
                             binding.scalar_type = ScalarType::Bool;
+                        } else if (token_.kind == Kind::Identifier &&
+                                   scalar_alias_targets_.count(std::string(token_.text))) {
+                            binding.scalar_type = resolve_scalar_alias(identifier());
                         } else {
-                            fail("native scalar local requires int or bool");
+                            fail("native scalar local requires int, bool or checked scalar alias");
                         }
+                        if (binding.heap_owned && binding.scalar_type == ScalarType::Bool)
+                            fail("native owned bool region lowering is not admitted");
                     }
                 }
                 require("=");
@@ -1160,7 +1180,10 @@ private:
                     require(":");
                     if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
                     else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
-                    else fail("native branch-local scalar requires int or bool");
+                    else if (token_.kind == Kind::Identifier &&
+                             scalar_alias_targets_.count(std::string(token_.text)))
+                        statement.branch_local->scalar_type = resolve_scalar_alias(identifier());
+                    else fail("native branch-local scalar requires int, bool or checked scalar alias");
                     require("=");
                     statement.branch_local->initializer = expression();
                     require(";");
