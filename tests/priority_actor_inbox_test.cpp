@@ -8,6 +8,10 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <mutex>
 
 using oreslang::runtime::PriorityActorInbox;
 using oreslang::runtime::NativeActorGroup;
@@ -178,9 +182,145 @@ static void supervisor_control_and_actor_single_flight_precede_user_priority() {
     inbox.close();
 }
 
+
+static void global_drain_never_passes_overtaken_normal() {
+    Inbox inbox({4, 32}, {4, 32}, {4, 32});
+    CHECK(inbox.offer(Lane::Normal, 101, 8));
+    const auto first_barrier = inbox.snapshot();
+    CHECK(first_barrier == 1);
+    CHECK(inbox.offer(Lane::Urgent, 201, 8));
+    const auto both_barrier = inbox.snapshot();
+    CHECK(both_barrier == 2);
+    auto urgent = inbox.try_receive();
+    CHECK(urgent && urgent->lane() == Lane::Urgent);
+    CHECK(urgent->sequence() == 2);
+    CHECK(urgent->acknowledge_released());
+    CHECK(inbox.watermark() == 0);
+    CHECK(!inbox.completed_through(first_barrier));
+    CHECK(!inbox.completed_through(both_barrier));
+    auto normal = inbox.try_receive();
+    CHECK(normal && normal->lane() == Lane::Normal);
+    CHECK(normal->sequence() == 1);
+    CHECK(normal->acknowledge_released());
+    CHECK(inbox.watermark() == 2);
+    CHECK(inbox.completed_through(first_barrier));
+    CHECK(inbox.completed_through(both_barrier));
+    inbox.close();
+}
+
+static void stalled_ack_bounds_global_reordering_and_recovers() {
+    // Even if URGENT keeps ACKing, a missing earlier NORMAL must not grow an
+    // unbounded sparse completion set. Max 3 unfinished sequence positions.
+    Inbox inbox({2, 16}, {2, 16}, {2, 16}, 3);
+    CHECK(inbox.offer(Lane::Normal, 100, 8));
+    auto held = inbox.try_receive();
+    CHECK(held && held->lane() == Lane::Normal && held->sequence() == 1);
+    for (int n = 0; n < 2; ++n) {
+        CHECK(inbox.offer(Lane::Urgent, int(n), 8));
+        auto urgent = inbox.try_receive();
+        CHECK(urgent && urgent->lane() == Lane::Urgent);
+        CHECK(urgent->sequence() == static_cast<std::uint64_t>(n + 2));
+        CHECK(urgent->acknowledge_released());
+    }
+    CHECK(inbox.watermark() == 0 && inbox.snapshot() == 3);
+    int refused = 42;
+    CHECK(!inbox.offer(Lane::Bulk, std::move(refused), 8));
+    CHECK(refused == 42); // denied before move, including global window denial
+    CHECK(inbox.used_frames(Lane::Bulk) == 0);
+    CHECK(held->acknowledge_released());
+    CHECK(inbox.watermark() == 3);
+    CHECK(inbox.offer(Lane::Bulk, 999, 8));
+    CHECK(inbox.snapshot() == 4);
+    auto bulk = inbox.try_receive();
+    CHECK(bulk && bulk->sequence() == 4);
+    CHECK(bulk->acknowledge_released());
+    CHECK(inbox.completed_through(4));
+    inbox.close();
+}
+
+struct FailOnceMove {
+    static inline bool fail_move = false;
+    int payload;
+    explicit FailOnceMove(int v) : payload(v) {}
+    FailOnceMove(FailOnceMove&& other) {
+        if (fail_move) throw std::runtime_error("injected move fault");
+        payload = other.payload;
+    }
+    FailOnceMove(const FailOnceMove&) = delete;
+    FailOnceMove& operator=(const FailOnceMove&) = delete;
+};
+
+static void failed_admission_never_consumes_global_identity() {
+    PriorityActorInbox<FailOnceMove> inbox({2, 16}, {2, 16}, {2, 16}, 2);
+    FailOnceMove producer(77);
+    FailOnceMove::fail_move = true;
+    bool threw = false;
+    try { (void)inbox.offer(PriorityActorInbox<FailOnceMove>::Lane::Normal,
+                            std::move(producer), 8); }
+    catch (const std::runtime_error&) { threw = true; }
+    FailOnceMove::fail_move = false;
+    CHECK(threw);
+    CHECK(producer.payload == 77);
+    CHECK(inbox.snapshot() == 0 && inbox.watermark() == 0);
+    CHECK(inbox.used_frames(PriorityActorInbox<FailOnceMove>::Lane::Normal) == 0);
+    CHECK(inbox.offer(PriorityActorInbox<FailOnceMove>::Lane::Normal,
+                      std::move(producer), 8));
+    auto accepted = inbox.try_receive();
+    CHECK(accepted && accepted->sequence() == 1);
+    CHECK(accepted->value().payload == 77);
+    CHECK(accepted->acknowledge_released());
+    CHECK(inbox.completed_through(1));
+    inbox.close();
+}
+
+static void concurrent_publish_has_unique_global_sequences_and_no_credit_leaks() {
+    constexpr int PER_LANE = 500, LANES = 3, TOTAL = PER_LANE * LANES;
+    Inbox inbox({16, 128}, {16, 128}, {16, 128}, 64);
+    const std::array<Lane, 3> lanes{Lane::Urgent, Lane::Normal, Lane::Bulk};
+    std::atomic<int> delivered{0};
+    std::array<std::thread, LANES> producers;
+    for (int p = 0; p < LANES; ++p) {
+        producers[p] = std::thread([&, p] {
+            for (int n = 0; n < PER_LANE; ++n) {
+                int payload = p * PER_LANE + n;
+                while (!inbox.offer(lanes[p], std::move(payload), 8))
+                    std::this_thread::yield();
+            }
+        });
+    }
+    std::vector<unsigned char> sequences(TOTAL + 1, 0);
+    std::array<int, LANES> next_value{0, PER_LANE, 2 * PER_LANE};
+    for (int i = 0; i < TOTAL; ++i) {
+        auto message = inbox.try_receive();
+        if (!message) { --i; std::this_thread::yield(); continue; }
+        const auto sequence = message->sequence();
+        CHECK(sequence > 0 && sequence <= TOTAL);
+        CHECK(sequences[sequence] == 0);
+        sequences[sequence] = 1;
+        const auto lane = message->lane();
+        const int producer_index = lane == Lane::Urgent ? 0 :
+                                   lane == Lane::Normal ? 1 : 2;
+        CHECK(message->value() == next_value[producer_index]++);
+        CHECK(message->acknowledge_released());
+        ++delivered;
+    }
+    for (auto& producer : producers) producer.join();
+    CHECK(delivered == TOTAL);
+    CHECK(inbox.snapshot() == TOTAL && inbox.watermark() == TOTAL);
+    for (std::size_t n = 1; n < sequences.size(); ++n) CHECK(sequences[n]);
+    CHECK(inbox.used_frames(Lane::Urgent) == 0);
+    CHECK(inbox.used_frames(Lane::Normal) == 0);
+    CHECK(inbox.used_frames(Lane::Bulk) == 0);
+    inbox.close();
+}
+
 int main() {
     bounded_lanes_and_deterministic_fairness();
     sustained_urgent_flood_cannot_starve_normal_or_bulk();
     seal_rejects_all_lanes_but_keeps_admitted_receipts_drainable();
     supervisor_control_and_actor_single_flight_precede_user_priority();
+    global_drain_never_passes_overtaken_normal();
+    stalled_ack_bounds_global_reordering_and_recovers();
+    failed_admission_never_consumes_global_identity();
+    concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
 }
