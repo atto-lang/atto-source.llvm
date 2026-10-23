@@ -22,6 +22,10 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
+/* Runtime-only checked send admission. Invalid/stale/stopping ActorRef
+ * returns 0 before accessing actor memory or scheduling work; no abort.
+ * The current guest ABI is still void, pending checked effect lowering. */
+int oreslang_source_actor_try_send(void* actor, int64_t payload);
 void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_stop(void* actor);
 /* Host-only deterministic test probe; never exposed to Oreslang guest code. */
