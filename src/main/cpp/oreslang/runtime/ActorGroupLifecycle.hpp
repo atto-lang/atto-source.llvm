@@ -289,7 +289,8 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         if (closed_) return false;
         auto it = workers_.find(ref.actor_id());
-        return it != workers_.end() && it->second.ref == ref
+        return it != workers_.end()
+            && it->second.ref.same_incarnation(ref)
             && bool(it->second.pending_control);
     }
 
