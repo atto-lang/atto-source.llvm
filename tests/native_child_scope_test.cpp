@@ -77,6 +77,46 @@ int main() {
         scope.get_done().get();
         group.close(); check(group.finalized(parent), "parent finalization failed");
     }
+    {
+        NativeActorGroup primary(74, 2), foreign(75, 1);
+        auto parent = primary.adopt(74, 1, 1, [] {});
+        auto child = primary.adopt(74, 2, 1, [] {});
+        auto imposter = foreign.adopt(75, 2, 1, [] {});
+        NativeChildScope scope(parent, 1);
+        auto revoked = scope.reserve();
+        scope.abort(revoked);
+        auto token = scope.reserve();
+        bool old_denied = false, foreign_denied = false;
+        try { scope.attach(revoked, child, [] {}); }
+        catch (const std::logic_error&) { old_denied = true; }
+        try { scope.attach(token, imposter, [] {}); }
+        catch (const std::invalid_argument&) { foreign_denied = true; }
+        check(old_denied && foreign_denied,
+              "stale reservation or foreign runtime passed child admission");
+        scope.attach(token, child, [] {});
+        scope.close();
+        check(primary.finalized(child), "authorized child not finalized");
+        scope.get_done().get();
+        primary.close(); foreign.close();
+        check(primary.finalized(parent), "parent not finalized");
+        check(foreign.finalized(imposter), "foreign actor not finalized");
+    }
+    {
+        NativeActorGroup group(76, 2);
+        auto parent = group.adopt(76, 1, 1, [] {});
+        auto child = group.adopt(76, 2, 1, [] {});
+        NativeChildScope scope(parent, 1);
+        scope.attach(scope.reserve(), child, [] {
+            throw std::runtime_error("injected stop rejection");
+        });
+        scope.close();
+        check(scope.stop_failures() == 1, "stop rejection not observable");
+        check(scope.get_done().wait_for(0ms) == std::future_status::timeout,
+              "throwing stop forged child finalization");
+        check(group.finalized(child), "stop failure blocked later finalization");
+        scope.get_done().get();
+        group.close(); check(group.finalized(parent), "parent not finalized");
+    }
     for (int i = 0; i < 100; ++i) {
         auto runtime = static_cast<std::uint64_t>(100 + i);
         NativeActorGroup group(runtime, 2);
