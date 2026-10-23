@@ -188,9 +188,10 @@ static void actual_native_dispatch_obeys_control_and_logical_actor_turn() {
     NativeActorGroup group(700, 1);
     auto actor = group.adopt(700, 5, 4, [] {});
     Inbox inbox({2, 16}, {2, 16}, {2, 16});
-    CHECK(inbox.offer(Lane::Normal, 1, 8));
-    CHECK(inbox.offer(Lane::Urgent, 2, 8));
-    CHECK(inbox.offer(Lane::Bulk, 3, 8));
+    inbox.bind_target(actor);
+    CHECK(inbox.offer_to(actor, Lane::Normal, 1, 8));
+    CHECK(inbox.offer_to(actor, Lane::Urgent, 2, 8));
+    CHECK(inbox.offer_to(actor, Lane::Bulk, 3, 8));
     std::vector<int> delivered;
     auto consume = [&](Inbox::Delivery& receipt) {
         delivered.push_back(receipt.value());
@@ -223,7 +224,8 @@ static void native_dispatch_does_not_steal_mail_from_active_carrier() {
     auto actor = group.adopt(701, 5, 4, [] {});
     CHECK(group.mark_ready(actor));
     Inbox inbox({1, 8}, {1, 8}, {1, 8});
-    CHECK(inbox.offer(Lane::Urgent, 77, 8));
+    inbox.bind_target(actor);
+    CHECK(inbox.offer_to(actor, Lane::Urgent, 77, 8));
     std::promise<void> active, release;
     auto ready = active.get_future();
     auto gate = release.get_future().share();
@@ -296,6 +298,42 @@ static void terminal_retirement_waits_for_inflight_owner_to_ack() {
     CHECK(inbox.drain_status(drain) == Inbox::DrainStatus::Aborted);
     CHECK(inbox.used_frames(Lane::Normal) == 0);
     CHECK(!inflight->retire_aborted_after_quiescence()); // no double release
+    inbox.close();
+}
+
+static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
+    NativeActorGroup old_group(750, 1), newer_group(750, 1);
+    auto old_actor = old_group.adopt(750, 9, 1, [] {});
+    auto new_actor = newer_group.adopt(750, 9, 2, [] {});
+    CHECK(old_group.mark_ready(old_actor));
+    CHECK(newer_group.mark_ready(new_actor));
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    inbox.bind_target(old_actor);
+    CHECK(inbox.offer_to(old_actor, Lane::Normal, 5, 8));
+    int rejected_payload = 17;
+    bool rejected = false;
+    try {
+        (void)inbox.offer_to(new_actor, Lane::Urgent,
+                             std::move(rejected_payload), 8);
+    } catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && rejected_payload == 17);
+    CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery&) {
+        CHECK(false && "new generation stole old queued message");
+    }) == Inbox::Dispatch::Retired);
+    CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 1);
+    rejected = false;
+    try { inbox.bind_target(new_actor); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery& message) {
+        CHECK(message.value() == 5 && message.sequence() == 1);
+        CHECK(message.acknowledge_released());
+    }) == Inbox::Dispatch::User);
+    CHECK(inbox.completed_through(1));
+    CHECK(old_group.finalized(old_actor));
+    CHECK(newer_group.finalized(new_actor));
+    old_actor.get_done().get();
+    new_actor.get_done().get();
     inbox.close();
 }
 
@@ -466,6 +504,7 @@ int main() {
     native_dispatch_does_not_steal_mail_from_active_carrier();
     terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success();
     terminal_retirement_waits_for_inflight_owner_to_ack();
+    stale_generation_cannot_reuse_a_live_native_actor_inbox();
     failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
