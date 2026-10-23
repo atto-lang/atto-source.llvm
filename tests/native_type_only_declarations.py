@@ -90,6 +90,14 @@ def main():
         ("bool alias accepted in typed lexical local",
          "declare type Ready = bool;\n"
          "pub fnc main(): int { const ready: Ready = true; return 1; }\n"),
+        ("int alias accepted in generic call argument",
+         "declare type Id = int;\n"
+         "fnc identity<T>(T value): T { return value; }\n"
+         "pub fnc main(): int { return identity<Id>(8); }\n"),
+        ("int alias accepted in generic default type",
+         "declare type Id = int;\n"
+         "fnc identity<T=Id>(T value): T { return value; }\n"
+         "pub fnc main(): int { return identity(8); }\n"),
     ])
     negative = [
         ("reject concrete declare model",
@@ -169,6 +177,19 @@ def main():
         ("unknown alias cannot be used in a native scalar local",
          "pub fnc main(): int { val total: Missing = 1; return total; }\n",
          None),
+        ("compiler-owned Entry cannot be redefined as scalar alias",
+         "declare type Entry = int;\n" + main_fn, "TYPE_DECL_RESERVED_BUILTIN"),
+        ("compiler-owned Callable cannot be redefined as interface",
+         "declare interface Callable as end\n" + main_fn, "TYPE_DECL_RESERVED_BUILTIN"),
+        ("bool alias cannot be a native i64 generic argument",
+         "declare type Flag = bool;\n"
+         "fnc identity<T>(T value): int { return value; }\n"
+         "pub fnc main(): int { return identity<Flag>(8); }\n",
+         "native scalar generic type requires int ABI"),
+        ("bool alias cannot be a native i64 generic default",
+         "declare type Flag = bool;\n"
+         "fnc identity<T=Flag>(T value): int { return value; }\n"
+         + main_fn, "native scalar generic default requires int ABI"),
     ])
 
     negative.extend([
