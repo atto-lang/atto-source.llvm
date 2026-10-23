@@ -141,7 +141,12 @@ public:
             actor_budget_, vm_budget_, reserved_bytes_);
     }
 
-    std::uint64_t identity() const noexcept { return identity_; }
+    // Identity is correlation metadata, not ambient cross-actor authority.
+    std::uint64_t identity() const {
+        require_owner();
+        if (closed_) throw std::logic_error("proxy request slab is closed");
+        return identity_;
+    }
     std::uint32_t capacity() const {
         return in_turn([&] { return slab_->capacity(); });
     }

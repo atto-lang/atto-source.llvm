@@ -198,6 +198,10 @@ int main() {
             try { (void)state.slab->route(state.ticket); }
             catch (const std::logic_error&) { host_denied = true; }
             assert(host_denied);
+            bool identity_denied = false;
+            try { (void)state.slab->identity(); }
+            catch (const std::logic_error&) { identity_denied = true; }
+            assert(identity_denied);
             auto other = ores_native_actor_scheduler_spawn(state.scheduler, 1);
             assert(other.scheduler_domain != 0);
             assert(ores_native_actor_scheduler_send(state.scheduler, other, 3));
