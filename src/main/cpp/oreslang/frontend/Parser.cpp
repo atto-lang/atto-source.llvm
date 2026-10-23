@@ -397,6 +397,30 @@ private:
                (token_.text == "pub" && peek_next().text == "declare");
     }
 
+    // Aliases are compile-time spellings for the existing scalar ABI, never
+    // new native structs. Resolve through a bounded chain; a missing target or
+    // trait/interface name must fail instead of becoming a forged class.
+    ScalarType resolve_scalar_alias(const std::string& name) const {
+        std::unordered_set<std::string> seen;
+        std::string current = name;
+        for (std::size_t depth = 0; depth < 129; ++depth) {
+            if (current == "int") return ScalarType::I64;
+            if (current == "bool") return ScalarType::Bool;
+            if (!seen.insert(current).second)
+                throw std::runtime_error("TYPE_ALIAS_CYCLE: cyclic scalar alias '" + current + "'");
+            auto alias = scalar_alias_targets_.find(current);
+            if (alias == scalar_alias_targets_.end()) {
+                if (type_only_nominals_.count(current))
+                    throw std::runtime_error("TYPE_ALIAS_KIND_MISMATCH: alias '" + name
+                                             + "' names a trait/interface '" + current + "'");
+                throw std::runtime_error("TYPE_ALIAS_UNKNOWN_TARGET: alias '" + name
+                                         + "' targets unknown scalar type '" + current + "'");
+            }
+            current = alias->second;
+        }
+        throw std::runtime_error("TYPE_ALIAS_DEPTH_BUDGET: maximum alias depth is 128");
+    }
+
     std::string type_only_scalar(bool allow_void) {
         if (token_.text == "int" || token_.text == "bool" ||
                 (allow_void && token_.text == "void")) {
@@ -404,8 +428,23 @@ private:
             advance();
             return type;
         }
+        // Method signatures retain only verified native scalar ABI spellings.
+        // A preceding, already-resolved alias can be canonicalized here.
+        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
+                scalar_alias_targets_.count(std::string(token_.text))) {
+            const std::string name = identifier();
+            return resolve_scalar_alias(name) == ScalarType::Bool ? "bool" : "int";
+        }
         fail("TYPE_ONLY_UNSUPPORTED_TYPE: native v1 admits only int/bool scalar"
              " signatures and void results; nominal/generic lowering is not verified");
+    }
+
+    std::string type_alias_target() {
+        if (accept("int")) return "int";
+        if (accept("bool")) return "bool";
+        if (token_.kind == Kind::Identifier && !reserved(token_.text))
+            return identifier();
+        fail("TYPE_ONLY_UNSUPPORTED_TYPE: alias target must name int, bool or another alias");
     }
 
     void type_only_declaration(Program& program, bool already_defined = false,
@@ -436,9 +475,11 @@ private:
         decl.name = identifier();
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
             require("=");
-            decl.alias_target = type_only_scalar(false);
+            decl.alias_target = type_alias_target();
             require(";");
+            scalar_alias_targets_.emplace(decl.name, decl.alias_target);
         } else {
+            type_only_nominals_.insert(decl.name);
             if (accept("extends")) {
                 do {
                     if (decl.parents.size() >= 32)
@@ -2816,6 +2857,11 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Source-local aliases are visible after declaration. Validation of the
+    // complete alias graph (including forward targets and unused aliases)
+    // happens before LLVM IR generation.
+    std::unordered_map<std::string, std::string> scalar_alias_targets_;
+    std::unordered_set<std::string> type_only_nominals_;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
 };
