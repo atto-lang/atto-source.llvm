@@ -3,6 +3,9 @@
  * Actor/continuation transfer is intentionally not part of this ABI yet.
  */
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE 1
+#endif
 #include "NativeStringRegion.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -107,6 +110,11 @@ int64_t ores_string_region_begin(int64_t console) {
         r->original_flags = fcntl(r->fd, F_GETFL);
         if (r->original_flags < 0) { close(r->fd); return 1; }
         if (fcntl(r->fd, F_SETFL, r->original_flags | O_NONBLOCK)) { close(r->fd); return 1; }
+#ifdef F_SETNOSIGPIPE
+        /* Darwin's per-descriptor protection also covers pipes; do not alter
+         * the embedding process's global SIGPIPE disposition. */
+        if (fcntl(r->fd, F_SETNOSIGPIPE, 1)) goto fail;
+#endif
         if (pipe(r->wake)) goto fail;
         for (int i = 0; i != 2; ++i) {
             int flags = fcntl(r->wake[i], F_GETFL);
@@ -114,6 +122,9 @@ int64_t ores_string_region_begin(int64_t console) {
             if (fcntl(r->wake[i], F_SETFD, FD_CLOEXEC)) goto fail;
         }
         if (fcntl(r->fd, F_SETFD, FD_CLOEXEC)) goto fail;
+#ifdef F_SETNOSIGPIPE
+        if (fcntl(r->wake[1], F_SETNOSIGPIPE, 1)) goto fail;
+#endif
         if (pthread_create(&r->writer, NULL, output_reactor, r)) goto fail;
         r->console = 1;
     }
