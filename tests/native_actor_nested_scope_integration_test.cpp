@@ -187,6 +187,30 @@ int main() {
         check(group.finalized(parent), "parent could not retire after rearmed join");
         parent.get_done().get();
     }
+    // Concurrent last-child finalization versus observer registration has
+    // exactly one legal outcome: synchronous already-drained, or one wakeup.
+    for (int round = 0; round < 200; ++round) {
+        const auto rid = static_cast<std::uint64_t>(8000 + round);
+        NativeActorGroup group(rid, 2);
+        auto parent = group.adopt(rid, 1, 1, [] {});
+        auto child = group.adopt_child(parent, rid, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "concurrent join actors did not start");
+        std::atomic<int> wakes{0};
+        std::atomic<bool> already{false};
+        std::thread register_observer([&] {
+            already = group.register_children_drained(
+                parent, [&] { wakes.fetch_add(1); });
+        });
+        std::thread finalizer([&] {
+            check(group.finalized(child), "racing child finalization rejected");
+        });
+        register_observer.join();
+        finalizer.join();
+        check((already && wakes == 0) || (!already && wakes == 1),
+              "lost/duplicate parent child-drained notification");
+        check(group.finalized(parent), "racing join parent failed finalization");
+    }
     for (int round = 0; round < 100; ++round) {
         const auto rid = static_cast<std::uint64_t>(7000 + round);
         NativeActorGroup group(rid, 2);
