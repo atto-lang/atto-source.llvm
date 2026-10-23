@@ -101,6 +101,25 @@ static void* stop_on_trusted_host(void* opaque) {
     return NULL;
 }
 
+static atomic_int capacity_rejected;
+static int64_t parent_at_capacity(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 11);
+    /* Slot 63 is reserved for root CONTROL, so parent at slot 0 owns
+     * exactly 62 remaining worker slots. Every successful nested spawn
+     * must remain owned by this parent until its host STOP joins them. */
+    for (int i = 0; i < 62; ++i) {
+        void* child = oreslang_source_actor_spawn(init, grandchild_message, 1);
+        check(child != NULL);
+    }
+    /* An additional guest spawn is a checked capacity denial, not SIGABRT
+     * and not an extra partially published actor or heap. */
+    check(oreslang_source_actor_spawn(init, grandchild_message, 1) == NULL);
+    atomic_store_explicit(&capacity_rejected, 1, memory_order_release);
+    return 11;
+}
+
 int main(void) {
     for (int round = 0; round < 10; ++round) {
         atomic_store(&child_spawned, 0);
@@ -199,6 +218,17 @@ int main(void) {
         check(!oreslang_source_actor_try_stop(a));
         check(!oreslang_source_actor_try_stop(b));
     }
+    /* Three complete parent+62 child VM lifetimes exercise the physical
+     * join path after nested admission hits its immutable slot bound. */
+    for (int round = 0; round < 3; ++round) {
+        atomic_store(&capacity_rejected, 0);
+        void* parent = oreslang_source_actor_spawn(init, parent_at_capacity, 1);
+        check(parent != NULL);
+        oreslang_source_actor_send(parent, 11);
+        wait_for(&capacity_rejected);
+        check(oreslang_source_actor_try_stop(parent));
+        check(!oreslang_source_actor_try_stop(parent));
+    }
     /* Deterministic STOP-vs-spawn adversarial case. The host-only test
      * probe observes an actual committed fence, never just thread start. */
     for (int round = 0; round < 100; ++round) {
@@ -232,6 +262,6 @@ int main(void) {
         check(atomic_load(&stop_finished));
         check(atomic_load(&racing_spawn_denied));
     }
-    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS depth3=10 child_first=10 independent_root=32 stop_spawn=100 overlapping_stop=110");
+    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS depth3=10 child_first=10 independent_root=32 stop_spawn=100 overlapping_stop=110 nested_capacity=3");
     return 0;
 }
