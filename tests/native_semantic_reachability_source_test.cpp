@@ -101,7 +101,7 @@ pub fnc main(): int {
 
     {
         const std::string source = R"ores(
-define contract Runnable as
+pub define contract Runnable as
   fnc run(int value) => int;
 end
 define module Service conforms Runnable as
