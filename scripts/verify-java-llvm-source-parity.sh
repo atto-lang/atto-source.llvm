@@ -38,6 +38,12 @@ if ! command -v git >/dev/null 2>&1; then
   echo "git is required for exact-revision evidence" >&2
   exit 66
 fi
+# The launcher itself must be tracked by the Java revision being reported.
+launcher_relative_path="${java_launcher#"$java_root"/}"
+if ! git -C "$java_root" ls-files --error-unmatch -- "$launcher_relative_path" >/dev/null 2>&1; then
+  echo "Java launcher must be a tracked file at the pinned Java revision" >&2
+  exit 65
+fi
 
 llvm_sha="$(git -C "$source_root" rev-parse --verify HEAD)"
 java_sha="$(git -C "$java_root" rev-parse --verify HEAD)"
