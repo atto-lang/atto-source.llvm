@@ -247,6 +247,41 @@ int main() {
 
     {
         Program program;
+        Function api_one = fn("api", integer(1), true);
+        Parameter one;
+        one.name = "value";
+        api_one.parameters.push_back(std::move(one));
+        program.functions.push_back(std::move(api_one));
+
+        Function api_two = fn("api", integer(2), false);
+        Parameter left;
+        left.name = "left";
+        Parameter right;
+        right.name = "right";
+        api_two.parameters.push_back(std::move(left));
+        api_two.parameters.push_back(std::move(right));
+        program.functions.push_back(std::move(api_two));
+
+        SemanticRootPolicy policy;
+        policy.build_kind = SemanticBuildKind::Library;
+        const auto result =
+            analyze_semantic_reachability(program, policy);
+
+        const auto api1 =
+            function_declaration_id(CallableId{"api", 1});
+        const auto api2 =
+            function_declaration_id(CallableId{"api", 2});
+        assert(contains(result.roots, api1));
+        assert(contains(result.retained, api2));
+        assert(has_edge(
+            result,
+            api1,
+            api2,
+            SemanticReachabilityReason::ExportedOverloadAbi));
+    }
+
+    {
+        Program program;
         program.functions.push_back(
             fn("public_api", call("private_helper"), true));
         program.functions.push_back(
