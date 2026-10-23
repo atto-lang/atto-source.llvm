@@ -1646,18 +1646,38 @@ private:
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
-            const auto operation = token_.text;
+
+            bool mutable_borrow = false;
+            std::string operation(token_.text);
+            if (operation == "mut") {
+                advance();
+                if (token_.text != "borrow")
+                    fail("'rt mut' only supports borrowing; use 'rt mut borrow value'");
+                operation = "borrow";
+                mutable_borrow = true;
+            }
             if (operation == "cooperate") {
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
+            }
+            if (operation == "ref" || operation == "deref" ||
+                operation == "unref" || operation == "raw") {
+                fail("pointer-style rt operation is not valid Oreslang source; "
+                     "use rt copy/share/take/borrow or rt mut borrow");
             }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            const bool mutable_borrow = operation == "borrow" && accept("mut");
+            if (operation == "borrow" && accept("mut")) {
+                if (mutable_borrow) fail("duplicate mutable borrow qualifier");
+                // Accept the existing shared corpus spelling while adding
+                // canonical rt mut borrow. Both lower to the identical loan;
+                // removing the older spelling needs a coordinated migration.
+                mutable_borrow = true;
+            }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
