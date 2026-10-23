@@ -6,8 +6,10 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -307,32 +309,98 @@ public:
     /** Immediate native equivalent of spawn: one *exclusive* manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
                          std::uint64_t generation, StopRequest stop_request) {
-        if (!stop_request || actor_id == 0 || generation == 0)
-            throw std::invalid_argument("invalid native actor admission");
-        if (runtime_id != runtime_id_)
-            throw std::invalid_argument("foreign runtime actor reference");
+        return adopt_impl(runtime_id, actor_id, generation,
+                          std::move(stop_request), nullptr);
+    }
+
+    /**
+     * Trusted runtime-only nested admission. Parent identity, active phase,
+     * group membership and new child ownership commit under one admission
+     * fence. An actor's source-level spawn must use this before publishing a
+     * routable child. No supervisor or OS worker is created per child.
+     */
+    NativeActorRef adopt_child(const NativeActorRef& parent,
+                               std::uint64_t runtime_id, std::uint64_t actor_id,
+                               std::uint64_t generation, StopRequest stop_request) {
+        return adopt_impl(runtime_id, actor_id, generation,
+                          std::move(stop_request), &parent);
+    }
+
+    /** Immutable spawn lineage for diagnostics, never a management grant. */
+    std::optional<std::pair<std::uint64_t, std::uint64_t>>
+    spawned_by(const NativeActorRef& child) const {
         auto& owners = registry();
-        // All paths touching both locks take the same scoped pair.
         std::scoped_lock guard(mutex_, owners.mutex);
-        if (closed_) throw std::logic_error("ActorGroup is closed");
-        if (worker_admission_fenced_) throw std::logic_error("ActorGroup worker admission fenced");
-        if (workers_.find(actor_id) != workers_.end())
-            throw std::logic_error("actor already managed by group");
-        if (workers_.size() >= maximum_workers_)
-            throw std::logic_error("ActorGroup worker capacity exceeded");
-        const Key key{runtime_id, actor_id};
-        if (owners.live.find(key) != owners.live.end())
-            throw std::logic_error("actor already managed by another group");
-        auto ticket = std::make_shared<NativeActorRef::Ticket>();
-        NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
-        try {
-            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
-        } catch (...) {
-            workers_.erase(actor_id);
-            throw;
+        auto it = owners.live.find(Key{child.runtime_id(), child.actor_id()});
+        if (it == owners.live.end() || it->second.group_id != group_id_
+            || it->second.generation != child.generation()
+            || it->second.ticket != child.ticket_)
+            throw std::invalid_argument("unknown or stale child incarnation");
+        if (!it->second.parent) return std::nullopt;
+        return std::pair<std::uint64_t, std::uint64_t>{
+            it->second.parent->second, it->second.parent_generation};
+    }
+
+    /**
+     * Parent STOP seals descendants atomically with adopt_child; callbacks
+     * execute outside both locks. A group-close race stops all owned workers
+     * through close() instead. No guest/control handler is run under mutexes.
+     */
+    void stop_subtree(const NativeActorRef& root) {
+        struct Rejection {
+            NativeActorRef ref;
+            std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        };
+        std::vector<std::pair<NativeActorRef, StopRequest>> stops;
+        std::vector<Rejection> rejected;
+        auto& owners = registry();
+        {
+            std::scoped_lock guard(mutex_, owners.mutex);
+            Entry* origin = find_active_locked(root);
+            if (!origin || closed_) throw std::invalid_argument("unknown or stopped subtree root");
+            auto root_owner = owners.live.find(Key{root.runtime_id(), root.actor_id()});
+            if (root_owner == owners.live.end() || root_owner->second.group_id != group_id_
+                || root_owner->second.generation != root.generation()
+                || root_owner->second.ticket != root.ticket_)
+                throw std::logic_error("subtree root lost authoritative owner");
+            stops.reserve(workers_.size());
+            rejected.reserve(workers_.size());
+            for (const auto& item : workers_) {
+                const Entry& entry = item.second;
+                auto it = owners.live.find(Key{entry.ref.runtime_id(), entry.ref.actor_id()});
+                if (it == owners.live.end()) continue;
+                bool descendant = false;
+                for (std::size_t depth = 0; depth <= workers_.size(); ++depth) {
+                    if (it->second.group_id != group_id_) break;
+                    if (it->second.generation == root.generation()
+                        && it->first == Key{root.runtime_id(), root.actor_id()}
+                        && it->second.ticket == root.ticket_) {
+                        descendant = true;
+                        break;
+                    }
+                    if (!it->second.parent) break;
+                    auto parent_it = owners.live.find(*it->second.parent);
+                    if (parent_it == owners.live.end()
+                        || parent_it->second.generation != it->second.parent_generation)
+                        break;
+                    it = parent_it;
+                }
+                if (!descendant || entry.phase == Phase::stopping) continue;
+                stops.emplace_back(entry.ref, entry.stop_request);
+                if (entry.phase == Phase::starting) rejected.push_back(Rejection{entry.ref, {}});
+            }
+            // Stage every callback before changing admission phase.
+            for (auto& rejection : rejected)
+                rejection.callbacks = settle_ticket(
+                    rejection.ref, ActorReadyResult{false, "actor parent stopped before ready"});
+            for (const auto& pair : stops) {
+                auto it = workers_.find(pair.first.actor_id());
+                if (it != workers_.end()) it->second.phase = Phase::stopping;
+            }
         }
-        return ref;
+        for (const auto& rejection : rejected)
+            notify(rejection.callbacks, rejection.ref.ticket_->result);
+        request_stops(stops);
     }
 
     /**
@@ -386,6 +454,7 @@ public:
                 return false;
             // Do not mutate readiness or completion state if CONTROL work
             // is still active or reserved. Failed admission is side-effect-free.
+            if (it->second.live_children != 0) return false;
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
@@ -407,6 +476,7 @@ public:
             // Settle done ONLY on acknowledged physical finalization.
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
+            retire_parent_link_locked(owners, it);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
         }
@@ -525,6 +595,9 @@ private:
         std::uint64_t generation;
         std::uint64_t group_id;
         std::shared_ptr<NativeActorRef::Ticket> ticket;
+        std::optional<Key> parent;
+        std::uint64_t parent_generation = 0;
+        std::size_t live_children = 0;
     };
     struct OwnerRegistry {
         std::mutex mutex;
@@ -554,6 +627,69 @@ private:
         return &it->second;
     }
 
+    NativeActorRef adopt_impl(std::uint64_t runtime_id, std::uint64_t actor_id,
+                              std::uint64_t generation, StopRequest stop_request,
+                              const NativeActorRef* parent) {
+        if (!stop_request || actor_id == 0 || generation == 0)
+            throw std::invalid_argument("invalid native actor admission");
+        if (runtime_id != runtime_id_)
+            throw std::invalid_argument("foreign runtime actor reference");
+        auto& owners = registry();
+        std::scoped_lock guard(mutex_, owners.mutex);
+        if (closed_) throw std::logic_error("ActorGroup is closed");
+        if (worker_admission_fenced_) throw std::logic_error("ActorGroup worker admission fenced");
+        std::optional<Key> parent_key;
+        std::uint64_t parent_generation = 0;
+        typename std::map<Key, Owner>::iterator parent_owner = owners.live.end();
+        if (parent) {
+            Entry* active_parent = find_active_locked(*parent);
+            if (!active_parent || active_parent->phase == Phase::stopping)
+                throw std::logic_error("nested spawn from stopped/stale/foreign parent");
+            parent_key = Key{parent->runtime_id(), parent->actor_id()};
+            parent_owner = owners.live.find(*parent_key);
+            if (parent_owner == owners.live.end()
+                || parent_owner->second.group_id != group_id_
+                || parent_owner->second.generation != parent->generation()
+                || parent_owner->second.ticket != parent->ticket_)
+                throw std::logic_error("parent owner identity mismatch");
+            if (parent_owner->second.live_children == std::numeric_limits<std::size_t>::max())
+                throw std::overflow_error("child lifetime counter exhausted");
+            parent_generation = parent->generation();
+        }
+        if (workers_.find(actor_id) != workers_.end())
+            throw std::logic_error("actor already managed by group");
+        if (workers_.size() >= maximum_workers_)
+            throw std::logic_error("ActorGroup worker capacity exceeded");
+        const Key key{runtime_id, actor_id};
+        if (owners.live.find(key) != owners.live.end())
+            throw std::logic_error("actor already managed by another group");
+        auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
+        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
+        try {
+            owners.live.emplace(key,
+                Owner{generation, group_id_, ref.ticket_, parent_key, parent_generation, 0});
+        } catch (...) {
+            workers_.erase(actor_id);
+            throw;
+        }
+        if (parent) ++parent_owner->second.live_children;
+        return ref;
+    }
+
+    static void retire_parent_link_locked(
+            OwnerRegistry& owners,
+            const std::map<Key, Owner>::iterator& child) noexcept {
+        if (!child->second.parent) return;
+        const auto parent = owners.live.find(*child->second.parent);
+        if (parent == owners.live.end()
+            || parent->second.generation != child->second.parent_generation
+            || parent->second.group_id != child->second.group_id
+            || parent->second.live_children == 0)
+            std::terminate(); // impossible under synchronized admission/join; fail closed
+        --parent->second.live_children;
+    }
+
     /**
      * Same authoritative owner registry as group.finalized(), but without a
      * NativeActorGroup pointer. A token cannot retire live group workers or
@@ -572,6 +708,7 @@ private:
                 || it->second.group_id != group_id
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_
+                || it->second.live_children != 0
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
@@ -588,6 +725,7 @@ private:
             }
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
+            retire_parent_link_locked(owners, it);
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
