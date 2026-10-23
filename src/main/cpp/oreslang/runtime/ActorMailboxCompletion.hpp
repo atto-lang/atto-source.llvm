@@ -27,6 +27,7 @@ namespace oreslang::runtime {
  */
 class ActorMailboxCompletion final {
 public:
+    enum class DrainStatus { Pending, Delivered, Aborted };
     explicit ActorMailboxCompletion(std::size_t window) : done_(window, 0) {
         if (window == 0)
             throw std::invalid_argument("actor mailbox completion window must be positive");
@@ -68,7 +69,9 @@ public:
         return sequence;
     }
 
-    void complete(std::uint64_t sequence) {
+    // Aborted means terminal actor teardown after physical quiescence,
+    // not a successful handler invocation. It MUST fail matching drains.
+    void complete(std::uint64_t sequence, bool terminal_aborted = false) {
         std::lock_guard<std::mutex> guard(mutex_);
         if (!sequence || sequence <= watermark_ || sequence >= next_
             || sequence - watermark_ > done_.size())
@@ -76,7 +79,9 @@ public:
         const auto slot = static_cast<std::size_t>(sequence % done_.size());
         if (done_[slot])
             throw std::logic_error("duplicate actor mailbox completion");
-        done_[slot] = 1;
+        done_[slot] = terminal_aborted ? 2 : 1;
+        if (terminal_aborted && (!first_aborted_ || sequence < first_aborted_))
+            first_aborted_ = sequence;
         while (watermark_ + 1 < next_) {
             const auto next_slot =
                 static_cast<std::size_t>((watermark_ + 1) % done_.size());
@@ -96,11 +101,19 @@ public:
         return watermark_;
     }
 
-    bool completed_through(std::uint64_t sequence) const {
+    DrainStatus drain_status(std::uint64_t sequence) const {
         std::lock_guard<std::mutex> guard(mutex_);
         if (sequence >= next_)
             throw std::invalid_argument("actor mailbox drain target was not committed");
-        return watermark_ >= sequence;
+        if (watermark_ < sequence) return DrainStatus::Pending;
+        return first_aborted_ && first_aborted_ <= sequence
+                ? DrainStatus::Aborted : DrainStatus::Delivered;
+    }
+
+    // Compatibility: only success can satisfy an existing positive drain
+    // predicate. Use drain_status() to distinguish Pending from Aborted.
+    bool completed_through(std::uint64_t sequence) const {
+        return drain_status(sequence) == DrainStatus::Delivered;
     }
 
 private:
@@ -108,6 +121,7 @@ private:
     std::vector<unsigned char> done_;
     std::uint64_t next_ = 1;
     std::uint64_t watermark_ = 0;
+    std::uint64_t first_aborted_ = 0; // terminal actor generation is poisoned
     std::size_t preparing_ = 0;
 };
 
