@@ -78,7 +78,7 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
                         and not executed.stderr,
                         "ORC exit mismatch for " + name + "/" + str(iteration), executed)
 
-        source.write_text(positives[1][1] + "\\n", encoding="utf-8")
+        source.write_text(positives[1][1] + "\n", encoding="utf-8")
         shaken = run(compiler, source, "--jit", "--tree-shake")
         require(shaken.returncode == 42 and not shaken.stdout and not shaken.stderr,
                 "ORC tree-shake source execution diverged", shaken)
