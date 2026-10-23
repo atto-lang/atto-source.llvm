@@ -1614,6 +1614,18 @@ if(BUILD_TESTING)
                  COMMAND oreslang-http-request-head-view-test)
         set_tests_properties(native_http_request_head_borrow_noalloc_host_only
             PROPERTIES TIMEOUT 30)
+        # Incarnation-bound host authority and teardown revocation proof.
+        # No guest actor compiler or source mailbox integration is implied.
+        add_executable(oreslang-actor-bound-request-table-test
+            tests/actor_bound_request_table_test.cpp)
+        target_include_directories(oreslang-actor-bound-request-table-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-actor-bound-request-table-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-actor-bound-request-table-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_actor_request_incarnation_revocation_host_only
+            COMMAND oreslang-actor-bound-request-table-test)
+        set_tests_properties(native_actor_request_incarnation_revocation_host_only
+            PROPERTIES TIMEOUT 30)
     endif()
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     # Pre-source-lowering safety gate: prevents stale continuation wakeups,
