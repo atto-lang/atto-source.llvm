@@ -35,7 +35,7 @@ fnc identity(Code code): Code { return code; }
 pub fnc main(): int { return identity(7); }
 ```
 
-`bool` aliases and already-defined scalar alias chains are also admitted.
+`bool` aliases, explicitly declared forward dependency chains, and use-before-definition in function parameter/return signatures are also admitted. Resolution runs after declaration parsing and **before** scalar checking, ownership, ABI computation, or LLVM IR emission. Self/mutual alias cycles, cycles through chains, and excessive resolution depth are rejected.
 `declare type` contributes no LLVM IR or runtime descriptor; a compatible
 definition must occur in the same source scope, with the same public/private
 visibility. Repeated or unresolved declarations, duplicate definitions,
@@ -45,20 +45,25 @@ spelling. This is **not** a general newtype, nominal ADT, data layout or
 runtime reflection implementation.
 
 The native subset deliberately rejects generic alias signatures,
-`declare trait` / `declare interface`, recursive/non-scalar aliases and
-alias usages before their definition. Java supports some of those, so
-**full source acceptance and execution parity is outstanding**. In particular,
-`declare type Code; fnc f(Code x): Code { ... } define type Code = int;`
-is not yet accepted natively. The native frontend must not silently
-reinterpret `trait` as `interface` or class/actor as a scalar alias.
+`declare trait` / `declare interface`, and recursive/non-scalar aliases.
+A function may use `Code` before its definition **only if** a matching
+`declare type Code;` signature precedes the function within the same
+source scope. Use-before-forward remains unavailable; no cross-file
+declaration linking is implied. Java supports additional type-only forms,
+so **full source acceptance and execution parity is outstanding**.
+The native frontend must not silently reinterpret `trait` as `interface`
+or class/actor as a scalar alias.
 
 The test `native_declare_type_scalar_source_parity` invokes the **actual
 native compiler** and requires LLVM IR on accepted scalar cases, nonzero exit
 and zero stdout IR for every negative. CTest registration alone or an Actions
 run with zero executed steps is not evidence that it passed. Next gate:
-JVM/native shared source fixtures with identical observable results on the
-intersection, actual guest runtime execution, and explicit source/version
-receipts. Follow Java enum AST issue
+actual JVM/native execution of the **byte-identical** fixture
+`forward-scalar-alias-parity.ores` (Git blob
+`093b92f47f845a61cc644c01eee975929af66e0b`) in both backends.
+The Java JUnit guest test and native Clang-linked CTest both target the
+integer result `7`; these are not validated until runner steps execute.
+Retain explicit source/version receipts. Follow Java enum AST issue
 [#1269](https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1269)
 and native ADT issue [#314](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/314)
 before claiming general enum/Option/Result parity.
