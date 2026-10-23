@@ -128,8 +128,8 @@ int main(void) {
     require(!ores_native_vm_publish_supervised_failure(
         s.vm, ORES_NATIVE_VM_MAIN, first));
     /* Terminal receipts are already accepted even though parent is busy. */
-    require(!ores_native_vm_stop(s.vm, ORES_NATIVE_VM_MAIN, s.parent)
-            || s.trace_count == 1); /* A parent may stop after child admission. */
+    /* Stop fences new admissions but must drain accepted CONTROL receipts. */
+    require(ores_native_vm_stop(s.vm, ORES_NATIVE_VM_MAIN, s.parent));
 
     atomic_store(&s.release_parent, 1);
     wait_for(&s.completed, 4);
