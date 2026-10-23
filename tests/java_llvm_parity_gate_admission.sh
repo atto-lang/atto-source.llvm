@@ -46,10 +46,13 @@ expect_rejected() {
 bash -n "$root/scripts/verify-java-llvm-source-parity.sh"
 make_repos
 launcher="$temp/java/scripts/run-source-parity.sh"
-if bash "$runner" "$temp/build" >"$temp/stdout" 2>"$temp/stderr"; then
-  echo "FAIL usage: incomplete arguments accepted" >&2
+usage_code=0
+bash "$runner" "$temp/build" >"$temp/stdout" 2>"$temp/stderr" || usage_code="$?"
+if [[ "$usage_code" != 64 ]] || ! grep -Fq 'usage:' "$temp/stderr"; then
+  echo "FAIL usage: expected exit 64 and usage diagnostic, got $usage_code" >&2
   exit 1
 fi
+echo "PASS admission: incomplete CLI arguments"
 
 make_repos
 printf 'untracked inject\n' > "$temp/java/injected.ores"
