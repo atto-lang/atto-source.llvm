@@ -25,7 +25,16 @@ end
 - Compatibility: `pub declare ...`, `define type/trait/interface`,
   `define pub ...` and `pub define ...` (within modules) are accepted.
 - `declare` is contextual: normal functions may still be named `declare`.
-- Alias targets are exactly `int` or `bool`. Trait/interface signatures admit 
+- Alias targets are `int`, `bool` or another type-only scalar alias, including
+  forward references between alias definitions; all alias edges are validated
+  even when the alias is unused. Cycles, unknown targets, trait/interface
+  targets and chains deeper than 128 are rejected before native IR.
+  Alias names are resolved to `ScalarType::I64` or `ScalarType::Bool` for
+  native function parameters/returns, explicitly typed scalar locals, and
+  already-resolved trait/interface scalar method signatures. `int` aliases
+  are allowed as native scalar-generic defaults and arguments; `bool`
+  aliases must not bypass the int-only native generic gate.
+  Trait/interface signatures admit 
   `int` and `bool` value parameters, and `int`, `bool` or `void` results;
   arity-disambiguated method declarations, source-order method metadata and
   same-kind intra-unit `extends` are retained.
@@ -44,9 +53,10 @@ end
 
 ## Explicitly unsupported (must fail, not silently lower)
 
-- Using the alias in executable native function/field signatures, or materializing
-  trait/interface instances. Type-only metadata is not yet a resolved native
-  signature ABI; merely storing `type Id = int` **does not enable** `fnc f(Id x)`.
+- Using an alias declared *after its first executable use*, standalone forward
+  declarations (`declare type Id;`), alias-based class fields, and materializing
+  trait/interface instances. Declaration order is required for functions and
+  local scalar bindings even though a chain of alias targets may refer forward.
 - Generic aliases/traits/interfaces, structural fields, default implementations,
   implicit trait evidence/dictionaries and cross-unit import/link resolution.
 - Arbitrary nominal, owned, borrowed, floating, string or generic members,
@@ -67,8 +77,31 @@ end
    are required; an Actions job showing zero steps is not compiler evidence.
 3. Compare accepted/rejected declaration corpus, nominal-kind compatibility,
    errors, and format/parse identity against Java/GraalVM and oreslang-format.
-4. Extend alias resolution and the shared linker **only** with explicit
-   source-level ownership/ABI tests; never make imported type-only declarations
-   executable by treating them as ordinary classes or callables.
+4. Extend the shared linker, nominal type/protocol semantics, and general
+   source-level alias use **only** with explicit ownership/ABI tests; never
+   make imported type-only declarations executable by treating them as
+   ordinary classes or callables.
 5. Independently approve any private-source cross-organization CI carrier
    through protected source repository policy before exporting a tree.
+
+## Executable scalar alias example
+
+```oreslang
+declare type UserId = int;
+declare pub type PublicId = UserId;
+
+fnc identity(PublicId value): PublicId {
+  return value;
+}
+
+pub fnc main(): int {
+  val id: UserId = 7;
+  return identity(id);
+}
+```
+
+Native source type checking uses the underlying i64/bool ABI while maintaining
+compile-time alias source identity; this example does not create a heap owner,
+dictionary or alias object. It does **not** establish that aliases provide newtype
+nominality: use `define type` newtype/refinement semantics only after their
+separate checked validation and ABI proof.
