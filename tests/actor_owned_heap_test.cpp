@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorOwnedHeap.hpp"
+#include "oreslang/runtime/ActorHeapScope.hpp"
 #include <array>
 #include <atomic>
 #include <limits>
@@ -360,6 +361,65 @@ static void test_heap_identity_terminal_exhaustion() {
           "invalid terminal identity zero must never be issued");
 }
 
+static void test_allocation_scope_auto_cleanup_and_transfer() {
+    using ScopedHeap = ActorOwnedHeap<256, 8>;
+    ScopedHeap heap(ActorHeapIdentity{900, 3, 1});
+
+    ScopedHeap::Handle transferred{};
+    {
+        ActorHeapScope<ScopedHeap, 4> scope(heap);
+        auto first = scope.allocate(24, 8);
+        auto second = scope.allocate(24, 8);
+        check(first && second, "scope allocations must succeed");
+        check(scope.tracked() == 2 && heap.live_allocations() == 2,
+              "scope tracks each lexical owner");
+
+        check(scope.drop(*first), "explicit lexical drop succeeds");
+        check(scope.tracked() == 1 && heap.live_allocations() == 1,
+              "explicit drop disarms exactly one cleanup");
+
+        transferred = *second;
+        check(scope.release(*second), "move/transfer disarms lexical cleanup");
+        check(scope.tracked() == 0 && heap.live_allocations() == 1,
+              "released owner remains live for its new owner");
+    }
+    check(heap.live_allocations() == 1,
+          "scope destructor must not free transferred ownership");
+    check(heap.remove(transferred), "new owner performs final deterministic drop");
+    check(heap.live_allocations() == 0 && heap.used() == 0,
+          "last deterministic drop recycles the bump region");
+
+    {
+        ActorHeapScope<ScopedHeap, 4> scope(heap);
+        auto a = scope.allocate(16, 8);
+        auto b = scope.allocate(16, 8);
+        auto c = scope.allocate(16, 8);
+        check(a && b && c, "three lexical owners allocate");
+        check(heap.live_allocations() == 3, "three owners are live");
+    }
+    check(heap.live_allocations() == 0 && heap.used() == 0,
+          "scope destructor drops every untransferred owner");
+
+    ActorHeapScope<ScopedHeap, 1> bounded(heap);
+    check(bounded.allocate(8).has_value(), "bounded scope first allocation");
+    check(!bounded.allocate(8), "scope capacity must fail closed");
+    check(bounded.close(), "explicit close succeeds");
+    check(bounded.close(), "close is idempotent");
+}
+
+static void test_scope_detects_out_of_band_invalidation_without_leaking_rest() {
+    using ScopedHeap = ActorOwnedHeap<256, 8>;
+    ScopedHeap heap(ActorHeapIdentity{901, 4, 1});
+    ActorHeapScope<ScopedHeap, 4> scope(heap);
+    auto first = scope.allocate(16, 8);
+    auto second = scope.allocate(16, 8);
+    check(first && second, "scope fixture allocations");
+    check(heap.remove(*first), "out-of-band drop fixture");
+    check(!scope.close(), "scope reports violated cleanup ownership");
+    check(heap.live_allocations() == 0,
+          "one stale tracked handle cannot suppress cleanup of remaining owners");
+}
+
 int main() {
     try {
         test_heap_identity_terminal_exhaustion();
@@ -371,6 +431,8 @@ int main() {
         test_transient_bump_tail_reuse_with_persistent_fields();
         test_coalesced_interior_holes_preserve_live_actor_payloads();
         test_randomized_interior_reclamation_preserves_stale_fences();
+        test_allocation_scope_auto_cleanup_and_transfer();
+        test_scope_detects_out_of_band_invalidation_without_leaking_rest();
         std::cout << "PASS native actor-owned byte heap contracts\n";
         return 0;
     } catch (const std::exception& failure) {
