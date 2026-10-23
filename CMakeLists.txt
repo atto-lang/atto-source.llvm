@@ -2341,6 +2341,31 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-carrier-create-failure-test)
     set_tests_properties(native_actor_lazy_carrier_creation_failure_fence PROPERTIES TIMEOUT 30)
 
+    # SCHED_FIFO is a bootstrap-time qualification step. Unprivileged hosts may
+    # reject the carrier creation, but no actor work may be admitted first.
+    add_executable(oreslang-native-realtime-policy-test
+        tests/native_actor_realtime_policy_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-realtime-policy-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-realtime-policy-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-realtime-policy-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_realtime_policy_fail_closed
+        COMMAND oreslang-native-realtime-policy-test)
+    set_tests_properties(native_actor_realtime_policy_fail_closed PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-linux-realtime-environment-test
+        tests/linux_realtime_environment_test.c
+        src/main/cpp/oreslang/runtime/LinuxRealtimeEnvironment.c)
+    target_include_directories(oreslang-linux-realtime-environment-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-linux-realtime-environment-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME linux_realtime_memory_lock_fail_closed
+        COMMAND oreslang-linux-realtime-environment-test)
+    set_tests_properties(linux_realtime_memory_lock_fail_closed PROPERTIES TIMEOUT 20)
+
     # Send and stop contend on one linearizable actor admission authority.
     add_executable(oreslang-native-send-stop-race-test
         tests/native_actor_send_stop_race_test.c
