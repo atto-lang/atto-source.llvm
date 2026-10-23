@@ -396,7 +396,10 @@ public:
         std::function<void()> callback;
         {
             std::lock_guard<std::mutex> guard(ticket->mutex);
-            if (!ticket->child_join_retry) return false;
+            // A stale incarnation is never allowed to enqueue an old
+            // scheduler wake after its physical DONE has been published.
+            if (ticket->physically_done.load(std::memory_order_acquire)
+                || !ticket->child_join_retry) return false;
             callback = std::move(ticket->child_join_retry);
         }
         try {
