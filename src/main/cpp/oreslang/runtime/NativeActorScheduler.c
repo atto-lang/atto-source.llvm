@@ -23,8 +23,13 @@ typedef struct {
     unsigned active;
     unsigned has_control;
     uint64_t control_payload;
+    /* Each spawned child owns one terminal receipt; parent owns only intrusive
+     * indexes. No malloc or actor-region pointer enters trusted CONTROL. */
+    OresNativeActorRef supervisor;
     OresNativeActorTerminalFailure failure;
-    unsigned control_is_failure;
+    size_t first_failure, last_failure, next_failure, pending_failures;
+    unsigned supervisor_bound, failure_state; /* 0 unused, 1 queued,
+                                                * 2 executing, 3 acknowledged */
     unsigned spawned, retired;
     uint64_t generation;
     /* Stable actor-lifetime allocation capability, independent of turn ids. */
@@ -104,9 +109,12 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
      * The parent still owns its exclusive logical lane. */
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
-        if (!s->actors[i].active && s->actors[i].has_control) {
+        if (!s->actors[i].active
+            && (s->actors[i].has_control || s->actors[i].pending_failures)) {
             *actor = i;
-            *control = 1;
+            /* Ordinary trusted CONTROL remains ahead of typed failure mail;
+             * either kind outranks USER DATA, and both own the same lane. */
+            *control = s->actors[i].has_control ? 1 : 2;
             s->next_actor = (i + 1) % s->actor_count;
             return 1;
         }
@@ -179,14 +187,26 @@ static void* carrier(void* raw) {
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
-        uint64_t payload;
+        uint64_t payload = 0;
         OresNativeActorTerminalFailure failure = {0};
-        int typed_failure = control && lane->control_is_failure;
-        if (control) {
+        size_t failure_child = SIZE_MAX;
+        if (control == 1) {
             payload = lane->control_payload;
-            if (typed_failure) failure = lane->failure;
-            lane->control_is_failure = 0;
             lane->has_control = 0;
+        } else if (control == 2) {
+            /* Single physical parent owner, with each child receipt retained
+             * until its callback returns and the execution gate is released. */
+            failure_child = lane->first_failure;
+            if (failure_child >= s->actor_count || !lane->pending_failures) abort();
+            ActorLane* child = &s->actors[failure_child];
+            if (child->failure_state != 1 || !child->supervisor_bound
+                || child->supervisor.actor_slot != i) abort();
+            lane->first_failure = child->next_failure;
+            if (lane->first_failure == SIZE_MAX) lane->last_failure = SIZE_MAX;
+            child->next_failure = SIZE_MAX;
+            --lane->pending_failures;
+            child->failure_state = 2;
+            failure = child->failure; /* Copy value, never borrow child's arena. */
         } else {
             payload = lane->messages[lane->head];
             lane->head = (lane->head + 1) % s->per_actor_capacity;
@@ -215,8 +235,8 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
-        if (typed_failure) s->panic_callback(s->context, i, failure);
-        else if (control) s->control_callback(s->context, i, payload);
+        if (control == 2) s->panic_callback(s->context, i, failure);
+        else if (control == 1) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
@@ -236,17 +256,26 @@ static void* carrier(void* raw) {
         lock(s);
         if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        /* A typed CONTROL receipt is acknowledged only AFTER callback return
+         * and physical-gate release, never merely after dequeue. */
+        if (control == 2) {
+            if (failure_child >= s->actor_count
+                || s->actors[failure_child].failure_state != 2) abort();
+            s->actors[failure_child].failure_state = 3;
+        }
         s->outstanding--;
         s->completed++;
         /* A lane contributes at most one runnable turn regardless of how
          * many DATA/CONTROL messages it owns. */
-        if (!lane->queued && !lane->has_control) {
+        if (!lane->queued && !lane->has_control && !lane->pending_failures) {
             if (!s->runnable_lanes) abort();
             --s->runnable_lanes;
         }
         if (control) ++s->control_completed;
-        if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
-        if (lane->retired && !lane->active && !lane->queued && !lane->has_control) {
+        if (lane->queued || lane->has_control || lane->pending_failures)
+            pthread_cond_signal(&s->ready);
+        if (lane->retired && !lane->active && !lane->queued
+            && !lane->has_control && !lane->pending_failures) {
             if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
                 && !ores_execution_retired(&lane->authority, lane->generation))
                 abort();
@@ -285,6 +314,9 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
         s->actors[i].messages = s->slots + i * capacity;
+        s->actors[i].first_failure = SIZE_MAX;
+        s->actors[i].last_failure = SIZE_MAX;
+        s->actors[i].next_failure = SIZE_MAX;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
@@ -374,7 +406,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     ActorLane* a = &s->actors[i];
-    const int new_lane = !a->active && !a->queued && !a->has_control;
+    const int new_lane = !a->active && !a->queued && !a->has_control
+        && !a->pending_failures;
     if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
         if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
@@ -491,7 +524,8 @@ int ores_native_actor_scheduler_publish_control(
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
-        const int new_lane = !lane->active && !lane->queued;
+        const int new_lane = !lane->active && !lane->queued
+            && !lane->pending_failures;
         if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
             if (s->rejected != UINT64_MAX) ++s->rejected;
             unlock(s);
@@ -499,7 +533,6 @@ int ores_native_actor_scheduler_publish_control(
         }
         if (new_lane) ++s->runnable_lanes;
         lane->control_payload = payload;
-        lane->control_is_failure = 0;
         lane->has_control = 1;
         ++s->reserved_executions;
         ++s->accepted;
@@ -509,6 +542,31 @@ int ores_native_actor_scheduler_publish_control(
     unlock(s);
     return ok;
 }
+/* Trusted bootstrap-only association; never inferred from a guest ActorRef.
+ * A child can have exactly one immutable supervisor for its lifetime. */
+int ores_native_actor_scheduler_bind_supervisor(
+    OresNativeActorScheduler* s, OresNativeActorRef parent, OresNativeActorRef child) {
+    if (!s) return 0;
+    lock(s);
+    int ok = !s->retired && matching(s, parent) && matching(s, child)
+        && parent.actor_slot != child.actor_slot
+        && !s->actors[parent.actor_slot].retired
+        && !s->actors[child.actor_slot].retired
+        && !s->actors[child.actor_slot].supervisor_bound
+        && !s->actors[child.actor_slot].failure_state;
+    if (ok) {
+        s->actors[child.actor_slot].supervisor = parent;
+        s->actors[child.actor_slot].supervisor_bound = 1;
+    }
+    unlock(s);
+    return ok;
+}
+
+/* Durable up to one terminal event per *bound* child incarnation. The parent
+ * may already have ordinary CONTROL and arbitrary bounded USER mail queued.
+ * Admission uses child-preallocated intrusive storage, no dynamic allocation.
+ * The returned success means receipt is owned by this scheduler until the
+ * parent executes/acknowledges it, not that the parent has run yet. */
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure) {
@@ -520,26 +578,41 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind >= ORES_NATIVE_CONTROL_PANIC
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
-        && !s->actors[parent.actor_slot].has_control
         && s->accepted != UINT64_MAX
         && execution_slot_available_locked(s);
     if (ok) {
-        ActorLane* a = &s->actors[parent.actor_slot];
-        const int new_lane = !a->active && !a->queued;
-        if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
-            if (s->rejected != UINT64_MAX) ++s->rejected;
-            unlock(s);
-            return 0;
+        ActorLane* child = &s->actors[failure.child.actor_slot];
+        ActorLane* parent_lane = &s->actors[parent.actor_slot];
+        ok = child->supervisor_bound && child->failure_state == 0
+            && child->supervisor.scheduler_domain == parent.scheduler_domain
+            && child->supervisor.actor_slot == parent.actor_slot
+            && child->supervisor.generation == parent.generation;
+        if (ok) {
+            const int new_lane = !parent_lane->active && !parent_lane->queued
+                && !parent_lane->has_control && !parent_lane->pending_failures;
+            ok = ensure_workers_locked(
+                s, s->runnable_lanes + (size_t)new_lane);
+            if (ok) {
+                if (new_lane) ++s->runnable_lanes;
+                child->failure = failure;
+                child->failure_state = 1;
+                child->next_failure = SIZE_MAX;
+                if (parent_lane->last_failure != SIZE_MAX) {
+                    s->actors[parent_lane->last_failure].next_failure =
+                        (size_t)failure.child.actor_slot;
+                } else {
+                    parent_lane->first_failure = (size_t)failure.child.actor_slot;
+                }
+                parent_lane->last_failure = (size_t)failure.child.actor_slot;
+                ++parent_lane->pending_failures;
+                ++s->reserved_executions;
+                ++s->accepted;
+                ++s->outstanding;
+                pthread_cond_signal(&s->ready);
+            }
         }
-        if (new_lane) ++s->runnable_lanes;
-        a->failure = failure;
-        a->control_is_failure = 1;
-        a->has_control = 1;
-        s->reserved_executions++;
-        s->accepted++;
-        s->outstanding++;
-        pthread_cond_signal(&s->ready);
-    } else if (s->rejected != UINT64_MAX) s->rejected++;
+    }
+    if (!ok && s->rejected != UINT64_MAX) ++s->rejected;
     unlock(s);
     return ok;
 }
@@ -560,7 +633,8 @@ int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->retired = 1;
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
-    if (!lane->active && !lane->queued && !lane->has_control)
+    if (!lane->active && !lane->queued && !lane->has_control
+        && !lane->pending_failures)
         if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
     unlock(s);
     return 1;
@@ -578,7 +652,9 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
     if (!s) return 0;
     lock(s);
     int done = matching(s, actor) && s->actors[actor.actor_slot].retired
-        && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].has_control
+        && !s->actors[actor.actor_slot].queued
+        && !s->actors[actor.actor_slot].has_control
+        && !s->actors[actor.actor_slot].pending_failures
         && !s->actors[actor.actor_slot].active
         && ores_execution_phase(&s->actors[actor.actor_slot].authority)
             == ORES_EXEC_TERMINATED;
@@ -594,7 +670,8 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
         return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
-    while (lane->queued || lane->has_control || lane->active
+    while (lane->queued || lane->has_control || lane->pending_failures
+        || lane->active
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     }
@@ -613,6 +690,7 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
                 if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
             if (!lane->active && !lane->queued && !lane->has_control
+                && !lane->pending_failures
                 && ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING)
                 if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
         }
