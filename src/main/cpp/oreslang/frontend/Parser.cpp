@@ -289,6 +289,11 @@ public:
         while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
             const bool exported = accept("pub");
             require("define");
+            if (accept("enum")) {
+                if (exported) fail("built-in MaxActorThreads enum cannot be public in the native subset");
+                built_in_actor_threads_enum();
+                continue;
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -319,17 +324,25 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
-            if (accept("define")) {
+            if (accept("@")) {
+                const MaxActorThreads cap = actor_max_threads_attribute();
+                require("define");
+                require("actor");
+                auto actor = actor_declaration();
+                actor.max_actor_threads = cap;
+                program.actors.push_back(std::move(actor));
+            } else if (accept("define")) {
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("enum")) built_in_actor_threads_enum();
+                else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
                     fail("native transform-pipe actor requires typed pipeline role and transport lowering");
-                } else fail("expected 'class' or 'actor'");
+                } else fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
             } else {
@@ -354,6 +367,42 @@ private:
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
+    }
+
+    void built_in_actor_threads_enum() {
+        if (actor_threads_enum_seen_)
+            fail("duplicate MaxActorThreads enum definition");
+        require("MaxActorThreads");
+        require("as");
+        constexpr std::string_view tiers[] = {"LOW", "MEDIUM", "HIGH"};
+        constexpr std::string_view numbers[] = {"1", "2", "3"};
+        for (std::size_t i = 0; i < 3; ++i) {
+            require(tiers[i]);
+            require("int");
+            require("=");
+            if (token_.kind != Kind::Integer || token_.text != numbers[i])
+                fail("MaxActorThreads backing value must be the canonical integer");
+            advance();
+            accept(";");
+        }
+        require("end");
+        actor_threads_enum_seen_ = true;
+    }
+
+    MaxActorThreads actor_max_threads_attribute() {
+        require("ActorMaxThreads");
+        require("(");
+        require("MaxActorThreads");
+        require(".");
+        MaxActorThreads level = MaxActorThreads::LOW;
+        if (accept("LOW")) level = MaxActorThreads::LOW;
+        else if (accept("MEDIUM")) level = MaxActorThreads::MEDIUM;
+        else if (accept("HIGH")) level = MaxActorThreads::HIGH;
+        else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
+        require(")");
+        if (level != MaxActorThreads::LOW)
+            fail("@ActorMaxThreads(MEDIUM/HIGH) requires compiler-proven per-turn actor state isolation; source parallel actors are not enabled");
+        return level;
     }
 
     ModuleContract contract() {
@@ -2609,6 +2658,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    bool actor_threads_enum_seen_ = false;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
 };
