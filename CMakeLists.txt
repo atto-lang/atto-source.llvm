@@ -282,6 +282,13 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_callable_nominal_boundary.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
+    # Constrained compiler-owned alias/trait/interface type declarations:
+    # exact source syntax, no runtime value, and fail-closed unsupported types.
+    add_test(NAME native_type_only_declaration_boundaries
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_scalar_generic_contract.py")
