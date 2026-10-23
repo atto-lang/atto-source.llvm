@@ -186,6 +186,63 @@ public:
         return true;
     }
 
+    /**
+     * Exception-safe exclusive capability admission. A sender holding a
+     * unique_ptr<T> retains it on rejected admission OR queue allocation
+     * failure. Unlike offer(T&&), no T move constructor runs and nothing
+     * owns the underlying kernel/arena capability until after the queue
+     * successfully publishes its preallocated empty envelope.
+     *
+     * This transport helper is NOT proof that the pointer's target is
+     * shareable; caller must validate actor generation/handle rights first.
+     */
+    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes) {
+        if (!payload) throw std::invalid_argument("null owned actor payload");
+        if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
+        const auto state = state_;
+        std::lock_guard<std::mutex> guard(state->mutex);
+        if (state->closed) throw std::logic_error("actor port closed");
+        if (state->next_id == 0 ||
+            state->pending_prepares >
+                std::numeric_limits<std::uint64_t>::max() - state->next_id)
+            throw std::overflow_error("actor frame identity exhausted");
+        if (state->used_frames >= state->max_frames ||
+            bytes > state->max_bytes - state->used_bytes)
+            return false;
+        if (state->ledger && !state->ledger->reserve_prepare()) return false;
+        ++state->used_frames;
+        state->used_bytes += bytes;
+        ++state->pending_prepares;
+
+        try {
+            Envelope frame{state->next_id, bytes, nullptr, 0};
+            if (state->ledger) {
+                state->ledger->publish([&](std::uint64_t sequence) {
+                    frame.sequence = sequence;
+                    state->queue.push_back(std::move(frame));
+                });
+            } else {
+                frame.sequence = frame.id;
+                state->queue.push_back(std::move(frame));
+            }
+            // Non-throwing transfer AFTER queue publication; a receiver
+            // cannot observe the envelope until the port mutex is released.
+            state->queue.back().payload = std::move(payload);
+            ++state->next_id;
+            --state->pending_prepares;
+            return true;
+        } catch (...) {
+            // No T ownership moved on a throwing publication. The empty
+            // envelope is not retained by the strong deque insertion
+            // guarantee for noexcept-movable Envelope.
+            --state->pending_prepares;
+            --state->used_frames;
+            state->used_bytes -= bytes;
+            if (state->ledger) state->ledger->cancel_prepare();
+            throw;
+        }
+    }
+
     std::optional<Delivery> try_receive() {
         std::lock_guard<std::mutex> guard(state_->mutex);
         if (state_->queue.empty()) return std::nullopt;
