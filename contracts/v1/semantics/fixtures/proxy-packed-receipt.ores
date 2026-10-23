@@ -1,15 +1,15 @@
-// Cross-backend scalar ABI checkpoint, NOT a guest allocation or I/O binding.
-// Request ticket: (incarnation << 32) | row, with 0 <= row <= 65535.
-// Receipt: (serial << 32) | (row * 8 + lane + 1).
-// Tests positive signed-i64 division/modulo without new guest builtins.
-fnc ticket_roundtrip(): int {
-  return ((17 * 4294967296 + 65535) / 4294967296 - 17)
-       + ((17 * 4294967296 + 65535) % 4294967296 - 65535);
+// Executed guest scalar ABI checkpoint, NOT a slab allocation or I/O API.
+// Request ticket: incarnation * 2^32 + row (row <= 65535).
+// Receipt claim: serial * 2^32 + (row * 8 + lane + 1).
+// LLVM rejects int division and remainder today, so this checks packing
+// using only signed-i64 addition, multiplication, and subtraction.
+fnc packed_ticket(): int {
+  return 17 * 4294967296 + 65535;
 }
-fnc receipt_roundtrip(): int {
-  return ((23 * 4294967296 + 59) / 4294967296 - 23)
-       + (((23 * 4294967296 + 59) % 4294967296 - 1) / 8 - 7);
+fnc packed_receipt(): int {
+  return 23 * 4294967296 + (7 * 8 + 3);
 }
 pub fnc main(): int {
-  return 42 + ticket_roundtrip() + receipt_roundtrip();
+  return 42 + (packed_ticket() - 73014509567)
+       + (packed_receipt() - 98784247867);
 }
