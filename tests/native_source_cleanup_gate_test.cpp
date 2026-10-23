@@ -7,13 +7,13 @@
 namespace oreslang::runtime {
 struct NativeSourceCleanupGateTestPeer {
     static bool claim(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
-        return NativeSourceCleanupGateTestPeer::claim(g, t);
+        return g.try_claim_cleanup(t);
     }
     static bool yield(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
-        return NativeSourceCleanupGateTestPeer::yield(g, t);
+        return g.yield_cleanup(t);
     }
     static bool complete(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
-        return NativeSourceCleanupGateTestPeer::complete(g, t);
+        return g.complete_cleanup(t);
     }
 };
 } // namespace oreslang::runtime
