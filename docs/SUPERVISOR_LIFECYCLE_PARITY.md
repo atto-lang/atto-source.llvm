@@ -224,3 +224,9 @@ failure/supervisor recovery CONTROL integration, arena/continuation/FFI
 loan receipts, and same-revision native CTest/sanitizer execution.
 The new test target has been committed, but source-repository Actions
 still produce zero recorded job steps. Do not claim this suite passed.
+
+### Checked source-actor send and pointer membership
+
+Source-runtime send, await-ready and STOP validate opaque ActorRef pointer membership while holding the same group mutex that guards actor reclamation. The new `oreslang_source_actor_try_send` returns false for missing/stale/stopping handles without aborting. The legacy void guest ABI keeps its existing fail-closed contract pending checked-effect lowering. This pointer-membership fix does not address allocator-address reuse (ABA); full source handles still require incarnation fencing.
+
+The `source_actor_opaque_ref_validation` CTest covers live checked admission, invalid/stale handles and retired pointers while another actor keeps the VM active or after complete VM shutdown. Negative legacy-ABI tests use fresh exec'd processes, not forked copies of an active multithreaded scheduler. The subtree STOP race fixture also checks that a later try_send rejects admission. Test targets are committed but exact-head CTest is not yet executed.
