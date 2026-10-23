@@ -551,7 +551,9 @@ public:
                 return false;
             // Do not mutate readiness or completion state if CONTROL work
             // is still active or reserved. Failed admission is side-effect-free.
-            if (it->second.live_children != 0) return false;
+            if (it->second.live_children != 0
+                || ref.ticket_->child_join_delivery_pending.load(std::memory_order_acquire))
+                return false;
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
@@ -829,6 +831,7 @@ private:
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_
                 || it->second.live_children != 0
+                || ref.ticket_->child_join_delivery_pending.load(std::memory_order_acquire)
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
