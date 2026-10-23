@@ -327,6 +327,39 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("main", call("leaf"), true));
+        program.functions.push_back(fn("leaf", integer(1)));
+
+        SemanticGraphBudget budget;
+        budget.max_depth = 0;
+        bool rejected = false;
+        try {
+            (void)analyze_semantic_reachability(
+                program, SemanticRootPolicy{}, budget);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "semantic graph depth budget must fail closed");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("main", integer(0), true));
+
+        SemanticGraphBudget budget;
+        budget.max_declarations = 0;
+        bool rejected = false;
+        try {
+            (void)analyze_semantic_reachability(
+                program, SemanticRootPolicy{}, budget);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "semantic declaration budget must fail closed");
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("main", integer(0), true));
         program.functions.push_back(fn("dead", integer(1)));
 
