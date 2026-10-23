@@ -1388,9 +1388,39 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-actor-retirement-barrier-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-native-actor-retirement-barrier-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-retirement-barrier-test PRIVATE
+        ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1)
     add_test(NAME native_actor_done_resource_quiescence
         COMMAND oreslang-native-actor-retirement-barrier-test)
     set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
+    # Optional source-unwind receipt: cancellation does not imply physical
+    # teardown, and no native allocation can be reclaimed without a receipt.
+    add_executable(oreslang-native-source-cleanup-gate-test
+        tests/native_source_cleanup_gate_test.cpp)
+    target_include_directories(oreslang-native-source-cleanup-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-cleanup-gate-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-cleanup-gate-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-source-cleanup-gate-test PRIVATE
+        ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1)
+    add_test(NAME native_source_cleanup_deferred_physical_receipt
+        COMMAND oreslang-native-source-cleanup-gate-test)
+    set_tests_properties(native_source_cleanup_deferred_physical_receipt PROPERTIES TIMEOUT 30)
+    # Validate cleanup admission against a live, claimed continuation-store
+    # generation and exact actor incarnation instead of a caller's raw ticket.
+    add_executable(oreslang-native-source-cleanup-binding-test
+        tests/native_source_cleanup_binding_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c)
+    target_include_directories(oreslang-native-source-cleanup-binding-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-cleanup-binding-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-cleanup-binding-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_cleanup_continuation_binding
+        COMMAND oreslang-native-source-cleanup-binding-test)
+    set_tests_properties(native_source_cleanup_continuation_binding PROPERTIES TIMEOUT 30)
     oreslang_contract_test(reject_gpu_kernel unsupported-gpu-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_quantum_kernel unsupported-quantum-kernel.ores --diagnostic "native gpu/quantum boundary unsupported")
     oreslang_contract_test(reject_gpu_expression unsupported-gpu-expression.ores --diagnostic "native gpu/quantum boundary unsupported")
