@@ -78,88 +78,15 @@ static bool paths_alias(const char* source_path, const std::string& report_path)
     throw std::runtime_error("cannot safely compare rt-report/source identity");
 }
 
-static void collect_tree_shake_expression_calls(
-        const oreslang::Expression& expression,
-        std::unordered_set<std::string>& calls) {
-    using Kind = oreslang::Expression::Kind;
-    if (expression.kind == Kind::Call)
-        calls.insert(oreslang::native_function_slot(
-            expression.name, expression.arguments.size()));
-    if (expression.left)
-        collect_tree_shake_expression_calls(*expression.left, calls);
-    if (expression.right)
-        collect_tree_shake_expression_calls(*expression.right, calls);
-    if (expression.condition)
-        collect_tree_shake_expression_calls(*expression.condition, calls);
-    if (expression.condition_lhs)
-        collect_tree_shake_expression_calls(*expression.condition_lhs, calls);
-    if (expression.condition_rhs)
-        collect_tree_shake_expression_calls(*expression.condition_rhs, calls);
-    if (expression.when_true)
-        collect_tree_shake_expression_calls(*expression.when_true, calls);
-    if (expression.when_false)
-        collect_tree_shake_expression_calls(*expression.when_false, calls);
-    for (const auto& argument : expression.arguments)
-        if (argument) collect_tree_shake_expression_calls(*argument, calls);
-}
-
-static void collect_tree_shake_statement_calls(
-        const oreslang::Statement& statement,
-        std::unordered_set<std::string>& calls) {
-    if (statement.expression)
-        collect_tree_shake_expression_calls(*statement.expression, calls);
-    if (statement.branch_local) {
-        if (statement.branch_local->initializer)
-            collect_tree_shake_expression_calls(
-                *statement.branch_local->initializer, calls);
-        for (const auto& argument : statement.branch_local->constructor_arguments)
-            if (argument) collect_tree_shake_expression_calls(*argument, calls);
-    }
-    if (statement.array_commit_length)
-        collect_tree_shake_expression_calls(*statement.array_commit_length, calls);
-    for (const auto& value : statement.array_commit_values)
-        if (value) collect_tree_shake_expression_calls(*value, calls);
-    if (statement.condition)
-        collect_tree_shake_expression_calls(*statement.condition, calls);
-    if (statement.condition_lhs)
-        collect_tree_shake_expression_calls(*statement.condition_lhs, calls);
-    if (statement.condition_rhs)
-        collect_tree_shake_expression_calls(*statement.condition_rhs, calls);
-    for (const auto& nested : statement.then_statements)
-        collect_tree_shake_statement_calls(nested, calls);
-    for (const auto& nested : statement.else_statements)
-        collect_tree_shake_statement_calls(nested, calls);
-}
-
-static std::unordered_set<std::string> tree_shake_function_calls(
-        const oreslang::Function& function) {
-    std::unordered_set<std::string> calls;
-    for (const auto& local : function.locals) {
-        if (local.initializer)
-            collect_tree_shake_expression_calls(*local.initializer, calls);
-        for (const auto& argument : local.constructor_arguments)
-            if (argument) collect_tree_shake_expression_calls(*argument, calls);
-    }
-    for (const auto& statement : function.statements)
-        collect_tree_shake_statement_calls(statement, calls);
-    for (const auto& guarded : function.early_returns) {
-        if (guarded.condition) collect_tree_shake_expression_calls(*guarded.condition, calls);
-        if (guarded.lhs) collect_tree_shake_expression_calls(*guarded.lhs, calls);
-        if (guarded.rhs) collect_tree_shake_expression_calls(*guarded.rhs, calls);
-        if (guarded.result) collect_tree_shake_expression_calls(*guarded.result, calls);
-    }
-    for (const auto& send : function.actor_sends)
-        if (send.payload) collect_tree_shake_expression_calls(*send.payload, calls);
-    for (const auto& write : function.actor_field_writes)
-        if (write.expression)
-            collect_tree_shake_expression_calls(*write.expression, calls);
-    if (function.caught_throw_value)
-        collect_tree_shake_expression_calls(*function.caught_throw_value, calls);
-    for (const auto& statement : function.caught_throw_defers)
-        collect_tree_shake_statement_calls(statement, calls);
-    if (function.result)
-        collect_tree_shake_expression_calls(*function.result, calls);
-    return calls;
+static std::vector<std::string> tree_shake_function_calls(
+        const oreslang::Function& function,
+        std::size_t remaining_budget) {
+    const auto facts =
+            oreslang::realtime_detail::direct_facts(function, remaining_budget);
+    if (facts.call_budget_exceeded)
+        throw std::runtime_error(
+            "tree shaking call graph exceeds compiler edge budget");
+    return facts.calls;
 }
 
 static void require_function_only_tree_shake_surface(
@@ -188,7 +115,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     for (std::size_t i = 0; i < program.functions.size(); ++i) {
         const auto& function = program.functions[i];
         const std::string key =
-            oreslang::native_function_slot(function.name, function.parameters.size());
+            oreslang::realtime_detail::function_key(
+                function.name, function.parameters.size());
         if (!definitions.emplace(key, i).second)
             throw std::runtime_error(
                 "tree shaking requires unique native function name/arity identities");
@@ -201,7 +129,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
             std::vector<std::string> matches;
             for (const auto& function : program.functions) {
                 if (function.name == requested)
-                    matches.push_back(oreslang::native_function_slot(
+                    matches.push_back(oreslang::realtime_detail::function_key(
                         function.name, function.parameters.size()));
             }
             if (matches.empty())
@@ -214,7 +142,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         for (const auto& function : program.functions) {
             if (function.exported || function.name == "main") {
                 const std::string key =
-                    oreslang::native_function_slot(function.name, function.parameters.size());
+                    oreslang::realtime_detail::function_key(
+                        function.name, function.parameters.size());
                 if (reachable.insert(key).second) pending.push_back(key);
             }
         }
@@ -227,8 +156,9 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         const auto definition = definitions.find(pending[cursor]);
         if (definition == definitions.end())
             throw std::runtime_error("tree shaking found an unresolved function root");
-        const auto calls =
-            tree_shake_function_calls(program.functions[definition->second]);
+        const auto calls = tree_shake_function_calls(
+                program.functions[definition->second],
+                oreslang::realtime_detail::kMaxRealtimeCallEdges - reachable.size());
         for (const auto& call : calls) {
             if (!definitions.count(call))
                 throw std::runtime_error(
@@ -240,7 +170,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     program.functions.erase(
         std::remove_if(program.functions.begin(), program.functions.end(),
             [&](const oreslang::Function& function) {
-                return !reachable.count(oreslang::native_function_slot(
+                return !reachable.count(oreslang::realtime_detail::function_key(
                     function.name, function.parameters.size()));
             }),
         program.functions.end());
