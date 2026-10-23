@@ -230,6 +230,16 @@ def main():
          "TYPE_PARENT_DEPTH_BUDGET"),
     ])
     negative.extend([
+        ("reject native root extension until checked alias ABI lowering",
+         "declare type Code = int;\n"
+         "define mtd double on Code(): int { return self + self; }\n"
+         + main_fn, "EXTENSION_BACKEND_UNSUPPORTED"),
+        ("reject native module extension until checked alias ABI lowering",
+         "define module api as\n"
+         " declare type Code = int;\n"
+         " define mtd double on Code(): int { return self + self; }\n"
+         " pub fnc main(): int { return 0; }\nend\n",
+         "EXTENSION_BACKEND_UNSUPPORTED"),
         ("declare alias requires full definition", "declare type Code;\n" + main_fn,
          "TYPE_ONLY_INCOMPLETE_DEFINITION"),
         ("define alias requires full definition", "define type Code;\n" + main_fn,
