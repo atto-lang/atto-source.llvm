@@ -721,11 +721,15 @@ private:
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
-        // Copy before mutating the authoritative registry; throws leave no
-        // partially adopted actor. Retain for recovery after group detaches.
-        ticket->stop_retry = stop_request;
+        // Both the manager and detached actor ticket must invoke the SAME
+        // callback object, including its mutable internal state. Copying an
+        // arbitrary std::function could restart an admission attempt from a
+        // stale pre-failure capture after the manager was destroyed.
+        auto stop_state = std::make_shared<StopRequest>(std::move(stop_request));
+        StopRequest dispatch = [stop_state] { (*stop_state)(); };
+        ticket->stop_retry = dispatch;
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
+        workers_.emplace(actor_id, Entry{ref, std::move(dispatch), Phase::starting, {}});
         try {
             owners.live.emplace(key,
                 Owner{generation, group_id_, ref.ticket_, parent_key, parent_generation, 0});
