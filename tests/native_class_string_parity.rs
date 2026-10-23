@@ -48,6 +48,23 @@ fn main() {
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
+        ("user-two-argument-println",
+            r#"import class Foo from './main-1.ores';
+               pub routine main():int {
+                 stdio.println("hello world");
+                 val Foo f = new Foo();
+                 val string x = f.bar();
+                 stdio.println("x", x);
+                 return 0;
+               }"#,
+            "hello world\nxhiiii 2hiiii\n"),
+        ("variadic-console-evaluation-order",
+            r#"fnc mark(string s):string{stdio.print(s);return s;}
+               pub routine main():int{
+                 stdio.println(mark("a"), mark("b"), "c");
+                 return 0;
+               }"#,
+            "ababc\n"),
         (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
@@ -225,6 +242,11 @@ fn main() {
         (
             "bad-concat",
             r#"pub fnc main():int{val string x="bad"+true;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-type-mismatch",
+            r#"pub fnc main():int{stdio.println("a", 2);return 0;}"#.to_owned(),
             foo.to_owned(),
         ),
         (
