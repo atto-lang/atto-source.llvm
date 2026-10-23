@@ -2713,3 +2713,20 @@ if(BUILD_TESTING)
     set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Host-only native proxy slab parity with Java ActorProxyRequestSlab.
+# The borrowed arena span requires caller-owned actor-turn fencing; this is
+# not guest Oreslang lowering or a live HTTP/CONNECT transport.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-proxy-request-slab-test
+        tests/native_proxy_request_slab_test.cpp)
+    target_include_directories(oreslang-native-proxy-request-slab-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-proxy-request-slab-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-proxy-request-slab-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_proxy_request_slab_host_only
+        COMMAND oreslang-native-proxy-request-slab-test)
+    set_tests_properties(native_proxy_request_slab_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
