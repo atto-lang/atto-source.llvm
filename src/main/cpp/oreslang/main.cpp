@@ -162,6 +162,27 @@ static std::unordered_set<std::string> tree_shake_function_calls(
     return calls;
 }
 
+static void require_function_only_tree_shake_surface(
+        const oreslang::Program& program) {
+    if (!program.actors.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects actor declarations until actor roots are modeled");
+    if (!program.classes.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects class declarations until class initializer roots are modeled");
+    if (!program.cooperative_loops.empty())
+        throw std::runtime_error(
+            "tree shaking currently rejects cooperative loop declarations until continuation ABI roots are modeled");
+    if (std::any_of(
+            program.functions.begin(),
+            program.functions.end(),
+            [](const oreslang::Function& fn) {
+                return static_cast<bool>(fn.scalar_while);
+            }))
+        throw std::runtime_error(
+            "tree shaking currently rejects scalar continuation functions until continuation ABI roots are modeled");
+}
+
 static void tree_shake_functions(oreslang::Program& program, const std::vector<std::string>& requested_roots) {
     std::unordered_map<std::string, std::size_t> definitions;
     for (std::size_t i = 0; i < program.functions.size(); ++i) {
@@ -563,6 +584,13 @@ int main(int argc, char** argv) {
             // Validate/codegen the complete admitted source once before pruning
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+
+            // The shipped pass is deliberately function-only. Richer Program
+            // owners have hidden semantic/ABI roots that are not represented
+            // by the direct-call graph yet. Fail closed rather than deleting
+            // a helper that is reachable only from an actor handler, class
+            // initializer, or host-driven continuation.
+            require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
         std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
