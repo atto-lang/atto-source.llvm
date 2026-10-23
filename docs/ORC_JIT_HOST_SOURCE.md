@@ -38,10 +38,12 @@ scalar-loop modes, hard-real-time reporting/check modes, and source programs
 without a native entry wrapper. Standard IR output and Clang AOT are unaffected.
 
 The source/ORC CTest gate runs seven positive source programs twice each
-(exercising direct calls, forward calls, nested calls and main exit-code policy)
-plus eight fail-closed negatives. This gate tests **real JIT execution**,
-rather than checking emitted LLVM IR alone. It does **not** test equivalent
-execution by Java/GraalVM. The complete conformance ledger remains open.
+(exercising direct calls, forward calls, nested calls and main exit-code policy),
+compares every one against actual Clang-linked AOT execution, checks a
+tree-shaken source program, and runs eight fail-closed negatives. This gate
+tests **real JIT execution**, rather than checking emitted LLVM IR alone.
+It does **not** test equivalent execution by Java/GraalVM. The complete
+conformance ledger remains open.
 
 ## Parity milestones after the initial JIT runner
 
