@@ -59,7 +59,7 @@ for tool in cmake mvn; do
   fi
 done
 cmake -S "$source_root" -B "$build_root" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-cmake --build "$build_root" --parallel 2 --target oreslang-llvmc oreslang-native-class-string-parity-build
+cmake --build "$build_root" --clean-first --parallel 2 --target oreslang-llvmc oreslang-native-class-string-parity-build
 (
   cd "$java_root"
   mvn -B -ntp -DskipTests clean package
