@@ -79,6 +79,21 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-string-region-test PRIVATE Threads::Threads)
     add_test(NAME native_string_region_lifetime_and_budgets COMMAND oreslang-native-string-region-test)
     set_tests_properties(native_string_region_lifetime_and_budgets PROPERTIES TIMEOUT 20)
+    find_program(ORES_CARGO_EXECUTABLE NAMES cargo REQUIRED)
+    set(ORES_RUST_TEST_HARNESS_MANIFEST
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/rust-harness/Cargo.toml")
+    set(ORES_RUST_TEST_HARNESS_TARGET_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/rust-test-harness-target")
+    set(ORES_RUST_TEST_HARNESS_BIN
+        "${ORES_RUST_TEST_HARNESS_TARGET_DIR}/release/oreslang-llvm-test-harness${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_target(oreslang-rust-test-harness ALL
+        COMMAND "${ORES_CARGO_EXECUTABLE}" build
+            --manifest-path "${ORES_RUST_TEST_HARNESS_MANIFEST}"
+            --release --locked
+            --target-dir "${ORES_RUST_TEST_HARNESS_TARGET_DIR}"
+        BYPRODUCTS "${ORES_RUST_TEST_HARNESS_BIN}"
+        COMMENT "Building Rust-only LLVM test harness"
+        VERBATIM)
     # Host-only generational reply slab proof; not source-level actor RPC.
     add_executable(oreslang-native-generational-reply-test
         tests/native_generational_reply_slots_test.cpp)
@@ -289,16 +304,14 @@ if(BUILD_TESTING)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME native_realtime_profile_cli
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"
-            "$<TARGET_FILE:oreslang-llvmc>")
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+            realtime-profile "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
 
     # Executable source admission gate: function values are not nominal classes.
     add_test(NAME native_callable_nominal_boundary
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_callable_nominal_boundary.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+            callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
     add_test(NAME native_scalar_generic_contract_harness_selftest
         COMMAND "${Python3_EXECUTABLE}"
@@ -524,10 +537,9 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-tagged-message-wire-v2-test PRIVATE
             -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_tagged_enum_message_java_wire_parity
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/tagged_message_wire_v2_matrix.py"
-                --binary "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
-                --vectors "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" tagged-message-wire
+                "$<TARGET_FILE:oreslang-tagged-message-wire-v2-test>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/contracts/v1/design/tagged_message_vectors.json")
         set_tests_properties(native_tagged_enum_message_java_wire_parity PROPERTIES TIMEOUT 30)
     else()
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
@@ -937,8 +949,7 @@ if(BUILD_TESTING)
         --ir "call i64 @inspect" --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(call_and_forward_ref forward-call-main.ores --ir "call i64 @add")
     add_test(NAME native_named_call_lexical_ir_order
-        COMMAND "${Python3_EXECUTABLE}"
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/named_call_source_order_test.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" named-call-order
           "$<TARGET_FILE:oreslang-llvmc>"
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
     set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
@@ -1693,8 +1704,7 @@ if(BUILD_TESTING)
     # Neither naming style is permitted without a typed I/O registry, async
     # transport and continuation lowering. No IR may be emitted on failure.
     add_test(NAME native_async_only_io_boundary_matrix
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_async_io_boundary_matrix.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-async-io-boundary
             "$<TARGET_FILE:oreslang-llvmc>")
     # General structural shapes are not a scalar-i64 ABI: prove negative
     # admission with a functioning scalar-positive compiler control.
@@ -2862,7 +2872,7 @@ endif()
 
 if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME refreshed_actor_persistent_fields
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_persistent_fields_refresh.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" actor-persistent-fields
         "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}" "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
@@ -2877,9 +2887,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(refreshed_actor_unsupported_field actor-unsupported-field.ores --diagnostic "expected 'int'")
 endif()
 
-if(BUILD_TESTING AND Python3_Interpreter_FOUND AND ORE_CLANG)
+if(BUILD_TESTING AND ORE_CLANG)
     add_test(NAME native_aot_driver
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_aot_driver.py"
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" aot-driver
             "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
     set_tests_properties(native_aot_driver PROPERTIES TIMEOUT 30)
