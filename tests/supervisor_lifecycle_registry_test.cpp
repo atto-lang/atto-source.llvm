@@ -49,6 +49,9 @@ static void lifecycle_and_detached_worker() {
     CHECK(!snapshot.admissions_fenced && snapshot.nodes.size() == 4);
     CHECK(tree.begin_shutdown());
     CHECK(tree.begin_shutdown());
+    // Registry shutdown must also seal already-issued CONTROL lane handles.
+    auto held_lane = tree.control_lane(root);
+    rejects([&] { held_lane->reserve_child(L::ActorKey{"late-child", 1}); });
     CHECK(snapshot.nodes.front().lifecycle.admissions_open()); // old snapshot stays unchanged
     rejects([&] { (void)tree.create_child(root); });
     rejects([&] { (void)tree.create_group(root, 1); });
