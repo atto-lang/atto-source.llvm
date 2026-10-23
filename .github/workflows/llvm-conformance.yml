@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify Java/LLVM strict parity gate fail-closed shell admissions
         run: bash tests/java_llvm_parity_gate_admission.sh
+      - name: Reject forged Java/LLVM parity receipts without a real compiler
+        run: bash tests/java_llvm_parity_receipt_admission.sh
       - name: Verify Java/LLVM strict parity receipt admission (Rust)
         run: |
           rustc --edition=2021 -D warnings --test tests/native_class_string_parity.rs -o /tmp/oreslang-parity-admission-tests
