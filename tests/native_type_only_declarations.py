@@ -259,6 +259,9 @@ def main():
         ("forward definition must be exactly once",
          "declare type Code;\ndefine type Code = int;\ndefine type Code = bool;\n"
          + main_fn, "TYPE_DECL_NAME_COLLISION"),
+        ("promise after completion is rejected",
+         "define type Code = int;\ndeclare type Code;\n" + main_fn,
+         "TYPE_FORWARD_AFTER_DEFINITION"),
         ("forward definitions cannot hide alias cycle",
          "declare type Code;\ndefine type Code = Other;\n"
          "define type Other = Code;\n" + main_fn, "TYPE_ALIAS_CYCLE"),
