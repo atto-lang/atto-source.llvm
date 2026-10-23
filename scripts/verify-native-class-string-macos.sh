@@ -11,6 +11,15 @@ command -v rustc >/dev/null || { echo "Requires Rust toolchain" >&2; exit 69; }
 prefix="$(brew --prefix "$formula")"
 found="$("$prefix/bin/llvm-config" --version)"
 [[ "$found" == "$version".* ]] || { echo "Expected LLVM $version, found $found" >&2; exit 65; }
+# The printed commit/tree receipt is only evidence for a clean source tree.
+# Ignore generated build directories but reject edits or untracked files in
+# source/build input paths. The compiler must not compile an unrecorded patch.
+if [[ -n "$(git status --porcelain --untracked-files=all -- \
+    CMakeLists.txt src/main/cpp/oreslang tests/native_class_string_parity.rs \
+    tests/fixtures/native-class-string scripts/compile-aot.sh)" ]]; then
+  echo "Refusing dirty build inputs: commit or discard changes before verification" >&2
+  exit 65
+fi
 printf "Source commit: %s\nSource tree: %s\nLLVM: %s\n" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$found"
 build="$root/build-class-string-llvm$version"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
