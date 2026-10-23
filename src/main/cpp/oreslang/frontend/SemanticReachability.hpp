@@ -91,6 +91,7 @@ enum class SemanticReachabilityReason {
     ActorSpawn,
     ActorInitializer,
     ActorHandler,
+    ExportedOverloadAbi,
     ClassReference,
     ClassInitializer
 };
@@ -107,6 +108,7 @@ inline const char* semantic_reachability_reason_name(
         case SemanticReachabilityReason::ActorSpawn: return "ACTOR_SPAWN";
         case SemanticReachabilityReason::ActorInitializer: return "ACTOR_INITIALIZER";
         case SemanticReachabilityReason::ActorHandler: return "ACTOR_HANDLER";
+        case SemanticReachabilityReason::ExportedOverloadAbi: return "EXPORTED_OVERLOAD_ABI";
         case SemanticReachabilityReason::ClassReference: return "CLASS_REFERENCE";
         case SemanticReachabilityReason::ClassInitializer: return "CLASS_INITIALIZER";
     }
@@ -267,6 +269,31 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
         add_node(continuation_declaration_id(loop.name), Node{});
 
     std::set<SemanticReachabilityEdge> edges;
+
+    std::map<std::string, std::vector<CallableId>> function_families;
+    for (const auto& [callable, function] : functions) {
+        (void)function;
+        function_families[callable.name].push_back(callable);
+    }
+
+    // Open-world/library ABI naming depends on overload-family cardinality.
+    // Record sibling retention as a semantic reason now, before Phase 2 ever
+    // consumes this graph for deletion.
+    if (policy.build_kind == SemanticBuildKind::Library) {
+        for (const auto& [callable, function] : functions) {
+            if (!function->exported) continue;
+            const auto& family = function_families.at(callable.name);
+            if (family.size() <= 1) continue;
+            const auto from = function_declaration_id(callable);
+            for (const auto& sibling : family) {
+                if (sibling == callable) continue;
+                edges.insert({
+                    from,
+                    function_declaration_id(sibling),
+                    SemanticReachabilityReason::ExportedOverloadAbi});
+            }
+        }
+    }
 
     for (const auto& [id, node] : nodes) {
         if (node.function) {
