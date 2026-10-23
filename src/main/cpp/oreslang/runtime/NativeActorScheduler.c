@@ -32,6 +32,11 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    uint64_t accepted_user_messages;
+    uint64_t processed_user_messages;
+    OresNativeActorTerminationKind requested_terminal_kind;
+    unsigned terminal_valid;
+    OresNativeActorTerminalState terminal;
     /* Stable actor-lifetime allocation capability, independent of turn ids. */
     OresNativeAllocationDomainRef allocation_domain;
     OresNativeExecutionAuthority authority;
@@ -113,6 +118,29 @@ static void lock(OresNativeActorScheduler* s) {
 }
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
+}
+static void publish_terminal_locked(
+        OresNativeActorScheduler* s, size_t actor_index) {
+    ActorLane* lane = &s->actors[actor_index];
+    if (!lane->spawned || lane->terminal_valid
+            || !lane->retired || lane->active || lane->queued || lane->has_control)
+        return;
+    if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
+        return;
+    if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
+            && lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
+        abort();
+    if (lane->processed_user_messages > lane->accepted_user_messages)
+        abort();
+    lane->terminal = (OresNativeActorTerminalState){
+        .actor = {s->domain, (uint64_t)actor_index, lane->generation},
+        .kind = lane->requested_terminal_kind,
+        .accepted_user_messages = lane->accepted_user_messages,
+        .processed_user_messages = lane->processed_user_messages,
+        .abandoned_user_messages = 0,
+        .abandoned_control_messages = 0,
+    };
+    lane->terminal_valid = 1;
 }
 #ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
 int ores_native_actor_scheduler_test_set_next_execution(
@@ -451,6 +479,10 @@ int ores_native_actor_scheduler_prestart_carriers(
     int ok = pristine && ensure_workers_locked(s, s->worker_count);
     unlock(s);
     return ok;
+}
+int ores_native_actor_scheduler_prestart_realtime(
+        OresNativeActorScheduler* s) {
+    return ores_native_actor_scheduler_prestart_carriers(s);
 }
 int ores_native_actor_scheduler_all_carriers_started(
         OresNativeActorScheduler* s) {
