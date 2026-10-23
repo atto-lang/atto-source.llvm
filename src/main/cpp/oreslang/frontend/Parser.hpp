@@ -62,6 +62,9 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means primitive i64
     std::string generic_type; // stage-one i64 generic slot
+    // Parser-only unresolved transparent scalar alias. Phase two resolves it
+    // before any ABI, ownership, LLVM or scalar-expression validation.
+    std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
 };
@@ -199,6 +202,8 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    // Pending forward scalar alias; must be discharged before backend admission.
+    std::string pending_return_type_alias;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
