@@ -1196,6 +1196,30 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    # Real C source-actor ABI: actor callback spawns a child, which spawns
+    # another actor. A trusted host STOP must close admissions, signal
+    # descendants in reverse lineage order and join physical carrier exit.
+    add_executable(oreslang-source-actor-implicit-child-scope-test
+        tests/source_actor_implicit_child_scope_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-implicit-child-scope-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-implicit-child-scope-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-source-actor-implicit-child-scope-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME source_actor_implicit_child_scope
+        COMMAND oreslang-source-actor-implicit-child-scope-test)
+    set_tests_properties(source_actor_implicit_child_scope PROPERTIES TIMEOUT 90)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
