@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -85,7 +86,8 @@ inline constexpr std::size_t kMaxRealtimeFunctions = 4096;
 inline constexpr std::size_t kMaxRealtimeCallEdges = 16384;
 
 inline std::string function_key(std::string_view name, std::size_t arity) {
-    return std::string(name) + "/" + std::to_string(arity);
+    return analysis_callable_key(
+        CallableId{std::string(name), arity});
 }
 
 struct DirectFacts {
