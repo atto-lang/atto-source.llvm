@@ -2943,3 +2943,41 @@ if(BUILD_TESTING)
     set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Host-only native proxy slab parity with Java ActorProxyRequestSlab.
+# The borrowed arena span requires caller-owned actor-turn fencing; this is
+# not guest Oreslang lowering or a live HTTP/CONNECT transport.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-proxy-request-slab-test
+        tests/native_proxy_request_slab_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-proxy-request-slab-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-proxy-request-slab-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-proxy-request-slab-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_proxy_request_slab_host_only
+        COMMAND oreslang-native-proxy-request-slab-test)
+    set_tests_properties(native_proxy_request_slab_host_only
+        PROPERTIES TIMEOUT 20)
+endif()
+
+# Full native actor scheduler proof: exact-generation ownership and paired
+# actor/VM quota, with backpressure, receipt reuse and foreign-turn rejection.
+# C scheduler source must be compiled as C; the actor test uses C++20.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-actor-proxy-slab-owner-test
+        tests/native_actor_proxy_request_slab_owner_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-actor-proxy-slab-owner-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-proxy-slab-owner-test PRIVATE Threads::Threads)
+    target_compile_features(oreslang-native-actor-proxy-slab-owner-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-actor-proxy-slab-owner-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_proxy_slab_generation_and_quota
+        COMMAND oreslang-native-actor-proxy-slab-owner-test)
+    set_tests_properties(native_actor_proxy_slab_generation_and_quota
+        PROPERTIES TIMEOUT 30)
+endif()
