@@ -10,11 +10,11 @@
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
 #define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
-typedef struct { uint64_t generation; size_t length; uint32_t loans; unsigned char live; } Slot;
+typedef struct { uint64_t generation, page_claim; size_t length; uint32_t loans; unsigned char live; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
 struct OresActorArena {
     atomic_flag lock;
-    uint64_t domain, owner, incarnation, epoch, next_loan_nonce;
+    uint64_t domain, owner, incarnation, epoch, next_loan_nonce, next_page_claim;
     size_t slots, slot_bytes, scratch_bytes, scratch_top;
     uint32_t loans;
     int active, retiring, prefaulted;
@@ -101,6 +101,7 @@ OresActorArena* ores_actor_arena_open(uint64_t owner, uint64_t incarnation,
     a->slot_bytes = slot_bytes;
     a->scratch_bytes = scratch_bytes;
     a->next_loan_nonce = 1;
+    a->next_page_claim = 1;
     a->free_count = slots;
     for (size_t i = 0; i < slots; ++i) {
         a->meta[i].generation = 1;
@@ -237,11 +238,84 @@ int ores_actor_arena_validate_pages(OresActorArena* a, OresArenaTurn turn,
     return 1;
 }
 
+/* One lock protects validation and all reservations. No caller sees
+ * partially claimed multi-page storage, including on late-slot rejection. */
+uint64_t ores_actor_arena_claim_pages(OresActorArena* a, OresArenaTurn turn,
+                                      const OresArenaHandle* pages,
+                                      size_t count, size_t page_bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    if (!pages || !count || count > a->slots || !page_bytes
+            || page_bytes > a->slot_bytes || !a->next_page_claim
+            || a->next_page_claim == UINT64_MAX) {
+        leave_lock(a);
+        return 0;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const OresArenaHandle h = pages[i];
+        if (h.domain != a->domain || h.index >= a->slots) {
+            leave_lock(a);
+            return 0;
+        }
+        const Slot* s = &a->meta[h.index];
+        if (!s->live || s->generation != h.generation
+                || s->length != page_bytes || s->page_claim || s->loans) {
+            leave_lock(a);
+            return 0;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (pages[j].index == h.index) {
+                leave_lock(a);
+                return 0;
+            }
+        }
+    }
+    const uint64_t claim = a->next_page_claim++;
+    for (size_t i = 0; i < count; ++i)
+        a->meta[pages[i].index].page_claim = claim;
+    leave_lock(a);
+    return claim;
+}
+
+int ores_actor_arena_unclaim_pages(OresActorArena* a, OresArenaTurn turn,
+                                   const OresArenaHandle* pages,
+                                   size_t count, uint64_t claim) {
+    enter_lock(a);
+    require_turn(a, turn);
+    if (!claim || !pages || !count || count > a->slots) {
+        leave_lock(a);
+        return 0;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const OresArenaHandle h = pages[i];
+        if (h.domain != a->domain || h.index >= a->slots) {
+            leave_lock(a);
+            return 0;
+        }
+        const Slot* s = &a->meta[h.index];
+        if (!s->live || s->generation != h.generation
+                || s->page_claim != claim || s->loans) {
+            leave_lock(a);
+            return 0;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (pages[j].index == h.index) {
+                leave_lock(a);
+                return 0;
+            }
+        }
+    }
+    for (size_t i = 0; i < count; ++i)
+        a->meta[pages[i].index].page_claim = 0;
+    leave_lock(a);
+    return 1;
+}
+
 void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
     enter_lock(a);
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
-    if (s->loans || s->generation == UINT64_MAX) deny();
+    if (s->loans || s->page_claim || s->generation == UINT64_MAX) deny();
     memset(a->slab + (size_t) h.index * a->slot_bytes, 0, a->slot_bytes);
     s->length = 0;
     s->live = 0;
@@ -254,7 +328,7 @@ OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, Ore
     enter_lock(a);
     require_turn(a, turn);
     Slot* s = require_slot(a, h);
-    if (s->loans == UINT32_MAX || a->loans >= ORES_MAX_LOANS
+    if (s->page_claim || s->loans == UINT32_MAX || a->loans >= ORES_MAX_LOANS
         || a->next_loan_nonce == UINT64_MAX) deny();
     size_t index = ORES_MAX_LOANS;
     for (size_t i = 0; i < ORES_MAX_LOANS; ++i) {
@@ -329,6 +403,9 @@ int ores_actor_arena_try_destroy(OresActorArena* a) {
     enter_lock(a);
     if (!a->retiring) deny();
     if (a->active || a->loans) { leave_lock(a); return 0; }
+    for (size_t i = 0; i < a->slots; ++i) {
+        if (a->meta[i].page_claim) { leave_lock(a); return 0; }
+    }
     /* Trusted scheduler fences all timers/wakers/FFI holders before destroy. */
     memset(a->slab, 0, checked_mul(a->slots, a->slot_bytes));
     memset(a->scratch, 0, a->scratch_bytes);
