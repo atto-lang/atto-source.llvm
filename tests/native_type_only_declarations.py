@@ -100,47 +100,27 @@ def main():
          "pub fnc main(): int { return identity(8); }\n"),
     ])
     positive.extend([
-        ("forward scalar int signature resolved after its definition",
-         "declare type Code;\n"
+        ("declare complete alias equivalent to define",
+         "declare type Code = int;\n"
          "fnc identity(Code value): Code { return value; }\n"
-         "define type Code = int;\n"
          "pub fnc main(): int { return identity(3); }\n"),
-        ("public forward matches public completion inside module",
-         "define module api as\n"
-         " declare pub type Code;\n"
-         " pub fnc identity(Code value): Code { return value; }\n"
-         " define pub type Code = int;\n"
-         " pub fnc main(): int { return identity(4); }\n"
-         "end\n"),
-        ("forward bool annotation in parameter and result",
-         "declare type Flag;\n"
-         "fnc flag(Flag value): Flag { return value; }\n"
-         "define type Flag = bool;\n" + main_fn),
-        ("forward scalar local resolved before IR",
-         "declare type Count;\n"
-         "pub fnc main(): int { val count: Count = 5; return count; }\n"
-         "define type Count = int;\n"),
-        ("forward type-only method signature",
-         "declare type Count;\n"
-         "declare trait Tagged as fnc tag(Count code): Count; end\n"
-         "define type Count = int;\n" + main_fn),
-        ("forward alias chain resolves exactly once",
-         "declare type Code;\n"
-         "fnc identity(Code value): Code { return value; }\n"
-         "define type Code = Id;\n"
-         "define type Id = int;\n"
-         "pub fnc main(): int { return identity(7); }\n"),
-        ("transitively forward alias resolves from a completed alias spelling",
-         "declare type Code;\n"
-         "define type UserId = Code;\n"
-         "fnc identity(UserId value): UserId { return value; }\n"
+        ("define complete alias equivalent to declare",
          "define type Code = int;\n"
+         "fnc identity(Code value): Code { return value; }\n"
+         "pub fnc main(): int { return identity(3); }\n"),
+        ("declare and define complete bool aliases",
+         "declare type Flag = bool;\n"
+         "define type Count = int;\n"
+         "fnc identity(Flag value): Flag { return value; }\n"
+         "pub fnc main(): int { val n: Count = 7; return n; }\n"),
+        ("completed aliases support transitive targets",
+         "declare type UserId = Code;\n"
+         "define type Code = int;\n"
+         "fnc identity(UserId value): UserId { return value; }\n"
          "pub fnc main(): int { return identity(7); }\n"),
-        ("transitively forward alias in contract method",
-         "declare type Code;\n"
-         "define type UserId = Code;\n"
-         "declare interface Api as fnc lookup(UserId id): UserId; end\n"
-         "define type Code = int;\n" + main_fn),
+        ("complete aliases in interface method signatures",
+         "declare type Code = int;\n"
+         "declare interface Api as fnc lookup(Code id): Code; end\n" + main_fn),
     ])
     negative = [
         ("reject concrete declare model",
@@ -250,49 +230,43 @@ def main():
          "TYPE_PARENT_DEPTH_BUDGET"),
     ])
     negative.extend([
-        ("unresolved forward type",
-         "declare type Code;\n" + main_fn, "TYPE_FORWARD_UNRESOLVED"),
-        ("forward declared twice",
-         "declare type Code;\ndeclare type Code;\ndefine type Code = int;\n"
-         + main_fn, "TYPE_FORWARD_DUPLICATE"),
-        ("forward public visibility mismatch",
-         "declare pub type Code;\ndefine type Code = int;\n"
-         + main_fn, "TYPE_FORWARD_VISIBILITY_MISMATCH"),
-        ("forward private visibility mismatch",
-         "declare type Code;\ndefine pub type Code = int;\n"
-         + main_fn, "TYPE_FORWARD_VISIBILITY_MISMATCH"),
-        ("forward cannot be defined as interface",
-         "declare type Code;\ndefine interface Code as end\n"
-         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
-        ("forward cannot be defined as trait",
-         "declare type Code;\ndefine trait Code as end\n"
-         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
-        ("forward cannot be defined as class",
-         "declare type Code;\ndefine class Code as\n"
-         " pub let int field = 1;\nend\n"
-         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
-        ("forward definition must be exactly once",
-         "declare type Code;\ndefine type Code = int;\ndefine type Code = bool;\n"
-         + main_fn, "TYPE_DECL_NAME_COLLISION"),
-        ("promise after completion is rejected",
-         "define type Code = int;\ndeclare type Code;\n" + main_fn,
-         "TYPE_FORWARD_AFTER_DEFINITION"),
-        ("forward definitions cannot hide alias cycle",
-         "declare type Code;\ndefine type Code = Other;\n"
-         "define type Other = Code;\n" + main_fn, "TYPE_ALIAS_CYCLE"),
-        ("bool forward cannot bypass native borrow rules",
-         "declare type Flag;\nfnc unsafe(borrow Flag value): int { return value; }\n"
-         "define type Flag = bool;\n" + main_fn, "native bool borrow ABI"),
-        ("standalone opaque definition cannot use unknown scalar",
-         "declare type Code;\ndefine type Code = Unknown;\n"
-         + main_fn, "TYPE_ALIAS_UNKNOWN_TARGET"),
+        ("declare alias requires full definition", "declare type Code;\n" + main_fn,
+         "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+        ("define alias requires full definition", "define type Code;\n" + main_fn,
+         "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+        ("declare public alias requires full definition",
+         "declare pub type Code;\n" + main_fn, "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+        ("define public alias requires full definition",
+         "define pub type Code;\n" + main_fn, "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+        ("declare then define same name collide",
+         "declare type Code = int;\ndefine type Code = bool;\n" + main_fn,
+         "TYPE_DECL_NAME_COLLISION"),
+        ("define then declare same name collide",
+         "define type Code = int;\ndeclare type Code = bool;\n" + main_fn,
+         "TYPE_DECL_NAME_COLLISION"),
+        ("completed alias cannot hide cycle",
+         "declare type Code = Other;\ndefine type Other = Code;\n" + main_fn,
+         "TYPE_ALIAS_CYCLE"),
+        ("completed alias cannot target unknown type",
+         "declare type Code = Unknown;\n" + main_fn,
+         "TYPE_ALIAS_UNKNOWN_TARGET"),
+        ("bool alias cannot bypass borrow rule",
+         "declare type Flag = bool;\n"
+         "fnc unsafe(borrow Flag value): int { return value; }\n" + main_fn,
+         "native bool borrow ABI"),
     ])
     with tempfile.TemporaryDirectory(prefix="ores-native-typeonly-") as root:
         source = Path(root) / "typeonly.ores"
+        equivalent_ir = {}
         for label, program in positive:
             result = compile_source(opts.compiler, program, source)
             if result.returncode or result.stderr or not result.stdout.startswith("; ModuleID"):
                 raise AssertionError((label, result.returncode, result.stderr, result.stdout[:500]))
+            if label in (
+                "declare complete alias equivalent to define",
+                "define complete alias equivalent to declare",
+            ):
+                equivalent_ir[label] = result.stdout
             # Type-only declarations cannot silently lower a named runtime value.
             for forbidden in (
                 "@Tagged", "@Endpoint", "@LocalId", "@PublicId",
@@ -311,6 +285,10 @@ def main():
                 # A nominal object or extra pointer slot would violate ABI parity.
                 if "define i64 @identity(i64 " not in result.stdout:
                     raise AssertionError((label, "scalar alias changed ABI", result.stdout[:800]))
+        if equivalent_ir.get("declare complete alias equivalent to define") != equivalent_ir.get(
+            "define complete alias equivalent to declare"
+        ):
+            raise AssertionError("declare/define type must emit identical LLVM IR")
         for label, program, diagnostic in negative:
             result = compile_source(opts.compiler, program, source)
             if result.returncode == 0 or result.stdout.strip():
