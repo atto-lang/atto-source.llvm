@@ -342,6 +342,32 @@ public:
     }
 
     /**
+     * Trusted scheduler subscription for re-attempting a parent physical
+     * finalizer when its last child retires. Register before relying on a
+     * finalizer rejection; no polling loop and no callback under owner locks.
+     * Returns true when the join was already empty (nothing registered).
+     * A duplicate subscriber is rejected instead of retaining unbounded
+     * closure objects. Callbacks are host-only enqueue signals, not permission
+     * to execute guest actor or CONTROL turns inline.
+     */
+    bool register_children_drained(const NativeActorRef& parent,
+                                   std::function<void()> notify) {
+        if (!notify) throw std::invalid_argument("missing child join notifier");
+        auto& owners = registry();
+        std::lock_guard<std::mutex> guard(owners.mutex);
+        auto it = owners.live.find(Key{parent.runtime_id(), parent.actor_id()});
+        if (it == owners.live.end() || it->second.group_id != group_id_
+            || it->second.generation != parent.generation()
+            || it->second.ticket != parent.ticket_)
+            throw std::invalid_argument("unknown or stale child join parent");
+        if (it->second.live_children == 0) return true;
+        if (it->second.join_notify)
+            throw std::logic_error("parent already has a child join notifier");
+        it->second.join_notify = std::move(notify);
+        return false;
+    }
+
+    /**
      * Parent STOP seals descendants atomically with adopt_child; callbacks
      * execute outside both locks. A group-close race stops all owned workers
      * through close() instead. No guest/control handler is run under mutexes.
@@ -444,6 +470,7 @@ public:
     bool finalized(const NativeActorRef& ref, std::string failure = "") {
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         std::vector<NativeActorRef::DoneContinuation> done_callbacks;
+        std::function<void()> wake_parent;
         auto& owners = registry();
         {
             std::scoped_lock guard(mutex_, owners.mutex);
@@ -476,12 +503,13 @@ public:
             // Settle done ONLY on acknowledged physical finalization.
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
-            retire_parent_link_locked(owners, it);
+            retire_parent_link_locked(owners, it, wake_parent);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
+        notify_join(wake_parent);
         return true;
     }
 
@@ -598,6 +626,7 @@ private:
         std::optional<Key> parent;
         std::uint64_t parent_generation = 0;
         std::size_t live_children = 0;
+        std::function<void()> join_notify;
     };
     struct OwnerRegistry {
         std::mutex mutex;
@@ -679,7 +708,8 @@ private:
 
     static void retire_parent_link_locked(
             OwnerRegistry& owners,
-            const std::map<Key, Owner>::iterator& child) noexcept {
+            const std::map<Key, Owner>::iterator& child,
+            std::function<void()>& wake_parent) noexcept {
         if (!child->second.parent) return;
         const auto parent = owners.live.find(*child->second.parent);
         if (parent == owners.live.end()
@@ -687,7 +717,8 @@ private:
             || parent->second.group_id != child->second.group_id
             || parent->second.live_children == 0)
             std::terminate(); // impossible under synchronized admission/join; fail closed
-        --parent->second.live_children;
+        if (--parent->second.live_children == 0)
+            wake_parent = std::move(parent->second.join_notify);
     }
 
     /**
@@ -700,6 +731,7 @@ private:
                                      std::string failure) {
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         std::vector<NativeActorRef::DoneContinuation> done_callbacks;
+        std::function<void()> wake_parent;
         auto& owners = registry();
         {
             std::lock_guard<std::mutex> guard(owners.mutex);
@@ -725,11 +757,12 @@ private:
             }
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
-            retire_parent_link_locked(owners, it);
+            retire_parent_link_locked(owners, it, wake_parent);
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
+        notify_join(wake_parent);
         return true;
     }
 
@@ -782,6 +815,15 @@ private:
             try { callback(result); } catch (...) {
                 // A failed host subscription cannot strand another subscriber.
             }
+        }
+    }
+
+    static void notify_join(const std::function<void()>& notify) noexcept {
+        if (!notify) return;
+        try { notify(); } catch (...) {
+            // This is a retry hint, NOT a physical-release receipt.
+            // Failure cannot manufacture parent DONE; trusted scheduler must
+            // separately retain its parent's physical-finalizer obligation.
         }
     }
 
