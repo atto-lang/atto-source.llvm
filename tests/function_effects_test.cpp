@@ -33,6 +33,14 @@ int main() {
                 "panic and throw must be distinct");
         require(FunctionEffects::parse("panic") != FunctionEffects::parse("raise"),
                 "panic and raise must be distinct");
+        // Preserve the original PR's direct least-authority regressions alongside
+        // the current-main exhaustive permission and forged-mask checks.
+        const FunctionEffects write{static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
+        require(declared.permits(write), "declared effects must permit a write");
+        require(!FunctionEffects{}.permits(read), "pure effects cannot authorize read");
+        require(read.united(write).permits(write), "union must retain write");
+        require(declared.has(FunctionEffect::Suspend), "declared suspend remains present");
+        require(!read.has(FunctionEffect::Panic), "read does not imply panic");
         // Exhaustive spelling and one-hot flag coverage: adding or aliasing an
         // effect must require updating this reviewed table.
         const std::array<std::pair<std::string_view, FunctionEffect>, 10> known{{
@@ -172,8 +180,8 @@ int main() {
         // The known-domain tests above exhaust all valid rows.
         // Extra adversarial values exercise the opaque public ABI boundary.
 
-        const std::array<std::string_view, 13> invalid{{
-            std::string_view{}, "unknown", "state", "state.READ", "state.read ",
+        const std::array<std::string_view, 14> invalid{{
+            std::string_view{}, "unknown", "StateWrite", "state", "state.READ", "state.read ",
             " state.read", "state-read", "suspend\n", "PANIC", "panic.",
             "throw/raise", std::string_view{"panic\0extra", 11},
             std::string_view{"\0panic", 6}

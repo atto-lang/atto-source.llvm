@@ -72,5 +72,47 @@ int main() {
     static_assert(CompressedActorRef::max_addressable_span ==
                   UINT64_C(34359738360)); // 32 GiB - 8 at 8-byte alignment
 
+    // The full 32-bit range is real even though no enormous actor arena is
+    // allocated for this boundary test. High-bit words must be treated as
+    // unsigned stored data, never as signed Java/LLVM guest integers.
+    if (sizeof(std::uintptr_t) > sizeof(std::uint32_t)) {
+        const auto synthetic_base = static_cast<std::uintptr_t>(UINT64_C(0x1000000000));
+        const auto span = static_cast<std::size_t>(
+            CompressedActorRef::max_addressable_span);
+        const auto last_offset = static_cast<std::uintptr_t>(
+            CompressedActorRef::max_offset);
+        auto last = CompressedActorRef::encode(
+            synthetic_base, span, synthetic_base + last_offset);
+        assert(last && last->storage() == UINT32_MAX);
+        assert(last->decode(synthetic_base, span) == synthetic_base + last_offset);
+
+        const auto high_bit_offset = static_cast<std::uintptr_t>(UINT64_C(1) << 34);
+        auto high = CompressedActorRef::encode(
+            synthetic_base, span, synthetic_base + high_bit_offset);
+        assert(high && high->storage() > static_cast<std::uint32_t>(INT32_MAX));
+        assert(high->decode(synthetic_base, span) ==
+               synthetic_base + high_bit_offset);
+
+        // Compression must not partially accept a region whose declared
+        // extent cannot be encoded. The allocator must select native64 first.
+        assert(!CompressedActorRef::encode(synthetic_base, span + 8, synthetic_base));
+        assert(!first->decode(synthetic_base, span + 8));
+    }
+
+    // Reject malformed regions crossing the machine-address boundary even
+    // when the individual candidate address is initially within the span.
+    const auto wrapped_base =
+        std::numeric_limits<std::uintptr_t>::max() & ~std::uintptr_t{7};
+    assert(!CompressedActorRef::encode(wrapped_base, 16, wrapped_base));
+    assert(!first->decode(wrapped_base, 16));
+    assert(!NativeActorManagedRef::encode(wrapped_base, 16, wrapped_base));
+    assert(!native->decode(wrapped_base, 16));
+
+    // Exact last address of the machine domain is allowed for an 8-byte span.
+    const auto end_base =
+        std::numeric_limits<std::uintptr_t>::max() - std::uintptr_t{7};
+    auto terminal = CompressedActorRef::encode(end_base, 8, end_base);
+    assert(terminal && terminal->decode(end_base, 8) == end_base);
+
     return 0;
 }

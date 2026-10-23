@@ -50,16 +50,16 @@ The provider must keep an independent, non-guest-accessible operation record.
 | CANCEL_EVENT_DONE | CANCEL_ACKNOWLEDGED | Atomic paired cancellation acknowledgment; then handle retirement |
 | QUOTA_HELD / FENCES_CLAIMED | ABORT_BEFORE_ENQUEUE | Only with a provider-proved no-enqueue witness, never by pretending completion |
 
-**Known missing primitive:** after `claimPair` / `claim_pair`, the existing
-fence ledger has no separately authenticated *pre-enqueue abort* operation.
-Fence admission now distinguishes RESERVED from SUBMITTED. If physical
-enqueue fails before any command reached hardware, the provider must invoke
+**Implemented host-ledger primitive:** after `claimPair` / `claim_pair`,
+fence admission distinguishes RESERVED from SUBMITTED and exposes an exact
+ticket *pre-enqueue abort* operation. If physical enqueue fails before any
+command reached hardware, the provider must invoke
 the exact-ticket pre-enqueue abort and atomically restore both allocations to
 idle. After enqueue succeeds it must mark the exact pair submitted before
 completion or cancellation is legal. A submitted command can never use the
 pre-enqueue abort path.
 
-This closes the host-ledger ambiguity, but provider dispatch remains disabled
+This closes the host-ledger ambiguity. Provider dispatch remains disabled
 until a real backend also authenticates physical allocation provenance, queue
 authority, quotas and device completion events. OpenCL source emission alone
 is still not execution evidence.
@@ -74,10 +74,12 @@ generation, sequence, and completion-seal checks remain enforced.
 - Use a single typed DOP layout plan (AoS, SoA, AoSoA), including padded
   length, scalar width, alignment and lane count, for host transfers and GPU
   kernel offsets. Identical byte lengths are not layout compatibility.
-- GPU kernel generation may not silently select host execution. Unsupported
-  GPU hardware, 32-bit device pointers, missing f32 or excessive storage/rows
-  fail with explicit diagnostics. Host ABI and endian compatibility require
-  explicit proof on the actual provider.
+- GPU kernel generation may not silently select host execution. The emitted
+  artifact carries ABI version, required address width, f32 support, canonical
+  little-endian byte interpretation, exact byte capacity and both global
+  NDRange dimensions. The provider must validate every field against the
+  authenticated physical device before enqueue. Unsupported hardware fails
+  explicitly; artifact emission alone is never the proof.
 - `cpu { gpu { ... } cpu { ... } }` requires transfer/continuation boundaries:
   the inner CPU region resumes **after** the necessary device event and
   materialization, not as a CPU callback inside the kernel.

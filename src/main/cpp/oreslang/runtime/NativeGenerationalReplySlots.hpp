@@ -63,7 +63,7 @@ private:
         explicit Core(std::size_t capacity)
             : slots(capacity), generations(capacity, 0), next(capacity),
               free(capacity ? 0 : invalid_index_) {
-            if (capacity == 0 || capacity >= invalid_index_) {
+            if (capacity == 0 || capacity > 65'536) {
                 throw std::invalid_argument("invalid reply capacity");
             }
             for (std::size_t i = 0; i < capacity; ++i) {
@@ -111,6 +111,14 @@ public:
         bool reject(const EndpointRef& responder, std::exception_ptr failure) const {
             if (!failure) throw std::invalid_argument("empty failure");
             if (!NativeGenerationalReplySlots::claim(*this, responder, true)) return false;
+            pending_->promise.set_exception(std::move(failure));
+            return true;
+        }
+        /** VM mailbox admission rollback. Only original caller endpoint
+         * can fail its own slot; this cannot fabricate a successful reply. */
+        bool fail_admission(const EndpointRef& caller, std::exception_ptr failure) const {
+            if (!failure) throw std::invalid_argument("empty admission failure");
+            if (!NativeGenerationalReplySlots::claim(*this, caller, false)) return false;
             pending_->promise.set_exception(std::move(failure));
             return true;
         }

@@ -140,3 +140,19 @@ production tracing API. The sequence is reconstructed after join from real
 admission and callback evidence, not a timestamped total order. Java/Graal
 shares the schema and adversarial validator but does not yet emit native
 carrier traces.
+
+
+## Proxy request / completion packed-i64 guest ABI checkpoint
+
+`fixtures/proxy-packed-receipt.ores` is a **shared, required, native-execution** fixture (`native.proxy-packed-receipt`, expected process exit 42) in both Java/GraalVM and LLVM semantics manifests. It verifies the same arithmetic used by host request tickets and receipt claims:
+
+- Request ticket: `incarnation * 4294967296 + row` (16-bit-bounded physical row).
+- Receipt: `serial * 4294967296 + (row * 8 + lane + 1)`, with up to 8 bounded receipt lanes per request.
+- The fixture uses serial values 33,554,433 and 67,108,865, so packed words exceed `2^53` but remain inside signed i64. It compares each packed value with its aligned 32-bit base and expects the exact 16-bit row / bounded receipt index to survive. IEEE-754 rounded arithmetic would produce process exit **48** rather than **42**.
+- Because the LLVM source frontend intentionally rejects integer `/` and `%` until their semantics are implemented, the fixture relies only on supported signed-i64 `+`, `-` and `*`. Decoding by division/remainder is a **separate pending language capability**, not silently interpreted by a test shim.
+
+**Scope:** this proves only arithmetic performed by actual compiled guest source *once the required conformance workflow executes*. It does **not** expose a guest `ProxyRequestSlab`, allocate actor arenas, send a callback, or establish owner-turn authorization. The host-level slab API and actual guest lowering require a second native-execution contract that admits, pins, retires, settles and recycles under real Java/GraalVM and native OresVM actor turns.
+
+The semantic suite's `cases.json`, normative schemas, TypeSpec manifest and all fixture Git blobs are now identical in the two branches; the three defer/finally cases that Java implements remain explicitly `llvm: pending`. The existing `contracts/v1/semantics/run.py` executors still differ by backend as intended.
+
+**Evidence limitation:** both source-organization conformance workflow runs on the new exact heads failed **before recording any steps**; a local Python arithmetic reference check passed, but **no checked-in Oreslang source was executed by a compiler** in this round. Do not mark this conformance case verified until the exact guest-result report is produced on an authorized runner.
