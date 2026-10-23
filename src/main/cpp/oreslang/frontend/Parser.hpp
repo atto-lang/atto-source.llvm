@@ -63,6 +63,7 @@ struct Parameter {
     std::string class_name; // empty means primitive i64
     std::string generic_type; // stage-one i64 generic slot
     ScalarType scalar_type = ScalarType::I64;
+    std::string pending_scalar_alias; // resolved after forward definition
     Mode mode = Mode::Value;
 };
 
@@ -82,6 +83,7 @@ struct LocalBinding {
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
+    std::string pending_scalar_alias; // only forward alias, never runtime value
     std::size_t offset = 0;
 };
 
@@ -199,6 +201,7 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string pending_return_alias;
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -243,6 +246,7 @@ struct TypeOnlyDecl {
     Kind kind = Kind::Alias;
     std::string name;
     bool exported = false;
+    bool forward_declaration = false; // declare type X; only
     std::string alias_target; // native v1 accepts only int/bool, not nominal types
     std::vector<std::string> parents;
     std::vector<Method> methods;
