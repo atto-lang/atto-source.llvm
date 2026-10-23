@@ -83,7 +83,7 @@ static void bounded_lanes_and_deterministic_fairness() {
 
 static void sustained_urgent_flood_cannot_starve_normal_or_bulk() {
     Inbox inbox({16, 128}, {8, 64}, {2, 16});
-    for (int i = 0; i < 16; ++i) CHECK(inbox.offer(Lane::Urgent, i, 8));
+    for (int i = 0; i < 16; ++i) CHECK(inbox.offer(Lane::Urgent, int(i), 8));
     CHECK(inbox.offer(Lane::Normal, 1000, 8));
     CHECK(inbox.offer(Lane::Bulk, 2000, 8));
     int normal_at = -1, bulk_at = -1;
