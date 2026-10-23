@@ -69,11 +69,14 @@ public:
         : layout_(layout), capacity_(capacity), lanes_(lanes),
           arena_(arena), turn_(turn), pages_(pages), page_words_(page_words) {
         const auto count = required_words(layout, capacity, lanes);
-        if (!arena_ || pages_.empty() || page_words_ == 0
+        if (!arena_ || pages_.empty() || pages_.size() > owned_pages_.size()
+                || page_words_ == 0
                 || page_words_ > (1024U * 1024U) / sizeof(std::uint32_t)
                 || pages_.size() != (count + page_words_ - 1) / page_words_) {
             throw std::invalid_argument("invalid arena-backed proxy pages");
         }
+        std::copy(pages_.begin(), pages_.end(), owned_pages_.begin());
+        pages_ = std::span<const OresArenaHandle>(owned_pages_.data(), pages_.size());
         // Check every generation and page length against the *actual* arena
         // before the first zeroing write. Syntactic handle checks cannot
         // distinguish a stale or foreign live slot from a valid one.
@@ -309,6 +312,7 @@ private:
     OresActorArena* arena_ = nullptr;
     OresArenaTurn turn_{};
     std::span<const OresArenaHandle> pages_{};
+    std::array<OresArenaHandle, 16> owned_pages_{};
     std::size_t page_words_ = 0;
     std::uint32_t free_head_ = kNoSlot;
     std::uint32_t live_ = 0;
