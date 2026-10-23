@@ -3197,3 +3197,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_max_threads_source_admission
         PROPERTIES TIMEOUT 20)
 endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-native-proxy-arena-pages-test
+        tests/native_proxy_request_slab_arena_pages_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    target_include_directories(oreslang-native-proxy-arena-pages-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-proxy-arena-pages-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-proxy-arena-pages-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_proxy_slab_arena_pages_and_zeroization
+        COMMAND oreslang-native-proxy-arena-pages-test)
+    set_tests_properties(native_proxy_slab_arena_pages_and_zeroization
+        PROPERTIES TIMEOUT 30)
+endif()
