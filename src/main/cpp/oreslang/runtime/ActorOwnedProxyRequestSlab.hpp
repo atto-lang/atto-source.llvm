@@ -44,10 +44,12 @@ inline std::uint64_t reserve_proxy_slab_identity() {
  * a future actor-turn-batched kernel, but keeps the existing arena guard and
  * its 1 MiB-per-persistent-slot policy rather than exporting raw pointers.
  *
- * Host must fence external I/O and run close() on the owning actor turn, then
- * retire actor budget after scheduler done. This object and its budgets must
- * outlive all associated callback envelopes; teardown must precede destruction
- * of scheduler and budget ledgers. No Oreslang source lowering is provided.
+ * Host must fence external I/O, preferably close() on the owning actor
+ * turn, then retire actor budget after exact scheduler done. The destructor
+ * can scrub a quiescent, unclosed slab only after that retirement fence.
+ * Any live request remains fail-stop. This object and its budgets must outlive
+ * all associated callback envelopes; teardown must precede destruction of
+ * scheduler and budget ledgers. No Oreslang source lowering is provided.
  */
 class ActorOwnedProxyRequestSlab final {
 public:
