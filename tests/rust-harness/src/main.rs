@@ -285,6 +285,43 @@ fn callable_nominal(compiler: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-nominal-type-binders-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("nominal-binder.ores");
+    let cases = [
+        "define class _ as end\n",
+        "define actor _ as\n  let count: int = 0;\n  pub fnc on_message(int value): int { return value; }\nend\n",
+        "define contract _ as\n  fnc execute(int value) => int;\nend\n",
+    ];
+    for body in cases {
+        let full_source = format!("{body}pub fnc main(): int {{ return 0; }}\\n");
+        fs::write(&source, full_source).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("wildcard '_' cannot be declared as a nominal type name"),
+            format!(
+                "wildcard nominal declaration must fail before IR emission: {body:?}; status={:?}; stdout={}; stderr={}",
+                out.status.code(), stdout(&out), stderr(&out)
+            ),
+        )?;
+    }
+
+    fs::write(
+        &source,
+        "define class Ordinary as\\n  pub let int value = 1;\nend\npub fnc main(): int { return 0; }\n",
+    ).map_err(|e| e.to_string())?;
+    let good = run(compiler, [source.as_os_str()])?;
+    require(
+        good.status.success() && stderr(&good).is_empty() && stdout(&good).starts_with("; ModuleID"),
+        format!("ordinary nominal declaration regressed: stdout={} stderr={}", stdout(&good), stderr(&good)),
+    )?;
+
+    println!("PASS 3 negative native nominal wildcard declarations and one positive class");
+    Ok(())
+}
+
 fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-aot-").map_err(|e| e.to_string())?;
     let source = temp.path.join("main.ores");
@@ -460,6 +497,10 @@ fn real_main() -> Result<(), String> {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
             realtime_profile(&compiler)
         }
+        Some("nominal-type-binders") => {
+            let compiler = path_arg(&args, 2, "usage: nominal-type-binders <compiler>")?;
+            nominal_type_binders(&compiler)
+        }
         Some("callable-nominal") => {
             let compiler = path_arg(&args, 2, "usage: callable-nominal <compiler>")?;
             callable_nominal(&compiler)
@@ -491,7 +532,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary> ..."
                 .to_string(),
         ),
     }
