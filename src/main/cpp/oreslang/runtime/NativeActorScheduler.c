@@ -704,10 +704,14 @@ int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
         unlock(s); return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
+    lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
-    if (!lane->active && !lane->queued && !lane->has_control)
+    if (!lane->active && !lane->queued && !lane->has_control) {
         if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
+        publish_terminal_locked(s, (size_t)actor.actor_slot);
+        pthread_cond_broadcast(&s->drained);
+    }
     unlock(s);
     return 1;
 }
@@ -723,13 +727,21 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
     if (!s) return 0;
     lock(s);
-    int done = matching(s, actor) && s->actors[actor.actor_slot].retired
-        && !s->actors[actor.actor_slot].queued && !s->actors[actor.actor_slot].has_control
-        && !s->actors[actor.actor_slot].active
-        && ores_execution_phase(&s->actors[actor.actor_slot].authority)
-            == ORES_EXEC_TERMINATED;
+    int done = matching(s, actor) && s->actors[actor.actor_slot].terminal_valid;
     unlock(s);
     return done;
+}
+int ores_native_actor_scheduler_terminal_state(
+        OresNativeActorScheduler* s,
+        OresNativeActorRef actor,
+        OresNativeActorTerminalState* output) {
+    if (!s || !output) return 0;
+    lock(s);
+    int available = matching(s, actor)
+        && s->actors[actor.actor_slot].terminal_valid;
+    if (available) *output = s->actors[actor.actor_slot].terminal;
+    unlock(s);
+    return available;
 }
 int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
@@ -741,7 +753,8 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
     while (lane->queued || lane->has_control || lane->active
-        || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED) {
+        || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
+        || !lane->terminal_valid) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     }
     unlock(s);
