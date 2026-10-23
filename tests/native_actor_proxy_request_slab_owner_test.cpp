@@ -71,6 +71,24 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
                 state.vm_budget, state.layout, 1, state.lanes);
             assert(state.actor_budget->used_bytes() == state.vm_budget.used_bytes());
             assert(state.actor_budget->used_bytes() > 0);
+            if (state.layout == ProxyRequestSlab::Layout::SoA) {
+                // 16,385 requests occupy 1 MiB + 64 bytes of live SoA data;
+                // the existing C ActorArena only admits persistent slots up
+                // to 1 MiB, so this must cross a physical arena page boundary.
+                const auto before = state.actor_budget->used_bytes();
+                {
+                    ActorOwnedProxyRequestSlab multi_page(state.scheduler, state.owner,
+                        *state.actor_budget, state.vm_budget,
+                        state.layout, 16385, 1);
+                    assert(state.actor_budget->used_bytes() == before + 2U * 1024U * 1024U);
+                    auto sample = multi_page.admit(10, 7, 17);
+                    assert(sample && multi_page.route(sample) == 17);
+                    assert(multi_page.retire(sample));
+                    multi_page.close();
+                }
+                assert(state.actor_budget->used_bytes() == before);
+                assert(state.vm_budget.used_bytes() == before);
+            }
             state.stale_ticket = state.slab->admit(5, 1, 42);
             assert(state.stale_ticket != 0 && state.slab->route(state.stale_ticket) == 42);
             state.pin = state.slab->pin(state.stale_ticket);
