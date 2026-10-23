@@ -15,6 +15,17 @@ static void require(bool condition) {
 static void bounded_contract(ProxyRequestSlab::Layout layout, std::uint32_t lanes) {
     std::vector<std::uint32_t> memory(ProxyRequestSlab::required_words(layout, 3, lanes));
     ProxyRequestSlab slab(layout, 3, lanes, memory);
+    // JVM and native guests must share signed 32-bit metadata bounds.
+    bool epoch_rejected = false;
+    try {
+        (void)slab.admit(UINT32_C(0x80000000), 10, 100);
+    } catch (const std::invalid_argument&) { epoch_rejected = true; }
+    require(epoch_rejected && slab.live() == 0);
+    bool route_rejected = false;
+    try {
+        (void)slab.admit(7, 10, UINT32_C(0xffffffff));
+    } catch (const std::invalid_argument&) { route_rejected = true; }
+    require(route_rejected && slab.live() == 0);
     const auto a = slab.admit(7, 10, 100);
     const auto b = slab.admit(7, 11, 101);
     const auto c = slab.admit(8, 12, 102);
