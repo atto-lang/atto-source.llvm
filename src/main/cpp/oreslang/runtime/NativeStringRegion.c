@@ -90,7 +90,9 @@ static void *output_reactor(void *argument) {
 static void wake_writer(Region *r) {
     /* Full wake pipe already represents readiness; the queue is authoritative. */
     char byte = 1;
-    (void)write(r->wake[1], &byte, 1);
+    ssize_t written = write(r->wake[1], &byte, 1);
+    if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        atomic_store(&r->failed, 1);
 }
 int64_t ores_string_region_begin(int64_t console) {
     Region *r = &region;
