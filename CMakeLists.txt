@@ -2737,7 +2737,8 @@ endif()
 if(BUILD_TESTING)
     add_executable(oreslang-native-actor-proxy-slab-owner-test
         tests/native_actor_proxy_request_slab_owner_test.cpp
-        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
     target_include_directories(oreslang-native-actor-proxy-slab-owner-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-actor-proxy-slab-owner-test PRIVATE Threads::Threads)
