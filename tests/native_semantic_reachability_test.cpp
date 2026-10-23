@@ -250,6 +250,39 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("target_helper", integer(5)));
+
+        ActorDecl actor;
+        actor.name = "Hosted";
+        actor.on_message =
+            fn("on_message", call("target_helper"), true);
+        program.actors.push_back(std::move(actor));
+
+        SemanticRootPolicy policy;
+        policy.root_default_main = false;
+        policy.target_roots.push_back(
+            actor_declaration_id("Hosted"));
+        const auto result =
+            analyze_semantic_reachability(program, policy);
+
+        const auto actor_id = actor_declaration_id("Hosted");
+        const auto helper_id =
+            function_declaration_id(CallableId{"target_helper", 0});
+        assert(contains(result.roots, actor_id));
+        assert(contains(result.retained, helper_id));
+
+        const auto explanation =
+            explain_semantic_reachability(result, actor_id);
+        assert(explanation.root);
+        assert(std::find(
+            explanation.root_reasons.begin(),
+            explanation.root_reasons.end(),
+            SemanticReachabilityReason::RootTargetAbi) !=
+            explanation.root_reasons.end());
+    }
+
+    {
+        Program program;
         Function continuation =
             fn("step", integer(0), true);
         continuation.scalar_while =
