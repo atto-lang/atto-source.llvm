@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "oreslang/runtime/NativeOresVMNio.h"
 #include <dirent.h>
 #include <fcntl.h>
