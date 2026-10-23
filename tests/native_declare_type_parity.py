@@ -180,6 +180,18 @@ NEGATIVE = {
         "unresolved native forward type"
     ),
     "builtin-shadowing": ("type int = bool;\n"+ENTRY, "reserved"),
+    "string-builtin-alias-shadowing": (
+        "type String = int;\n" + ENTRY, "reserved"
+    ),
+    "string-forward-shadowing": (
+        "declare type String;\n" + ENTRY, "cannot shadow builtin"
+    ),
+    "canonical-String-refinement-unverified": (
+        "declare type DisplayName;\n"
+        "define type DisplayName = String with min_length 1 "
+        "and chars ascii_letters;\n" + ENTRY,
+        "native refined string aliases require Zorde UTF-8/charset checks"
+    ),
     "class-collision": (
         "define type Box = int;\n"
         "define class Box as pub let int count = 1; end\n"+ENTRY,
