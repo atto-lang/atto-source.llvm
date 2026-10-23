@@ -9,6 +9,7 @@ Do not use python for anything, use Rust instead of python to support the langua
 Notes on the compiler and runtime:
 
 * Strive for zero gc. The borrow checker should accomplish this, and having separate heaps/arenas per actor helps reduce gc overhead.
+* Borrow checking uses reserved keywords `rt copy, rt share, rt take, rt borrow`
 * Go for full AOT. Some JIT elements are ok, as long as they can be explicitly controlled/governed by user.
 * Strive for hard real time not just soft-real time by minimizing JIT (or having JIT switched off for certain paths) and moving towards full AOT.
 * Use data-oriented design and data oriented programming - be mindful of using AoS, SoA, AoSoA and SoAoS where possible.
