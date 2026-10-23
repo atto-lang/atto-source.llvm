@@ -99,6 +99,38 @@ def main():
          "fnc identity<T=Id>(T value): T { return value; }\n"
          "pub fnc main(): int { return identity(8); }\n"),
     ])
+    positive.extend([
+        ("forward scalar int signature resolved after its definition",
+         "declare type Code;\n"
+         "fnc identity(Code value): Code { return value; }\n"
+         "define type Code = int;\n"
+         "pub fnc main(): int { return identity(3); }\n"),
+        ("public forward matches public completion inside module",
+         "define module api as\n"
+         " declare pub type Code;\n"
+         " pub fnc identity(Code value): Code { return value; }\n"
+         " define pub type Code = int;\n"
+         " pub fnc main(): int { return identity(4); }\n"
+         "end\n"),
+        ("forward bool annotation in parameter and result",
+         "declare type Flag;\n"
+         "fnc flag(Flag value): Flag { return value; }\n"
+         "define type Flag = bool;\n" + main_fn),
+        ("forward scalar local resolved before IR",
+         "declare type Count;\n"
+         "pub fnc main(): int { val count: Count = 5; return count; }\n"
+         "define type Count = int;\n"),
+        ("forward type-only method signature",
+         "declare type Count;\n"
+         "declare trait Tagged as fnc tag(Count code): Count; end\n"
+         "define type Count = int;\n" + main_fn),
+        ("forward alias chain resolves exactly once",
+         "declare type Code;\n"
+         "fnc identity(Code value): Code { return value; }\n"
+         "define type Code = Id;\n"
+         "define type Id = int;\n"
+         "pub fnc main(): int { return identity(7); }\n"),
+    ])
     negative = [
         ("reject concrete declare model",
          "declare model M as Pass() end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
@@ -205,6 +237,37 @@ def main():
              for i in range(128, 0, -1)
          ) + "declare trait T0 as end\n" + main_fn,
          "TYPE_PARENT_DEPTH_BUDGET"),
+    ])
+    negative.extend([
+        ("unresolved forward type",
+         "declare type Code;\n" + main_fn, "TYPE_FORWARD_UNRESOLVED"),
+        ("forward declared twice",
+         "declare type Code;\ndeclare type Code;\ndefine type Code = int;\n"
+         + main_fn, "TYPE_FORWARD_DUPLICATE"),
+        ("forward public visibility mismatch",
+         "declare pub type Code;\ndefine type Code = int;\n"
+         + main_fn, "TYPE_FORWARD_VISIBILITY_MISMATCH"),
+        ("forward private visibility mismatch",
+         "declare type Code;\ndefine pub type Code = int;\n"
+         + main_fn, "TYPE_FORWARD_VISIBILITY_MISMATCH"),
+        ("forward cannot be defined as interface",
+         "declare type Code;\ndefine interface Code as end\n"
+         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
+        ("forward cannot be defined as trait",
+         "declare type Code;\ndefine trait Code as end\n"
+         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
+        ("forward definition must be exactly once",
+         "declare type Code;\ndefine type Code = int;\ndefine type Code = bool;\n"
+         + main_fn, "TYPE_DECL_NAME_COLLISION"),
+        ("forward definitions cannot hide alias cycle",
+         "declare type Code;\ndefine type Code = Other;\n"
+         "define type Other = Code;\n" + main_fn, "TYPE_ALIAS_CYCLE"),
+        ("bool forward cannot bypass native borrow rules",
+         "declare type Flag;\nfnc unsafe(borrow Flag value): int { return value; }\n"
+         "define type Flag = bool;\n" + main_fn, "native bool borrow ABI"),
+        ("standalone opaque definition cannot use unknown scalar",
+         "declare type Code;\ndefine type Code = Unknown;\n"
+         + main_fn, "TYPE_ALIAS_UNKNOWN_TARGET"),
     ])
     with tempfile.TemporaryDirectory(prefix="ores-native-typeonly-") as root:
         source = Path(root) / "typeonly.ores"
