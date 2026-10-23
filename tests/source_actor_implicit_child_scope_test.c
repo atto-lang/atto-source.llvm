@@ -87,6 +87,11 @@ static int64_t parent_racing_spawn(
     return 9;
 }
 
+static void* checked_stop_on_trusted_host(void* opaque) {
+    check(oreslang_source_actor_try_stop(opaque));
+    return NULL;
+}
+
 static void* stop_on_trusted_host(void* opaque) {
     atomic_store_explicit(&stop_started, 1, memory_order_release);
     oreslang_source_actor_stop(opaque);
@@ -138,6 +143,60 @@ int main(void) {
         check(atomic_load(&stop_finished));
         check(atomic_load(&grandchild_exited));
     }
+    /* If descendant STOP enters first, a parent STOP must reject without
+     * corrupting the partially retired subtree. Once the descendant and its
+     * grandchild are physically done, retrying parent STOP succeeds. */
+    for (int round = 0; round < 10; ++round) {
+        atomic_store(&child_spawned, 0);
+        atomic_store(&spawned_child_handle, 0);
+        atomic_store(&grandchild_spawned, 0);
+        atomic_store(&grandchild_entered, 0);
+        atomic_store(&release_grandchild, 0);
+        atomic_store(&grandchild_exited, 0);
+        void* parent = oreslang_source_actor_spawn(init, parent_message, 1);
+        check(parent);
+        oreslang_source_actor_send(parent, 1);
+        wait_for(&child_spawned);
+        wait_for(&grandchild_spawned);
+        wait_for(&grandchild_entered);
+        void* child = (void*)(uintptr_t)atomic_load_explicit(
+            &spawned_child_handle, memory_order_acquire);
+        check(child != NULL);
+        pthread_t descendant_closer;
+        check(pthread_create(&descendant_closer, NULL,
+            checked_stop_on_trusted_host, child) == 0);
+        int descendant_fenced = 0;
+        for (int attempt = 0; attempt < 10000; ++attempt) {
+            if (oreslang_source_actor_test_stopping(child)) {
+                descendant_fenced = 1;
+                break;
+            }
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+        check(descendant_fenced);
+        check(!oreslang_source_actor_try_stop(parent));
+        atomic_store_explicit(&release_grandchild, 1, memory_order_release);
+        check(pthread_join(descendant_closer, NULL) == 0);
+        check(atomic_load(&grandchild_exited));
+        check(!oreslang_source_actor_try_stop(child));
+        check(oreslang_source_actor_try_stop(parent));
+    }
+
+    /* Independent root STOPs may proceed in parallel with exactly one
+     * teardown per actor. Last-root VM teardown remains serialized. */
+    for (int round = 0; round < 32; ++round) {
+        void* a = oreslang_source_actor_spawn(init, parent_message, 1);
+        void* b = oreslang_source_actor_spawn(init, parent_message, 1);
+        check(a && b);
+        pthread_t first, second;
+        check(pthread_create(&first, NULL, checked_stop_on_trusted_host, a) == 0);
+        check(pthread_create(&second, NULL, checked_stop_on_trusted_host, b) == 0);
+        check(pthread_join(first, NULL) == 0);
+        check(pthread_join(second, NULL) == 0);
+        check(!oreslang_source_actor_try_stop(a));
+        check(!oreslang_source_actor_try_stop(b));
+    }
     /* Deterministic STOP-vs-spawn adversarial case. The host-only test
      * probe observes an actual committed fence, never just thread start. */
     for (int round = 0; round < 100; ++round) {
@@ -171,6 +230,6 @@ int main(void) {
         check(atomic_load(&stop_finished));
         check(atomic_load(&racing_spawn_denied));
     }
-    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS depth3=10 stop_spawn=100 overlapping_stop=110");
+    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS depth3=10 child_first=10 independent_root=32 stop_spawn=100 overlapping_stop=110");
     return 0;
 }
