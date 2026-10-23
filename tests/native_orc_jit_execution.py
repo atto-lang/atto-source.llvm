@@ -144,6 +144,22 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
             require(jit.returncode == expected and not jit.stdout and not jit.stderr,
                     "fixture ORC/AOT divergence: " + fixture_name, jit)
 
+        # Current main also compiles imported String classes, but their
+        # region/print dependencies are external runtime symbols. ORC must
+        # reject such IR until a versioned capability-scoped binding registry
+        # is implemented. Never silently search the compiler process symbols.
+        imported_string = fixtures / "native-class-string" / "main.ores"
+        require(imported_string.is_file(), "missing imported String-class fixture")
+        string_ir = run(compiler, imported_string)
+        require(string_ir.returncode == 0 and
+                b"define i32 @main(" in string_ir.stdout,
+                "imported String fixture must compile through the shared frontend",
+                string_ir)
+        refused = run(compiler, imported_string, "--jit")
+        require(refused.returncode != 0 and not refused.stdout and
+                b"unresolved external function is not admitted" in refused.stderr,
+                "ORC must fail closed on unbound String runtime symbols", refused)
+
         source.write_text(positives[1][1] + "\n", encoding="utf-8")
         shaken = run(compiler, source, "--jit", "--tree-shake")
         require(shaken.returncode == 42 and not shaken.stdout and not shaken.stderr,
