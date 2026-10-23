@@ -335,6 +335,18 @@ public:
                 fail("native contract imports require a validated cross-unit linker");
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+            } else if (token_.text == "pub" && peek_next().text == "define") {
+                // Keep legacy public-definition word order within modules,
+                // but do not accidentally admit unrelated public runtime forms.
+                require("pub");
+                require("define");
+                if (token_.text == "type" || token_.text == "trait" ||
+                        token_.text == "interface") {
+                    type_only_declaration(program, true, true);
+                } else {
+                    fail("TYPE_ONLY_INVALID_KIND: public define form not supported"
+                         " for this native runtime declaration");
+                }
             } else if (accept("define")) {
                 if (token_.text == "type" || token_.text == "trait" ||
                         token_.text == "interface" || token_.text == "pub") {
