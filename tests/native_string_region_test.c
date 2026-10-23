@@ -13,9 +13,17 @@ int main(void) {
         int64_t b = ores_string_literal("c", 1);
         assert(a > 0 && b > a);
         assert(ores_string_concat(a, b) > b);
+        int64_t same = ores_string_literal("a\0b", 3);
+        assert(same != a && ores_string_equal(a, same) == 1);
+        assert(ores_string_equal(a, b) == 0);
+        assert(ores_string_equal(a, ores_string_literal("a", 1)) == 0);
+        assert(ores_string_equal(ores_string_literal(NULL, 0), ores_string_literal("", 0)) == 1);
         assert(ores_string_region_end() == 0);
         assert(ores_string_region_end() == 1);
     }
+    assert(ores_string_region_begin(0) == 0);
+    assert(ores_string_equal(0, ores_string_literal("", 0)) == 0);
+    assert(ores_string_region_end() == 1); /* invalid handles cannot forge equality */
     assert(ores_string_region_begin(0) == 0);
     assert(ores_string_concat(-1, 1) == 0);
     assert(ores_string_region_end() == 1);

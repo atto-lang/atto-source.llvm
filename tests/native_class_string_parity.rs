@@ -49,6 +49,42 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "string-content-equality",
+            r#"fnc same(string a,string b):bool{return a == b;}
+              pub routine main():int {
+                val string a="foo"; val string b="f"+"oo";
+                stdio.println(same(a,b) ? "equal" : "WRONG");
+                stdio.println(a != "bar" ? "different" : "WRONG");
+                stdio.println("" == "" ? "empty" : "WRONG");
+                return 0;
+              }"#,
+            "equal\ndifferent\nempty\n",
+        ),
+        (
+            "string-equality-embedded-nul-and-unicode",
+            r#"pub routine main():int {
+                stdio.println("a\u0000b" == "a"+"\u0000b" ? "nul" : "WRONG");
+                stdio.println("a\u0000b" != "a" ? "length" : "WRONG");
+                stdio.println("\u00e9" == "é" ? "unicode" : "WRONG");
+                return 0;
+              }"#,
+            "nul\nlength\nunicode\n",
+        ),
+        (
+            "http-string-routing-primitives",
+            r#"fnc route(string method,string path):int {
+                if (method != "GET") { return 405; } fi
+                return path == "/health" ? 200 : 404;
+              }
+              pub routine main():int {
+                stdio.println(route("G"+"ET", "/"+"health") == 200 ? "health" : "WRONG");
+                stdio.println(route("GET", "/missing") == 404 ? "missing" : "WRONG");
+                stdio.println(route("POST", "/health") == 405 ? "method" : "WRONG");
+                return 0;
+              }"#,
+            "health\nmissing\nmethod\n",
+        ),
+        (
             "source-effect-order",
             r#"fnc mark():string{stdio.print("method;");return "a";}
           pub fnc main():int{stdio.print("before;");val string a=mark();stdio.print("after;");
@@ -146,6 +182,16 @@ fn main() {
         }
     }
     let negatives = [
+        (
+            "string-integer-equality",
+            r#"pub fnc main():int{return "a" == 1 ? 0 : 1;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "string-ordering",
+            r#"pub fnc main():int{return "a" < "b" ? 0 : 1;}"#.to_owned(),
+            foo.to_owned(),
+        ),
         (
             "private-method",
             exact.replace("f.bar()", "f.foo()"),
