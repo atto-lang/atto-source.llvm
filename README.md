@@ -11,6 +11,21 @@ Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
 are **not implemented** in the LLVM compiler. The CI regression fixtures
 reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
 
+## Under review: imported string-class native execution
+
+[Draft PR #886](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/886)
+introduces a checked **host-only** source-to-LLVM path for one sibling
+`import class Foo from "./main-1.ores";`, an exported stateless class,
+zero-parameter string-returning methods, implicit `self`, `new Foo()`,
+string concatenation, `val string`, and `stdio.println`.
+
+The new regression compiles both source files into one native executable and
+checks actual output, rejected private methods and rejected path traversal.
+**Not yet verified**: GitHub Actions failed before any steps ran.
+General linking, methods with arguments, class fields/constructors, runtime
+actors, and cross-backend parity remain release gates. This is **not** a
+separate accepted Oreslang dialect.
+
 ## Implemented and verified native functionality (October 2026)
 
 - Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional
