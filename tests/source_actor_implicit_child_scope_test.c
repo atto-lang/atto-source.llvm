@@ -79,6 +79,7 @@ static int64_t parent_racing_spawn(
      * before consuming a slot. No child is created and no VM-wide abort. */
     void* denied = oreslang_source_actor_spawn(init, child_message, 1);
     check(denied == NULL);
+    check(!oreslang_source_actor_try_send(top_actor, 99));
     atomic_store_explicit(&racing_spawn_denied, 1, memory_order_release);
     return 9;
 }
@@ -130,6 +131,7 @@ int main(void) {
         atomic_store(&stop_finished, 0);
         void* parent = oreslang_source_actor_spawn(init, parent_racing_spawn, 1);
         check(parent != NULL);
+        top_actor = parent;
         oreslang_source_actor_send(parent, 9);
         wait_for(&racing_parent_entered);
         pthread_t closer;
