@@ -75,6 +75,8 @@ static int64_t parent_racing_spawn(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
     (void)heap;
     check(domain && epoch && payload == 9);
+    /* A carrier cannot block waiting on its own scheduler's DONE. */
+    check(!oreslang_source_actor_try_stop(top_actor));
     atomic_store_explicit(&racing_parent_entered, 1, memory_order_release);
     while (!atomic_load_explicit(&allow_racing_spawn, memory_order_acquire))
         sched_yield();
