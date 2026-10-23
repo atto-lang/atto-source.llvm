@@ -28,12 +28,22 @@ struct State {
     std::uint64_t ticket = 0;
     ActorOwnedProxyRequestSlab::Receipt pin{};
     bool foreign_denied = false;
+    bool closed_foreign_denied = false;
     bool failed = false;
 };
 
 static void on_message(void* context, std::size_t actor, std::uint64_t step) {
     auto& state = *static_cast<State*>(context);
     try {
+        if (actor == 1 && step == 5) {
+            bool close_denied = false, read_denied = false;
+            try { state.slab->close(); }
+            catch (const std::logic_error&) { close_denied = true; }
+            try { (void)state.slab->capacity(); }
+            catch (const std::logic_error&) { read_denied = true; }
+            state.closed_foreign_denied = close_denied && read_denied;
+            return;
+        }
         if (actor == 1 && step == 3) {
             bool denied = false;
             try { (void)state.slab->settle(state.pin); }
@@ -196,6 +206,9 @@ int main() {
             assert(ores_native_actor_scheduler_send(state.scheduler, state.owner, 4));
             assert(ores_native_actor_scheduler_drain(state.scheduler));
             assert(!state.failed);
+            assert(ores_native_actor_scheduler_send(state.scheduler, other, 5));
+            assert(ores_native_actor_scheduler_drain(state.scheduler));
+            assert(!state.failed && state.closed_foreign_denied);
             ores_native_actor_scheduler_retire(state.scheduler);
             assert(oreslang::runtime::retire_actor_shard_budget_after_done(
                 state.scheduler, state.owner, *state.actor_budget));
