@@ -27,8 +27,8 @@ fn hex_encode(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = Vec::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        out.push(DIGITS[usize::from(byte >> 4)]);
-        out.push(DIGITS[usize::from(byte & 0x0f)]);
+        out.push(DIGITS[usize::from(*byte >> 4)]);
+        out.push(DIGITS[usize::from(*byte & 0x0f)]);
     }
     String::from_utf8(out).expect("hex alphabet is ASCII")
 }
@@ -46,7 +46,7 @@ fn evidence_admission(
         }
         return Ok(());
     }
-    if java.is_none_or(|value| value.trim().is_empty()) {
+    if java.map_or(true, |value| value.trim().is_empty()) {
         return Err("--require-java requires a nonempty --java-command; missing Java must fail closed");
     }
     if !java_revision.is_some_and(valid_git_revision) {
@@ -55,7 +55,7 @@ fn evidence_admission(
     if !llvm_revision.is_some_and(valid_git_revision) {
         return Err("--require-java requires a 40-hex --llvm-revision");
     }
-    if report.is_none_or(|value| value.trim().is_empty()) {
+    if report.map_or(true, |value| value.trim().is_empty()) {
         return Err("--require-java requires a nonempty --report for a durable execution receipt");
     }
     Ok(())
