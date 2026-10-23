@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <exception>
 #include <mutex>
+#include <memory>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -37,8 +39,10 @@ public:
 
     class Delivery final {
     public:
-        Delivery(Lane lane, OwnedDelivery&& owned)
-            : lane_(lane), owned_(std::move(owned)) {}
+        Delivery(Lane lane, OwnedDelivery&& owned,
+                 std::shared_ptr<ActorMailboxCompletion> completion)
+            : lane_(lane), owned_(std::move(owned)),
+              completion_(std::move(completion)) {}
         Delivery(Delivery&&) noexcept = default;
         Delivery& operator=(Delivery&&) noexcept = delete;
         Delivery(const Delivery&) = delete;
@@ -48,16 +52,26 @@ public:
         T& value() { return owned_.value(); }
         const T& value() const { return owned_.value(); }
         std::size_t charged_bytes() const noexcept { return owned_.charged_bytes(); }
-        bool acknowledge_released() { return owned_.acknowledge_released(); }
+        std::uint64_t sequence() const noexcept { return owned_.sequence(); }
+        bool acknowledge_released() {
+            if (!owned_.acknowledge_released()) return false;
+            // Credit is refunded only after physical quiescence. Record the
+            // sequence after ACK, so an earlier message cannot be skipped.
+            completion_->complete(owned_.sequence());
+            return true;
+        }
     private:
         Lane lane_;
         OwnedDelivery owned_;
+        std::shared_ptr<ActorMailboxCompletion> completion_;
     };
 
-    PriorityActorInbox(Limits urgent, Limits normal, Limits bulk)
-        : urgent_(urgent.frames, urgent.bytes),
-          normal_(normal.frames, normal.bytes),
-          bulk_(bulk.frames, bulk.bytes) {}
+    PriorityActorInbox(Limits urgent, Limits normal, Limits bulk,
+                       std::size_t max_unfinished = 4096)
+        : completion_(std::make_shared<ActorMailboxCompletion>(max_unfinished)),
+          urgent_(urgent.frames, urgent.bytes, completion_),
+          normal_(normal.frames, normal.bytes, completion_),
+          bulk_(bulk.frames, bulk.bytes, completion_) {}
 
     PriorityActorInbox(const PriorityActorInbox&) = delete;
     PriorityActorInbox& operator=(const PriorityActorInbox&) = delete;
@@ -80,13 +94,22 @@ public:
             const auto lane = service_order_[next_slot_];
             next_slot_ = (next_slot_ + 1) % service_order_.size();
             auto receipt = port(lane).try_receive();
-            if (receipt) return Delivery(lane, std::move(*receipt));
+            if (receipt) return Delivery(lane, std::move(*receipt), completion_);
         }
         return std::nullopt;
     }
 
     std::size_t used_frames(Lane lane) const { return port(lane).used_frames(); }
     std::size_t used_bytes(Lane lane) const { return port(lane).used_bytes(); }
+
+    // A drain captures snapshot() at its linearization point. An overtaking
+    // URGENT may ACK before an earlier NORMAL, but it cannot advance this
+    // contiguous watermark across that gap. No waiter is registered here.
+    std::uint64_t snapshot() const { return completion_->snapshot(); }
+    std::uint64_t watermark() const { return completion_->watermark(); }
+    bool completed_through(std::uint64_t target) const {
+        return completion_->completed_through(target);
+    }
 
     // Seal all lanes even if the first lane still has outstanding credits.
     // Previously admitted messages remain drainable after close.
@@ -123,6 +146,7 @@ private:
         Lane::Bulk
     };
 
+    std::shared_ptr<ActorMailboxCompletion> completion_;
     BoundedActorPort<T> urgent_;
     BoundedActorPort<T> normal_;
     BoundedActorPort<T> bulk_;
