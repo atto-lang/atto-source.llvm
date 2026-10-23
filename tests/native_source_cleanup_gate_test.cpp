@@ -54,4 +54,21 @@ int main() {
         }
         CHECK(race.ready_for_reclaim());
     }
+
+    // A scheduler-close/cleanup-failure racing the final trusted cleanup
+    // receipt may produce exactly one terminal outcome, never both.
+    for (std::uint64_t i=1;i<=800;++i) {
+        NativeSourceCleanupTicket t{37, i, i + 2000};
+        NativeSourceCleanupGate race(t);
+        CHECK(race.request_cancel(t));
+        CHECK(race.try_claim_cleanup(t));
+        std::atomic<int> wins{0};
+        std::thread complete([&]{ if (race.complete_cleanup(t)) ++wins; });
+        std::thread incomplete([&]{ if (race.fail_cleanup(t)) ++wins; });
+        complete.join(); incomplete.join();
+        CHECK(wins == 1);
+        CHECK(race.ready_for_reclaim() != race.incomplete());
+        CHECK(!race.complete_cleanup(t) && !race.fail_cleanup(t));
+        CHECK(!race.request_cancel({37, i + 1, i + 2000}));
+    }
 }
