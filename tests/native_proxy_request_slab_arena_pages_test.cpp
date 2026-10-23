@@ -22,6 +22,14 @@ int main() {
         ProxyRequestSlab::Layout::SoA, kCapacity, 1);
     assert(words * sizeof(std::uint32_t) == kPageBytes + 64);
     OresActorArena* arena = ores_actor_arena_open(7, 11, 2, kPageBytes, 1);
+    // A valid live slot in a DIFFERENT arena is not an Oreslang slab page,
+    // even if its slot index and generation happen to match locally.
+    OresActorArena* other_arena =
+        ores_actor_arena_open(9, 13, 1, kPageBytes, 1);
+    const auto other_turn = ores_actor_arena_enter(other_arena, 9, 13);
+    const auto real_foreign_handle =
+        ores_actor_arena_alloc(other_arena, other_turn, kPageBytes);
+    ores_actor_arena_leave(other_arena, other_turn);
     const auto turn = ores_actor_arena_enter(arena, 7, 11);
     std::array<OresArenaHandle, 2> pages = {
         ores_actor_arena_alloc(arena, turn, kPageBytes),
@@ -72,6 +80,7 @@ int main() {
     auto foreign = pages[1];
     ++foreign.domain;
     rejects_before_mutation(foreign);
+    rejects_before_mutation(real_foreign_handle);
     auto stale = pages[1];
     ++stale.generation;
     rejects_before_mutation(stale);
@@ -138,5 +147,7 @@ int main() {
     ores_actor_arena_leave(arena, turn);
     ores_actor_arena_retire(arena);
     assert(ores_actor_arena_try_destroy(arena));
+    ores_actor_arena_retire(other_arena);
+    assert(ores_actor_arena_try_destroy(other_arena));
     std::puts("NATIVE_PROXY_ARENA_PAGES_OK");
 }
