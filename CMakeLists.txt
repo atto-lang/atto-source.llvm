@@ -39,7 +39,7 @@ target_include_directories(oreslang-llvmc PRIVATE
     "${LLVM_INCLUDE_DIRS}"
 )
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
+llvm_map_components_to_libnames(ORE_LLVM_LIBS core support asmparser)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
