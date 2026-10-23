@@ -169,7 +169,10 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* worker = find_active_locked(ref);
-            if (closed_ || !worker || worker->phase == Phase::starting)
+            // A STOP fence rejects new DATA turns. A callback already
+            // admitted before the fence may finish, but a stopped actor
+            // must never restart work while its arena is being retired.
+            if (closed_ || !worker || worker->phase != Phase::ready)
                 return UserTurn::retired;
             if (worker->pending_control) return UserTurn::busy;
             ticket = worker->ref.ticket_;
@@ -225,7 +228,9 @@ public:
         if (!handler) throw std::invalid_argument("CONTROL handler required");
         std::lock_guard<std::mutex> guard(mutex_);
         Entry* worker = find_active_locked(ref);
-        if (!worker || closed_ || worker->phase == Phase::starting
+        // Keep already-reserved CONTROL drainable after STOP, but admit
+        // no *new* handler once shutdown has fenced the actor lane.
+        if (!worker || closed_ || worker->phase != Phase::ready
             || worker->pending_control) return false;
         worker->pending_control = std::move(handler);
         worker->ref.ticket_->control_reserved.store(true, std::memory_order_release);
