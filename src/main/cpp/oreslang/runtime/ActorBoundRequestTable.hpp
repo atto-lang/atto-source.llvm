@@ -11,9 +11,14 @@
 #include <utility>
 
 namespace oreslang::runtime {
-template <std::size_t ActorCapacity, std::size_t Slots, std::size_t MaxBytes>
+template <std::size_t ActorCapacity, std::size_t Slots, std::size_t MaxBytes,
+          std::size_t HistoryCapacity = ActorCapacity * 64>
 class ActorBoundRequestTable final {
     static_assert(ActorCapacity > 0, "must reserve at least one actor authority");
+    static_assert(ActorCapacity <= static_cast<std::size_t>(-1) / 64,
+                  "default history capacity would overflow");
+    static_assert(HistoryCapacity >= ActorCapacity,
+                  "historical identity budget must cover active actor capacity");
 public:
     struct ActorIncarnation {
         std::uint64_t id = 0;
@@ -29,8 +34,16 @@ private:
         std::uint64_t owner_token = 0;
         bool active = false;
     };
+    struct History {
+        std::uint64_t id = 0;
+        std::uint64_t highest_generation = 0;
+    };
     Table slots_;
     std::array<Entry, ActorCapacity> actors_{};
+    // Never forget an actor ID's largest incarnation number. Erasing old
+    // identity history would allow a stale identity to be activated again.
+    // Bounded history exhaustion refuses new IDs rather than evicting guards.
+    std::array<History, HistoryCapacity> history_{};
     std::uint64_t next_owner_token_ = 1; // never reused, including on restart
     mutable std::mutex mutex_;
     static bool equal(ActorIncarnation a, ActorIncarnation b) noexcept {
@@ -57,15 +70,26 @@ public:
             if (entry.active && entry.actor.id == actor.id) return false;
         }
         if (next_owner_token_ == 0) return false; // permanent exhaustion
+        Entry* free_entry = nullptr;
         for (auto& entry : actors_) {
-            if (!entry.active) {
-                entry.actor = actor;
-                entry.owner_token = next_owner_token_++;
-                entry.active = true;
-                return true;
-            }
+            if (!entry.active) { free_entry = &entry; break; }
         }
-        return false;
+        if (!free_entry) return false;
+        History* seen = nullptr;
+        History* unused = nullptr;
+        for (auto& history : history_) {
+            if (history.id == actor.id) { seen = &history; break; }
+            if (history.id == 0 && !unused) unused = &history;
+        }
+        if (seen && actor.generation <= seen->highest_generation) return false;
+        if (!seen && !unused) return false; // reject, never evict
+        auto* record = seen ? seen : unused;
+        record->id = actor.id;
+        record->highest_generation = actor.generation;
+        free_entry->actor = actor;
+        free_entry->owner_token = next_owner_token_++;
+        free_entry->active = true;
+        return true;
     }
     std::optional<Ingress> begin(ActorIncarnation actor) {
         std::lock_guard<std::mutex> guard(mutex_);
