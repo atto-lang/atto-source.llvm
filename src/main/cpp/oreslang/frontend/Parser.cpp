@@ -457,6 +457,7 @@ private:
                 TypeOnlyDecl::Method method;
                 method.name = identifier();
                 require("(");
+                std::unordered_set<std::string> formal_names;
                 if (!accept(")")) {
                     do {
                         if (method.parameter_types.size() >= 32)
@@ -464,12 +465,16 @@ private:
                         std::string type;
                         if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
                                 peek_next().text == ":") {
-                            identifier();
+                            const std::string name = identifier();
+                            if (!formal_names.insert(name).second)
+                                fail("TYPE_ONLY_DUPLICATE_PARAM: duplicate method parameter '" + name + "'");
                             require(":");
                             type = type_only_scalar(false);
                         } else {
                             type = type_only_scalar(false);
-                            identifier();
+                            const std::string name = identifier();
+                            if (!formal_names.insert(name).second)
+                                fail("TYPE_ONLY_DUPLICATE_PARAM: duplicate method parameter '" + name + "'");
                         }
                         method.parameter_types.push_back(std::move(type));
                     } while (accept(","));
@@ -494,6 +499,8 @@ private:
             }
             require(braces ? "}" : "end");
         }
+        if (program.type_only_declarations.size() >= 1024)
+            fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
         program.type_only_declarations.push_back(std::move(decl));
     }
 
@@ -2341,10 +2348,13 @@ private:
         // Reject missing parents, interface/trait kind laundering and cycles
         // before the LLVM backend sees any type metadata.
         std::vector<unsigned char> state(program.type_only_declarations.size(), 0);
-        std::function<void(std::size_t)> visit = [&](std::size_t index) {
+        std::function<void(std::size_t, std::size_t)> visit =
+                [&](std::size_t index, std::size_t depth) {
             if (state[index] == 2) return;
             if (state[index] == 1)
                 throw std::runtime_error("TYPE_PARENT_CYCLE: cycle in trait/interface inheritance");
+            if (depth > 128)
+                throw std::runtime_error("TYPE_PARENT_DEPTH_BUDGET: maximum inheritance depth is 128");
             state[index] = 1;
             const auto& decl = program.type_only_declarations[index];
             for (const auto& parent : decl.parents) {
@@ -2358,12 +2368,12 @@ private:
                     throw std::runtime_error("TYPE_PARENT_KIND_MISMATCH: '" + decl.name +
                                              "' cannot extend a different type-only kind '" +
                                              parent + "'");
-                visit(found->second);
+                visit(found->second, depth + 1);
             }
             state[index] = 2;
         };
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i)
-            visit(i);
+            visit(i, 1);
     }
 
     static void validate(const Program& program) {
