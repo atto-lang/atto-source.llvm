@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/OrcJitRunner.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -211,6 +212,7 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
+    bool jit_run = false;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -253,6 +255,9 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--jit") {
+            if (jit_run) { std::cerr << "duplicate JIT option\n"; return 2; }
+            jit_run = true;
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -285,6 +290,12 @@ int main(int argc, char** argv) {
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
     }
+    if (jit_run && (wasm32_target || cortex_m_target || experimental_owned_int ||
+                    experimental_rt_scalar_loop || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen)) {
+        std::cerr << "ORC JIT requires a trusted host program without experimental runtime or RT modes\n";
+        return 2;
+    }
     if (!tree_shake && !tree_shake_roots.empty()) {
         std::cerr << "tree-shake-root requires --tree-shake\n";
         return 2;
@@ -304,7 +315,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--jit] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -542,7 +553,14 @@ int main(int argc, char** argv) {
             require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        const auto ir = oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        if (jit_run) {
+            // No IR on stdout in execution mode: preserve executable exit semantics.
+            const int status = oreslang::execute_host_llvm_ir_with_orc(ir);
+            if (coreLog) coreLog->dump(stderr);
+            return status;
+        }
+        std::cout << ir;
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
