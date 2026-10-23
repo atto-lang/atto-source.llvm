@@ -50,6 +50,18 @@ for tree in "$source_root" "$java_root"; do
   git -C "$tree" diff --cached --quiet --exit-code
 done
 
+# Both repositories must carry the same committed source corpus. Comparing
+# outputs alone is insufficient if one repo silently changes its fixtures.
+for fixture in main.ores main-1.ores; do
+  relative="tests/fixtures/native-class-string/$fixture"
+  git -C "$source_root" ls-files --error-unmatch -- "$relative" >/dev/null
+  git -C "$java_root" ls-files --error-unmatch -- "$relative" >/dev/null
+  if ! cmp -s "$source_root/$relative" "$java_root/$relative"; then
+    echo "Java and LLVM class/String source fixtures diverge: $relative" >&2
+    exit 65
+  fi
+done
+
 # Rebuild both implementations from the exact pinned source trees; a stale
 # compiler/guest runtime may not be credited to the source revisions.
 for tool in cmake mvn; do
