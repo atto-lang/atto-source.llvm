@@ -329,3 +329,53 @@ Exact-head production CTest and sanitizers remain **unverified** because
 source-org GitHub Actions jobs complete with zero recorded steps. The
 source-free private runner is not authorized to receive source without
 independent approval under Java security issue #962.
+
+### Exact-revision local production test entrypoints
+
+Runner allocation/billing/organization policy is currently preventing
+source-organization GitHub Actions jobs from starting. A failed zero-step
+Actions run is not evidence that any compiler or runtime test passed or
+failed. The protected private-CI destination allowlist is still empty;
+do NOT upload private repository source to another organization or interpret
+a source-free runner canary as source-transfer authorization.
+
+Two source-local, no-network, no-credentials verification scripts now
+support exact-head testing from an existing authorized checkout:
+
+```bash
+# Freeze the SHA from the review/PR, not from an unreviewed moving branch.
+EXPECTED_COMMIT='<40-hex-commit-from-LLVM-PR-864>'
+bash scripts/verify-actor-lifecycle-direct.sh "$EXPECTED_COMMIT"
+# If LLVM + CMake packages are installed, also run actual CTest targets:
+bash scripts/verify-actor-lifecycle-local.sh "$EXPECTED_COMMIT"
+```
+
+Both scripts reject a mismatched Git HEAD and a dirty worktree and record
+the actual HEAD and Git-tree SHA in the out-of-tree build receipt. By
+default they repeat targeted lifecycle tests three times and compile a
+separate Clang AddressSanitizer + UndefinedBehaviorSanitizer configuration;
+the repetition count can be set with `ORES_LIFECYCLE_REPEATS` (1..100).
+Use `ORES_LIFECYCLE_ASAN=0` only to explicitly skip sanitizers.
+Each matrix prints a pass marker **only** after successful execution.
+
+The direct test script builds the exact production C runtime source objects
+and production C++ header tests, not models or mocks. It does not require
+LLVM or CMake, and covers these exact CTest-equivalent programs:
+
+- `source_actor_implicit_child_scope`
+- `source_actor_opaque_ref_validation`
+- `native_actor_nested_scope_integration`
+- `native_actor_group_managed_worker_readiness`
+
+The CMake script builds their exact CMake targets, asserts all four test
+names are registered using `ctest --show-only=json-v1`, then executes
+their real CTests. Note: `actor_group_lifecycle` is **not** the registered
+CTest name; the actual name is
+`native_actor_group_managed_worker_readiness`.
+
+The direct shell script was verified locally at its exact fetched Git blob
+(`b3e7238ec8c28f36bf6a256921588aae38bd0280`): `bash -n` passed,
+and isolated Git-fixture tests confirmed wrong-HEAD and dirty-worktree
+inputs fail closed with exit code 2. **The OresVM production source was not
+available in that local execution environment**; therefore compilation,
+CTest and sanitizer results for the LLVM PR remain unverified.
