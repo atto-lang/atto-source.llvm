@@ -2317,6 +2317,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-supervisor-control-overflow-test)
     set_tests_properties(native_supervisor_control_overflow_characterization PROPERTIES TIMEOUT 20)
 
+    # One scheduler lane handles 1,000 distinct child terminations while
+    # its ordinary DATA mailbox is saturated and its current turn is held.
+    add_executable(oreslang-native-supervisor-thousand-failures-test
+        tests/native_supervisor_thousand_failures_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-thousand-failures-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-thousand-failures-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-thousand-failures-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_thousand_failures
+        COMMAND oreslang-native-supervisor-thousand-failures-test)
+    set_tests_properties(native_supervisor_thousand_failures PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
