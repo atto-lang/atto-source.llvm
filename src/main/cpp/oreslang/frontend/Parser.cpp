@@ -382,6 +382,10 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        // Reject unresolved/duplicated type promises before publishing typed
+        // IR signatures or running the ownership admission.
+        validate_type_only_declarations(program);
+        resolve_forward_alias_uses(program);
         validate(program);
         return program;
     }
@@ -477,10 +481,15 @@ private:
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
-            require("=");
-            decl.alias_target = type_alias_target();
-            require(";");
-            scalar_alias_targets_.emplace(decl.name, decl.alias_target);
+            if (!already_defined && accept(";")) {
+                decl.forward_declaration = true;
+                forward_scalar_alias_names_.insert(decl.name);
+            } else {
+                require("=");
+                decl.alias_target = type_alias_target();
+                require(";");
+                scalar_alias_targets_.emplace(decl.name, decl.alias_target);
+            }
         } else {
             type_only_nominals_.insert(decl.name);
             if (accept("extends")) {
@@ -2930,6 +2939,7 @@ private:
     // complete alias graph (including forward targets and unused aliases)
     // happens before LLVM IR generation.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
+    std::unordered_set<std::string> forward_scalar_alias_names_;
     std::unordered_set<std::string> type_only_nominals_;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
