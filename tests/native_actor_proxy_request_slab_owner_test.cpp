@@ -131,7 +131,10 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
         } else if (step == 4) {
             assert(state.slab->live() == 0);
             state.slab->close();
-            state.other_slab->close();
+            // Deliberately omit other_slab.close() even though all its
+            // requests are settled: after the exact scheduler-done fence,
+            // trusted host retirement must scrub/free it safely instead of
+            // aborting an otherwise quiescent supervisor shutdown.
         } else {
             state.failed = true;
         }
