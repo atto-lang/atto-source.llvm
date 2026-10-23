@@ -43,11 +43,30 @@ supervised, bounded quarantine and isolate teardown.
   (800 adversarial pairings per CTest invocation).
 - Stale actor/continuation ticket rejection and duplicate claim denial.
 - Three successive cleanup yield/reclaim cycles before physical completion.
-- Fatal/incomplete cleanup can never be converted into a completed receipt.
+- Another 800 cleanup-failure-versus-completion adversarial pairings ensure\n  exactly one terminal result; failure cannot be rewritten as success.\n- Fatal/incomplete cleanup can never be converted into a completed receipt.
 - Actual actor resource-registry and ActorGroup `get_done()` integration
   refuses reclamation on cancel request or yielded cleanup and admits it
   after an explicit completed receipt.
 - Incomplete cleanup forbids native arena release and falsely successful DONE.
+
+## Focused executable evidence (not a full backend build)
+
+On the October 22 feature head following the semantic `main` merge, the
+**exact Git blobs** for `NativeSourceCleanupGate.hpp`
+(`7d70ac63c0bc883f7301414c84e4fa0fd6659da7`) and
+`native_source_cleanup_gate_test.cpp`
+(`0df2f5616169afd3594ae78e635f9e9043e77b25`) were materialized
+locally and independently verified with `git hash-object`. Compilation
+and executable tests passed with Clang 17 / GCC 14 (`-std=c++17 -Werror`);
+Clang 17 ASan+UBSan passed with leak detection and halt-on-error.
+The harness exercises **1,600 racing pairs per run**, plus stale-ticket,
+duplicate-claim, failure-terminal and multi-turn yield invariants.
+
+These receipts do **not** validate full repository CMake, integrated
+`NativeActorRetirementBarrier`, generated LLVM IR, executed `.ores`
+programs or GraalVM JDK25. The source GitHub Actions runs still show
+`runner_id=0` and `steps=[]`; source-org administrator admission is
+a prerequisite for full exact-head tests.
 
 ## Not yet implemented; hard merge gates
 
