@@ -73,6 +73,17 @@ SCALAR_CONTINUATION_SURFACE = """pub routine count_to_one_thousand(): int {
 }
 """
 
+TERNARY_CALL_SURFACE = """fnc branch_only(): int {
+  return 42;
+}
+fnc dead(): int {
+  return 9;
+}
+pub fnc main(): int {
+  return true ? branch_only() : 0;
+}
+"""
+
 def compile_ir(compiler, source, shaken, roots=(), compiler_args=()):
     with tempfile.TemporaryDirectory(prefix="oreslang-tree-shake-source-") as td:
         path=Path(td)/"case.ores"
@@ -134,6 +145,14 @@ def main():
     require(missing.returncode!=0 and missing.stdout==b"" and
             b"unknown tree-shake root" in missing.stderr,
             "unknown explicit tree-shake root did not fail closed")
+
+    ternary=compile_ir(args.compiler,TERNARY_CALL_SURFACE,True)
+    require(ternary.returncode==0,
+            "ternary tree-shaken compile failed: "+repr(ternary.stderr[:1024]))
+    require(b"@branch_only(" in ternary.stdout,
+            "call reachable only from ternary arm was removed")
+    require(b"@dead(" not in ternary.stdout,
+            "unreachable function survived ternary tree shaking")
 
     class_control=compile_ir(args.compiler,CLASS_SURFACE,False)
     class_shaken=compile_ir(args.compiler,CLASS_SURFACE,True)
