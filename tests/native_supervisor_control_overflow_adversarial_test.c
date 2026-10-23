@@ -139,6 +139,9 @@ int main(void) {
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 13));
     require(ores_native_actor_scheduler_try_send(s.scheduler, s.parent, 14)
             == ORES_NATIVE_SEND_MAILBOX_FULL);
+    /* Raw scheduler STOP must not orphan two registered children that
+     * have physically retired but not yet reported their terminal state. */
+    require(!ores_native_actor_scheduler_stop(s.scheduler, s.parent));
 
     const OresNativeActorTerminalFailure a =
         {ORES_NATIVE_CONTROL_PANIC, s.child_a, 99, 101};
@@ -146,6 +149,8 @@ int main(void) {
         {ORES_NATIVE_CONTROL_PANIC, s.child_b, 99, 102};
     require(ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 77));
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
+    /* Even one remaining unreported child must prevent parent retirement. */
+    require(!ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
     /* Duplicate publication is rejected without overwriting a receipt. */
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
