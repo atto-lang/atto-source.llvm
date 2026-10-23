@@ -639,6 +639,20 @@ int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
     if (!matching(s, actor) || s->actors[actor.actor_slot].retired) {
         unlock(s); return 0;
     }
+    /* Defense in depth: the host VM already guards supervisor STOP, but the
+     * raw scheduler must not orphan its immutable child registrations. A
+     * terminal receipt can be queued/in-flight/acknowledged; simply stopping
+     * or physically retiring a child without publication is insufficient. */
+    for (size_t j = 0; j < s->actor_count; ++j) {
+        const ActorLane* child = &s->actors[j];
+        if (child->supervisor_bound && child->failure_state == 0
+            && child->supervisor.scheduler_domain == actor.scheduler_domain
+            && child->supervisor.actor_slot == actor.actor_slot
+            && child->supervisor.generation == actor.generation) {
+            unlock(s);
+            return 0;
+        }
+    }
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->retired = 1;
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
