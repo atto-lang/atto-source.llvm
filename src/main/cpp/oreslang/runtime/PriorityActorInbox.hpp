@@ -62,6 +62,15 @@ public:
             completion_->complete(owned_.sequence());
             return true;
         }
+
+        // Only runtime-owned terminal STOP/CANCEL cleanup calls this after
+        // quiescence. A discarded delivery is not a processed message:
+        // its sequence advances the contiguous fence but fails drain_status.
+        bool retire_aborted_after_quiescence() {
+            if (!owned_.acknowledge_released()) return false;
+            completion_->complete(owned_.sequence(), true);
+            return true;
+        }
     private:
         Lane lane_;
         OwnedDelivery owned_;
@@ -143,6 +152,35 @@ public:
     std::uint64_t watermark() const { return completion_->watermark(); }
     bool completed_through(std::uint64_t target) const {
         return completion_->completed_through(target);
+    }
+    using DrainStatus = ActorMailboxCompletion::DrainStatus;
+    DrainStatus drain_status(std::uint64_t target) const {
+        return completion_->drain_status(target);
+    }
+
+    /**
+     * Terminal STOP/CANCEL cleanup after sender preparations and other actor
+     * carriers have been externally fenced. All queued user mail is retired
+     * as ABORTED (never misreported as successfully delivered), while any
+     * already checked-out in-flight delivery remains owned by its receiver.
+     *
+     * Call only after actor scheduler/lifecycle grants terminal cleanup
+     * authority. A pending producer move can still publish an admitted
+     * frame after seal; callers MUST join those moves before this method.
+     */
+    std::size_t retire_queued_after_quiescence() {
+        try { close(); }
+        catch (const std::logic_error&) {
+            // Expected: outstanding queued/checked-out/preparing credits;
+            // every lane has already been sealed by close().
+        }
+        std::size_t count = 0;
+        while (auto next = try_receive()) {
+            if (!next->retire_aborted_after_quiescence())
+                throw std::logic_error("actor mailbox retirement duplicate receipt");
+            ++count;
+        }
+        return count;
     }
 
     // Seal all lanes even if the first lane still has outstanding credits.
