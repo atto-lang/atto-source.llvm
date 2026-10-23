@@ -56,7 +56,11 @@ private:
     }
     void recycle(std::size_t i) noexcept { // caller holds mutex_
         auto& slot = slots_[i];
-        assert(slot.readers == 0 && free_count_ < Slots);
+        // Queue corruption is fatal even under NDEBUG: silent ring overflow
+        // could hand out still-owned request buffers to unrelated actors.
+        if (slot.readers != 0 || free_count_ >= Slots ||
+            (slot.phase != Phase::closing && slot.phase != Phase::writing &&
+             slot.phase != Phase::aborting)) std::terminate();
         slot.owner = 0;
         slot.size = 0;
         if (slot.generation == UINT32_MAX) {
@@ -78,7 +82,10 @@ private:
     void drop_read(std::size_t i) noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
         auto& slot = slots_[i];
-        assert(slot.readers > 0);
+        // Never let a bookkeeping underflow resurrect an already-freed slot.
+        if (slot.readers == 0 ||
+            (slot.phase != Phase::ready && slot.phase != Phase::closing))
+            std::terminate();
         --slot.readers;
         if (slot.readers == 0 && slot.phase == Phase::closing) recycle(i);
     }
@@ -176,7 +183,10 @@ public:
         head_ = (head_ + 1) % Slots;
         --free_count_;
         auto& slot = slots_[i];
-        assert(slot.phase == Phase::free && slot.generation != UINT32_MAX);
+        // Production builds must reject a broken free-list, not rely on
+        // assert() being enabled. Generation exhaustion never wraps.
+        if (slot.phase != Phase::free || slot.generation == UINT32_MAX ||
+            slot.readers != 0) std::terminate();
         ++slot.generation;
         slot.owner = owner;
         slot.phase = Phase::writing;
