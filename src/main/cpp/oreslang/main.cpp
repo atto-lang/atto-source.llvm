@@ -146,6 +146,20 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
                         function.name, function.parameters.size());
                 if (reachable.insert(key).second) pending.push_back(key);
             }
+            if (function.exported) {
+                // LLVM names overloaded families according to family
+                // cardinality. Preserve every sibling of a public overload in
+                // conservative mode so removing a private sibling cannot
+                // silently rename the surviving exported ABI symbol.
+                for (const auto& sibling : program.functions) {
+                    if (sibling.name != function.name) continue;
+                    const std::string sibling_key =
+                        oreslang::realtime_detail::function_key(
+                            sibling.name, sibling.parameters.size());
+                    if (reachable.insert(sibling_key).second)
+                        pending.push_back(sibling_key);
+                }
+            }
         }
     }
     if (pending.empty())
