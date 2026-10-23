@@ -2482,6 +2482,9 @@ private:
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
             const auto& decl = program.type_only_declarations[i];
             if (decl.forward_declaration) {
+                if (declarations.count(decl.name))
+                    throw std::runtime_error("TYPE_FORWARD_AFTER_DEFINITION: type '" + decl.name +
+                                             "' cannot be promised after completion");
                 if (decl.kind != TypeKind::Alias ||
                         !forward_visibility.emplace(decl.name, decl.exported).second)
                     throw std::runtime_error("TYPE_FORWARD_DUPLICATE: repeated opaque declaration '"
