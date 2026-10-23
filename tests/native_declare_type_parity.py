@@ -97,6 +97,22 @@ NEGATIVE = {
         "type Code = int;\ntype Code = bool;\n"+ENTRY,
         "duplicate native type alias"
     ),
+    "refined-with-min-max-unverified": (
+        "declare type Code;\n"
+        "fnc identity(Code value): Code { return value; }\n"
+        "define type Code = int with min 0 and max 5;\n" + ENTRY,
+        "proof-preserving lowering"
+    ),
+    "refined-with-value-unverified": (
+        "declare type Code;\n"
+        "define type Code = int with value gte 0 and value lte 5;\n" + ENTRY,
+        "proof-preserving lowering"
+    ),
+    "refined-as-language-unverified": (
+        "declare type Code;\n"
+        "define type Code = int as positive integer;\n" + ENTRY,
+        "proof-preserving lowering"
+    ),
     "generic-forward": (
         "declare type Code<T>;\ndefine type Code = int;\n"+ENTRY,
         "generic type alias forward"
