@@ -11,11 +11,10 @@
 /*
  * Adversarial, real NativeActorScheduler dispatch test.
  *
- * This is a characterization of the CURRENT one-slot CONTROL admission API,
- * not a claim of lossless supervisor failure delivery. When A fills CONTROL,
- * B returns 0 and an external trusted owner must retain and retry B. The
- * companion P0 issue requires integrating a durable per-child failure lane
- * before the end-to-end supervision contract can be considered proven.
+ * This is a real scheduler regression for pre-bound distinct child receipts:
+ * failure A and failure B must both survive USER saturation, and the parent
+ * must dispatch them serially ahead of previously queued USER traffic.
+ * This is not source-level supervisor/guest/ABI parity proof.
  */
 typedef struct {
     OresNativeActorScheduler* scheduler;
@@ -116,6 +115,10 @@ int main(void) {
     s.child_b = ores_native_actor_scheduler_spawn(s.scheduler, 2);
     require(s.parent.scheduler_domain && s.child_a.scheduler_domain
             && s.child_b.scheduler_domain);
+    require(ores_native_actor_scheduler_bind_supervisor(
+        s.scheduler, s.parent, s.child_a));
+    require(ores_native_actor_scheduler_bind_supervisor(
+        s.scheduler, s.parent, s.child_b));
 
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 11));
     await_flag(&s.first_started);
@@ -129,24 +132,21 @@ int main(void) {
     const OresNativeActorTerminalFailure b =
         {ORES_NATIVE_CONTROL_PANIC, s.child_b, 99, 102};
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
-    /* A valid, distinct child failure is NOT retained by this scheduler. */
-    require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
+    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
+    /* Duplicate publication is rejected without overwriting a receipt. */
+    require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
     require(s.count == 1);
     atomic_store(&s.unblock_first, 1);
     require(ores_native_actor_scheduler_drain(s.scheduler));
 
-    /* CONTROL gets the next parent turn; USER remains FIFO and is not lost. */
-    require(s.count == 4);
+    /* CONTROL gets the next two parent turns; USER remains FIFO and intact. */
+    require(s.count == 5);
     require(s.trace[0] == 11 && s.trace[1] == 101
-            && s.trace[2] == 12 && s.trace[3] == 13);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 1);
-    require(atomic_load(&s.peak_parent_active) == 1);
-
-    /* External caller-held retry. Real supervision MUST make this durable. */
-    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
-    require(ores_native_actor_scheduler_drain(s.scheduler));
-    require(s.count == 5 && s.trace[4] == 102);
+            && s.trace[2] == 102 && s.trace[3] == 12
+            && s.trace[4] == 13);
     require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
+    require(atomic_load(&s.peak_parent_active) == 1);
+    require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
 
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
@@ -154,6 +154,6 @@ int main(void) {
     require(ores_native_actor_scheduler_stop(s.scheduler, s.child_b));
     ores_native_actor_scheduler_retire(s.scheduler);
     require(ores_native_actor_scheduler_try_destroy(s.scheduler));
-    puts("NATIVE_SUPERVISOR_CONTROL_OVERFLOW_CHARACTERIZED: retry_required=1");
+    puts("NATIVE_SUPERVISOR_CONTROL_OVERFLOW_PASS: distinct=2 retained=2");
     return 0;
 }
