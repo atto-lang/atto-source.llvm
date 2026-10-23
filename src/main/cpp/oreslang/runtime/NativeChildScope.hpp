@@ -106,8 +106,13 @@ public:
             for (auto& pair : s->entries) {
                 auto& entry = pair.second;
                 if (!entry.child || entry.stop_issued) continue;
-                entry.stop_issued = true;
                 callbacks.push_back(entry.stop);
+            }
+            // Mark only after the callback vector is complete. Allocation or
+            // copy failure cannot silently lose stop obligations.
+            for (auto& pair : s->entries) {
+                auto& entry = pair.second;
+                if (entry.child && !entry.stop_issued) entry.stop_issued = true;
             }
             publish = joined_locked(*s);
         }
