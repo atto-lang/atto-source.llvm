@@ -1629,6 +1629,35 @@ if(BUILD_TESTING)
             COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
     set_tests_properties(native_structural_shape_failclosed PROPERTIES TIMEOUT 180)
+    # Bounded exhaustive shared/exclusive loan and alias partitions. Keep both
+    # registrations even without rustc/clang: unavailable tooling must fail.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_alias_matrix.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_alias_matrix.rs"
+            VERBATIM)
+        add_custom_target(oreslang-native-borrow-alias-matrix-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix")
+    endif()
+    foreach(mode IN ITEMS release sanitizer)
+        if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+            set(alias_matrix_extra)
+            if(mode STREQUAL "sanitizer")
+                set(alias_matrix_extra --sanitize)
+            endif()
+            add_test(NAME native_borrow_alias_matrix_${mode}
+                COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+                    ${alias_matrix_extra})
+        else()
+            add_test(NAME native_borrow_alias_matrix_${mode}
+                COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(native_borrow_alias_matrix_${mode} PROPERTIES TIMEOUT 180)
+    endforeach()
     add_test(NAME native_strict_nonblocking_io_source_guard
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")

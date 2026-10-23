@@ -21,10 +21,16 @@ def main():
     parser.add_argument('--clang', required=True)
     args = parser.parse_args()
     cases = Path(__file__).with_name('fixtures').joinpath('borrow-contract.tsv')
+    rows = cases.read_text().splitlines()
+    require(len(rows) == 162, 'shared borrow corpus must contain all 162 vectors')
+    names = set()
     with tempfile.TemporaryDirectory(prefix='ores-borrow-contract-') as tmp:
         root = Path(tmp)
-        for line in cases.read_text().splitlines():
-            expected, name, code = line.split('\t')
+        for line in rows:
+            expected, name, code = line.split('\t', 2)
+            require(expected in ('accept', 'reject'), ('unknown verdict', expected))
+            require(name not in names, ('duplicate vector', name))
+            names.add(name)
             source = root / (name + '.ores')
             source.write_text(code)
             result = run([args.compiler, str(source)])
@@ -41,7 +47,7 @@ def main():
                 require(linked.returncode == 0, (name, linked.stderr))
                 executed = run([str(binary)])
                 require(executed.returncode == 42, (name, executed))
-    print('PASS shared borrow contract: 18 cases; accepted programs execute native code')
+    print(f'PASS shared borrow contract: {len(cases.read_text().splitlines())} cases; accepted programs execute native code')
 
 
 if __name__ == '__main__':
