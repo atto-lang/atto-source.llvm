@@ -182,3 +182,45 @@ the hint fails. The separate arena/continuation/FFI release gate remains.
 Test coverage is committed for post-close wakeups, duplicate registration and
 already-joined paths. Separate isolated C++17 model testing passed 1,001 cases
 with strict warnings and ASan/UBSan; this is **not** exact-head repository CTest.
+
+
+### SourceActorBootstrap implicit lifetime substrate
+
+`SourceActorBootstrap.c` is the real native C source-actor ABI entered
+by compiler-emitted `oreslang_source_actor_spawn`, distinct from the
+C++ `NativeActorGroup` host reference substrate. Runtime callback
+execution now sets a temporary thread-local *trusted actor identity*
+for the duration of the constructor/message only. Actors spawned by
+that callback inherit a runtime-owned `lifetime_parent` edge; host
+main spawns remain lifetime-root actors. There is no automatic restart,
+event-bus group, supervisor creation, per-actor scheduler or carrier.
+
+Trusted `oreslang_source_actor_stop(parent)` seals the entire in-memory
+descendant tree under the group admission mutex before issuing stop
+to every member in reverse creation/ancestry order. It releases that
+mutex before waiting for each native scheduler DONE and before returning
+from STOP, then retires and frees every actor-owned heap leaf-first.
+An actor attempting to spawn after its owner has crossed the fence
+gets a NULL host-ABI result before consuming a slot rather than causing
+a process-wide abort; source lowering still owes a checked effect.
+
+`source_actor_implicit_child_scope` CTest now compiles the **actual**
+SourceActorBootstrap, NativeOresVM, NativeActorScheduler and actor-owned
+heap implementation with strict warnings. Ten depth-three executions
+hold a grandchild carrier open while a concurrent trusted host STOP
+joins the subtree, and 100 deterministically ordered races prove that
+a spawn after a parent STOP fence is rejected without allocating a
+descendant. The test-only fence observation API is compiled only under
+`ORESLANG_SOURCE_ACTOR_TESTING` and cannot be called from guest Oreslang.
+
+**Outstanding:** This is a limited compiler-runtime ABI bridge,
+not generalized `spawn` syntax inside source actor methods, and its
+STOP is still a host main barrier rather than a suspendable guest
+`get_done()`. C++ `NativeActorGroup` and C `SourceActorBootstrap`
+are distinct paths; future integration must not duplicate authoritative
+ownership across them. Pending: checked cancellation/spawn rejection
+lowering, generation-fenced guest ActorRef lifecycle, source actor
+failure/supervisor recovery CONTROL integration, arena/continuation/FFI
+loan receipts, and same-revision native CTest/sanitizer execution.
+The new test target has been committed, but source-repository Actions
+still produce zero recorded job steps. Do not claim this suite passed.
