@@ -62,6 +62,7 @@ public:
             // Credit is refunded only after physical quiescence. Record the
             // sequence after ACK, so an earlier message cannot be skipped.
             completion_->complete(owned_.sequence());
+            if (bound_actor_) bound_actor_->release_resource_loan();
             return true;
         }
 
@@ -71,6 +72,7 @@ public:
         bool retire_aborted_after_quiescence() {
             if (!owned_.acknowledge_released()) return false;
             completion_->complete(owned_.sequence(), true);
+            if (bound_actor_) bound_actor_->release_resource_loan();
             return true;
         }
     private:
@@ -100,6 +102,7 @@ public:
         if (sealed_ || bound_target_ || active_admissions_ != 0 ||
             completion_->snapshot() != 0)
             throw std::logic_error("actor inbox target already bound or active");
+        bound_actor_ = target;
         bound_target_ = OwnerKey{target.runtime_id(), target.actor_id(),
                                  target.generation()};
     }
@@ -147,7 +150,8 @@ public:
             const auto lane = service_order_[next_slot_];
             next_slot_ = (next_slot_ + 1) % service_order_.size();
             auto receipt = port(lane).try_receive();
-            if (receipt) return Delivery(lane, std::move(*receipt), completion_);
+            if (receipt)
+                return Delivery(lane, std::move(*receipt), completion_, bound_actor_);
         }
         return std::nullopt;
     }
@@ -221,7 +225,7 @@ public:
             const NativeActorGroup::RuntimeFinalizer& finalizer,
             const NativeActorRef& actor) {
         if (!finalizer.matches(actor) ||
-            !finalizer.ready_for_resource_reclamation())
+            !finalizer.ready_for_actor_turn_quiescence())
             throw std::logic_error("actor mailbox retirement lacks physical turn fence");
         {
             std::lock_guard<std::mutex> guard(service_mutex_);
@@ -358,6 +362,7 @@ private:
     BoundedActorPort<T> bulk_;
     std::mutex service_mutex_;
     std::optional<OwnerKey> bound_target_;
+    std::optional<NativeActorRef> bound_actor_;
     bool sealed_ = false;
     std::size_t active_admissions_ = 0;
     std::size_t next_slot_ = 0;
