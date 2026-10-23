@@ -65,6 +65,23 @@ static int64_t parent_message(
     return 1;
 }
 
+static atomic_int racing_parent_entered, allow_racing_spawn, racing_spawn_denied;
+
+static int64_t parent_racing_spawn(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap;
+    check(domain && epoch && payload == 9);
+    atomic_store_explicit(&racing_parent_entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&allow_racing_spawn, memory_order_acquire))
+        sched_yield();
+    /* The checked host ABI denies a spawn after this parent's STOP fence,
+     * before consuming a slot. No child is created and no VM-wide abort. */
+    void* denied = oreslang_source_actor_spawn(init, child_message, 1);
+    check(denied == NULL);
+    atomic_store_explicit(&racing_spawn_denied, 1, memory_order_release);
+    return 9;
+}
+
 static void* stop_on_trusted_host(void* opaque) {
     atomic_store_explicit(&stop_started, 1, memory_order_release);
     oreslang_source_actor_stop(opaque);
@@ -102,6 +119,37 @@ int main(void) {
         check(atomic_load(&stop_finished));
         check(atomic_load(&grandchild_exited));
     }
-    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS iterations=10 depth=3");
+    /* Deterministic STOP-vs-spawn adversarial case. The host-only test
+     * probe observes an actual committed fence, never just thread start. */
+    for (int round = 0; round < 100; ++round) {
+        atomic_store(&racing_parent_entered, 0);
+        atomic_store(&allow_racing_spawn, 0);
+        atomic_store(&racing_spawn_denied, 0);
+        atomic_store(&stop_started, 0);
+        atomic_store(&stop_finished, 0);
+        void* parent = oreslang_source_actor_spawn(init, parent_racing_spawn, 1);
+        check(parent != NULL);
+        oreslang_source_actor_send(parent, 9);
+        wait_for(&racing_parent_entered);
+        pthread_t closer;
+        check(pthread_create(&closer, NULL, stop_on_trusted_host, parent) == 0);
+        wait_for(&stop_started);
+        int fenced = 0;
+        for (int i = 0; i < 10000; ++i) {
+            if (oreslang_source_actor_test_stopping(parent)) {
+                fenced = 1;
+                break;
+            }
+            struct timespec pause = {0, 1000000};
+            nanosleep(&pause, NULL);
+        }
+        check(fenced);
+        check(!atomic_load_explicit(&stop_finished, memory_order_acquire));
+        atomic_store_explicit(&allow_racing_spawn, 1, memory_order_release);
+        check(pthread_join(closer, NULL) == 0);
+        check(atomic_load(&stop_finished));
+        check(atomic_load(&racing_spawn_denied));
+    }
+    puts("SOURCE_ACTOR_IMPLICIT_CHILD_SCOPE_PASS iterations=10 depth=3 stop_spawn_races=100");
     return 0;
 }
