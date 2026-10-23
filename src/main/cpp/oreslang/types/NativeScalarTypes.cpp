@@ -44,7 +44,7 @@ void validate_native_scalar_types(const Program& program) {
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
         for (const auto& field : cls->second->fields)
-            if (field.name == name) return field.int_array ? Type{Kind::Array, "int"} : scalar(field.scalar_type == ScalarType::Bool);
+            if (field.name == name) return field.int_array ? Type{Kind::Array, "int"} : scalar(field.scalar_type);
         fail(offset, "unknown class field");
     };
     std::function<Type(const Expression&, const Locals&)> expression;
@@ -147,10 +147,14 @@ void validate_native_scalar_types(const Program& program) {
     // initialize bool fields; integer bit patterns cannot become boolean storage.
     for (const auto& cls : program.classes) {
         Locals parameters;
-        for (const auto& name : cls.constructor_parameters) parameters.emplace(name, scalar(false));
+        if (!cls.constructor_parameter_types.empty() && cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
+            throw std::runtime_error("native constructor type/parameter arity mismatch");
+        for (std::size_t i = 0; i < cls.constructor_parameters.size(); ++i)
+            parameters.emplace(cls.constructor_parameters[i], scalar(cls.constructor_parameter_types.empty()
+                ? ScalarType::I64 : cls.constructor_parameter_types[i]));
         for (const auto& field : cls.fields)
             if (field.initializer_expression)
-                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type == ScalarType::Bool),
+                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type),
                         field.initializer_expression->offset, "class field initializer type");
     }
     std::function<void(const Function&, Locals)> function;
@@ -162,8 +166,12 @@ void validate_native_scalar_types(const Program& program) {
                     binding.initializer->kind == Expression::Kind::Console;
                 require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
             }
-            for (const auto& arg : binding.constructor_arguments)
-                require(expression(*arg, locals), scalar(false), arg->offset, "constructor parameter requires int");
+            for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                const auto& cls = *classes.at(binding.class_name);
+                const auto& arg = binding.constructor_arguments[i];
+                require(expression(*arg, locals), scalar(cls.constructor_parameter_types.empty()
+                    ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), arg->offset, "constructor parameter type mismatch");
+            }
             locals.emplace(binding.name, local_type(binding));
         }
         if (fn.scalar_while)

@@ -670,7 +670,11 @@ void validate_i64_ownership(const Program& program) {
                 std::function<void(const Expression&)> validate_scalar;
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
-                    if (expr.kind == K::Integer || expr.kind == K::Boolean) return;
+                    if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::Field) {
+                        check_value(expr, locals, functions);
+                        return;
+                    }
                     if (expr.kind == K::Variable) {
                         const auto it = locals.find(expr.name);
                         if (it == locals.end() || it->second.heap_owned ||

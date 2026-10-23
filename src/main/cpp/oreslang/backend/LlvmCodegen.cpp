@@ -515,6 +515,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& local : fn.locals) {
             if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
             scan_string(local.initializer.get());
+            for (const auto& arg : local.constructor_arguments) scan_string(arg.get());
         }
         for (const auto& s : fn.statements) scan_statement(s);
         for (const auto& g : fn.early_returns) {
@@ -527,6 +528,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         scan_string(fn.result.get());
     };
     for (const auto& fn : source.functions) scan_function(fn);
+    for (const auto& cls : source.classes) for (const auto& field : cls.fields) {
+        if (field.scalar_type == ScalarType::String) string_runtime = true;
+        scan_string(field.initializer_expression.get());
+    }
     for (const auto& actor : source.actors) {
         for (const auto& field : actor.fields) scan_string(field.initializer.get());
         scan_function(actor.on_message);

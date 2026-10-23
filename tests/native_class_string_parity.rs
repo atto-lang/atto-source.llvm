@@ -49,6 +49,27 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "routing-path-segment-record",
+            include_str!("fixtures/native-class-string/path-segment.ores"),
+            "foo\n",
+        ),
+        (
+            "typed-bool-and-string-record",
+            r#"define class Header as pub val bool enabled; pub val String text; end
+              pub routine main():int {
+                val Header header=new Header(true,"Content-Type");
+                stdio.println(header.text);
+                return header.enabled && header.text == "Content-Type" ? 0 : 1;
+              }"#,
+            "Content-Type\n",
+        ),
+        (
+            "string-field-literal-initializer",
+            r#"define class Label as pub val String text="ready"; end
+              pub routine main():int {val Label label=new Label();stdio.println(label.text);return 0;}"#,
+            "ready\n",
+        ),
+        (
             "typed-string-array-path-segments",
             include_str!("fixtures/native-class-string/string-array.ores"),
             "foo\nbaz\n",
@@ -201,6 +222,12 @@ fn main() {
         }
     }
     let negatives = [
+        ("string-record-integer-argument", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(1);return 0;}".to_owned(), foo.to_owned()),
+        ("integer-record-string-argument", "define class Segment as pub val int kind; end pub fnc main():int{val Segment s=new Segment(\"bad\");return 0;}".to_owned(), foo.to_owned()),
+        ("string-record-missing-argument", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment();return 0;}".to_owned(), foo.to_owned()),
+        ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
+        ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
+        ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),
