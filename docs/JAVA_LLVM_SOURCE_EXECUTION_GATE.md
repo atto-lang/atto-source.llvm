@@ -16,9 +16,12 @@ The strict differential runner adds two independent Java executions per
 positive source program and byte-compares each to the expected native output.
 A Java launcher must be supplied; there is **no** skip or fallback when Java
 cannot execute a fixture. Both source trees must be checked out independently
-at known Git commits, with no tracked local edits. The launcher and both
-source fixtures must be tracked by the pinned checkouts; the runner checks
-byte-for-byte fixture equality and performs fresh compiler/runtime builds.
+at known Git commits, with no tracked **or untracked** local edits.
+The launcher and both source fixtures must be tracked by the pinned checkouts;
+the runner checks byte-for-byte fixture equality and performs fresh
+compiler/runtime builds. The JSON receipt records per-program native and Java
+stdout as hexadecimal bytes (including embedded NUL), individual exit status,
+repeat counts and exact source commit IDs.
 A successful run creates a
 **new** JSON evidence file containing both exact source SHAs, counts and the
 sanitizer flag. An existing receipt is never overwritten.
@@ -67,6 +70,16 @@ runner is still responsible for recording the launcher build/toolchain and
 attaching the complete executed job logs. Source SHAs by themselves are **not**
 proof of provenance. Keep runner permissions scoped to the source organization;
 do not place source or tokens in public logs/artifacts.
+
+## Source-free admission regression proof
+
+Run `bash tests/java_llvm_parity_gate_admission.sh` before attempting any
+private-source runner. It creates disposable **synthetic** Git repositories to
+exercise denial of untracked LLVM and Java sources, a modified tracked source,
+committed Java/LLVM fixture divergence, and an untracked launcher. It also
+syntax-checks the actual strict runner. These tests are safe to execute without
+LLVM, GraalVM, Maven or a private source export; they are **not** guest
+execution or cross-backend conformance evidence.
 
 ## Admission policy
 
