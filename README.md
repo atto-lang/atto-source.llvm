@@ -3,13 +3,15 @@
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
 
-**Status: small experimental source-to-LLVM compiler, not Java language/runtime parity.**
+**Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
+
+**Current verification status (October 2026):** LLVM has a tested but incomplete native source-to-IR/AOT implementation. **Full end-to-end parity has not yet been verified.** The inventory below documents implementation gaps to close, not exceptions to the parity requirement. Unsupported source fails closed rather than silently compiling with different semantics.
 
 Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
 are **not implemented** in the LLVM compiler. The CI regression fixtures
 reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
 
-## Implemented slice (October 2026)
+## Implemented and verified native functionality (October 2026)
 
 - Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
@@ -43,7 +45,10 @@ rather than silently truncating to an unrelated shell status. Native source
 `std.process.exit()` and exception effects remain unsupported and fail closed.
 
 The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
-calling conventions are still **provisional** and do not imply Java parity.
+calling conventions are still **provisional**. Their semantics must be
+reconciled with the shared Oreslang specification and Java/GraalVM behavior,
+then verified by cross-backend differential tests before those features
+are marked parity-complete.
 The native slice does not support `-9223372036854775808` as one literal.
 Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
 
@@ -64,11 +69,35 @@ echo $? # 42
 The compiler CLI prints LLVM IR; the AOT driver below links it into a host executable.
 Direct object output and a versioned ABI remain unimplemented.
 
-Unsupported actors, async/await, channels, traits, general heap-allocated classes,
-imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
-and compiler-integrated native actor memory domains **fail closed**.
-The narrow stack-only class subset and native RAII runtime primitives above
-are the first tested steps toward an ownership-first backend.
+**Mandatory parity work remaining:** actors, async/await, channels, traits,
+general heap-allocated classes, imports, tuples, recursive/cyclic owned objects,
+memory management, scheduler semantics and compiler-integrated native actor
+memory domains. Currently unsupported constructs **fail closed**.
+The stack-only class subset and native RAII primitives above are verified
+building blocks, not a substitute for the remaining guest-language support.
+
+## Parity development and release policy
+
+- **One language contract:** match Java/GraalVM for parsing, types, ADTs, modules,
+  errors, effects, ownership and all observable program behavior. Backend-specific
+  implementation choices are allowed; semantic deviations are not.
+- **One concurrency contract:** actor isolation, supervision, mailbox delivery,
+  channel/select behavior, cancellation, continuations and scheduling guarantees
+  must hold on LLVM as on Java/GraalVM.
+- **Continuous gap closure:** every feature requires a cross-backend capability
+  entry, associated regression fixtures, and explicit implementation/verification
+  status. Java-only or LLVM-only implementations remain open parity work.
+- **Evidence-driven parity claims:** promote a feature to *verified parity* only
+  after equivalent positive, negative and differential execution tests pass on
+  pinned revisions. Parser acceptance, rejection tests, or host-only C++ tests
+  do not establish source-level runtime parity.
+- **Release gate:** general-purpose LLVM distributions must not be labeled fully
+  parity-complete until the shared conformance suite and required safety/runtime
+  gates pass. Constrained embedded targets may document platform-specific
+  capability limits without weakening the full host backend parity target.
+
+The detailed status matrix and open obligations live in the
+[source parity contract](docs/SOURCE_PARITY.md).
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 
