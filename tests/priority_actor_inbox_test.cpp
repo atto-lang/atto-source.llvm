@@ -454,6 +454,57 @@ static void failed_admission_never_consumes_global_identity() {
     inbox.close();
 }
 
+static void owned_handle_admission_never_steals_on_rejection_or_constructor_fault() {
+    // Even a payload with a deliberately throwing move constructor is safe:
+    // the transport only moves unique_ptr (no T constructor under the lock).
+    using OwnedInbox = PriorityActorInbox<FailOnceMove>;
+    OwnedInbox inbox({1, 8}, {1, 8}, {1, 8}, 2);
+    auto first = std::make_unique<FailOnceMove>(42);
+    FailOnceMove::fail_move = true;
+    CHECK(inbox.offer_owned(OwnedInbox::Lane::Normal, first, 8));
+    CHECK(!first);
+    auto denied = std::make_unique<FailOnceMove>(99);
+    CHECK(!inbox.offer_owned(OwnedInbox::Lane::Normal, denied, 8));
+    CHECK(denied && denied->payload == 99);
+    auto r = inbox.try_receive();
+    CHECK(r && r->sequence() == 1 && r->value().payload == 42);
+    CHECK(r->acknowledge_released());
+    CHECK(inbox.completed_through(1));
+    CHECK(inbox.offer_owned(OwnedInbox::Lane::Bulk, denied, 8));
+    CHECK(!denied);
+    auto bulk = inbox.try_receive();
+    CHECK(bulk && bulk->sequence() == 2 && bulk->value().payload == 99);
+    CHECK(bulk->acknowledge_released());
+    CHECK(inbox.completed_through(2));
+    FailOnceMove::fail_move = false;
+    inbox.close();
+
+    // Generation-fenced unique-ownership path must reject a restarted actor
+    // without touching the sender's still-owned object.
+    NativeActorGroup original(751, 1), replacement(751, 1);
+    auto original_ref = original.adopt(751, 11, 1, [] {});
+    auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
+    CHECK(original.mark_ready(original_ref) && replacement.mark_ready(replacement_ref));
+    Inbox target({1, 8}, {1, 8}, {1, 8});
+    target.bind_target(original_ref);
+    auto owned = std::make_unique<int>(7);
+    bool invalid = false;
+    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
+    catch (const std::logic_error&) { invalid = true; }
+    CHECK(invalid && owned && *owned == 7);
+    CHECK(target.snapshot() == 0);
+    CHECK(target.offer_owned_to(original_ref, Lane::Urgent, owned, 8));
+    CHECK(!owned);
+    auto accepted = target.try_receive();
+    CHECK(accepted && accepted->value() == 7 && accepted->acknowledge_released());
+    CHECK(target.completed_through(1));
+    CHECK(original.finalized(original_ref));
+    CHECK(replacement.finalized(replacement_ref));
+    original_ref.get_done().get();
+    replacement_ref.get_done().get();
+    target.close();
+}
+
 static void concurrent_publish_has_unique_global_sequences_and_no_credit_leaks() {
     constexpr int PER_LANE = 500, LANES = 3, TOTAL = PER_LANE * LANES;
     Inbox inbox({16, 128}, {16, 128}, {16, 128}, 64);
@@ -509,5 +560,6 @@ int main() {
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
     failed_admission_never_consumes_global_identity();
+    owned_handle_admission_never_steals_on_rejection_or_constructor_fault();
     concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
 }
