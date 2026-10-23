@@ -289,6 +289,14 @@ public:
         while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
             const bool exported = accept("pub");
             require("define");
+            // A scalar-only transparent type alias has no native runtime
+            // descriptor. Unsupported nominal/trait/interface forms never
+            // degrade into a scalar alias.
+            const bool defined_public = exported || accept("pub");
+            if (accept("type")) {
+                parse_scalar_type_alias(defined_public);
+                continue;
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -319,7 +327,31 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("declare")) {
+                parse_type_forward();
+                continue;
+            }
+            if (token_.text == "type") {
+                advance();
+                parse_scalar_type_alias(false);
+                continue;
+            }
+            if (token_.text == "pub" && peek_next().text == "define") {
+                advance();
+                require("define");
+                if (accept("type")) {
+                    parse_scalar_type_alias(true);
+                    continue;
+                }
+                fail("native public define supports only scalar type aliases in this source subset");
+            }
             if (accept("define")) {
+                const bool defined_public = accept("pub");
+                if (accept("type")) {
+                    parse_scalar_type_alias(defined_public);
+                    continue;
+                }
+                if (defined_public) fail("native public define supports only scalar type aliases in this source subset");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -338,6 +370,20 @@ public:
         }
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        for (const auto& forward : forwards_) {
+            if (defined_type_aliases_.find(forward.first) == defined_type_aliases_.end()) {
+                throw std::runtime_error("unresolved native forward type '" + forward.first
+                        + "'; cross-module linking is unsupported");
+            }
+        }
+        for (const auto& cls : program.classes) {
+            if (defined_type_aliases_.count(cls.name))
+                throw std::runtime_error("native nominal class collides with type alias '" + cls.name + "'");
+        }
+        for (const auto& actor : program.actors) {
+            if (defined_type_aliases_.count(actor.name))
+                throw std::runtime_error("native nominal actor collides with type alias '" + actor.name + "'");
+        }
         if (program.functions.empty() && program.actors.empty() &&
                 program.cooperative_loops.empty())
             fail("expected at least one function or actor");
@@ -351,6 +397,62 @@ public:
     }
 
 private:
+    struct ForwardType {
+        bool exported = false;
+    };
+    struct ScalarAlias {
+        std::string target;
+        bool exported = false;
+    };
+
+    void parse_type_forward() {
+        const bool exported = accept("pub");
+        if (!accept("type")) {
+            if (token_.text == "interface" || token_.text == "trait") {
+                fail("native trait/interface forward requires a verified type-level linker; unsupported");
+            }
+            fail("native declare supports only scalar type aliases; class/actor/enum/model unsupported");
+        }
+        const std::string name = identifier();
+        if (token_.text == "<")
+            fail("native generic type alias forward requires a verified monomorphization ABI");
+        require(";");
+        if (defined_type_aliases_.count(name) || !forwards_.emplace(name, ForwardType{exported}).second) {
+            fail("duplicate native forward type declaration '" + name + "'");
+        }
+    }
+
+    void parse_scalar_type_alias(bool exported) {
+        const std::string name = identifier();
+        if (token_.text == "<")
+            fail("native generic type alias requires a verified monomorphization ABI");
+        if (name == "int" || name == "bool" || reserved(name))
+            fail("native type alias cannot shadow a builtin or reserved language name");
+        require("=");
+        std::string target;
+        if (accept("int")) target = "int";
+        else if (accept("bool")) target = "bool";
+        else {
+            if (defined_type_aliases_.count(std::string(token_.text)))
+                target = defined_type_aliases_.at(identifier()).target;
+            else fail("native type aliases currently require an already-resolved int/bool scalar target");
+        }
+        require(";");
+        if (defined_type_aliases_.count(name))
+            fail("duplicate native type alias definition '" + name + "'");
+        const auto forward = forwards_.find(name);
+        if (forward != forwards_.end() && forward->second.exported != exported)
+            fail("native forward type visibility mismatch for '" + name + "'");
+        defined_type_aliases_.emplace(name, ScalarAlias{std::move(target), exported});
+    }
+
+    bool accept_scalar_alias(std::string_view expected) {
+        const auto it = defined_type_aliases_.find(std::string(token_.text));
+        if (it == defined_type_aliases_.end() || it->second.target != expected) return false;
+        advance();
+        return true;
+    }
+
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
@@ -745,9 +847,9 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (accept("int")) {
+                if (accept("int") || accept_scalar_alias("int")) {
                     parameter.scalar_type = ScalarType::I64;
-                } else if (accept("bool")) {
+                } else if (accept("bool") || accept_scalar_alias("bool")) {
                     if (parameter.mode != Parameter::Mode::Value)
                         fail("native bool borrow ABI is not yet admitted; pass bool by value");
                     parameter.scalar_type = ScalarType::Bool;
@@ -773,9 +875,9 @@ private:
         require(":");
         value.returns_void = accept("void");
         if (!value.returns_void) {
-            if (accept("int")) {
+            if (accept("int") || accept_scalar_alias("int")) {
                 value.return_type = ScalarType::I64;
-            } else if (accept("bool")) {
+            } else if (accept("bool") || accept_scalar_alias("bool")) {
                 value.return_type = ScalarType::Bool;
             } else {
                 const std::size_t type_offset = token_.offset;
@@ -2604,6 +2706,8 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::unordered_map<std::string, ForwardType> forwards_;
+    std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
