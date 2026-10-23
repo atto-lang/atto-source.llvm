@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NativeTextClassImport.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -329,6 +330,21 @@ int main(int argc, char** argv) {
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
+
+        // Dedicated checked cross-file, stateless string-class admission.
+        // This path never relaxes generic/native RT, wasm or Cortex-M policy.
+        if (oreslang::is_native_text_class_import(text)) {
+            if (wasm32_target || cortex_m_target || native_hard_rt_profile ||
+                tree_shake || experimental_owned_int || experimental_rt_scalar_loop ||
+                rt_report_seen || rt_check_only || rt_entry_seen)
+                throw std::runtime_error(
+                    "native imported text/class slice requires an ordinary host target; "
+                    "AOT RT, tree-shaking, alternate targets and experimental modes are not admitted");
+            std::cout << oreslang::emit_native_text_class_import(path, text);
+            std::cout.flush();
+            if (coreLog) coreLog->dump(stderr);
+            return 0;
+        }
 
         auto ast = oreslang::parse_program(text, experimental_owned_int,
                                            experimental_rt_scalar_loop);
