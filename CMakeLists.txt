@@ -1604,6 +1604,16 @@ if(BUILD_TESTING)
                  COMMAND oreslang-request-slot-table-test)
         set_tests_properties(native_network_request_slot_borrow_host_only
             PROPERTIES TIMEOUT 30)
+        # Host-only, strict-subset HTTP/1 head views over transport read leases.
+        add_executable(oreslang-http-request-head-view-test tests/http_request_head_view_test.cpp)
+        target_include_directories(oreslang-http-request-head-view-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-http-request-head-view-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-http-request-head-view-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_http_request_head_borrow_noalloc_host_only
+                 COMMAND oreslang-http-request-head-view-test)
+        set_tests_properties(native_http_request_head_borrow_noalloc_host_only
+            PROPERTIES TIMEOUT 30)
     endif()
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     # Pre-source-lowering safety gate: prevents stale continuation wakeups,
