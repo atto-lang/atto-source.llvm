@@ -28,12 +28,29 @@ a physical isolated-actor endpoint transfer, or Java/GraalVM parity.
   bytes remain immutable until safe reclamation. No C++ new/new[] is
   required per request after table construction.
 
+## HTTP request-head borrow substrate
+
+HttpRequestHeadView parses a bounded, strict ASCII subset of HTTP/1.0 and
+HTTP/1.1 request-line and header syntax directly from an active ReadLease
+string_view. It exposes borrowed method, target, version and header values
+without allocating a request object or header map. The 32 KiB metadata bound
+and 100 header count bound fail closed. It rejects whitespace-prefixed
+obs-fold, C0/DEL value controls, malformed names and incomplete head blocks.
+
+This is deliberately NOT a full HTTP server parser: no body framing, content
+length reconciliation, transfer-encoding checks, TLS, HTTP/2, trailer, or
+request-smuggling validation is included. In particular, first_header()
+is not a safe way to adjudicate duplicate Content-Length or Transfer-Encoding
+fields. Real production ingress must use a complete framing policy first.
+
 ## Evidence limits
 
 The CTest native_network_request_slot_borrow_host_only includes stale
 handle/owner rejection, transfer while borrowed, deferred cancellation
 reclamation, abandonment, capacity exhaustion, concurrent cancellation,
 and 25,000 short request cycles with no instrumented C++ new/new[].
+The additional borrowed HTTP head test exercises 10,000 request/parse/close
+cycles without instrumented C++ allocations plus malformed-header rejection.
 On Linux it additionally reads a real loopback TCP request into table
 ingress storage and transfers a handle across trusted owner IDs.
 
