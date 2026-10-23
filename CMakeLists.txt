@@ -2777,6 +2777,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-vm-realtime-prestart-test
         tests/native_vm_realtime_prestart_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-realtime-prestart-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2814,6 +2815,7 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(oreslang-native-vm-nio-lifecycle-test
         tests/native_vm_nio_lifecycle_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c
         src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
         src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
