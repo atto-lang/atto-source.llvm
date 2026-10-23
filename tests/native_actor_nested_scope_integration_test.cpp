@@ -399,6 +399,7 @@ int main() {
                 if (attempts++ == 0)
                     throw std::runtime_error("mutable STOP callback rejected first enqueue");
             });
+            check(group.mark_ready(*detached), "mutable STOP startup failed");
             finalize = group.runtime_finalizer(*detached);
             group.close();
             check(detached->stop_delivery_failed(), "mutable STOP failure not recorded");
