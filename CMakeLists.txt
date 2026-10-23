@@ -1406,6 +1406,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-priority-actor-inbox-test)
     set_tests_properties(native_priority_user_inbox_control_isolation PROPERTIES TIMEOUT 30)
 
+    # Incarnation ticket finalization is a CAS winner-takes-all race.
+    add_executable(oreslang-actor-resource-loan-terminal-race-test
+        tests/actor_resource_loan_terminal_race_test.cpp)
+    target_include_directories(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-loan-terminal-race-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_loan_terminal_race
+        COMMAND oreslang-actor-resource-loan-terminal-race-test)
+    set_tests_properties(native_actor_resource_loan_terminal_race PROPERTIES TIMEOUT 60)
+
     add_executable(oreslang-actor-mailbox-completion-model-test
         tests/actor_mailbox_completion_model_test.cpp)
     target_include_directories(oreslang-actor-mailbox-completion-model-test PRIVATE
