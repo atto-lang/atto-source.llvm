@@ -309,6 +309,14 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     }) == Inbox::Dispatch::Retired);
     CHECK(!finalizer.ready_for_resource_reclamation());
     CHECK(!finalizer.finalized("actor turn still active"));
+    bool denied = false;
+    try { (void)inbox.retire_queued_after_quiescence(); }
+    catch (const std::logic_error&) { denied = true; }
+    CHECK(denied); // a bound inbox never accepts the unguarded retirement API
+    denied = false;
+    try { (void)inbox.retire_queued_after_quiescence(finalizer, actor); }
+    catch (const std::logic_error&) { denied = true; }
+    CHECK(denied); // STOP is not proof that the user turn has physically exited
     CHECK(inbox.used_frames(Lane::Urgent) == 1);
     CHECK(inbox.used_frames(Lane::Normal) == 1);
     CHECK(inbox.used_frames(Lane::Bulk) == 1);
@@ -317,7 +325,7 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     carrier.join();
     CHECK(finalizer.ready_for_resource_reclamation());
     CHECK(inbox.watermark() == 0); // earlier NORMAL has not finished
-    CHECK(inbox.retire_queued_after_quiescence() == 2);
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 2);
     CHECK(inbox.watermark() == 3);
     CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
     CHECK(inbox.drain_status(2) == Inbox::DrainStatus::Aborted);
@@ -326,7 +334,7 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     CHECK(inbox.used_frames(Lane::Urgent) == 0);
     CHECK(inbox.used_frames(Lane::Normal) == 0);
     CHECK(inbox.used_frames(Lane::Bulk) == 0);
-    CHECK(inbox.retire_queued_after_quiescence() == 0);
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 0);
     inbox.close();
 
     CHECK(finalizer.finalized());
