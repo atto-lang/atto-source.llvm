@@ -428,6 +428,86 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm) {
     control_unlock(vm);
     return signalled;
 }
+int ores_native_vm_nio_can_attach(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_bootstrap_in_progress && !vm->nio_backend;
+    control_unlock(vm);
+    return ok;
+}
+
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int granted = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_backend && !vm->nio_bootstrap_in_progress;
+    if (granted) {
+        vm->nio_bootstrap_in_progress = 1;
+        vm->nio_bootstrap_owner = pthread_self();
+    }
+    control_unlock(vm);
+    return granted;
+}
+
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm) {
+    if (!vm) return;
+    control_lock(vm);
+    if (vm->nio_bootstrap_in_progress
+            && pthread_equal(vm->nio_bootstrap_owner, pthread_self())) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired
+                && pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+}
+
+int ores_native_vm_attach_nio(
+    OresNativeVM* vm, void* backend, OresNativeVMNioDestroy destroy) {
+    if (!vm || !backend || !destroy) return 0;
+    control_lock(vm);
+    const int owner = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self());
+    const int accepted = owner && !vm->control_retired
+        && !vm->guest_actor_admitted && !vm->nio_backend;
+    if (accepted) {
+        vm->nio_backend = backend;
+        vm->nio_destroy = destroy;
+    }
+    if (owner) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired
+                && pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+    return accepted;
+}
+
+void* ores_native_vm_nio_acquire(OresNativeVM* vm) {
+    if (!vm) return NULL;
+    int status = pthread_mutex_trylock(&vm->control_lock);
+    if (status == EBUSY) return NULL;
+    if (status != 0) abort();
+    void* backend = NULL;
+    if (!vm->control_retired && vm->nio_backend
+            && vm->nio_borrows != (size_t)-1) {
+        ++vm->nio_borrows;
+        backend = vm->nio_backend;
+    }
+    control_unlock(vm);
+    return backend;
+}
+
+void ores_native_vm_nio_release(OresNativeVM* vm, void* backend) {
+    if (!vm || !backend) abort();
+    control_lock(vm);
+    if (!vm->nio_borrows || backend != vm->nio_backend) abort();
+    if (--vm->nio_borrows == 0 && vm->control_retired) {
+        if (pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+}
+
 void ores_native_vm_retire(OresNativeVM* vm) {
     if (!vm) return;
     control_lock(vm);
