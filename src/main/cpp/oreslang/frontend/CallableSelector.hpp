@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstddef>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -19,7 +19,8 @@ struct CallableId {
         return !(lhs == rhs);
     }
     friend bool operator<(const CallableId& lhs, const CallableId& rhs) {
-        return std::tie(lhs.name, lhs.arity) < std::tie(rhs.name, rhs.arity);
+        return std::tie(lhs.name, lhs.arity) <
+               std::tie(rhs.name, rhs.arity);
     }
 };
 
@@ -34,35 +35,34 @@ inline std::string analysis_callable_key(const CallableId& id) {
 inline CallableId parse_analysis_callable_key(const std::string& key) {
     const auto slash = key.rfind('/');
     if (slash == std::string::npos || slash == 0 || slash + 1 >= key.size())
-        throw std::invalid_argument("invalid analysis callable key: " + key);
+        throw std::invalid_argument(
+            "invalid analysis callable key: " + key);
+
     std::size_t arity = 0;
     for (std::size_t i = slash + 1; i < key.size(); ++i) {
         const char ch = key[i];
         if (ch < '0' || ch > '9')
-            throw std::invalid_argument("invalid analysis callable key: " + key);
-        const std::size_t digit = static_cast<std::size_t>(ch - '0');
+            throw std::invalid_argument(
+                "invalid analysis callable key: " + key);
+        const std::size_t digit =
+            static_cast<std::size_t>(ch - '0');
         if (arity > (static_cast<std::size_t>(-1) - digit) / 10)
-            throw std::invalid_argument("analysis callable arity overflow");
+            throw std::invalid_argument(
+                "analysis callable arity overflow");
         arity = arity * 10 + digit;
     }
     return CallableId{key.substr(0, slash), arity};
 }
 
-// This is a compile-time selector/ABI key, never a runtime structural
-// overload resolution step. Native source identifiers cannot contain 'inline std::string native_function_slot(const std::string& name, std::size_t value_arity) {
+// ABI/report boundary only. Native source identifiers cannot contain '$'.
+inline std::string native_function_slot(
+        const std::string& name,
+        std::size_t value_arity) {
     return name + "$arity" + std::to_string(value_arity);
 }
 
 inline std::string native_function_slot(const CallableId& id) {
     return native_function_slot(id.name, id.arity);
-}
-
-} // namespace oreslang
-.
-// A single encoder must be used by the ownership verifier, code generator,
-// and exported overloaded symbols to prevent signature/ABI drift.
-inline std::string native_function_slot(const std::string& name, std::size_t value_arity) {
-    return name + "$arity" + std::to_string(value_arity);
 }
 
 } // namespace oreslang
