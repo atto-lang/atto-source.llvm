@@ -382,10 +382,10 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
-        // Reject unresolved/duplicated type promises before publishing typed
-        // IR signatures or running the ownership admission.
+        // A type declaration is always complete: verify the entire alias
+        // catalog before publishing ABI signatures or ownership metadata.
         validate_type_only_declarations(program);
-        resolve_forward_alias_uses(program);
+        resolve_alias_uses(program);
         validate(program);
         return program;
     }
@@ -432,12 +432,10 @@ private:
             advance();
             return type;
         }
-        // Store all alias spellings in method metadata until the entire
-        // declaration catalog is checked. An already-declared alias may itself
-        // depend on a forward promise completed later in the source.
+        // Type aliases are complete declarations. Canonicalize their
+        // underlying scalar ABI only after whole-catalog validation.
         if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
-                (forward_scalar_alias_names_.count(std::string(token_.text)) ||
-                 scalar_alias_targets_.count(std::string(token_.text)))) {
+                scalar_alias_targets_.count(std::string(token_.text))) {
             return identifier();
         }
         fail("TYPE_ONLY_UNSUPPORTED_TYPE: native v1 admits only int/bool scalar"
@@ -482,15 +480,12 @@ private:
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
-            if (!already_defined && accept(";")) {
-                decl.forward_declaration = true;
-                forward_scalar_alias_names_.insert(decl.name);
-            } else {
-                require("=");
-                decl.alias_target = type_alias_target();
-                require(";");
-                scalar_alias_targets_.emplace(decl.name, decl.alias_target);
-            }
+            // 'declare type' and 'define type' share this exact grammar.
+            // Incomplete 'declare type Code;' never creates an alias.
+            require("=");
+            decl.alias_target = type_alias_target();
+            require(";");
+            scalar_alias_targets_.emplace(decl.name, decl.alias_target);
         } else {
             type_only_nominals_.insert(decl.name);
             if (accept("extends")) {
@@ -2414,9 +2409,9 @@ private:
             throw std::runtime_error("using effects require transitive call summaries");
     }
 
-    void resolve_forward_alias_uses(Program& program) const {
-        // Forward alias spellings in trait/interface signatures never create
-        // executable instances, but still require resolved scalar ABI types.
+    void resolve_alias_uses(Program& program) const {
+        // Complete type aliases in trait/interface signatures never create
+        // executable instances, but require validated scalar ABI types.
         for (auto& declaration : program.type_only_declarations) {
             if (declaration.kind == TypeOnlyDecl::Kind::Alias) continue;
             for (auto& member : declaration.methods) {
@@ -2452,7 +2447,7 @@ private:
                 if (param.scalar_type == ScalarType::Bool &&
                         param.mode != Parameter::Mode::Value)
                     throw std::runtime_error("native bool borrow ABI is not yet admitted;"
-                                             " forward type cannot bypass value-only bool");
+                                             " scalar alias cannot bypass value-only bool");
             }
             if (!fn.pending_return_alias.empty()) {
                 fn.return_type = resolve_scalar_alias(fn.pending_return_alias);
@@ -3038,7 +3033,6 @@ private:
     // complete alias graph (including forward targets and unused aliases)
     // happens before LLVM IR generation.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
-    std::unordered_set<std::string> forward_scalar_alias_names_;
     std::unordered_set<std::string> type_only_nominals_;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
