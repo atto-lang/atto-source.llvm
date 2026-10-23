@@ -161,6 +161,32 @@ int main() {
               "registering after drain must not manufacture asynchronous event");
         check(group.finalized(parent), "already-drained parent could not retire");
     }
+    {
+        // Last-child notification is a one-shot scheduler hint, not proof
+        // that future nested admission is impossible. If a new child races
+        // parent finalization, the owner counter must reject that finalizer
+        // and permit a new observer to be armed.
+        NativeActorGroup group(6108, 3);
+        auto parent = group.adopt(6108, 1, 1, [] {});
+        auto first = group.adopt_child(parent, 6108, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(first),
+              "dynamic join startup failed");
+        std::atomic<int> wakeups{0};
+        check(!group.register_children_drained(parent, [&] { ++wakeups; }),
+              "first child join was empty");
+        check(group.finalized(first), "first child did not physically retire");
+        check(wakeups == 1, "first child did not wake parent");
+        auto second = group.adopt_child(parent, 6108, 3, 1, [] {});
+        check(group.mark_ready(second), "second child did not start");
+        check(!group.finalized(parent),
+              "parent finalizer slipped through newly admitted child");
+        check(!group.register_children_drained(parent, [&] { ++wakeups; }),
+              "new child did not require rearming join observer");
+        check(group.finalized(second), "second child did not retire");
+        check(wakeups == 2, "rearmed last-child observer never fired");
+        check(group.finalized(parent), "parent could not retire after rearmed join");
+        parent.get_done().get();
+    }
     for (int round = 0; round < 100; ++round) {
         const auto rid = static_cast<std::uint64_t>(7000 + round);
         NativeActorGroup group(rid, 2);
