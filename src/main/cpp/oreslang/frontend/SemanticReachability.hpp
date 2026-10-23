@@ -184,11 +184,11 @@ inline void insert_edge(
         std::set<SemanticReachabilityEdge>& edges,
         SemanticReachabilityEdge edge,
         const SemanticGraphBudget& budget) {
-    const auto [it, inserted] = edges.insert(std::move(edge));
-    (void)it;
-    if (inserted && edges.size() > budget.max_edges)
+    if (edges.find(edge) != edges.end()) return;
+    if (edges.size() >= budget.max_edges)
         throw std::runtime_error(
             "semantic reachability graph edge budget exceeded");
+    edges.insert(std::move(edge));
 }
 
 inline void add_dependency_edges(
