@@ -130,6 +130,17 @@ def main():
          "define type Code = Id;\n"
          "define type Id = int;\n"
          "pub fnc main(): int { return identity(7); }\n"),
+        ("transitively forward alias resolves from a completed alias spelling",
+         "declare type Code;\n"
+         "define type UserId = Code;\n"
+         "fnc identity(UserId value): UserId { return value; }\n"
+         "define type Code = int;\n"
+         "pub fnc main(): int { return identity(7); }\n"),
+        ("transitively forward alias in contract method",
+         "declare type Code;\n"
+         "define type UserId = Code;\n"
+         "declare interface Api as fnc lookup(UserId id): UserId; end\n"
+         "define type Code = int;\n" + main_fn),
     ])
     negative = [
         ("reject concrete declare model",
