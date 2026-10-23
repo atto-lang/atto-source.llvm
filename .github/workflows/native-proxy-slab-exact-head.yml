@@ -6,6 +6,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorArena.h'
       - 'tests/native_proxy_request_slab_test.cpp'
+      - 'tests/native_proxy_request_slab_arena_pages_test.cpp'
       - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
@@ -40,6 +41,10 @@ jobs:
             -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
             /tmp/proxy-actor-arena.o -o /tmp/proxy-slab-host
           test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
+            /tmp/proxy-actor-arena.o -o /tmp/proxy-arena-pages
+          test "$(/tmp/proxy-arena-pages)" = "NATIVE_PROXY_ARENA_PAGES_OK"
       - name: Exercise ASan and UBSan
         shell: bash
         run: |
@@ -53,6 +58,11 @@ jobs:
             -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
             /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-slab-sanitized
           ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
+          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
+            /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-arena-pages-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/proxy-arena-pages-sanitized
       - name: Compile and execute exact-generation real native actor test
         shell: bash
         run: |
