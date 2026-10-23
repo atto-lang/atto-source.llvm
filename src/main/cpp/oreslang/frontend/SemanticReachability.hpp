@@ -136,6 +136,7 @@ struct SemanticRootPolicy {
 struct SemanticGraphBudget {
     std::size_t max_declarations = 100000;
     std::size_t max_edges = 30000;
+    std::size_t max_depth = 4096;
     SemanticScanBudget scan{};
 };
 
@@ -353,15 +354,20 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
         outgoing.at(edge.from).push_back(edge);
 
     std::set<SemanticDeclarationId> retained;
-    std::vector<SemanticDeclarationId> pending(
-        roots.begin(), roots.end());
+    std::vector<std::pair<SemanticDeclarationId, std::size_t>> pending;
+    for (const auto& root : roots)
+        pending.emplace_back(root, 0);
     retained.insert(roots.begin(), roots.end());
 
     for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
-        const auto& from = pending[cursor];
+        const auto& [from, depth] = pending[cursor];
         for (const auto& edge : outgoing.at(from)) {
-            if (retained.insert(edge.to).second)
-                pending.push_back(edge.to);
+            if (retained.count(edge.to)) continue;
+            if (depth >= budget.max_depth)
+                throw std::runtime_error(
+                    "semantic reachability graph depth budget exceeded");
+            retained.insert(edge.to);
+            pending.emplace_back(edge.to, depth + 1);
         }
     }
 
