@@ -31,12 +31,16 @@ int main() {
     // owner-enforced initialization must not leak prior arena bytes.
     ores_actor_arena_write(arena, turn, pages[0], 0, &secret, sizeof(secret));
     ores_actor_arena_write(arena, turn, pages[1], 60, &secret, sizeof(secret));
+    ores_actor_arena_write(arena, turn, pages[1], kPageBytes - 4, &secret, sizeof(secret));
     ProxyRequestSlab slab(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
         arena, turn, pages, kPageWords);
     std::uint32_t first = 9, last = 9;
     ores_actor_arena_read(arena, turn, pages[0], 0, &first, sizeof(first));
     ores_actor_arena_read(arena, turn, pages[1], 60, &last, sizeof(last));
-    assert(first == 0 && last == 0);
+    std::uint32_t padded_tail = 9;
+    ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
+                          &padded_tail, sizeof(padded_tail));
+    assert(first == 0 && last == 0 && padded_tail == 0);
     const auto ticket = slab.admit(1, 2, 3);
     assert(ticket != 0 && slab.route(ticket) == 3);
     const auto claim = slab.pin(ticket);
@@ -48,12 +52,13 @@ int main() {
     // Inject a last-page secret after normal traffic. close() must zero all
     // logical words, including those at the last physical page boundary.
     ores_actor_arena_write(arena, turn, pages[1], 60, &secret, sizeof(secret));
+    ores_actor_arena_write(arena, turn, pages[1], kPageBytes - 4, &secret, sizeof(secret));
     slab.close();
     std::array<std::uint32_t, 1024> check{};
-    for (std::size_t off = 0; off < words;) {
+    for (std::size_t off = 0; off < 2 * kPageWords;) {
         const auto page = off / kPageWords;
         const auto within = off % kPageWords;
-        const auto count = std::min({words - off, kPageWords - within, check.size()});
+        const auto count = std::min({2 * kPageWords - off, kPageWords - within, check.size()});
         ores_actor_arena_read(arena, turn, pages[page],
             within * sizeof(std::uint32_t), check.data(),
             count * sizeof(std::uint32_t));
