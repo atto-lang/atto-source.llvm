@@ -18,6 +18,7 @@ struct Unit {
     Program program;
     std::string prefix;
     std::unordered_map<std::string, std::size_t> dependencies;
+    std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
     std::unordered_set<std::string> classes;
@@ -148,14 +149,19 @@ private:
             if (imported.local_name == current.program.module)
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
-            if (target.program.module != imported.selected_module)
+            if (imported.selected_class) {
+                const auto cls = target.class_exports.find(imported.selected_module);
+                if (cls == target.class_exports.end() || !cls->second)
+                    fail(current, "unknown or private imported class '" + imported.selected_module + "'");
+                current.class_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+            } else if (target.program.module != imported.selected_module)
                 fail(current, "imported file does not declare selected module '" + imported.selected_module + "'");
-            current.dependencies.emplace(imported.local_name, selected);
+            if (!imported.selected_class) current.dependencies.emplace(imported.local_name, selected);
         }
         return index;
     }
     static void binding_name(const Unit& unit, const std::string& name) {
-        if (unit.dependencies.count(name))
+        if (unit.dependencies.count(name) || unit.class_imports.count(name))
             fail(unit, "native module import binding cannot be shadowed: '" + name + "'");
     }
     void expression(const Unit& unit, Expression* expr) {
@@ -182,6 +188,13 @@ private:
         expr->name = target->prefix + member;
     }
     std::string class_type(const Unit& unit, const std::string& name, bool constructing = false) {
+        const auto imported = unit.class_imports.find(name);
+        if (imported != unit.class_imports.end()) {
+            const auto& target = *units[imported->second.first];
+            if (constructing && !target.constructor_exports.at(imported->second.second))
+                fail(unit, "private imported constructor is not accessible");
+            return target.prefix + imported->second.second;
+        }
         if (unit.classes.count(name)) return unit.prefix + name;
         const auto dot = name.find('.');
         if (dot == std::string::npos) return name;

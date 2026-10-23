@@ -13,7 +13,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool };
+enum class ScalarType { I64, Bool, String };
 
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
@@ -27,7 +27,7 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, Variable,
+        Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
         Add, Subtract, Multiply,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
@@ -39,6 +39,7 @@ struct Expression {
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
+    mutable ScalarType resolved_type = ScalarType::I64;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -253,6 +254,7 @@ struct CooperativeScalarLoop {
 };
 
 struct ModuleImport {
+    bool selected_class = false;
     std::string selected_module;
     std::string local_name;
     std::string path;

@@ -130,6 +130,12 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
     }
 
     switch (expr->kind) {
+        case Expression::Kind::String:
+            add_effect(facts, FunctionEffect::Alloc);
+            break;
+        case Expression::Kind::Console:
+            add_effect(facts, FunctionEffect::Io);
+            break;
         case Expression::Kind::Call:
             if (facts.calls.size() >= facts.call_limit) {
                 facts.call_budget_exceeded = true;
@@ -157,6 +163,8 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
         case Expression::Kind::Add:
+            if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
+            break;
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Equal:

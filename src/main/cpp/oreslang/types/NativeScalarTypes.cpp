@@ -6,7 +6,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, Class, Array, Void };
+enum class Kind { Int, Bool, String, Class, Array, Void };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -14,12 +14,13 @@ struct Type {
 };
 using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
+Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
 Type parameter_type(const Parameter& p) {
-    return p.class_name.empty() ? scalar(p.scalar_type == ScalarType::Bool) : Type{Kind::Class, p.class_name};
+    return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
 Type local_type(const LocalBinding& local) {
     if (local.int_array) return {Kind::Array, {}};
-    return local.class_name.empty() ? scalar(local.scalar_type == ScalarType::Bool) : Type{Kind::Class, local.class_name};
+    return local.class_name.empty() ? scalar(local.scalar_type) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
     throw std::runtime_error("native scalar type mismatch: " + detail + " at byte " + std::to_string(offset));
@@ -49,6 +50,10 @@ void validate_native_scalar_types(const Program& program) {
         switch (e.kind) {
             case E::Integer: return scalar(false);
             case E::Boolean: return scalar(true);
+            case E::String: return scalar(ScalarType::String);
+            case E::Console:
+                require(expression(*e.left, locals), scalar(ScalarType::String), e.offset, "stdio requires string");
+                return {Kind::Void, {}};
             case E::Variable: return locals.at(e.name);
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
@@ -82,7 +87,13 @@ void validate_native_scalar_types(const Program& program) {
                 require(lhs, rhs, e.offset, "conditional arm types");
                 return lhs;
             }
-            case E::Add: case E::Subtract: case E::Multiply:
+            case E::Add: {
+                auto left = expression(*e.left, locals), right = expression(*e.right, locals);
+                require(left, right, e.offset, "addition operand types");
+                if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
+                return left;
+            }
+            case E::Subtract: case E::Multiply:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
@@ -103,7 +114,7 @@ void validate_native_scalar_types(const Program& program) {
                     require(expression(*e.arguments[i], locals), parameter_type(fn.parameters.at(slot)),
                             e.arguments[i]->offset, "argument bool/int/nominal type differs from parameter");
                 }
-                return fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type == ScalarType::Bool);
+                return fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type);
             }
         }
         fail(e.offset, "unsupported expression");
@@ -127,8 +138,11 @@ void validate_native_scalar_types(const Program& program) {
     function = [&](const Function& fn, Locals locals) {
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
-            if (binding.initializer)
-                require(expression(*binding.initializer, locals), local_type(binding), binding.offset, "local initializer type");
+            if (binding.initializer) {
+                const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
+                    binding.initializer->kind == Expression::Kind::Console;
+                require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
+            }
             for (const auto& arg : binding.constructor_arguments)
                 require(expression(*arg, locals), scalar(false), arg->offset, "constructor parameter requires int");
             locals.emplace(binding.name, local_type(binding));
@@ -160,7 +174,7 @@ void validate_native_scalar_types(const Program& program) {
         if (fn.caught_throw_value)
             require(expression(*fn.caught_throw_value, locals), scalar(false), fn.offset, "throw payload requires int");
         if (!fn.catch_binding.empty()) locals.emplace(fn.catch_binding, scalar(false));
-        const Type result = fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type == ScalarType::Bool);
+        const Type result = fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type);
         for (const auto& guard : fn.early_returns) {
             if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
             else compare(*guard.lhs, *guard.rhs, locals);
@@ -173,7 +187,7 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };
     for (const auto& fn : program.functions) {
-        if (fn.name == "main" && fn.return_type == ScalarType::Bool) fail(fn.offset, "OS entrypoint requires int or void");
+        if (fn.name == "main" && fn.return_type != ScalarType::I64) fail(fn.offset, "OS entrypoint requires int or void");
         function(fn, {});
     }
     for (const auto& actor : program.actors) {

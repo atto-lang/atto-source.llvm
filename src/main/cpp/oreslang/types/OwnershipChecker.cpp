@@ -238,6 +238,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
     switch (expr.kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
+        case Expression::Kind::String:
+            return;
+        case Expression::Kind::Console:
+            check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Variable: {
             LocalOwnership& source = local(expr, locals);
@@ -387,6 +391,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
     switch (expr.kind) {
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
+        case Expression::Kind::String:
         case Expression::Kind::Variable:
         case Expression::Kind::Field:
             check_value(expr, locals, functions);
@@ -426,6 +431,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
     }
     reject(expr, "unsupported guarded condition");
@@ -437,6 +443,9 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
 void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
                                    const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::String:
+        case Expression::Kind::Console:
+            reject(expr, "native caught throw cannot own string region effects");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
             return;
@@ -860,6 +869,11 @@ void validate_i64_ownership(const Program& program) {
             if (owner.class_name.empty()) {
                 cfg.entry.emplace(name, state);
             } else {
+                // A fieldless nominal object still owns identity/liveness.
+                // Track an unspellable proof slot so whole-object reads and
+                // moves retain the same CFG checks as nonempty classes.
+                if (owner.class_fields.empty())
+                    cfg.entry.emplace(name + ".$identity", state);
                 for (const auto& field : owner.class_fields) {
                     auto field_state = state;
                     if (owner.moved_fields.count(field))

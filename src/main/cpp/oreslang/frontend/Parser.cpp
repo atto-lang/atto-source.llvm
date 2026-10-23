@@ -116,12 +116,13 @@ public:
             ++at_;
             const auto content = at_;
             while (at_ < source_.size() && source_[at_] != quote) {
-                const auto byte = static_cast<unsigned char>(source_[at_]);
-                if (byte < 32 || byte == 127 || source_[at_] == '\\')
-                    throw std::runtime_error("native import path escapes/control characters unsupported at byte " + std::to_string(at_));
+                if (source_[at_] == '\\') {
+                    ++at_;
+                    if (at_ == source_.size()) break;
+                }
                 ++at_;
             }
-            if (at_ == source_.size()) throw std::runtime_error("unterminated native import path at byte " + std::to_string(start));
+            if (at_ == source_.size()) throw std::runtime_error("unterminated native string at byte " + std::to_string(start));
             const auto text = source_.substr(content, at_ - content);
             ++at_;
             return {Kind::String, text, start};
@@ -306,7 +307,8 @@ public:
                 fail("native contract imports require a validated cross-unit linker");
             ModuleImport imported;
             imported.offset = token_.offset;
-            require("module");
+            imported.selected_class = accept("class");
+            if (!imported.selected_class) require("module");
             imported.selected_module = identifier();
             imported.local_name = accept("as") ? identifier() : imported.selected_module;
             if (!module_names_.insert(imported.local_name).second)
@@ -316,6 +318,9 @@ public:
             imported.path = std::string(token_.text);
             if (imported.path.empty() || imported.path.size() > 4096)
                 fail("native import path must contain 1..4096 bytes");
+            for (unsigned char ch : imported.path)
+                if (ch < 32 || ch == 127 || ch == '\\')
+                    fail("native import path escapes/control characters unsupported");
             advance();
             require(";");
             program.imports.push_back(std::move(imported));
@@ -324,8 +329,12 @@ public:
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
         while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
-            const bool exported = accept("pub");
+            bool exported = accept("pub");
             require("define");
+            if (accept("pub")) {
+                if (exported) fail("duplicate pub modifier");
+                exported = true;
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -356,9 +365,13 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
-            const bool public_class = token_.text == "pub" && peek_next().text == "define";
+            bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("define")) {
+                if (accept("pub")) {
+                    if (public_class) fail("duplicate pub modifier");
+                    public_class = true;
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -658,7 +671,7 @@ private:
             }
             result.fields.push_back(std::move(field));
         }
-        if (result.fields.empty()) fail("native class requires at least one field");
+        // Fieldless classes still have nominal identity and checked receiver loans.
         for (const auto& method : result.methods)
             if (seen.count(method.name)) fail("native field/method name collision requires explicit callable member resolution");
         std::unordered_set<std::string> allowed(
@@ -828,6 +841,8 @@ private:
                     parameter.scalar_type = ScalarType::I64;
                 } else if (accept("bool")) {
                     parameter.scalar_type = ScalarType::Bool;
+                } else if (accept("string") || accept("String")) {
+                    parameter.scalar_type = ScalarType::String;
                 } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = type_identifier();
@@ -856,6 +871,8 @@ private:
                 value.return_type = ScalarType::I64;
             } else if (accept("bool")) {
                 value.return_type = ScalarType::Bool;
+            } else if (accept("string") || accept("String")) {
+                value.return_type = ScalarType::String;
             } else {
                 const std::size_t type_offset = token_.offset;
                 const std::string type = identifier();
@@ -892,10 +909,38 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio") {
             LocalBinding binding;
             binding.offset = token_.offset;
-            if (accept("let")) {
+            if (token_.text == "stdio") {
+                // ANF: discard an effect's integer status in an unspellable
+                // compiler-owned slot, preserving declaration/effect order.
+                binding.name = "$effect" + std::to_string(value.locals.size());
+                binding.initializer = primary();
+            } else if ((token_.text == "val" || token_.text == "const") &&
+                    [&] { Lexer look = lexer_; const auto type = look.next();
+                        return type.text == "string" || type.text == "String" ||
+                            (type.kind == Kind::Identifier && look.next().kind == Kind::Identifier); }()) {
+                const bool mutable_value = accept("val");
+                if (!mutable_value) require("const");
+                const std::string type = type_identifier();
+                binding.name = identifier();
+                require("=");
+                if (type == "string" || type == "String") {
+                    binding.scalar_type = ScalarType::String;
+                    binding.initializer = expression();
+                } else {
+                    binding.class_name = type;
+                    require("new");
+                    if (type_identifier() != type) fail("class constructor type mismatch");
+                    require("(");
+                    if (!accept(")")) {
+                        do binding.constructor_arguments.push_back(expression()); while (accept(","));
+                        require(")");
+                    }
+                    binding.new_class = true;
+                }
+            } else if (accept("let")) {
                 // Preserve the Java/Graal distinction between immutable
                 // let Class and exclusively borrowable let mut Class.
                 binding.owner_mutable = accept("mut");
@@ -986,6 +1031,9 @@ private:
                             if (binding.heap_owned)
                                 fail("native owned bool region lowering is not admitted");
                             binding.scalar_type = ScalarType::Bool;
+                        } else if (accept("string") || accept("String")) {
+                            if (binding.heap_owned) fail("owned string qualifier is unsupported");
+                            binding.scalar_type = ScalarType::String;
                         } else {
                             fail("native scalar local requires int or bool");
                         }
@@ -1380,7 +1428,8 @@ private:
                 statement.field = action->name;
                 statement.expression = expression();
             } else if (action->kind == Expression::Kind::Call ||
-                       action->kind == Expression::Kind::ArrayCall) {
+                       action->kind == Expression::Kind::ArrayCall ||
+                       action->kind == Expression::Kind::Console) {
                 statement.kind = Statement::Kind::Call;
                 statement.expression = std::move(action);
             } else {
@@ -1399,7 +1448,7 @@ private:
             if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
                 fail("native protected try return requires nonthrowing scalar/field read");
         }
-        require(";");
+        if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
             require("}");
             // Java/Graal syntax requires catch. This native subset has no
@@ -1642,6 +1691,20 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.kind == Kind::String) {
+            auto expr = make_expression(Expression::Kind::String, offset);
+            expr->name = string_literal(token_.text);
+            advance();
+            return expr;
+        }
+        if (accept("stdio")) {
+            require(".");
+            auto expr = make_expression(Expression::Kind::Console, offset);
+            expr->name = identifier();
+            if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
+            require("("); expr->left = expression(); require(")");
+            return expr;
+        }
         if (accept("(")) {
             // Java/Graal's () is a zero-slot Tuple, not grouping.
             // Native scalar lowering must reject all tuple arities before IR.
@@ -1870,6 +1933,54 @@ private:
         return result;
     }
 
+    static std::string string_literal(std::string_view raw) {
+        std::string result;
+        auto hex = [](char ch) -> unsigned {
+            if (ch >= '0' && ch <= '9') return static_cast<unsigned>(ch - '0');
+            if (ch >= 'a' && ch <= 'f') return static_cast<unsigned>(ch - 'a' + 10);
+            if (ch >= 'A' && ch <= 'F') return static_cast<unsigned>(ch - 'A' + 10);
+            throw std::runtime_error("invalid native string Unicode escape");
+        };
+        auto unicode = [&](std::size_t& i) {
+            if (raw.size() - i < 4) throw std::runtime_error("incomplete native string Unicode escape");
+            unsigned value = 0;
+            for (unsigned n = 0; n != 4; ++n) value = value * 16 + hex(raw[i++]);
+            return value;
+        };
+        for (std::size_t i = 0; i < raw.size();) {
+            char ch = raw[i++];
+            if (ch != '\\') { result += ch; continue; }
+            if (i == raw.size()) throw std::runtime_error("incomplete native string escape");
+            ch = raw[i++];
+            if (ch == 'n') result += '\n';
+            else if (ch == 'r') result += '\r';
+            else if (ch == 't') result += '\t';
+            else if (ch != 'u') result += ch;
+            else {
+                unsigned code = unicode(i);
+                if (code >= 0xd800 && code <= 0xdbff) {
+                    if (raw.size() - i < 6 || raw[i] != '\\' || raw[i + 1] != 'u')
+                        throw std::runtime_error("unpaired native string Unicode surrogate");
+                    i += 2;
+                    const unsigned low = unicode(i);
+                    if (low < 0xdc00 || low > 0xdfff) throw std::runtime_error("unpaired native string Unicode surrogate");
+                    code = 0x10000 + ((code - 0xd800) << 10) + low - 0xdc00;
+                } else if (code >= 0xdc00 && code <= 0xdfff)
+                    throw std::runtime_error("unpaired native string Unicode surrogate");
+                if (code <= 0x7f) result += static_cast<char>(code);
+                else if (code <= 0x7ff) {
+                    result += static_cast<char>(0xc0 | (code >> 6)); result += static_cast<char>(0x80 | (code & 63));
+                } else if (code <= 0xffff) {
+                    result += static_cast<char>(0xe0 | (code >> 12)); result += static_cast<char>(0x80 | ((code >> 6) & 63)); result += static_cast<char>(0x80 | (code & 63));
+                } else {
+                    result += static_cast<char>(0xf0 | (code >> 18)); result += static_cast<char>(0x80 | ((code >> 12) & 63));
+                    result += static_cast<char>(0x80 | ((code >> 6) & 63)); result += static_cast<char>(0x80 | (code & 63));
+                }
+            }
+        }
+        return result;
+    }
+
     static void validate_expression(const Expression& expr,
                                     const std::unordered_set<std::string>& parameters,
                                     const NativeSignatures& functions,
@@ -1878,6 +1989,10 @@ private:
         switch (expr.kind) {
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
+            case Expression::Kind::String:
+                return;
+            case Expression::Kind::Console:
+                validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Variable:
                 if (parameters.count(expr.name) == 0) {
@@ -2020,7 +2135,7 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::Bool ? "bool" : "int";
+        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -2040,6 +2155,11 @@ private:
                 return ScalarType::I64;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
+            case Expression::Kind::String:
+                return expr.resolved_type = ScalarType::String;
+            case Expression::Kind::Console:
+                require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
+                return ScalarType::I64;
             case Expression::Kind::Variable: {
                 const auto found = variables.find(expr.name);
                 // Non-scalar class/array/actor names are rejected by ownership
@@ -2133,7 +2253,16 @@ private:
             case Expression::Kind::BorrowMut:
                 return validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
-            case Expression::Kind::Add:
+            case Expression::Kind::Add: {
+                auto left = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
+                if (left == ScalarType::String) require_type(right, ScalarType::String, "string concatenation");
+                else {
+                    require_type(left, ScalarType::I64, "arithmetic");
+                    require_type(right, ScalarType::I64, "arithmetic");
+                }
+                return expr.resolved_type = left;
+            }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply: {
                 ScalarType left = validate_scalar_expression(

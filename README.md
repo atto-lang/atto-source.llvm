@@ -33,6 +33,10 @@ for every workload.
 
 ## Implemented and verified native functionality (October 2026)
 
+- The two-file `Foo` example now compiles natively with class imports,
+  fieldless instance methods, typed `val` declarations, string returns and
+  concatenation, and nonblocking console output. See
+  [native class/string parity and remaining limits](docs/NATIVE_CLASS_STRING_PARITY.md).
 - Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
 - Typed `int` and `bool` parameters, scalar fields and loans; checked bool operators

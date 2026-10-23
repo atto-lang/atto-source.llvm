@@ -71,6 +71,14 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 15)
 
     find_package(Threads REQUIRED)
+    add_executable(oreslang-native-string-region-test
+        tests/native_string_region_test.c src/main/cpp/oreslang/runtime/NativeStringRegion.c)
+    target_include_directories(oreslang-native-string-region-test PRIVATE src/main/cpp)
+    set_target_properties(oreslang-native-string-region-test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_compile_options(oreslang-native-string-region-test PRIVATE -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-string-region-test PRIVATE Threads::Threads)
+    add_test(NAME native_string_region_lifetime_and_budgets COMMAND oreslang-native-string-region-test)
+    set_tests_properties(native_string_region_lifetime_and_budgets PROPERTIES TIMEOUT 20)
     # Host-only generational reply slab proof; not source-level actor RPC.
     add_executable(oreslang-native-generational-reply-test
         tests/native_generational_reply_slots_test.cpp)
@@ -1658,6 +1666,34 @@ if(BUILD_TESTING)
                 COMMAND "${CMAKE_COMMAND}" -E false)
         endif()
         set_tests_properties(native_borrow_alias_matrix_${mode} PROPERTIES TIMEOUT 180)
+    endforeach()
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_class_string_parity.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity"
+            DEPENDS tests/native_class_string_parity.rs
+                tests/fixtures/native-class-string/main.ores tests/fixtures/native-class-string/main-1.ores
+            VERBATIM)
+        add_custom_target(oreslang-native-class-string-parity-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")
+    endif()
+    foreach(mode IN ITEMS release sanitizer)
+        set(string_parity_extra)
+        if(mode STREQUAL "sanitizer")
+            set(string_parity_extra --sanitize)
+        endif()
+        if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+            add_test(NAME native_class_string_parity_${mode}
+                COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity"
+                    --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+                    --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeStringRegion.c"
+                    ${string_parity_extra})
+        else()
+            add_test(NAME native_class_string_parity_${mode} COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
     add_test(NAME native_strict_nonblocking_io_source_guard
         COMMAND "${Python3_EXECUTABLE}"
