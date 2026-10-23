@@ -2491,9 +2491,20 @@ private:
         }
         for (const auto& promise : forward_visibility) {
             auto it = declarations.find(promise.first);
-            if (it == declarations.end())
+            if (it == declarations.end()) {
+                const bool concrete_name =
+                    std::any_of(program.classes.begin(), program.classes.end(),
+                        [&](const ClassDecl& c) { return c.name == promise.first; }) ||
+                    std::any_of(program.actors.begin(), program.actors.end(),
+                        [&](const ActorDecl& actor) { return actor.name == promise.first; }) ||
+                    std::any_of(program.contracts.begin(), program.contracts.end(),
+                        [&](const ModuleContract& contract) { return contract.name == promise.first; });
+                if (concrete_name)
+                    throw std::runtime_error("TYPE_FORWARD_KIND_MISMATCH: '" + promise.first +
+                                             "' is not completed by a type-only scalar alias");
                 throw std::runtime_error("TYPE_FORWARD_UNRESOLVED: '" + promise.first +
                                          "' has no completed type definition");
+            }
             const auto& complete = program.type_only_declarations[it->second];
             if (complete.kind != TypeKind::Alias)
                 throw std::runtime_error("TYPE_FORWARD_KIND_MISMATCH: '" + promise.first +
