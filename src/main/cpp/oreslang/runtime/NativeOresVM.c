@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeCpuBudget.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <errno.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -23,6 +24,13 @@ struct OresNativeVM {
     pthread_mutex_t control_lock;
     unsigned pending_control_wakes;
     int control_retired;
+    int guest_actor_admitted;
+    int nio_bootstrap_in_progress;
+    pthread_t nio_bootstrap_owner;
+    void* nio_backend;
+    OresNativeVMNioDestroy nio_destroy;
+    size_t nio_borrows;
+    pthread_cond_t nio_idle;
 };
 
 static int valid_domain(enum OresNativeVMDomain domain) {
@@ -34,6 +42,11 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));
     if (!vm) return NULL;
     if (pthread_mutex_init(&vm->control_lock, NULL) != 0) {
+        free(vm);
+        return NULL;
+    }
+    if (pthread_cond_init(&vm->nio_idle, NULL) != 0) {
+        if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
         free(vm);
         return NULL;
     }
