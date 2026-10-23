@@ -319,6 +319,19 @@ if(BUILD_TESTING)
     set_tests_properties(native_semantic_reachability_observation_only
         PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-native-semantic-reachability-source-test
+        tests/native_semantic_reachability_source_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-semantic-reachability-source-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-semantic-reachability-source-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_semantic_reachability_current_source
+        COMMAND oreslang-native-semantic-reachability-source-test)
+    set_tests_properties(native_semantic_reachability_current_source
+        PROPERTIES TIMEOUT 30)
+
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
     add_test(NAME native_tree_shaking_direct_calls
