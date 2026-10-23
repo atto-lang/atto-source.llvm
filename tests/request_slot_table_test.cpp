@@ -1,5 +1,5 @@
 #include "oreslang/runtime/RequestSlotTable.hpp"
-#if defined(__linux__) && __has_include("oreslang/runtime/NonblockingTcpLinux.hpp")
+#if defined(__linux__)
 #define ORES_TEST_TCP 1
 #include "oreslang/runtime/NonblockingTcpLinux.hpp"
 #endif
