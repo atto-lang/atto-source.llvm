@@ -105,6 +105,11 @@ int main() {
     ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
                           &padded_tail, sizeof(padded_tail));
     assert(first == 0 && last == 0 && padded_tail == 0);
+    // Plant sentinels while the first slab holds its reservation:
+    // failed competing constructors must not partially scrub either page.
+    ores_actor_arena_write(arena, turn, pages[0], 0, &secret, sizeof(secret));
+    ores_actor_arena_write(arena, turn, pages[1], kPageBytes - 4,
+                          &secret, sizeof(secret));
     // Atomic claim prevents a second slab from zeroing even the *first*
     // page while this slab still owns both. Include subset overlap.
     auto rejects_claimed_pages = [&](std::span<const OresArenaHandle> claim_pages,
@@ -128,6 +133,15 @@ int main() {
     assert(ores_actor_arena_unclaim_pages(
         arena, turn, pages.data(), pages.size(), 0) == 0);
     assert(slab.live() == 0);
+    std::uint32_t protected_first = 0, protected_last = 0;
+    ores_actor_arena_read(arena, turn, pages[0], 0,
+                          &protected_first, sizeof(protected_first));
+    ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
+                          &protected_last, sizeof(protected_last));
+    assert(protected_first == secret && protected_last == secret);
+    const std::uint32_t zero = 0;
+    ores_actor_arena_write(arena, turn, pages[0], 0, &zero, sizeof(zero));
+
 
     // Caller-owned span may be changed or destroyed after construction.
     // The slab must use an immutable by-value handle snapshot instead.
