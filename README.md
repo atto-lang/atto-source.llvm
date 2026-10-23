@@ -3,6 +3,17 @@
 Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
 
+Please keep parity with oreslang-source.java in terms of features and capability. The same guest code that runs on graalvm should compile and execute with gcc/llvm.
+Do not use python for anything, use Rust instead of python to support the language.
+
+Notes on the compiler and runtime:
+
+* Strive for min gc or zero gc where possible. Having separate heaps/arenas per actor helps reduce gc overhead.
+* Strive for hard real time not just soft-real time by minimizing JIT (or having JIT switched off for certain paths) and moving towards full AOT.
+* Use data-oriented design and data oriented programming - be mindful of using AoS, SoA, AoSoA and SoAoS where possible.
+* Use 32 bit pointers instead of 64 bit pointers for allocation/heaps. Having separate heaps per actor helps with this. 32 bit pointers helps us save up to 50% on memory/RAM. The 32 bit pointers should be implemented so that it stays 32 bit even on Arm-64 machines, etc etc.
+
+
 **Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
 **Current verification status (October 2026):** LLVM has a tested but incomplete native source-to-IR/AOT implementation. **Full end-to-end parity has not yet been verified.** The inventory below documents implementation gaps to close, not exceptions to the parity requirement. Unsupported source fails closed rather than silently compiling with different semantics.
