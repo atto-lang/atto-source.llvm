@@ -104,6 +104,20 @@ def main():
          "declare trait Api as fnc read(): int { return 1; } end\n" + main_fn,
          None),
     ]
+    negative.extend([
+        ("reject duplicate formal names",
+         "declare trait Api as fnc read(int id, int id) => int; end\n"
+         + main_fn, "TYPE_ONLY_DUPLICATE_PARAM"),
+        ("reject type catalog exhaustion",
+         "".join(f"declare type T{i} = int;\n" for i in range(1025))
+         + main_fn, "TYPE_ONLY_DECL_BUDGET"),
+        ("reject inheritance depth exhaustion",
+         "declare trait T0 as end\n"
+         + "".join(
+             f"declare trait T{i} extends T{i - 1} as end\n"
+             for i in range(1, 129)
+         ) + main_fn, "TYPE_PARENT_DEPTH_BUDGET"),
+    ])
     with tempfile.TemporaryDirectory(prefix="ores-native-typeonly-") as root:
         source = Path(root) / "typeonly.ores"
         for label, program in positive:
