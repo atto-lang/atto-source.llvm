@@ -286,9 +286,20 @@ public:
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
-        while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
+        while (token_.text == "define" || token_.text == "declare" ||
+                (token_.text == "pub" &&
+                 (peek_next().text == "define" || peek_next().text == "declare"))) {
+            if (at_type_only_introducer()) {
+                type_only_declaration(program);
+                continue;
+            }
             const bool exported = accept("pub");
             require("define");
+            if (token_.text == "type" || token_.text == "trait" ||
+                    token_.text == "interface" || token_.text == "pub") {
+                type_only_declaration(program, true, exported);
+                continue;
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -319,7 +330,17 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
-            if (accept("define")) {
+            if (at_type_only_introducer()) {
+                type_only_declaration(program);
+            } else if (accept("define")) {
+                if (token_.text == "type" || token_.text == "trait" ||
+                        token_.text == "interface" || token_.text == "pub") {
+                    type_only_declaration(program, true);
+                    continue;
+                }
+                if (token_.text == "model")
+                    fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified "
+                         "operation provenance, configuration and codegen parity");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
@@ -339,8 +360,8 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         if (program.functions.empty() && program.actors.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.cooperative_loops.empty() && program.type_only_declarations.empty())
+            fail("expected at least one function, actor or type-only declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
@@ -354,6 +375,108 @@ private:
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
+    }
+
+    bool at_type_only_introducer() const {
+        return token_.text == "declare" ||
+               (token_.text == "pub" && peek_next().text == "declare");
+    }
+
+    std::string type_only_scalar(bool allow_void) {
+        if (token_.text == "int" || token_.text == "bool" ||
+                (allow_void && token_.text == "void")) {
+            std::string type(token_.text);
+            advance();
+            return type;
+        }
+        fail("TYPE_ONLY_UNSUPPORTED_TYPE: native v1 admits only int/bool scalar"
+             " signatures and void results; nominal/generic lowering is not verified");
+    }
+
+    void type_only_declaration(Program& program, bool already_defined = false,
+                               bool before_public = false) {
+        bool exported = before_public;
+        if (already_defined) {
+            if (accept("pub")) {
+                if (exported) fail("TYPE_ONLY_DUPLICATE_VISIBILITY: duplicate pub");
+                exported = true;
+            }
+        } else {
+            const bool prefix_public = accept("pub");
+            require("declare");
+            const bool postfix_public = accept("pub");
+            if (prefix_public && postfix_public)
+                fail("TYPE_ONLY_DUPLICATE_VISIBILITY: duplicate pub");
+            exported = prefix_public || postfix_public;
+        }
+
+        TypeOnlyDecl decl;
+        decl.exported = exported;
+        if (accept("type")) decl.kind = TypeOnlyDecl::Kind::Alias;
+        else if (accept("trait")) decl.kind = TypeOnlyDecl::Kind::Trait;
+        else if (accept("interface")) decl.kind = TypeOnlyDecl::Kind::Interface;
+        else fail("TYPE_ONLY_INVALID_KIND: declare admits type, trait or interface; "
+                  "define model is a runtime type and value");
+
+        decl.name = identifier();
+        if (decl.kind == TypeOnlyDecl::Kind::Alias) {
+            require("=");
+            decl.alias_target = type_only_scalar(false);
+            require(";");
+        } else {
+            if (accept("extends")) {
+                do {
+                    if (decl.parents.size() >= 32)
+                        fail("TYPE_ONLY_PARENT_BUDGET: maximum 32 parent types");
+                    decl.parents.push_back(identifier());
+                } while (accept(","));
+            }
+            const bool braces = accept("{");
+            if (!braces) require("as");
+            std::unordered_set<std::string> member_names;
+            while (token_.kind != Kind::End &&
+                    token_.text != (braces ? "}" : "end")) {
+                if (decl.methods.size() >= 128)
+                    fail("TYPE_ONLY_MEMBER_BUDGET: maximum 128 method signatures");
+                require("fnc");
+                TypeOnlyDecl::Method method;
+                method.name = identifier();
+                if (!member_names.insert(method.name).second)
+                    fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate method '" + method.name + "'");
+                require("(");
+                if (!accept(")")) {
+                    do {
+                        if (method.parameter_types.size() >= 32)
+                            fail("TYPE_ONLY_PARAM_BUDGET: maximum 32 method parameters");
+                        std::string type;
+                        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
+                                peek_next().text == ":") {
+                            identifier();
+                            require(":");
+                            type = type_only_scalar(false);
+                        } else {
+                            type = type_only_scalar(false);
+                            identifier();
+                        }
+                        method.parameter_types.push_back(std::move(type));
+                    } while (accept(","));
+                    require(")");
+                }
+                if (!accept(":")) {
+                    // '=' and '>' are separate lexer tokens: require adjacency.
+                    if (token_.text != "=" || peek_next().text != ">" ||
+                            peek_next().offset != token_.offset + 1)
+                        fail("TYPE_ONLY_BAD_ARROW: signature requires contiguous => or :");
+                    require("=");
+                    require(">");
+                }
+                method.return_type = type_only_scalar(true);
+                require(";");
+                decl.methods.push_back(std::move(method));
+            }
+            require(braces ? "}" : "end");
+        }
+        program.type_only_declarations.push_back(std::move(decl));
     }
 
     ModuleContract contract() {
