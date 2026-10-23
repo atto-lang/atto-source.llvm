@@ -16,7 +16,10 @@ The strict differential runner adds two independent Java executions per
 positive source program and byte-compares each to the expected native output.
 A Java launcher must be supplied; there is **no** skip or fallback when Java
 cannot execute a fixture. Both source trees must be checked out independently
-at known Git commits, with no tracked local edits. A successful run creates a
+at known Git commits, with no tracked local edits. The launcher and both
+source fixtures must be tracked by the pinned checkouts; the runner checks
+byte-for-byte fixture equality and performs fresh compiler/runtime builds.
+A successful run creates a
 **new** JSON evidence file containing both exact source SHAs, counts and the
 sanitizer flag. An existing receipt is never overwritten.
 
