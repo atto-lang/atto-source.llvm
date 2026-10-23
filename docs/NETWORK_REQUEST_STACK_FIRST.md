@@ -75,3 +75,33 @@ suitability.
    throughput, tail latency, and peak transport-buffer occupancy.
 6. GraalVM currently uses JDK HttpExchange and Java host State objects:
    host-object allocations remain until a separately verified bridge lands.
+
+## Host-only actor-incarnation binding (second slice)
+
+ActorBoundRequestTable<ActorCapacity, Slots, MaxBytes> adds a bounded,
+preallocated actor-authority directory over the request slots. The trusted
+runtime activates an (actor-id, incarnation) pair and receives a distinct,
+monotonically minted internal owner token. Reusing the actor ID with an old
+incarnation never restores its request access. The directory serializes
+begin/borrow/transfer/close with actor retirement; the retirement path calls
+RequestSlotTable.revoke_owner before reusing an actor directory entry.
+
+Retirement revokes published handles immediately but keeps outstanding read
+leases pinned until they finish. If retirement catches an unfinished ingress,
+the slot enters an aborting phase: publish refuses the write, while storage
+stays valid until the owning ingress lease is dropped. Generation and owner
+tokens never wrap into a previously valid authority. Native scoped callbacks
+return their leases on both normal exit and C++ exception unwinding.
+
+This is still a HOST reference: ActorIncarnation inputs must eventually come
+from runtime-authenticated execution/CONTROL state, never user-supplied
+messages, generic ints or unauthenticated RPC. The adapter is not connected
+to compiled ActorMail source dispatch. Exposing the underlying raw slot table
+to guest code would violate that trust boundary. Cross-process isolated and
+untrusted workers require their separate protected broker/IPC protocol.
+
+The test native_actor_request_incarnation_revocation_host_only exercises
+retirement, stale generations, in-progress writer cancellation, deferred
+reclamation, owner handoff, 25k allocation-instrumented scoped cycles, and
+native exception cleanup. GCC/Clang ASan+UBSan local harness passes do NOT
+satisfy exact-head hosted CTest or guest-language execution gates.
