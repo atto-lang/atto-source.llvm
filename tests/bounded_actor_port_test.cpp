@@ -2,6 +2,9 @@
 
 #include <memory>
 #include <cstdint>
+#include <atomic>
+#include <thread>
+#include <array>
 #include <deque>
 #include <functional>
 #include <random>
@@ -183,4 +186,68 @@ int main() {
     check(expected_frames == 0 && expected_bytes == 0);
     check(stress.used_frames() == 0 && stress.used_bytes() == 0);
     stress.close();
+
+    // Deliberately hold a cleanup hook open on another carrier. An offer
+    // must fail promptly during the physical quiescence window: no early
+    // ACK credit refund, no payload destructor running under the port lock.
+    BoundedActorPort<ReentrantPayload> concurrent_cleanup(1, 8);
+    std::atomic<bool> cleanup_entered{false}, allow_cleanup{false};
+    ReentrantPayload slow_cleanup([&] {
+        cleanup_entered.store(true, std::memory_order_release);
+        while (!allow_cleanup.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    });
+    check(concurrent_cleanup.offer(std::move(slow_cleanup), 8));
+    auto concurrent_receipt = concurrent_cleanup.try_receive();
+    check(concurrent_receipt.has_value());
+    std::thread cleaner([&] { check(concurrent_receipt->acknowledge_released()); });
+    while (!cleanup_entered.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    ReentrantPayload still_blocked({});
+    check(!concurrent_cleanup.offer(std::move(still_blocked), 8));
+    allow_cleanup.store(true, std::memory_order_release);
+    cleaner.join();
+    check(concurrent_cleanup.used_frames() == 0);
+    ReentrantPayload accepted_after_cleanup({});
+    check(concurrent_cleanup.offer(std::move(accepted_after_cleanup), 8));
+    auto retired = concurrent_cleanup.try_receive();
+    check(retired && retired->acknowledge_released());
+    concurrent_cleanup.close();
+
+    // Four real OS producers race one receiver over a tiny bounded port.
+    // Each sender's monotonic sequence must remain FIFO and capacity must
+    // never be refunded by dequeue rather than physical ACK.
+    BoundedActorPort<MoveOnly> multiproducer(16, 128);
+    constexpr int senders = 4, per_sender = 1000;
+    std::array<std::thread, senders> producers;
+    for (int sender = 0; sender < senders; ++sender) {
+        producers[sender] = std::thread([&, sender] {
+            for (int seq = 0; seq < per_sender; ++seq) {
+                MoveOnly payload(sender * 65536 + seq);
+                while (!multiproducer.offer(std::move(payload), 8))
+                    std::this_thread::yield();
+            }
+        });
+    }
+    std::array<int, senders> last_seen{-1, -1, -1, -1};
+    int received = 0;
+    while (received < senders * per_sender) {
+        auto current = multiproducer.try_receive();
+        if (!current) {
+            std::this_thread::yield();
+            continue;
+        }
+        const int encoded = *current->value().item;
+        const int sender = encoded / 65536, seq = encoded % 65536;
+        check(sender >= 0 && sender < senders);
+        check(seq == last_seen[sender] + 1);
+        last_seen[sender] = seq;
+        check(current->acknowledge_released());
+        ++received;
+    }
+    for (auto& producer : producers) producer.join();
+    for (auto seq : last_seen) check(seq == per_sender - 1);
+    check(multiproducer.used_frames() == 0);
+    check(multiproducer.used_bytes() == 0);
+    multiproducer.close();
 }
