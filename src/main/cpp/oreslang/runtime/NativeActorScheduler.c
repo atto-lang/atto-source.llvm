@@ -26,6 +26,8 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    pthread_t carrier_owner; /* owning physical worker while active */
+    unsigned carrier_owner_valid;
     unsigned has_control;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
@@ -160,6 +162,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
      * The parent still owns its exclusive logical lane. */
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!!s->actors[i].active != !!s->actors[i].carrier_owner_valid) abort();
         if (!s->actors[i].active && s->actors[i].has_control) {
             *actor = i;
             *control = 1;
@@ -248,6 +251,7 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (lane->active || lane->carrier_owner_valid) abort();
         if (!s->reserved_executions || !s->next_execution) abort();
         --s->reserved_executions;
         const uint64_t execution_id = s->next_execution;
@@ -259,6 +263,8 @@ static void* carrier(void* raw) {
                 (uint64_t)(uintptr_t)&carrier_identity, 1, &execution_claim))
             abort();
         lane->active = 1;
+        lane->carrier_owner = pthread_self();
+        lane->carrier_owner_valid = 1;
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -280,7 +286,9 @@ static void* carrier(void* raw) {
         executing = NULL;
 
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         /* Leave the generation-checked guest execution claim first, but
          * keep lane.active/outstanding until the gate has completed its
          * cross-domain wakeup. Otherwise drain() may report quiescence and
@@ -290,8 +298,11 @@ static void* carrier(void* raw) {
         unlock(s);
         if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        lane->carrier_owner_valid = 0;
         s->outstanding--;
         s->completed++;
         if (!control) {

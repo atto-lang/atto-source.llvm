@@ -133,5 +133,61 @@ int main() {
     CHECK(hooks.order.back() == "escalate");
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
+
+    // #175 restart intensity: two attempts may occur inside a 10-tick
+    // window, the third must escalate, and capacity returns only after the
+    // oldest attempt ages out. No timer/thread is owned by CONTROL.
+    SupervisorControlTurn windowed(4, 2, 10);
+    Hooks windowHooks;
+    windowHooks.next = SupervisorControlTurn::Decision::Restart;
+    Key w1{"window-1", 1}, w2{"window-2", 1},
+        w3{"window-3", 1}, w4{"window-4", 1};
+    windowed.reserve_child(w1);
+    windowed.reserve_child(w2);
+    windowed.reserve_child(w3);
+    windowed.reserve_child(w4);
+
+    CHECK(windowed.publish_child(w1, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 100)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 1);
+
+    CHECK(windowed.publish_child(w2, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 105)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 2);
+
+    CHECK(windowed.publish_child(w3, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 106)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "escalate");
+    CHECK(windowed.restarts_in_window() == 2);
+
+    CHECK(windowed.publish_child(w4, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 111)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 2);
+    CHECK(windowed.restarts_used() == 3);
+
+    // A regressing scheduler tick is untrusted evidence: deny restart and
+    // escalate without throwing/requeueing the CONTROL event forever.
+    SupervisorControlTurn regressing(1, 1, 10);
+    Hooks regressionHooks;
+    regressionHooks.next = SupervisorControlTurn::Decision::Restart;
+    Key r1{"regression-1", 1};
+    regressing.reserve_child(r1);
+    CHECK(regressing.publish_child(r1, Kind::Panic, "panic"));
+    CHECK(regressing.admit_turn(regressionHooks, false, 50)
+            == SupervisorControlTurn::Admitted::Control);
+    Key r2{"regression-2", 1};
+    regressing.reserve_child(r2);
+    CHECK(regressing.publish_child(r2, Kind::Panic, "panic"));
+    CHECK(regressing.admit_turn(regressionHooks, false, 49)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(regressionHooks.order.back() == "escalate");
+
     return 0;
 }

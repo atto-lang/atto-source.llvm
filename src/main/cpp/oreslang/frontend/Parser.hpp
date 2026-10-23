@@ -13,7 +13,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool };
+enum class ScalarType { I64, Bool, String };
 
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
@@ -27,7 +27,7 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, Variable,
+        Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
         Add, Subtract, Multiply,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
@@ -39,6 +39,7 @@ struct Expression {
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
+    mutable ScalarType resolved_type = ScalarType::I64;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -60,7 +61,7 @@ struct Expression {
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
-    std::string class_name; // empty means primitive i64
+    std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
@@ -90,17 +91,28 @@ struct ClassField {
     std::int64_t initial = 0;
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
+    ScalarType scalar_type = ScalarType::I64;
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
 };
 
+struct ClassMethod {
+    std::string name;
+    std::size_t arity = 0; // source arguments, excludes hidden self
+    bool public_member = false;
+    bool mutable_receiver = false;
+};
+
 struct ClassDecl {
+    bool exported = false;
+    std::vector<ClassMethod> methods;
     std::string name;
     // Up to 16 scalar i64 or owned Array<int> fields.
     // The ordered vector defines the native LLVM struct layout.
     std::vector<ClassField> fields;
     bool explicit_constructor = false;
+    bool constructor_exported = false;
     std::vector<std::string> constructor_parameters;
 };
 
@@ -206,6 +218,8 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    std::string method_owner; // compiler-owned class method privilege, never source syntax
+    bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
 };
@@ -243,7 +257,16 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+struct ModuleImport {
+    bool selected_class = false;
+    std::string selected_module;
+    std::string local_name;
+    std::string path;
+    std::size_t offset = 0;
+};
+
 struct Program {
+    std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string module;
     std::vector<ClassDecl> classes;
@@ -259,5 +282,11 @@ struct Program {
 // is one zero-local await ActorRef.get_ready() in trusted zero-argument main.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
+
+// Internal module-linking stages: syntax trees are NOT admitted for codegen.
+// resolve_and_validate_program must run after all module names are resolved.
+Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
+                                 bool experimental_rt_scalar_loop = false);
+void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

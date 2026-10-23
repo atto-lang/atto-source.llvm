@@ -1,0 +1,24 @@
+// Native actor handler owns two bounded temporary i64 heap slots.
+// The compiler must drop both before the scheduler admits the next message.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    const previous: owned int = total + n;
+    const doubled: owned int = previous + previous;
+    total = doubled;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  worker.send(1);
+  worker.send(2);
+  worker.send(3);
+  worker.send(4);
+  worker.send(5);
+  worker.send(6);
+  worker.send(7);
+  worker.send(8);
+  stop worker;
+  return 43;
+}

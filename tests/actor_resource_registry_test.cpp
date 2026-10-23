@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
+#include "oreslang/runtime/LogicalMutex.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -132,6 +133,60 @@ int main() {
     assert(orderedResult.status == Reclaim::complete);
     assert(ordered.quarantined_resources() == 0);
     assert((order == std::vector<int>{1, 2}));
+
+    // A cancelled/stopped actor does not yield a logical lock while any
+    // admitted turn/loan/callback may still access the protected payload.
+    // The actor resource registry releases after quiescence, not on STOP.
+    ActorResourceRegistry lockOwner(44, 3);
+    oreslang::runtime::LogicalMutex<int> logicalLock(8);
+    auto lockHeld = logicalLock.request();
+    auto lockWaiting = logicalLock.request();
+    assert(logicalLock.owns(lockHeld.token));
+    assert(!logicalLock.owns(lockWaiting.token));
+    int lockRevocations = 0;
+    lockOwner.register_lock_permit([&] {
+        assert(lockOwner.phase() == Phase::closing); // outside registry mutex
+        assert(lockOwner.try_reclaim().status == Reclaim::closing);
+        assert(logicalLock.release(lockHeld.token) == lockWaiting.token);
+        ++lockRevocations;
+    });
+    auto outstandingTurn = lockOwner.acquire_turn();
+    auto outstandingLoan = lockOwner.acquire_loan();
+    auto outstandingCallback = lockOwner.acquire_callback();
+    lockOwner.retire();
+    assert(lockOwner.try_reclaim().status == Reclaim::busy);
+    assert(logicalLock.owns(lockHeld.token));
+    lockOwner.release_turn(outstandingTurn);
+    lockOwner.release_loan(outstandingLoan);
+    assert(lockOwner.try_reclaim().status == Reclaim::busy);
+    assert(logicalLock.owns(lockHeld.token));
+    lockOwner.release_callback(outstandingCallback);
+    assert(lockOwner.try_reclaim().status == Reclaim::complete);
+    assert(lockRevocations == 1);
+    assert(logicalLock.owns(lockWaiting.token));
+    assert(!logicalLock.owns(lockHeld.token));
+    assert(lockOwner.try_reclaim().status == Reclaim::complete);
+    assert(lockRevocations == 1);
+    assert(!logicalLock.release(lockWaiting.token));
+
+    // Unknown lock revocation outcome cannot authorize reuse of protected
+    // actor-owned allocations: quarantine rather than incorrectly regrant.
+    ActorResourceRegistry failedLockRevoke(45, 3);
+    int protectedArenaDrops = 0;
+    failedLockRevoke.register_resource(Kind::native_allocation,
+                                       [&] { ++protectedArenaDrops; });
+    failedLockRevoke.register_lock_permit([] {
+        throw std::runtime_error("logical lock permit revocation failed");
+    });
+    failedLockRevoke.retire();
+    auto failedLockResult = failedLockRevoke.try_reclaim();
+    assert(failedLockResult.status == Reclaim::failed);
+    assert(failedLockResult.failures == 1);
+    assert(failedLockResult.skipped == 1);
+    assert(failedLockRevoke.quarantined_resources() == 2);
+    assert(protectedArenaDrops == 0);
+    assert(failedLockRevoke.try_reclaim().status == Reclaim::failed);
+    assert(protectedArenaDrops == 0);
 
     ActorResourceRegistry quarantine(30, 1);
     int allocationDrops = 0;
