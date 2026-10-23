@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/runtime/ActorArena.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,37 @@ public:
             put(i, kNextFree, i + 1 == capacity_ ? kNoSlot : i + 1);
         }
     }
+    // Authoritative storage lives inside generation-checked persistent arena
+    // slots, not in an external vector. A trusted owner adapter must enter a
+    // valid arena turn, then resume() once per mailbox turn before invoking
+    // operations; a forged/stale turn fails closed at the C arena boundary.
+    ProxyRequestSlab(Layout layout, std::uint32_t capacity, std::uint32_t lanes,
+                     OresActorArena* arena, OresArenaTurn turn,
+                     std::span<const OresArenaHandle> pages,
+                     std::size_t page_words)
+        : layout_(layout), capacity_(capacity), lanes_(lanes),
+          arena_(arena), turn_(turn), pages_(pages), page_words_(page_words) {
+        const auto count = required_words(layout, capacity, lanes);
+        if (!arena_ || pages_.empty() || page_words_ == 0
+                || page_words_ > (1024U * 1024U) / sizeof(std::uint32_t)
+                || pages_.size() < (count + page_words_ - 1) / page_words_) {
+            throw std::invalid_argument("invalid arena-backed proxy pages");
+        }
+        rows_ = layout_ == Layout::AoSoA
+            ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
+        receipt_base_ = rows_ * kFields;
+        for (std::size_t word = 0; word < count; ++word) write_word(word, 0);
+        free_head_ = 0;
+        for (std::uint32_t row = 0; row < capacity_; ++row) {
+            put(row, kNextFree, row + 1 == capacity_ ? kNoSlot : row + 1);
+        }
+    }
+
+    void resume(OresArenaTurn turn) {
+        if (!arena_) throw std::logic_error("not arena-backed");
+        turn_ = turn; // The arena checks domain, epoch and bound carrier.
+    }
+
     ProxyRequestSlab(const ProxyRequestSlab&) = delete;
     ProxyRequestSlab& operator=(const ProxyRequestSlab&) = delete;
     ProxyRequestSlab(ProxyRequestSlab&&) = delete;
@@ -106,7 +138,7 @@ public:
         for (std::uint32_t i = 0; i < kPins; ++i) {
             if (receipt(row, i) == 0) {
                 ++serial;
-                receipt(row, i) = serial;
+                put_receipt(row, i, serial);
                 put(row, kSerial, serial);
                 put(row, kPending, get(row, kPending) + 1);
                 const auto index = row * kPins + i + 1;
@@ -129,7 +161,7 @@ public:
         if ((phase != kOpen && phase != kRetiring) || receipt(row, lane) != serial) {
             return false;
         }
-        receipt(row, lane) = 0;
+        put_receipt(row, lane, 0);
         const auto remaining = get(row, kPending) - 1;
         put(row, kPending, remaining);
         if (phase == kRetiring && remaining == 0) recycle(row);
@@ -155,7 +187,12 @@ public:
     void close() {
         check_open();
         if (live_ != 0) throw std::logic_error("unretired native requests");
-        std::fill(words_.begin(), words_.end(), 0);
+        if (arena_) {
+            const auto words = required_words(layout_, capacity_, lanes_);
+            for (std::size_t i = 0; i < words; ++i) write_word(i, 0);
+        } else {
+            std::fill(words_.begin(), words_.end(), 0);
+        }
         closed_ = true;
         free_head_ = kNoSlot;
     }
@@ -176,14 +213,36 @@ private:
             : (static_cast<std::size_t>(row / lanes_) * kFields + field) * lanes_
                 + (row % lanes_);
     }
-    std::uint32_t get(std::uint32_t row, std::uint32_t field) const noexcept {
-        return words_[offset(row, field)];
+    std::uint32_t read_word(std::size_t word) const {
+        if (!arena_) return words_[word];
+        const auto page = word / page_words_;
+        const auto byte_offset = (word % page_words_) * sizeof(std::uint32_t);
+        std::uint32_t value = 0;
+        ores_actor_arena_read(arena_, turn_, pages_[page], byte_offset,
+                              &value, sizeof(value));
+        return value;
     }
-    void put(std::uint32_t row, std::uint32_t field, std::uint32_t value) noexcept {
-        words_[offset(row, field)] = value;
+    void write_word(std::size_t word, std::uint32_t value) {
+        if (!arena_) {
+            words_[word] = value;
+            return;
+        }
+        const auto page = word / page_words_;
+        const auto byte_offset = (word % page_words_) * sizeof(std::uint32_t);
+        ores_actor_arena_write(arena_, turn_, pages_[page], byte_offset,
+                               &value, sizeof(value));
     }
-    std::uint32_t& receipt(std::uint32_t row, std::uint32_t index) noexcept {
-        return words_[receipt_base_ + row * kPins + index];
+    std::uint32_t get(std::uint32_t row, std::uint32_t field) const {
+        return read_word(offset(row, field));
+    }
+    void put(std::uint32_t row, std::uint32_t field, std::uint32_t value) {
+        write_word(offset(row, field), value);
+    }
+    std::uint32_t receipt(std::uint32_t row, std::uint32_t index) const {
+        return read_word(receipt_base_ + row * kPins + index);
+    }
+    void put_receipt(std::uint32_t row, std::uint32_t index, std::uint32_t value) {
+        write_word(receipt_base_ + row * kPins + index, value);
     }
     std::uint32_t checked_row(std::uint64_t ticket) const {
         const auto row = static_cast<std::uint32_t>(ticket);
@@ -215,6 +274,10 @@ private:
     std::uint32_t rows_ = 0;
     std::size_t receipt_base_ = 0;
     std::span<std::uint32_t> words_;
+    OresActorArena* arena_ = nullptr;
+    OresArenaTurn turn_{};
+    std::span<const OresArenaHandle> pages_{};
+    std::size_t page_words_ = 0;
     std::uint32_t free_head_ = kNoSlot;
     std::uint32_t live_ = 0;
     bool closed_ = false;
