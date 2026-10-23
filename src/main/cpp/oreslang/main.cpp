@@ -152,13 +152,18 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         throw std::runtime_error(
             "tree shaking requires an explicit root, main, or at least one pub function");
 
+    std::size_t scanned_edges = 0;
     for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
         const auto definition = definitions.find(pending[cursor]);
         if (definition == definitions.end())
             throw std::runtime_error("tree shaking found an unresolved function root");
+        if (scanned_edges >= oreslang::realtime_detail::kMaxRealtimeCallEdges)
+            throw std::runtime_error(
+                "tree shaking call graph exceeds compiler edge budget");
         const auto calls = tree_shake_function_calls(
                 program.functions[definition->second],
-                oreslang::realtime_detail::kMaxRealtimeCallEdges - reachable.size());
+                oreslang::realtime_detail::kMaxRealtimeCallEdges - scanned_edges);
+        scanned_edges += calls.size();
         for (const auto& call : calls) {
             if (!definitions.count(call))
                 throw std::runtime_error(
