@@ -272,6 +272,53 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("main", call("missing"), true));
+
+        bool rejected = false;
+        try {
+            (void)analyze_semantic_reachability(program);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "unresolved dependency must fail closed");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("main", call("leaf"), true));
+        program.functions.push_back(fn("leaf", integer(1)));
+
+        SemanticGraphBudget budget;
+        budget.max_edges = 0;
+        bool rejected = false;
+        try {
+            (void)analyze_semantic_reachability(
+                program, SemanticRootPolicy{}, budget);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "semantic graph edge budget must fail closed");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("main", integer(0), true));
+        program.functions.push_back(fn("dead", integer(1)));
+
+        const auto result = analyze_semantic_reachability(program);
+        bool rejected = false;
+        try {
+            (void)explain_semantic_reachability(
+                result,
+                function_declaration_id(CallableId{"dead", 0}));
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected && "removed declaration must not be explainable");
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("orphan", integer(1)));
         SemanticRootPolicy policy;
         policy.root_default_main = false;
