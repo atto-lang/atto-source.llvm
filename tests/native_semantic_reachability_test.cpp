@@ -557,6 +557,33 @@ int main() {
 
     {
         Program program;
+        program.functions.push_back(fn("main", integer(0), true));
+        ClassDecl first;
+        first.name = "Duplicate";
+        ClassDecl second;
+        second.name = "Duplicate";
+        program.classes.push_back(std::move(first));
+        program.classes.push_back(std::move(second));
+
+        SemanticReachabilityResult forged;
+        forged.build_kind = SemanticBuildKind::Executable;
+        forged.roots.push_back(
+            function_declaration_id(CallableId{"main", 0}));
+        forged.retained = forged.roots;
+        forged.removed.push_back(class_declaration_id("Duplicate"));
+
+        bool rejected = false;
+        try {
+            (void)make_reachability_manifest_v1(program, forged);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected &&
+               "manifest adapter must reject duplicate program declaration IDs");
+    }
+
+    {
+        Program program;
         program.functions.push_back(fn("orphan", integer(1)));
         SemanticRootPolicy policy;
         policy.root_default_main = false;
