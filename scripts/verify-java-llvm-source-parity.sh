@@ -126,7 +126,8 @@ fi
 # An exit-zero subprocess, a nonempty file or a self-reported PASS are not
 # enough. Independently check provenance, corpus completeness and binary
 # parity before publishing a durable receipt.
-if ! jq -e --arg llvm "$llvm_sha" --arg java "$java_sha" '
+if ! jq -e -s --arg llvm "$llvm_sha" --arg java "$java_sha" '
+  (length == 1) and (.[0] |
   .schema == "oreslang.java-llvm.source-parity.v1" and
   .status == "passed" and
   .llvm_revision == $llvm and
@@ -152,7 +153,7 @@ if ! jq -e --arg llvm "$llvm_sha" --arg java "$java_sha" '
     ((.java_stdout_hex | type) == "string") and
     (.native_stdout_hex == .java_stdout_hex) and
     (.native_stdout_hex | test("^([0-9a-f]{2})*$"))
-  )
+  ))
 ' "$staging" >/dev/null; then
   echo "invalid strict parity receipt; refusing release qualification" >&2
   exit 65
