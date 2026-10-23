@@ -1159,17 +1159,32 @@ if(BUILD_TESTING)
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
     endif()
     # Class moves are compiled and exercised through real native guests.
-    if(ORE_CLANG)
+    find_program(ORE_MOVE_RUSTC rustc)
+    if(ORE_CLANG AND ORE_MOVE_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
+            COMMAND "${ORE_MOVE_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
+            DEPENDS tests/class_move_native_matrix.rs VERBATIM)
+        add_custom_target(oreslang-class-move-native-matrix-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix")
         add_test(NAME native_class_move_source_execution
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
         add_test(NAME native_class_move_source_asan_ubsan
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
+        add_test(NAME native_class_move_optimized_rust_assertions
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix" --self-test)
         set_tests_properties(native_class_move_source_execution
-            native_class_move_source_asan_ubsan PROPERTIES TIMEOUT 180)
+            native_class_move_source_asan_ubsan
+            native_class_move_optimized_rust_assertions PROPERTIES TIMEOUT 180)
+    else()
+        foreach(move_gate IN ITEMS native_class_move_source_execution
+                native_class_move_source_asan_ubsan native_class_move_optimized_rust_assertions)
+            add_test(NAME ${move_gate} COMMAND "${CMAKE_COMMAND}" -E false)
+        endforeach()
     endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
@@ -1835,6 +1850,7 @@ if(BUILD_TESTING)
             DEPENDS tests/native_class_string_parity.rs
                 tests/fixtures/native-class-string/main.ores tests/fixtures/native-class-string/main-1.ores
                 tests/fixtures/native-class-string/string-array.ores
+                tests/fixtures/native-class-string/path-segment.ores
             VERBATIM)
         add_custom_target(oreslang-native-class-string-parity-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")
@@ -2098,7 +2114,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(class_reject_suspend_boundary class-async-borrow-reject.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(class_admit_ordered_legacy_two_field_layout class-unsupported-layout-reject.ores)
     oreslang_contract_test(class_reject_duplicate_field class-multifield-duplicate-field-reject.ores --diagnostic "duplicate class field")
-    oreslang_contract_test(class_reject_nonint_nested_field class-multifield-nonint-field-reject.ores --diagnostic "expected 'int'")
+    oreslang_contract_test(class_reject_nonint_nested_field class-multifield-nonint-field-reject.ores --diagnostic "class field initializer type")
     oreslang_contract_test(class_reject_shared_write_secondary class-multifield-shared-write-reject.ores --diagnostic "ownership violation")
     oreslang_contract_test(class_reject_overlap_across_fields class-multifield-overlap-reject.ores --diagnostic "conflicting active native borrow")
     oreslang_contract_test(class_reject_immutable_exclusive_loan class-immutable-owner-mut-borrow-reject.ores --diagnostic "cannot mutably borrow immutable owner")
@@ -2216,7 +2232,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_class_colon_write class-colon-rebindable-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(native_class_val_final_mut_read class-val-read-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(reject_native_const_alias_write class-final-alias-write-reject.ores --diagnostic "cannot reassign final class field")
-        oreslang_contract_test(reject_native_final_uninitialized class-final-uninitialized-reject.ores --diagnostic "final class field requires declaration-site initializer")
+        oreslang_contract_test(reject_native_final_uninitialized class-final-uninitialized-reject.ores --diagnostic "native class constructor argument arity mismatch")
         oreslang_contract_test(reject_native_val_alias_write class-val-alias-write-reject.ores --diagnostic "cannot reassign final class field")
         oreslang_contract_test(reject_native_final_mut_write class-final-mut-write-reject.ores --diagnostic "cannot reassign final class field")
         oreslang_contract_test(reject_native_const_alias_take class-const-take-reject.ores --diagnostic "cannot take final class field")

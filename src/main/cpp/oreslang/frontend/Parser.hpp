@@ -96,6 +96,7 @@ struct ClassField {
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
+    bool constructor_argument = false; // declaration-only field supplied by implicit positional constructor
 };
 
 struct ClassMethod {
@@ -115,6 +116,7 @@ struct ClassDecl {
     bool explicit_constructor = false;
     bool constructor_exported = false;
     std::vector<std::string> constructor_parameters;
+    std::vector<ScalarType> constructor_parameter_types;
 };
 
 // Native source value categories. Future<T> remains a no-IR boundary
