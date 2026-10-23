@@ -267,6 +267,29 @@ int main() {
         check(group.finalized(child), "subtree child finalization rejected");
         check(group.finalized(parent), "subtree parent join finalization rejected");
     }
+    {
+        // A mutable lambda captures its attempt counter *by value*. STOP
+        // retry must invoke exactly the same callable object after close;
+        // a copied pre-failure callback would throw forever.
+        std::optional<NativeActorRef> detached;
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalize;
+        {
+            NativeActorGroup group(9104, 2);
+            detached = group.adopt(9104, 1, 1, [attempts = 0]() mutable {
+                if (attempts++ == 0)
+                    throw std::runtime_error("mutable STOP callback rejected first enqueue");
+            });
+            finalize = group.runtime_finalizer(*detached);
+            group.close();
+            check(detached->stop_delivery_failed(), "mutable STOP failure not recorded");
+        }
+        check(NativeActorGroup::retry_failed_stop(*detached),
+              "STOP retry lost mutable callback state across manager destruction");
+        check(!detached->stop_delivery_failed(),
+              "mutable callback successful retry not acknowledged");
+        check(finalize->finalized(), "mutable callback actor could not finalize");
+        detached->get_done().get();
+    }
     for (int round = 0; round < 200; ++round) {
         const auto rid = static_cast<std::uint64_t>(8000 + round);
         NativeActorGroup group(rid, 2);
