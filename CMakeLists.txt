@@ -2125,6 +2125,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-vm-control-plane-test
         tests/native_vm_control_plane_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-control-plane-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2140,6 +2141,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-ores-vm-test
         tests/native_ores_vm_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-ores-vm-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2168,6 +2170,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-vm-cpu-budget-test
         tests/native_vm_cpu_budget_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-cpu-budget-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2183,6 +2186,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-vm-turn-gate-test
         tests/native_vm_physical_turn_gate_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-turn-gate-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
@@ -2264,6 +2268,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-vm-supervisor-test
         tests/native_vm_supervisor_owner_test.c
         src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-native-vm-supervisor-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
