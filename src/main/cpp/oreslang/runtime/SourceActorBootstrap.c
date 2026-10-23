@@ -359,17 +359,26 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
-void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    /* Validate under the SAME lock as subtree STOP and heap reclamation.
-     * Previously a stale pointer was read before the group admission lock. */
+int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
+    /* Checked host admission is safe for missing/stale/stopping pointers.
+     * Validate and submit against STOP under a single admission lock. */
     group_lock();
     SourceActor* instance = find_actor_locked(opaque);
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message && !instance->stopping);
-    const OresNativeSendStatus admitted = ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload);
+    int accepted = 0;
+    if (instance && instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->on_message && !instance->stopping)
+        accepted = ores_native_vm_try_send(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+            == ORES_NATIVE_SEND_ACCEPTED;
     group_unlock();
-    ensure(admitted == ORES_NATIVE_SEND_ACCEPTED);
+    return accepted;
+}
+
+void oreslang_source_actor_send(void* opaque, int64_t payload) {
+    /* Legacy void guest ABI retains its fail-closed contract; source
+     * compiler must eventually emit typed overload/cancellation results
+     * rather than turning checked send admission into a process abort. */
+    ensure(oreslang_source_actor_try_send(opaque, payload));
 }
 
 int64_t oreslang_source_actor_await_ready(
