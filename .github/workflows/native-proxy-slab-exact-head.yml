@@ -4,6 +4,7 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
       - 'tests/native_proxy_request_slab_test.cpp'
       - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
       - 'CMakeLists.txt'
@@ -32,16 +33,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena.o
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
-            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp -o /tmp/proxy-slab-host
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena.o -o /tmp/proxy-slab-host
           test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
       - name: Exercise ASan and UBSan
         shell: bash
         run: |
           set -euo pipefail
+          cc -std=c11 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena-sanitized.o
           c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
-            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp -o /tmp/proxy-slab-sanitized
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-slab-sanitized
           ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
       - name: Compile and execute exact-generation real native actor test
         shell: bash
@@ -52,5 +62,6 @@ jobs:
             -o /tmp/proxy-native-actor-scheduler.o
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
-            /tmp/proxy-native-actor-scheduler.o -o /tmp/proxy-native-owner-test
+            /tmp/proxy-native-actor-scheduler.o /tmp/proxy-actor-arena.o \
+            -o /tmp/proxy-native-owner-test
           test "$(/tmp/proxy-native-owner-test)" = "NATIVE_ACTOR_PROXY_REQUEST_SLAB_OWNER_OK"
