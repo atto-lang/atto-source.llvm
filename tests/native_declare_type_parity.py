@@ -74,6 +74,18 @@ NEGATIVE = {
         "generic type alias"
     ),
     "unsupported-trait": ("declare trait Printable;\n"+ENTRY, "native trait/interface forward"),
+    "unsupported-trait-definition": (
+        "define trait Printable as end\n"+ENTRY,
+        "native trait/interface definitions"
+    ),
+    "unsupported-interface-definition": (
+        "define interface Named as end\n"+ENTRY,
+        "native trait/interface definitions"
+    ),
+    "unsupported-enum-definition": (
+        "define enum Status as Success = 1; end\n"+ENTRY,
+        "native user-defined tagged enum"
+    ),
     "unsupported-interface": ("declare interface Named;\n"+ENTRY, "native trait/interface forward"),
     "unsupported-actor": ("declare actor Worker;\n"+ENTRY, "native declare supports only"),
     "unsupported-enum": ("declare enum Status;\n"+ENTRY, "native declare supports only"),
