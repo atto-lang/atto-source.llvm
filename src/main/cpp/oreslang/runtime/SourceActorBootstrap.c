@@ -355,7 +355,7 @@ void* oreslang_source_actor_spawn(
         }
         /* Top-level compiler lowering still assumes an infallible spawn;
          * preserve fail-closed legacy behavior until typed effects land. */
-        ensure(0 && "source actor group slots exhausted");
+        ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     }
     const size_t slot = group.next_slot++;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
