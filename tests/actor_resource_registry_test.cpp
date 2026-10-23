@@ -286,6 +286,11 @@ int main() {
         std::atomic<bool> afterDequeue{false};
         std::atomic<bool> allowReclaim{false};
         std::thread grantCarrier([&] {
+            // The actual physical logical-mutex dequeue happens HERE.
+            // Retain the selected grant on this carrier without publishing
+            // it to the waiting Task until cancellation/reclaim is settled.
+            auto selected = gate.release(ownerToken.token);
+            assert(selected == queuedToken.token);
             afterDequeue.store(true, std::memory_order_release);
             const auto deadline = std::chrono::steady_clock::now()
                                   + std::chrono::seconds(3);
@@ -293,9 +298,9 @@ int main() {
                     && std::chrono::steady_clock::now() < deadline) {
                 std::this_thread::yield();
             }
-            // The queued token was cancelled by the owning Task before
-            // delivery. Releasing the old owner MUST NOT regrant it.
-            assert(!gate.release(ownerToken.token));
+            // Cancellation on a different carrier revoked the selected
+            // (but unpublished) token. No grant can be delivered afterward.
+            assert(!gate.owns(selected));
             cancelledGrant.release_handoff(claim);
         });
         const auto deadline = std::chrono::steady_clock::now()
@@ -308,7 +313,8 @@ int main() {
         cancelledGrant.retire();
         assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
         assert(arenaDrops.load() == 0);
-        assert(!gate.release(queuedToken.token));  // cancel before publish
+        assert(gate.owns(queuedToken.token));
+        assert(!gate.release(queuedToken.token));  // cancel after dequeue, before publish
         assert(!gate.owns(queuedToken.token));
         assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
         assert(arenaDrops.load() == 0);
