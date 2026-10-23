@@ -89,6 +89,21 @@ int main() {
         }));
     assert(saw);
     assert(broker.close(Identity{2,3}, newHandle));
+    // Callback unwinding must not leak a read loan or strand slot capacity.
+    auto unwinding = broker.begin(supervisor);
+    assert(unwinding);
+    std::memcpy(unwinding->data(), "unwind", 6);
+    const auto unwindHandle = unwinding->publish(6);
+    bool unwound = false;
+    try {
+        broker.with_borrow(supervisor, unwindHandle, [&](std::string_view view) {
+            assert(view == "unwind");
+            throw 37;
+        });
+    } catch (int code) { unwound = code == 37; }
+    assert(unwound);
+    assert(broker.close(supervisor, unwindHandle));
+    assert(broker.available() == 2);
     // Every short, authenticated request can reuse preallocated memory with
     // zero C++ new/new[] during the measured hot request processing cycle.
     auto before = news.load(std::memory_order_relaxed);
