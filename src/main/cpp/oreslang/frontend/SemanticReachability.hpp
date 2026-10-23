@@ -129,9 +129,7 @@ struct SemanticReachabilityEdge {
 struct SemanticRootPolicy {
     SemanticBuildKind build_kind = SemanticBuildKind::Executable;
     std::vector<CallableId> explicit_function_roots;
-    std::vector<std::string> target_actor_roots;
-    std::vector<std::string> target_class_roots;
-    std::vector<std::string> target_continuation_roots;
+    std::vector<SemanticDeclarationId> target_roots;
     bool root_default_main = true;
 };
 
@@ -320,19 +318,9 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
         }
     }
 
-    for (const auto& actor : policy.target_actor_roots)
+    for (const auto& target_root : policy.target_roots)
         add_root(
-            actor_declaration_id(actor),
-            SemanticReachabilityReason::RootTargetAbi,
-            nodes, roots, root_reason_set);
-    for (const auto& klass : policy.target_class_roots)
-        add_root(
-            class_declaration_id(klass),
-            SemanticReachabilityReason::RootTargetAbi,
-            nodes, roots, root_reason_set);
-    for (const auto& continuation : policy.target_continuation_roots)
-        add_root(
-            continuation_declaration_id(continuation),
+            target_root,
             SemanticReachabilityReason::RootTargetAbi,
             nodes, roots, root_reason_set);
 
