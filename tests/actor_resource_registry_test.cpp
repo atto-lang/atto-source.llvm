@@ -283,6 +283,8 @@ int main() {
         cancelledGrant.register_resource(Kind::native_allocation,
                                          [&] { ++arenaDrops; });
         auto claim = cancelledGrant.acquire_handoff();
+        ActorResourceRegistry foreignGrant(63, incarnation);
+        const auto foreignClaim = foreignGrant.acquire_handoff();
         std::atomic<bool> afterDequeue{false};
         std::atomic<bool> allowReclaim{false};
         std::thread grantCarrier([&] {
@@ -326,6 +328,17 @@ int main() {
         catch (const std::logic_error&) { wrongRole = true; }
         assert(wrongRole);
         assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        // A same-identity foreign registry's first handoff ticket must not
+        // drain this physically dequeued grant while its carrier is paused.
+        bool foreignRejected = false;
+        try { cancelledGrant.release_handoff(foreignClaim); }
+        catch (const std::logic_error&) { foreignRejected = true; }
+        assert(foreignRejected);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+        foreignGrant.release_handoff(foreignClaim);
+        foreignGrant.retire();
+        assert(foreignGrant.try_reclaim().status == Reclaim::complete);
         allowReclaim.store(true, std::memory_order_release);
         grantCarrier.join();
         assert(cancelledGrant.try_reclaim().status == Reclaim::complete);
