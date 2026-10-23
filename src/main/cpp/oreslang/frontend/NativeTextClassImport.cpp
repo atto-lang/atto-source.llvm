@@ -7,6 +7,12 @@
 
 #include <cctype>
 #include <cstdint>
+#include <cerrno>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -302,6 +308,22 @@ void require_import_utf8(std::string_view source) {
     }
 }
 
+#if !defined(_WIN32)
+// Keep the descriptor open from identity verification through the full read.
+// Checking is_symlink(path) before a separate ifstream open is racy: an
+// attacker can replace the admitted sibling with a link in between.
+class ScopedImportFd {
+public:
+    explicit ScopedImportFd(int fd) : fd_(fd) {}
+    ScopedImportFd(const ScopedImportFd&) = delete;
+    ScopedImportFd& operator=(const ScopedImportFd&) = delete;
+    ~ScopedImportFd() { if (fd_ >= 0) ::close(fd_); }
+    int get() const { return fd_; }
+private:
+    int fd_;
+};
+#endif
+
 std::string read_import(const std::filesystem::path& entry, const std::string& name) {
     const std::filesystem::path relative(name);
     // First stage admits one literal, sibling .ores import; traversal and
@@ -309,19 +331,45 @@ std::string read_import(const std::filesystem::path& entry, const std::string& n
     if (relative.parent_path() != "." || relative.extension() != ".ores" ||
         relative.filename() == "." || relative.filename() == "..")
         throw std::runtime_error("native class import requires a sibling .ores path");
+#if defined(_WIN32)
+    throw std::runtime_error("native string/class libc ABI is not yet supported on Windows");
+#else
     const auto file = entry.parent_path() / relative;
-    if (!std::filesystem::is_regular_file(file) || std::filesystem::is_symlink(file))
+    // O_NOFOLLOW rejects a swapped-in symlink at open time; O_NONBLOCK
+    // prevents an attacker swapping in a FIFO from hanging compiler admission.
+    // fstat checks the opened inode, not a second path lookup.
+    const ScopedImportFd fd(::open(file.c_str(),
+        O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+    if (fd.get() < 0)
         throw std::runtime_error("native class import must be a regular, non-symlink file");
-    const auto bytes = std::filesystem::file_size(file);
-    if (bytes > 1024 * 1024) throw std::runtime_error("native imported source exceeds 1 MiB");
-    std::ifstream input(file, std::ios::binary);
-    if (!input) throw std::runtime_error("cannot read native class import");
-    std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    if (source.size() != bytes) throw std::runtime_error("native class import changed during read");
+    struct stat initial = {};
+    if (::fstat(fd.get(), &initial) != 0 || !S_ISREG(initial.st_mode))
+        throw std::runtime_error("native class import must be a regular, non-symlink file");
+    if (initial.st_size < 0 || initial.st_size > 1024 * 1024)
+        throw std::runtime_error("native imported source exceeds 1 MiB");
+    std::string source(static_cast<std::size_t>(initial.st_size), '\0');
+    std::size_t offset = 0;
+    while (offset < source.size()) {
+        const ssize_t n = ::read(fd.get(), source.data() + offset, source.size() - offset);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) throw std::runtime_error("native class import changed during read");
+        offset += static_cast<std::size_t>(n);
+    }
+    // Reject growth after fstat rather than reading an unbounded file.
+    char extra = 0;
+    ssize_t tail;
+    do { tail = ::read(fd.get(), &extra, 1); } while (tail < 0 && errno == EINTR);
+    if (tail != 0) throw std::runtime_error("native class import changed during read");
+    struct stat final = {};
+    if (::fstat(fd.get(), &final) != 0 || !S_ISREG(final.st_mode) ||
+        initial.st_dev != final.st_dev || initial.st_ino != final.st_ino ||
+        initial.st_size != final.st_size)
+        throw std::runtime_error("native class import changed during read");
     require_import_utf8(source);
     if (source.find("// ores:") != std::string::npos)
         throw std::runtime_error("imported target headers require shared linker verification");
     return source;
+#endif
 }
 
 void validate_expr(const Expr& expr, const Unit& unit,
