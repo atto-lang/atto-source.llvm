@@ -19,7 +19,10 @@ Type parameter_type(const Parameter& p) {
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
 Type local_type(const LocalBinding& local) {
-    if (local.int_array) return {Kind::Array, {}};
+    if (local.int_array && local.array_element_type != ScalarType::I64 &&
+            local.array_element_type != ScalarType::String)
+        throw std::runtime_error("unsupported native array element type");
+    if (local.int_array) return {Kind::Array, local.array_element_type == ScalarType::String ? "String" : "int"};
     return local.class_name.empty() ? scalar(local.scalar_type) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
@@ -41,7 +44,7 @@ void validate_native_scalar_types(const Program& program) {
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
         for (const auto& field : cls->second->fields)
-            if (field.name == name) return field.int_array ? Type{Kind::Array, {}} : scalar(field.scalar_type == ScalarType::Bool);
+            if (field.name == name) return field.int_array ? Type{Kind::Array, "int"} : scalar(field.scalar_type == ScalarType::Bool);
         fail(offset, "unknown class field");
     };
     std::function<Type(const Expression&, const Locals&)> expression;
@@ -98,11 +101,17 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
-            case E::ArrayCall:
-                require(expression(*e.left, locals), {Kind::Array, {}}, e.offset, "array receiver");
-                for (const auto& arg : e.arguments)
-                    require(expression(*arg, locals), scalar(false), arg->offset, "Array<int> argument requires int");
-                return scalar(false); // existing native array ABI returns an i64 status/value
+            case E::ArrayCall: {
+                const auto owner = expression(*e.left, locals);
+                if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
+                const Type element = owner.name == "String" ? scalar(ScalarType::String) : scalar(false);
+                for (std::size_t i = 0; i < e.arguments.size(); ++i) {
+                    const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
+                            e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
+                }
+                return e.name == "get" ? element : scalar(false);
+            }
             case E::Call: {
                 const auto& fn = *functions.at(native_function_slot(e.name, e.arguments.size()));
                 std::size_t positional = 0;
