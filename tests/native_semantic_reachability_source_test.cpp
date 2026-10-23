@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
         const Program program = parse_program(source_buffer.str());
         const auto result = analyze_semantic_reachability(program);
         const auto manifest = make_reachability_manifest_v1(
-            program, result, SemanticBuildKind::Executable);
+            program, result);
         std::string expected = expected_buffer.str();
         if (!expected.empty() && expected.back() == '\n')
             expected.pop_back();
@@ -97,6 +97,32 @@ pub fnc main(): int {
         assert(contains(
             result.retained,
             class_declaration_id("Pair")));
+    }
+
+    {
+        const std::string source = R"ores(
+define contract Runnable as
+  fnc run(int value) => int;
+end
+define module Service conforms Runnable as
+  pub fnc run(int value): int { return value + 1; }
+  pub fnc main(): int { return 0; }
+end
+)ores";
+        const Program program = parse_program(source);
+        assert(program.contracts.size() == 1);
+        assert(program.conforms.size() == 1);
+
+        const auto result = analyze_semantic_reachability(program);
+        const auto run_id =
+            function_declaration_id(CallableId{"run", 1});
+        const auto main_id =
+            function_declaration_id(CallableId{"main", 0});
+
+        // Same-file structural contracts are full-source admission evidence.
+        // In a closed executable they do not become runtime roots by themselves.
+        assert(contains(result.roots, main_id));
+        assert(contains(result.removed, run_id));
     }
 
     {
