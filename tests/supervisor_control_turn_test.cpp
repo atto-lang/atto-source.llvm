@@ -140,48 +140,100 @@ int main() {
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
 
-    // A throwing restart handler retries the same failure without spending
-    // a restart slot before a successful restart acknowledgment.
-    SupervisorControlTurn retry_restart(2, 1);
-    Hooks restart_hooks;
-    restart_hooks.next = SupervisorControlTurn::Decision::Restart;
-    const Key restart_one{"restart-one", 1};
-    const Key restart_two{"restart-two", 1};
-    retry_restart.reserve_child(restart_one);
-    retry_restart.reserve_child(restart_two);
-    CHECK(retry_restart.publish_child(restart_one, Kind::Panic, "panic"));
-    restart_hooks.throw_restart_once = true;
-    threw = false;
-    try { (void)retry_restart.admit_turn(restart_hooks, false); }
-    catch (const std::logic_error&) { threw = true; }
-    CHECK(threw && retry_restart.urgent());
-    CHECK(retry_restart.restarts_used() == 0);
-    restart_hooks.restart_ok = false;
-    CHECK(retry_restart.admit_turn(restart_hooks, false)
-            == SupervisorControlTurn::Admitted::Control);
-    CHECK(retry_restart.restarts_used() == 0);
-    CHECK(restart_hooks.order.back() == "escalate");
-    restart_hooks.restart_ok = true;
-    CHECK(retry_restart.publish_child(restart_two, Kind::Panic, "panic"));
-    CHECK(retry_restart.admit_turn(restart_hooks, false)
-            == SupervisorControlTurn::Admitted::Control);
-    CHECK(retry_restart.restarts_used() == 1);
+    // #175 restart intensity: two attempts may occur inside a 10-tick
+    // window, the third must escalate, and capacity returns only after the
+    // oldest attempt ages out. No timer/thread is owned by CONTROL.
+    SupervisorControlTurn windowed(4, 2, 10);
+    Hooks windowHooks;
+    windowHooks.next = SupervisorControlTurn::Decision::Restart;
+    Key w1{"window-1", 1}, w2{"window-2", 1},
+        w3{"window-3", 1}, w4{"window-4", 1};
+    windowed.reserve_child(w1);
+    windowed.reserve_child(w2);
+    windowed.reserve_child(w3);
+    windowed.reserve_child(w4);
 
-    // A retained lane pointer cannot bypass an already committed shutdown.
-    SupervisorControlTurn sealed(2, 1);
-    const Key old_child{"old", 1};
-    sealed.reserve_child(old_child);
-    CHECK(sealed.try_fence_shutdown());
-    bool late_rejected = false;
-    try { sealed.reserve_child(Key{"late", 2}); }
-    catch (const std::logic_error&) { late_rejected = true; }
-    CHECK(late_rejected && sealed.reserved_count() == 1);
-    CHECK(sealed.publish_child(old_child, Kind::Panic, "panic"));
-    CHECK(sealed.admit_turn(restart_hooks, true)
+    CHECK(windowed.publish_child(w1, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 100)
             == SupervisorControlTurn::Admitted::Control);
-    CHECK(sealed.restarts_used() == 0); // fenced restart escalates
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 1);
+
+    CHECK(windowed.publish_child(w2, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 105)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 2);
+
+    CHECK(windowed.publish_child(w3, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 106)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "escalate");
+    CHECK(windowed.restarts_in_window() == 2);
+
+    CHECK(windowed.publish_child(w4, Kind::Panic, "panic"));
+    CHECK(windowed.admit_turn(windowHooks, false, 111)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(windowHooks.order.back() == "restart");
+    CHECK(windowed.restarts_in_window() == 2);
+    CHECK(windowed.restarts_used() == 3);
+
+    // A regressing scheduler tick is untrusted evidence: deny restart and
+    // escalate without throwing/requeueing the CONTROL event forever.
+    SupervisorControlTurn regressing(1, 1, 10);
+    Hooks regressionHooks;
+    regressionHooks.next = SupervisorControlTurn::Decision::Restart;
+    Key r1{"regression-1", 1};
+    regressing.reserve_child(r1);
+    CHECK(regressing.publish_child(r1, Kind::Panic, "panic"));
+    CHECK(regressing.admit_turn(regressionHooks, false, 50)
+            == SupervisorControlTurn::Admitted::Control);
+    Key r2{"regression-2", 1};
+    regressing.reserve_child(r2);
+    CHECK(regressing.publish_child(r2, Kind::Panic, "panic"));
+    CHECK(regressing.admit_turn(regressionHooks, false, 49)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(regressionHooks.order.back() == "escalate");
+
+
+    // An ambiguous/throwing restart has consumed its bounded intensity
+    // attempt: retry must escalate rather than issuing a duplicate restart.
+    SupervisorControlTurn retried(2, 1);
+    Hooks retryHooks;
+    retryHooks.next = SupervisorControlTurn::Decision::Restart;
+    const Key failed{"failed-restart", 1};
+    const Key laterAgain{"later-restart", 1};
+    retried.reserve_child(failed);
+    retried.reserve_child(laterAgain);
+    CHECK(retried.publish_child(failed, Kind::Panic, "panic"));
+    retryHooks.throw_restart_once = true;
+    bool restartThrew = false;
+    try { (void)retried.admit_turn(retryHooks, false); }
+    catch (const std::logic_error&) { restartThrew = true; }
+    CHECK(restartThrew && retried.urgent());
+    CHECK(retried.restarts_used() == 1);
+    CHECK(retried.admit_turn(retryHooks, false) == SupervisorControlTurn::Admitted::Control);
+    CHECK(retryHooks.order.back() == "escalate");
+    CHECK(retried.restarts_used() == 1);
+    CHECK(retried.publish_child(laterAgain, Kind::Panic, "panic"));
+    CHECK(retried.admit_turn(retryHooks, false) == SupervisorControlTurn::Admitted::Control);
+    CHECK(retryHooks.order.back() == "escalate");
+
+    // A retained CONTROL-lane pointer cannot bypass committed shutdown.
+    SupervisorControlTurn sealed(2, 1);
+    const Key oldChild{"old", 1};
+    sealed.reserve_child(oldChild);
+    CHECK(sealed.try_fence_shutdown());
+    CHECK(sealed.try_fence_shutdown()); // idempotent under exclusive lease
+    bool lateRejected = false;
+    try { sealed.reserve_child(Key{"late", 2}); }
+    catch (const std::logic_error&) { lateRejected = true; }
+    CHECK(lateRejected && sealed.reserved_count() == 1);
+    CHECK(sealed.publish_child(oldChild, Kind::Panic, "panic"));
+    CHECK(sealed.admit_turn(retryHooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(retryHooks.order.back() == "escalate");
+    CHECK(sealed.restarts_used() == 0);
     CHECK(sealed.reserved_count() == 0);
-    CHECK(sealed.admit_turn(restart_hooks, true)
-            == SupervisorControlTurn::Admitted::None);
+    CHECK(sealed.admit_turn(retryHooks, true) == SupervisorControlTurn::Admitted::None);
     return 0;
 }

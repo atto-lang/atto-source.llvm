@@ -1,0 +1,64 @@
+name: Native request-slot borrow fast path
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/RequestSlotTable.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorBoundRequestTable.hpp'
+      - 'src/main/cpp/oreslang/runtime/HttpRequestHeadView.hpp'
+      - 'src/main/cpp/oreslang/runtime/NonblockingTcpLinux.hpp'
+      - 'tests/request_slot_table_test.cpp'
+      - 'tests/actor_bound_request_table_test.cpp'
+      - 'tests/http_request_head_view_test.cpp'
+      - '.github/workflows/native-request-slot-fastpath.yml'
+  push:
+    branches:
+      - 'feat/network-request-slot-borrow-fastpath-20261023'
+    paths:
+      - 'src/main/cpp/oreslang/runtime/RequestSlotTable.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorBoundRequestTable.hpp'
+      - 'src/main/cpp/oreslang/runtime/HttpRequestHeadView.hpp'
+      - 'src/main/cpp/oreslang/runtime/NonblockingTcpLinux.hpp'
+      - 'tests/request_slot_table_test.cpp'
+      - 'tests/actor_bound_request_table_test.cpp'
+      - 'tests/http_request_head_view_test.cpp'
+      - '.github/workflows/native-request-slot-fastpath.yml'
+permissions:
+  contents: read
+jobs:
+  host-native:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Compile host contract with sanitizers
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -I src/main/cpp tests/request_slot_table_test.cpp \
+            -o /tmp/oreslang-request-slot-test
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -I src/main/cpp tests/http_request_head_view_test.cpp \
+            -o /tmp/oreslang-http-head-test
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+            -I src/main/cpp tests/actor_bound_request_table_test.cpp \
+            -o /tmp/oreslang-actor-bound-test
+      - name: Run real Linux TCP and allocation/lifetime regressions
+        run: |
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-request-slot-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-http-head-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/oreslang-actor-bound-test

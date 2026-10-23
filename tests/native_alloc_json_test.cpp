@@ -41,7 +41,7 @@ int main() {
     assert(AllocJson::exact_i64(AllocJson::parse("100e-2")) == 1);
     assert(AllocJson::exact_i64(AllocJson::parse("-1200.00e-2")) == -12);
 
-    for (const std::string& non_integral : {"1.5", "1e-1", "0.001e2"}) {
+    for (const char* non_integral : {"1.5", "1e-1", "0.001e2"}) {
         bool rejected_non_integral = false;
         try {
             (void)AllocJson::exact_i64(AllocJson::parse(non_integral));
@@ -60,7 +60,7 @@ int main() {
     }
     assert(forged_overflow);
 
-    for (const std::string& bad_number_token : {" 1", "1 ", "\t1"}) {
+    for (const char* bad_number_token : {" 1", "1 ", "\t1"}) {
         AllocJsonValue bad_number(AllocJsonNumber{bad_number_token});
         bool rejected_bad_number = false;
         try {

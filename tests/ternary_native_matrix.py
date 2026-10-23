@@ -47,7 +47,7 @@ pub fnc main(): int {
 """, 42),
     "local-initializer": ("""
 pub fnc main(): int {
-  const answer = 7 == 7 ? 40 : 1;
+  const answer: int = 7 == 7 ? 40 : 1;
   return answer + 2;
 }
 """, 42),
@@ -93,7 +93,7 @@ pub fnc main(): int {
 NEGATIVE = {
     "reject-int-truthiness": (
         PORTABLE_REJECT["reject_integer_truthiness"]["source"],
-        "native ternary condition requires bool",
+        "ternary condition requires bool, got int",
     ),
     "reject-missing-colon": ("""
 pub fnc main(): int {
@@ -143,6 +143,12 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     # Tree shaking is part of the semantic gate: callees referenced only
     # from ternary arms must remain reachable even though runtime executes one arm.
     produced = execute([compiler, "--tree-shake", str(src)])
+    if "define class" in source:
+        # Preserve main's conservative constructor-root admission boundary,
+        # while retaining native execution coverage of class-valued effects.
+        assert produced.returncode != 0 and not produced.stdout, name
+        assert "rejects class declarations until class initializer roots are modeled" in produced.stderr, (name, produced.stderr)
+        produced = execute([compiler, str(src)])
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
     assert "ternary.true" in produced.stdout, name
     assert "ternary.false" in produced.stdout, name
