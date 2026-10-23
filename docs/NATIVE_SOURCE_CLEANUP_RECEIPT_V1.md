@@ -68,6 +68,37 @@ programs or GraalVM JDK25. The source GitHub Actions runs still show
 `runner_id=0` and `steps=[]`; source-org administrator admission is
 a prerequisite for full exact-head tests.
 
+## Store-backed continuation admission (October 23)
+
+`NativeSourceCleanupBinding` now checks a **live, CLAIMED** generation-fenced
+`NativeContinuationStore` record before allowing its wrapper to advance the
+cleanup gate. The binding verifies the packed slot+generation handle, actor
+runtime domain, actor arena owner and incarnation, code generation and source
+token. A dedicated `native_source_cleanup_continuation_binding` CTest
+exercises the **real C continuation store**, rejection before resume-claim,
+wrong actor/incarnation, wrong source generation/token, foreign store handles,
+and revoked or released continuation handles.
+
+This is an **additional verification wrapper**, not yet non-bypassable
+scheduler authority: `NativeSourceCleanupGate` still exposes its host
+transition methods directly, and store `get` plus a subsequent gate CAS is not
+atomic with relinquishing the physical actor carrier lease. The runtime must
+route all guest cleanup continuation admission through the trusted actor
+CONTROL scheduler, remove direct/foreign paths, pin the continuation-store
+lifetime and prove same-actor single-flight across each yield/re-entry.
+Unsupported lowering and guest `defer`/`finally` remain fail-closed.
+
+The exact committed binding header blob
+`ae9f36d2d4783cc330f620ec65c7cb89386be493` was reproduced locally,
+verified by `git hash-object`, and compiled/executed in a **mock-C-store**
+smoke with Clang 17, GCC 14 and Clang ASan+UBSan. This is syntax and adapter
+logic evidence; the new CTest linked against real C runtime sources has
+**not** executed because source GitHub Actions still do not assign runners.
+
+Shared draft source-conformance fixtures live at
+[platform-conformance PR #159](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/159)
+and expressly do not claim real backend execution.
+
 ## Not yet implemented; hard merge gates
 
 1. **LLVM frontend/compiler lowering:** Native source `Task`, `await`,
