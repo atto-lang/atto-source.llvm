@@ -154,3 +154,20 @@ should hoist redundant base/decode work.
 For ECS/DOP kernels, lowering should prefer index-preserving operations and
 avoid decoding to pointers until a concrete field load/store requires an
 address. This is especially important for vectorized SoA/AoSoA loops.
+
+## Span arithmetic safety gate (October 21, 2026)
+
+A compressed32 region descriptor must specify a nonzero base, a nonempty
+contiguous region, and a span of at most `2^32 - 1` eight-byte quanta
+(32 GiB minus 8 bytes). The *entire* `[base, base + size)` region must fit
+the native address space without integer wrap; checking just the target
+offset would admit malformed descriptors whose declared end wraps around
+`UINTPTR_MAX`. `ManagedRef.hpp` now applies the full-span check on both
+encode and decode, including the native64 fallback mode. Null references
+remain zero, never dereferenced. Tests cover the unsigned high bit, maximum
+encodable word, exact address-space boundary, and corrupt overflow spans.
+
+This does not make offset bits alone a capability. The independently verified
+actor identity, object-start, generation and turn/borrow constraints remain
+mandatory at every runtime/LLVM dereference boundary.
+

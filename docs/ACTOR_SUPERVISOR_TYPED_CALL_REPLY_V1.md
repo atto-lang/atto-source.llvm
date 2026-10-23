@@ -151,3 +151,27 @@ Java host: `src/main/java/dev/oreslang/runtime/GenerationalReplyRegistry.java`, 
 ### Independent host proof (2026-10-20, after implementation)
 
 The **four host source/test files** above were mirrored verbatim into a private, different-organization test repository; their Git blob SHAs match the corresponding branch files byte-for-byte. [Run 39505307759](https://github.com/fiducia-cloud-test/go-client-consumer/actions/runs/39505307759) on commit `28b2a18f111357edc0eb04db6dc614fef1dba288` **passed** standalone Java and strict C++17 GCC/Clang host tests. The mirror used only first-party repository checkout with no cross-organization token. Source-organization Actions runs failed before steps started; the successful independent run verifies **only** the mirrored host reply primitives, not repository-wide compilation, source-level `request()`, GraalVM native-image, LLVM guest lowering or supervisor CONTROL integration.
+
+## Phase 2 host integration (2026-10-20)
+
+### Java: admitted mailbox calls (new on this branch)
+
+`ActorRuntime.sendCall(ref, dataOnlyMessage, ticket, calleeEndpoint)` now uses the **existing bounded mailbox send path**, but attaches the reply ticket solely as a private `MessageEnvelope.CallBinding` sidecar. It never adds the slot, endpoint or capability to `ActorInboxMail.value` or serializes it across a private heap boundary. `ActorContext.replyCurrentCall(value)` is the runtime-only response hook, callable only under the callee's physical single-writer turn lease and only for a call-bearing envelope.
+
+The reply is **staged** and not published until the handler and post-handler state validation complete successfully. A duplicate stage returns false; a handler throw or unanswered ordinary turn fails the ticket on envelope retirement instead of delivering a false success. A canceled/expired slot rejects late publication. Unsupported source-level suspension across the handler exit is fail-closed.
+
+`ActorReplySchedulerBridge.requestCurrentActor(...)` reserves a slot, attaches its future to `ActorRuntime.enqueueOnCompletion`, schedules a finite timeout on a **shared caller-supplied timer executor**, then admits mail. Failed mailbox admission atomically fails the caller-owned ticket; the sender thread does not execute guest continuation callbacks. Cancellation uses split producer-slot claim and `OresFuture` CAS/revocation, and incarnation retirement can use `retireWhenDone`.
+
+New Java tests: `ActorUnaryMailboxRequestTest` exercises actual actor message delivery, typed reply, no forged reply on ordinary `send`, and handler exception after a staged reply; `ActorReplySchedulerBridgeTest` checks caller-lane resumption and timeout fencing. Those **repository-integrated tests require a full JDK25/GraalVM run** and are not included in the standalone cross-organization host proof. The VM still needs a compiler-generated, nominal `run(Q):R` dispatcher and supervisor application-service grammar. Do not claim the language-level `ref.request(Q)` path executes.
+
+### LLVM: matching admission rollback
+
+`NativeGenerationalReplySlots::Ticket::fail_admission` now performs caller-authenticated exceptional completion when future native mailbox admission fails. The native host test verifies credit retirement and rejects late success. Native source actor mail envelope routing and `OresNativeActorFuture` CONTROL wake attachment are still separate integration gates; the C++ `std::future` is not a guest continuation.
+
+### Remaining security / parity gates
+
+- Bind caller/callee endpoint capabilities to VM-minted actor incarnation identities (not arbitrary host objects), and close all slots on cancellation/hot reload/stop.
+- Preserve supervisor CONTROL as a wholly separate priority and authority domain: a supervisor application RPC must use an explicit service-capability endpoint.
+- Support compiler-checked reply types and ownership for `run(Q):R`; no reflection and no `Future<Future<R>>`.
+- Prove suspension-safe handler continuation completion and native scheduler wake under CONTROL saturation before admitting async unary handlers.
+- Run full integrated Java/GraalVM/LLVM suites plus source-level call/response tests; only then mark guest behavior executable.

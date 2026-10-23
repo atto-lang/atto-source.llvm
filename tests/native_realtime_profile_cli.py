@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -86,7 +87,7 @@ def main():
                 "source must not be overwritten through report symlink")
 
         hard_alias = root / "pure-report-hardlink.ores"
-        hard_alias.hardlink_to(pure)
+        os.link(pure, hard_alias)
         result = run([
             compiler,
             "--rt-check",

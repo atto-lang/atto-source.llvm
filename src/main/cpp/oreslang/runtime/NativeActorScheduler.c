@@ -1,12 +1,17 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <unistd.h>
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
@@ -21,6 +26,8 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    pthread_t carrier_owner; /* owning physical worker while active */
+    unsigned carrier_owner_valid;
     unsigned has_control;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
@@ -45,6 +52,10 @@ struct OresNativeActorScheduler {
     uint64_t reserved_executions;
     uint64_t accepted, rejected, completed, control_completed;
     int retired;
+    int priority_inheritance_enabled;
+    int explicit_carrier_policy;
+    int carrier_policy;
+    int carrier_priority;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
@@ -80,6 +91,25 @@ void ores_native_actor_scheduler_test_set_next_domain(uint64_t value) {
 }
 #endif
 
+static int init_scheduler_mutex(OresNativeActorScheduler* s) {
+    pthread_mutexattr_t attr;
+    int attr_ready = pthread_mutexattr_init(&attr) == 0;
+    if (attr_ready) {
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
+        if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
+                && pthread_mutex_init(&s->lock, &attr) == 0) {
+            s->priority_inheritance_enabled = 1;
+            if (pthread_mutexattr_destroy(&attr) != 0) abort();
+            return 1;
+        }
+#endif
+        if (pthread_mutexattr_destroy(&attr) != 0) abort();
+    }
+    /* General-purpose execution remains portable when PI is unavailable.
+     * Hard-RT admission must separately require the query below to be true. */
+    s->priority_inheritance_enabled = 0;
+    return pthread_mutex_init(&s->lock, NULL) == 0;
+}
 static void lock(OresNativeActorScheduler* s) {
     if (pthread_mutex_lock(&s->lock) != 0) abort();
 }
@@ -104,6 +134,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
      * The parent still owns its exclusive logical lane. */
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!!s->actors[i].active != !!s->actors[i].carrier_owner_valid) abort();
         if (!s->actors[i].active && s->actors[i].has_control) {
             *actor = i;
             *control = 1;
@@ -192,6 +223,7 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (lane->active || lane->carrier_owner_valid) abort();
         if (!s->reserved_executions || !s->next_execution) abort();
         --s->reserved_executions;
         const uint64_t execution_id = s->next_execution;
@@ -203,6 +235,8 @@ static void* carrier(void* raw) {
                 (uint64_t)(uintptr_t)&carrier_identity, 1, &execution_claim))
             abort();
         lane->active = 1;
+        lane->carrier_owner = pthread_self();
+        lane->carrier_owner_valid = 1;
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -224,7 +258,9 @@ static void* carrier(void* raw) {
         executing = NULL;
 
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         /* Leave the generation-checked guest execution claim first, but
          * keep lane.active/outstanding until the gate has completed its
          * cross-domain wakeup. Otherwise drain() may report quiescence and
@@ -234,8 +270,11 @@ static void* carrier(void* raw) {
         unlock(s);
         if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        lane->carrier_owner_valid = 0;
         s->outstanding--;
         s->completed++;
         /* A lane contributes at most one runnable turn regardless of how
@@ -288,7 +327,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
-    if (pthread_mutex_init(&s->lock, NULL) != 0) goto allocation_failed;
+    if (!init_scheduler_mutex(s)) goto allocation_failed;
     if (pthread_cond_init(&s->ready, NULL) != 0) {
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
@@ -344,7 +383,23 @@ static int create_carrier(pthread_t* tid, void* context) {
             &fail_next_carrier_create, 0, memory_order_relaxed))
         return EAGAIN;
 #endif
-    return pthread_create(tid, NULL, carrier, context);
+    OresNativeActorScheduler* s = (OresNativeActorScheduler*)context;
+    if (!s->explicit_carrier_policy)
+        return pthread_create(tid, NULL, carrier, context);
+
+    pthread_attr_t attr;
+    int rc = pthread_attr_init(&attr);
+    if (rc != 0) return rc;
+    rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+    if (rc == 0) rc = pthread_attr_setschedpolicy(&attr, s->carrier_policy);
+    if (rc == 0) {
+        struct sched_param param = {0};
+        param.sched_priority = s->carrier_priority;
+        rc = pthread_attr_setschedparam(&attr, &param);
+    }
+    if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
+    if (pthread_attr_destroy(&attr) != 0) abort();
+    return rc;
 }
 static int execution_slot_available_locked(OresNativeActorScheduler* s) {
     /* reserved_executions counts admitted turns that have not yet claimed an
@@ -363,6 +418,69 @@ static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     /* An existing busy carrier cannot be counted as additional capacity.
      * Never acknowledge another independent lane on a failed growth step. */
     return s->started_workers >= required;
+}
+int ores_native_actor_scheduler_configure_fifo(
+        OresNativeActorScheduler* s, int priority) {
+    if (!s || executing == s) return 0;
+    int minimum = sched_get_priority_min(SCHED_FIFO);
+    int maximum = sched_get_priority_max(SCHED_FIFO);
+    if (minimum < 0 || maximum < 0 || priority < minimum || priority > maximum)
+        return 0;
+    lock(s);
+    /* Configuration is bootstrap-only. Spawning actor identities is harmless,
+     * but no OS carrier or admitted work may exist yet. */
+    int pristine = !s->retired && s->started_workers == 0
+        && s->accepted == 0 && s->outstanding == 0 && s->runnable_lanes == 0;
+    if (pristine) {
+        s->explicit_carrier_policy = 1;
+        s->carrier_policy = SCHED_FIFO;
+        s->carrier_priority = priority;
+    }
+    unlock(s);
+    return pristine;
+}
+int ores_native_actor_scheduler_fifo_carriers_ready(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ready = s->explicit_carrier_policy
+        && s->carrier_policy == SCHED_FIFO
+        && s->started_workers == s->worker_count;
+    unlock(s);
+    return ready;
+}
+int ores_native_actor_scheduler_prestart_carriers(
+        OresNativeActorScheduler* s) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    /* This primitive is intentionally narrower than "prepare realtime".
+     * It proves only that pthread creation has been moved before admission.
+     * OS scheduling, affinity, memory residency and synchronization bounds
+     * remain separate hard-RT qualification requirements. */
+    int pristine = !s->retired && s->accepted == 0
+        && s->outstanding == 0 && s->runnable_lanes == 0;
+    int ok = pristine && ensure_workers_locked(s, s->worker_count);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_all_carriers_started(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ready = s->started_workers == s->worker_count;
+    unlock(s);
+    return ready;
+}
+int ores_native_actor_scheduler_priority_inheritance_enabled(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int enabled = s->priority_inheritance_enabled;
+    for (size_t i = 0; enabled && i < s->actor_count; ++i)
+        enabled = ores_execution_priority_inheritance_enabled(
+            &s->actors[i].authority);
+    unlock(s);
+    return enabled;
 }
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count

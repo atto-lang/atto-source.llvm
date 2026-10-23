@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
+#include <utility>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -18,6 +20,25 @@
 // byte heap, not yet compiler-lowered Oreslang guest objects or a sandbox.
 // Actor execution must externally enforce exclusive access and quiescence.
 namespace oreslang::runtime {
+
+// All actor byte-heap layouts share a non-wrapping identity space. A
+// fetch_add-based allocator can overflow through UINT64_MAX back to 1,
+// resurrecting a stale handle even after reporting exhaustion. The terminal
+// counter value is never advanced or reused.
+namespace detail {
+inline std::atomic<std::uint64_t> next_actor_owned_heap_id{1};
+
+inline std::uint64_t reserve_actor_owned_heap_id(
+        std::atomic<std::uint64_t>& next) {
+    auto current = next.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    throw std::overflow_error("actor heap identity exhausted");
+}
+} // namespace detail
 
 template<std::size_t Bytes, std::size_t Slots>
 class ActorOwnedHeap final {
@@ -47,14 +68,26 @@ private:
     struct Slot {
         std::size_t offset = 0;
         std::size_t length = 0;
+        // Physical allocation extent starts here, including its alignment
+        // padding. Slots own the entire extent until deterministic drop.
+        std::size_t rewind_to = 0;
         std::uint64_t generation = 1;
         bool live = false;
+    };
+
+    struct Hole {
+        std::size_t offset = 0;
+        std::size_t length = 0;
     };
 
     // The byte array itself lives in native memory, not a Java object heap.
     alignas(std::max_align_t) std::array<std::byte, Bytes> memory_{};
     std::array<Slot, Slots> slots_{};
     std::array<std::size_t, Slots> free_slots_{};
+    // One authoritative sorted free-range table, statically bounded and
+    // never requiring malloc/GC during an actor allocation or drop.
+    std::array<Hole, Slots + 1> holes_{};
+    std::size_t hole_count_ = 0;
     std::size_t next_slot_ = 0;
     std::size_t free_count_ = 0;
     std::size_t used_ = 0;
@@ -66,11 +99,49 @@ private:
     bool retired_ = false;
 
     static std::uint64_t new_identity() {
-        static std::atomic<std::uint64_t> next{1};
-        const auto id = next.fetch_add(1, std::memory_order_relaxed);
-        if (id == 0 || id == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("actor heap identity exhausted");
-        return id;
+        return detail::reserve_actor_owned_heap_id(detail::next_actor_owned_heap_id);
+    }
+
+    // Insert an owned extent after deterministic destruction, coalescing
+    // adjacent holes and rewinding an empty bump tail. All live allocations
+    // remain at their original stable addresses.
+    void recycle_extent(std::size_t start, std::size_t end) noexcept {
+        if (end == used_) {
+            used_ = start;
+        } else {
+            std::size_t i = 0;
+            while (i < hole_count_ && holes_[i].offset < start) ++i;
+            const bool merge_before = i > 0
+                && holes_[i - 1].offset + holes_[i - 1].length == start;
+            const bool merge_after = i < hole_count_
+                && end == holes_[i].offset;
+            if (merge_before && merge_after) {
+                holes_[i - 1].length += end - start + holes_[i].length;
+                std::move(holes_.begin() + i + 1, holes_.begin() + hole_count_,
+                          holes_.begin() + i);
+                --hole_count_;
+            } else if (merge_before) {
+                holes_[i - 1].length += end - start;
+            } else if (merge_after) {
+                holes_[i].offset = start;
+                holes_[i].length += end - start;
+            } else {
+                // With at most Slots live objects and extents kept disjoint,
+                // the number of free interior ranges is <= Slots + 1.
+                if (hole_count_ == holes_.size()) std::terminate();
+                std::move_backward(holes_.begin() + i,
+                                   holes_.begin() + hole_count_,
+                                   holes_.begin() + hole_count_ + 1);
+                holes_[i] = Hole{start, end - start};
+                ++hole_count_;
+            }
+        }
+        while (hole_count_ > 0) {
+            const Hole tail = holes_[hole_count_ - 1];
+            if (tail.offset + tail.length != used_) break;
+            used_ = tail.offset;
+            --hole_count_;
+        }
     }
 
     bool valid(const Handle& handle) const noexcept {
@@ -178,24 +249,62 @@ public:
             return std::nullopt;
 
         const auto base = reinterpret_cast<std::uintptr_t>(memory_.data());
-        if (base > std::numeric_limits<std::uintptr_t>::max() - used_)
-            return std::nullopt;
-        const auto address = base + used_;
         const auto mask = static_cast<std::uintptr_t>(alignment - 1);
-        if (address > std::numeric_limits<std::uintptr_t>::max() - mask)
-            return std::nullopt;
-        const auto aligned = (address + mask) & ~mask;
-        const auto padding = static_cast<std::size_t>(aligned - address);
-        if (padding > Bytes - used_ || count > Bytes - used_ - padding)
-            return std::nullopt;
+        auto padding_at = [&](std::size_t physical_offset)
+                -> std::optional<std::size_t> {
+            if (base > std::numeric_limits<std::uintptr_t>::max() - physical_offset)
+                return std::nullopt;
+            const auto address = base + physical_offset;
+            if (address > std::numeric_limits<std::uintptr_t>::max() - mask)
+                return std::nullopt;
+            const auto aligned = (address + mask) & ~mask;
+            return static_cast<std::size_t>(aligned - address);
+        };
+
+        std::size_t extent_start = used_;
+        std::size_t payload_offset = 0;
+        std::size_t extent_bytes = 0;
+        std::size_t hole_index = hole_count_;
+        for (std::size_t i = 0; i < hole_count_; ++i) {
+            const auto padding = padding_at(holes_[i].offset);
+            if (!padding || *padding > holes_[i].length
+                    || count > holes_[i].length - *padding)
+                continue;
+            extent_start = holes_[i].offset;
+            extent_bytes = *padding + count;
+            payload_offset = extent_start + *padding;
+            hole_index = i;
+            break;
+        }
+        if (hole_index == hole_count_) {
+            const auto padding = padding_at(used_);
+            if (!padding || *padding > Bytes - used_
+                    || count > Bytes - used_ - *padding)
+                return std::nullopt;
+            extent_bytes = *padding + count;
+            payload_offset = used_ + *padding;
+            used_ += extent_bytes;
+        } else {
+            // The allocation owns the alignment padding; the suffix remains
+            // available for subsequent allocations with any valid alignment.
+            Hole& hole = holes_[hole_index];
+            hole.offset += extent_bytes;
+            hole.length -= extent_bytes;
+            if (hole.length == 0) {
+                std::move(holes_.begin() + hole_index + 1,
+                          holes_.begin() + hole_count_,
+                          holes_.begin() + hole_index);
+                --hole_count_;
+            }
+        }
 
         const std::size_t slot_id = free_count_ != 0
             ? free_slots_[--free_count_] : next_slot_++;
         auto& slot = slots_[slot_id];
-        slot.offset = used_ + padding;
+        slot.rewind_to = extent_start;
+        slot.offset = payload_offset;
         slot.length = count;
         slot.live = true;
-        used_ += padding + count;
         ++live_count_;
         return Handle(heap_identity_, incarnation_, slot_id, slot.generation);
     }
@@ -206,7 +315,12 @@ public:
         // Refuse ABA if the slot-generation space is exhausted.
         if (slot.generation == std::numeric_limits<std::uint64_t>::max())
             return false;
-        std::fill_n(memory_.data() + slot.offset, slot.length, std::byte{0});
+        const std::size_t extent_start = slot.rewind_to;
+        const std::size_t extent_end = slot.offset + slot.length;
+        // Scrub alignment padding as well as the payload. No stale bytes
+        // from a prior extent can be observed on later recycling.
+        std::fill_n(memory_.data() + extent_start, extent_end - extent_start,
+                    std::byte{0});
         slot.live = false;
         ++slot.generation;
         free_slots_[free_count_++] = handle.slot_;
@@ -215,10 +329,13 @@ public:
         // allocation is removed. Recycle the *entire* bump region at that
         // quiescent point. Slot generations are deliberately NOT reset:
         // previously issued handles remain invalid across reuse cycles.
-        // Partial frees remain non-compacting to avoid moving live values.
+        // Interior holes are also reusable without compacting any live value.
         if (live_count_ == 0) {
             used_ = 0;
+            hole_count_ = 0;
             std::fill(memory_.begin(), memory_.end(), std::byte{0});
+        } else {
+            recycle_extent(extent_start, extent_end);
         }
         return true;
     }
@@ -261,6 +378,7 @@ public:
         used_ = 0;
         live_count_ = 0;
         free_count_ = 0;
+        hole_count_ = 0;
         next_slot_ = 0;
         // Permanent retirement: new actors construct a fresh unique heap.
         // Existing handles can never resolve again, even at the same address.
