@@ -188,6 +188,85 @@ int main() {
         check(group.finalized(parent), "parent could not retire after rearmed join");
         parent.get_done().get();
     }
+    {
+        // A last-child scheduler wakeup that throws during enqueue must be
+        // retained on the parent's generation-specific ticket for retry.
+        NativeActorGroup group(9120, 3);
+        auto parent = group.adopt(9120, 1, 1, [] {});
+        auto child = group.adopt_child(parent, 9120, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "failed-join startup failed");
+        int wakes = 0;
+        check(!group.register_children_drained(
+            parent, [attempts = 0, &wakes]() mutable {
+                if (attempts++ < 2)
+                    throw std::runtime_error("join CONTROL enqueue rejected");
+                ++wakes;
+            }), "failed-join unexpectedly reported no children");
+        check(group.finalized(child), "failed-join child did not retire");
+        check(parent.child_join_notification_failed(),
+              "failed last-child enqueue was discarded");
+        check(wakes == 0, "failed enqueue manufactured parent notification");
+        check(parent.get_done().wait_for(0ms) == std::future_status::timeout,
+              "failed join manufactured parent DONE");
+        auto second = group.adopt_child(parent, 9120, 3, 1, [] {});
+        check(group.mark_ready(second), "post-failed-join child not admitted");
+        bool rejected = false;
+        try { (void)group.register_children_drained(parent, [] {}); }
+        catch (const std::logic_error&) { rejected = true; }
+        check(rejected, "failed join notifier was silently overwritten");
+        check(!NativeActorGroup::retry_failed_children_drained(parent),
+              "second failed enqueue reported success");
+        check(parent.child_join_notification_failed(),
+              "second failed retry lost join receipt");
+        check(NativeActorGroup::retry_failed_children_drained(parent),
+              "join enqueue never recovered");
+        check(!parent.child_join_notification_failed() && wakes == 1,
+              "join retry was duplicated or failed to settle");
+        check(!NativeActorGroup::retry_failed_children_drained(parent),
+              "successful join retry admitted duplicate");
+        check(!group.finalized(parent),
+              "parent retired before newly admitted second child");
+        check(!group.register_children_drained(parent, [&] { ++wakes; }),
+              "parent could not rearm after recovering original join");
+        check(group.finalized(second), "second child retirement failed");
+        check(wakes == 2, "second child join notification missing");
+        check(group.finalized(parent), "parent did not retire after both joins");
+    }
+    {
+        // After group destruction, retained parent ticket and finalizer
+        // still own the failed child-drained enqueue without UAF.
+        std::optional<NativeActorRef> parent;
+        std::optional<NativeActorGroup::RuntimeFinalizer> parent_finalizer;
+        std::optional<NativeActorGroup::RuntimeFinalizer> child_finalizer;
+        auto delivered = std::make_shared<std::atomic<int>>(0);
+        {
+            NativeActorGroup group(9121, 2);
+            parent = group.adopt(9121, 1, 1, [] {});
+            auto child = group.adopt_child(*parent, 9121, 2, 1, [] {});
+            check(group.mark_ready(*parent) && group.mark_ready(child),
+                  "detached failed-join startup failed");
+            parent_finalizer = group.runtime_finalizer(*parent);
+            child_finalizer = group.runtime_finalizer(child);
+            check(!group.register_children_drained(
+                *parent, [delivered, calls = 0]() mutable {
+                    if (calls++ == 0)
+                        throw std::runtime_error("detached wakeup enqueue failed");
+                    ++*delivered;
+                }), "detached join unexpectedly empty");
+            group.close();
+        }
+        check(!parent_finalizer->finalized(), "parent detached before child");
+        check(child_finalizer->finalized(), "detached child failed retirement");
+        check(parent->child_join_notification_failed(),
+              "detached child lost failed parent wakeup");
+        check(NativeActorGroup::retry_failed_children_drained(*parent),
+              "post-destruction parent wakeup not retryable");
+        check(delivered->load() == 1 && !parent->child_join_notification_failed(),
+              "detached notification not delivered exactly once");
+        check(parent_finalizer->finalized(), "detached parent finalizer failed");
+        parent->get_done().get();
+    }
     // Concurrent last-child finalization versus observer registration has
     // exactly one legal outcome: synchronous already-drained, or one wakeup.
     {
