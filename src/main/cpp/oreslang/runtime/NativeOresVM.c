@@ -25,6 +25,7 @@ struct OresNativeVM {
     unsigned pending_control_wakes;
     int control_retired;
     int guest_actor_admitted;
+    int realtime_bootstrap_attempted;
     int nio_bootstrap_in_progress;
     pthread_t nio_bootstrap_owner;
     void* nio_backend;
@@ -86,13 +87,29 @@ failed:
     return NULL;
 }
 
+static void control_lock(OresNativeVM* vm);
+static void control_unlock(OresNativeVM* vm);
+
 int ores_native_vm_prepare_realtime(OresNativeVM* vm) {
     if (!vm) return 0;
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
-        if (!ores_native_actor_scheduler_prestart_realtime(vm->schedulers[i]))
-            return 0;
+    control_lock(vm);
+    if (vm->control_retired || vm->guest_actor_admitted
+            || vm->nio_bootstrap_in_progress || vm->realtime_bootstrap_attempted) {
+        control_unlock(vm);
+        return 0;
     }
-    return 1;
+    // One-way cold-host transition, including failure. Serialize with
+    // spawn/retire so carrier creation cannot race guest admission or close.
+    vm->realtime_bootstrap_attempted = 1;
+    int ok = 1;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (!ores_native_actor_scheduler_prestart_realtime(vm->schedulers[i])) {
+            ok = 0;
+            break;
+        }
+    }
+    control_unlock(vm);
+    return ok;
 }
 
 OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config) {

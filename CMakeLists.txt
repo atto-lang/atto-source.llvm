@@ -2841,6 +2841,8 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-actor-max-threads-admission-test
         tests/actor_max_threads_source_admission_test.cpp
         src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
     target_include_directories(oreslang-native-actor-max-threads-admission-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")

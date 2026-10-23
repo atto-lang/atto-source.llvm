@@ -74,6 +74,9 @@ int main(void) {
         require(ores_native_vm_spawn(lazy, domain, 0).scheduler_domain != 0);
         require(ores_native_vm_started_carriers(lazy, domain) == 0);
     }
+    require(!ores_native_vm_prepare_realtime(lazy));
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        require(ores_native_vm_started_carriers(lazy, (enum OresNativeVMDomain)i) == 0);
     require(ores_native_vm_close(lazy));
 
     /* RT open performs potentially blocking pthread creation only at host
