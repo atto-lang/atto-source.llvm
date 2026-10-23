@@ -427,3 +427,9 @@ The temporary diagnostic branch was reset after testing, and the evidence
 was recorded on issue #159. Hosted-runner entitlements, organization Actions
 policy, billing and other pre-job failures require administrator inspection.
 The private cross-organization source-transfer allowlist remains empty.
+
+### Second executed C++ actor-group test
+
+The full `tests/actor_group_lifecycle_test.cpp` (GitHub blob `424a4624df7d532d5d016dbf7c00e2adf8cf333d`) was compiled locally with the production `ActorGroupLifecycle.hpp` (blob `04199cae7d0152429e2550e7435b47a28ba8d326`). Source comments and empty lines alone were omitted for transport into the local container, preserving executable code and assertions. The test passed **25/25** optimized strict GCC runs, **10/10** Clang ASan+UBSan runs, and **5/5** GCC TSan runs. This is the production C++ `native_actor_group_managed_worker_readiness` test, not a reference-model mock.
+
+Together with the C++ nested-scope test, two native C++ suites are now locally executed against production header logic. The complete OresVM C ABI scheduler, LLVM compiler, CMake/CTest inventory, source-level actor behavior and GraalVM parity remain unverified pending an authorized full checkout/working runner.
