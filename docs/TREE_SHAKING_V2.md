@@ -82,6 +82,28 @@ forward its invariants and tests, but rebuild semantic reachability on current
     enough. Release qualification records final symbols, sections, imported
     libraries/resources, behavior, and size deltas.
 
+13. **Semantic and artifact reachability are distinct.** The shared
+    `ores-reachability/1` receipt is emitted after frontend semantic
+    normalization and before backend-specific code generation, optimizer DCE,
+    Native Image analysis, linker GC, Wasm optimization, or synthesis. A
+    separate target report may describe backend helpers, imports, sections,
+    libraries, resources, kernels, RTL, gates, and bytes.
+
+14. **Transform ordering is explicit.** Source is fully parsed and semantically
+    admitted first. Semantics-producing macro/annotation expansion,
+    trait/composition flattening, lexical import resolution, and other
+    frontend-defined declaration synthesis happen before semantic reachability.
+    Only canonical frontend specialization backed by shared compile-time
+    constants may affect the backend-neutral graph. Backend-specific optimizer
+    decisions happen after the semantic receipt and cannot change its retained
+    semantic contract.
+
+15. **Multi-file/module identity is lexical and stable.** When LLVM gains
+    linked imports/modules, declaration IDs include canonical code-unit/module
+    ownership rather than file-system accident or short names. Type-only
+    namespaces/contracts participate in semantic admission and type dependency
+    checking but do not become runtime roots merely because they exist.
+
 ## Rollout
 
 ### Phase 0 — harden the shipped function-only pass
@@ -171,9 +193,15 @@ padding can make very small artifacts equal in file size.
 
 ### Phase 5 — cross-backend parity
 
-For the shared supported subset, Java/GraalVM and LLVM consume the same semantic
-fixtures and compare backend-neutral roots/retained/removed sets. Backend
-runtime-feature graphs remain target-specific.
+For the shared supported subset, Java/GraalVM and LLVM consume the same source
+and compare the backend-neutral `ores-reachability/1` roots,
+retained/removed sets, and compile-time constants **before backend-specific
+optimization**. Backend runtime-feature/artifact graphs remain target-specific.
+
+Java parity must include its real lexical module/import ownership, annotation/
+macro expansion, proof-carrying named calls, generic specialization admission,
+and guest-AOT closed/open-world build mode. LLVM must not claim parity by
+comparing only same-file scalar call graphs.
 
 ## Required adversarial fixtures
 
@@ -213,7 +241,7 @@ Do not make tree shaking the release default until all of the following hold:
 - randomized graph/provenance tests pass;
 - current-main AST completeness/adversarial fixtures pass;
 - final linked behavior is equivalent for shaken/unshaken controls;
-- Java/LLVM semantic parity is green for the shared subset;
+- Java/LLVM semantic parity is green for identical-source shared-subset fixtures at the semantic pre-codegen boundary;
 - no unmodeled dynamic/FFI/reflection/hot-load surface is admitted silently;
 - release artifact inspection demonstrates actual subsystem removal;
 - CI evidence is tied to the exact Git tree and contains executed steps.
