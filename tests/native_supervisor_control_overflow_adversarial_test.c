@@ -77,8 +77,12 @@ static void on_data(void* opaque, size_t actor, uint64_t payload) {
 }
 
 static void on_control(void* opaque, size_t actor, uint64_t payload) {
-    (void)opaque; (void)actor; (void)payload;
-    abort(); /* typed failures, never a user CONTROL envelope */
+    State* s = (State*)opaque;
+    require(actor == 0 && payload == 77);
+    start_parent_turn(s);
+    require(s->count < 8);
+    s->trace[s->count++] = 77;
+    end_parent_turn(s);
 }
 
 static int ref_matches(OresNativeActorRef left, OresNativeActorRef right) {
@@ -131,6 +135,7 @@ int main(void) {
         {ORES_NATIVE_CONTROL_PANIC, s.child_a, 99, 101};
     const OresNativeActorTerminalFailure b =
         {ORES_NATIVE_CONTROL_PANIC, s.child_b, 99, 102};
+    require(ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 77));
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
     /* Duplicate publication is rejected without overwriting a receipt. */
@@ -139,12 +144,12 @@ int main(void) {
     atomic_store(&s.unblock_first, 1);
     require(ores_native_actor_scheduler_drain(s.scheduler));
 
-    /* CONTROL gets the next two parent turns; USER remains FIFO and intact. */
-    require(s.count == 5);
-    require(s.trace[0] == 11 && s.trace[1] == 101
-            && s.trace[2] == 102 && s.trace[3] == 12
-            && s.trace[4] == 13);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
+    /* Ordinary CONTROL precedes both distinct typed failures, then FIFO USER. */
+    require(s.count == 6);
+    require(s.trace[0] == 11 && s.trace[1] == 77
+            && s.trace[2] == 101 && s.trace[3] == 102
+            && s.trace[4] == 12 && s.trace[5] == 13);
+    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 3);
     require(atomic_load(&s.peak_parent_active) == 1);
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, b));
 
