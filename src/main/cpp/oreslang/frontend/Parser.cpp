@@ -1444,7 +1444,7 @@ private:
             advance();
 
             bool mutable_borrow = false;
-            std::string operation = token_.text;
+            std::string operation(token_.text);
             if (operation == "mut") {
                 advance();
                 if (token_.text != "borrow")
@@ -1467,8 +1467,13 @@ private:
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            if (operation == "borrow" && token_.text == "mut")
-                fail("legacy 'rt borrow mut' is not valid Oreslang; use 'rt mut borrow value'");
+            if (operation == "borrow" && accept("mut")) {
+                if (mutable_borrow) fail("duplicate mutable borrow qualifier");
+                // Accept the existing shared corpus spelling while adding
+                // canonical rt mut borrow. Both lower to the identical loan;
+                // removing the older spelling needs a coordinated migration.
+                mutable_borrow = true;
+            }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
