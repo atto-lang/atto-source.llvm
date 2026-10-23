@@ -2714,3 +2714,17 @@ if(BUILD_TESTING)
     set_tests_properties(llvm_static_facts_v0_negative llvm_static_facts_v0_real_compiler
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Real LLVM guest compilation/execution for a bounded two-file imported class.
+if(BUILD_TESTING AND UNIX)
+    find_program(ORE_NATIVE_TEXT_CLANG NAMES clang)
+    if(ORE_NATIVE_TEXT_CLANG)
+        add_test(NAME native_text_class_import_compiled_guest
+            COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_text_class_import_smoke.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_NATIVE_TEXT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-text-class/main.ores")
+        set_tests_properties(native_text_class_import_compiled_guest PROPERTIES TIMEOUT 45)
+    endif()
+endif()
