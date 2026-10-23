@@ -22,7 +22,9 @@ ctest --test-dir build -R '^native_orc_jit_(host_admission|compiled_source)
 3. Admit only a generated, defined `i32 main()` native process wrapper; this
    retains the compiler's documented guest `int` to OS-exit-code conversion,
    including rejection/status conversion of values outside `0..255`.
-4. Reject unresolved external functions/globals, module-level inline asm,\n   aliases, ifuncs, native ctor/dtor hooks, and main() with an incompatible\n   calling convention.
+4. Reject unresolved external functions/globals, module-level inline asm,
+   aliases, ifuncs, native ctor/dtor hooks, and main() with an incompatible
+   calling convention.
    Do not install LLVM's unrestricted current-process symbol resolver.
    Host library bindings require a future explicit allowlisted capability ABI.
 5. Load the module into LLVM ORC **LLJIT** using ThreadSafeModule, resolve the
