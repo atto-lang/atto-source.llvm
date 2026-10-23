@@ -224,7 +224,6 @@ inline void validate_manifest(
 inline OresReachabilityManifestV1 make_reachability_manifest_v1(
         const Program& program,
         const SemanticReachabilityResult& reachability,
-        SemanticBuildKind build_kind,
         std::map<std::string, ReachabilityConstantV1>
             compile_time_constants = {}) {
     using namespace reachability_manifest_detail;
@@ -235,7 +234,7 @@ inline OresReachabilityManifestV1 make_reachability_manifest_v1(
 
     OresReachabilityManifestV1 manifest;
     manifest.build_kind =
-        build_kind == SemanticBuildKind::Library
+        reachability.build_kind == SemanticBuildKind::Library
             ? "library"
             : "executable";
     manifest.compile_time_constants =
