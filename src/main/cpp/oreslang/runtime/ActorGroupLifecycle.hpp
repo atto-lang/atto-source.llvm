@@ -111,6 +111,13 @@ public:
             && generation_ == other.generation_;
     }
 
+    // Numeric identity is useful for routing labels but is insufficient
+    // authorization when a finalized actor's IDs are reused. The opaque
+    // scheduler ticket distinguishes physical actor incarnations (ABA).
+    bool same_incarnation(const NativeActorRef& other) const noexcept {
+        return *this == other && ticket_ == other.ticket_;
+    }
+
     /**
      * Register an enqueue-only host continuation. Never run guest code from
      * this callback; the caller must post guest resumption to its scheduler.
