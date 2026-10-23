@@ -129,3 +129,38 @@ compiler-generated source actor execution or full repository CTest.
    complete native CTest/sanitizers and real Java/Graal/LLVM source parity.
 
 Keep the implementation draft until these runtime boundaries are verified.
+
+
+## Nested child lifetime integration (draft)
+
+`NativeActorGroup.adopt_child(parent,...)` now commits one same-group,
+generation-checked parent edge and child ownership under the group's
+admission lock together with the authoritative owner registry. It does not
+create another group, mailman, supervisor or scheduler. The same immutable
+parent/child edge is used to reject parent physical finalization while a
+descendant is outstanding, including after the group has detached its active
+worker map. Terminal child finalization retires exactly one parent edge;
+stale actor incarnations cannot satisfy a replacement child's join.
+`stop_subtree(parent)` atomically fences nested admissions under that
+parent and issues each live descendant's stop callback once, outside
+CONTROL/owner locks. The new `native_actor_nested_scope_integration` CTest
+covers depth-three families, sibling/descendant joins, post-close finalizer
+tickets, stale replacement generations, foreign-group rejection and 100
+concurrent STOP-vs-nested-spawn races.
+
+**Not integrated:** The standalone `NativeChildScope` reservation prototype
+is a host-only reference; it is NOT an additional authoritative lifetime
+owner. Production adapters must use the existing `NativeActorGroup` registry
+as the single ownership/retirement source, and must not publish actor
+references before successful `adopt_child`. A real source-actor scheduler
+must call `stop_subtree` on actor terminal exit and retry a rejected parent
+physical finalizer after its descendants retire; this glue does not exist
+yet. Native FINALIZED still relies on the trusted issuer's proof that the
+carrier, continuations, FFI loans and arena are safe to release. Guest
+`spawn` lowering, reserved terminal CONTROL delivery, supervisor policies,
+cross-supervisor ownership transfer and exhaustive source parity are
+separate release gates.
+
+**Evidence:** The CTest target is committed, but exact-head compiler,
+CTest, sanitizer and real guest-execution results are pending. GitHub Actions
+failure without executed steps is not a test failure or passing result.
