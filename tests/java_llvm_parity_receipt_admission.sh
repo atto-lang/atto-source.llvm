@@ -86,6 +86,10 @@ expect_bad_receipt() {
 printf 'PASS but not JSON\n' > "$MOCK_RECEIPT"
 expect_bad_receipt 'non-JSON success text'
 make_receipt
+cp "$MOCK_RECEIPT" "$tmp/duplicate.json"
+cat "$tmp/duplicate.json" >> "$MOCK_RECEIPT"
+expect_bad_receipt 'multiple concatenated JSON receipts'
+make_receipt
 jq '.java_revision="0000000000000000000000000000000000000000"' "$MOCK_RECEIPT" > "$tmp/new.json"
 mv "$tmp/new.json" "$MOCK_RECEIPT"
 expect_bad_receipt 'forged Java source SHA'
@@ -101,4 +105,4 @@ make_receipt
 jq '.cases[0].native_stdout_hex="0"' "$MOCK_RECEIPT" > "$tmp/new.json"
 mv "$tmp/new.json" "$MOCK_RECEIPT"
 expect_bad_receipt 'malformed hex bytes'
-echo 'PASS: five forged receipts rejected without publication (no real compiler execution)'
+echo 'PASS: six forged receipts rejected without publication (no real compiler execution)'
