@@ -66,10 +66,17 @@ int main(int argc, char** argv) {
             }
             oreslang_source_actor_stop(target);
         }
+        check(!oreslang_source_actor_try_send(target, 42));
         invoke_bad(target, action);
         return 0;  /* any return is a failed expected rejection */
     }
     check(argc == 1);
+    check(!oreslang_source_actor_try_send((void*)(uintptr_t)1, 42));
+    void* live = oreslang_source_actor_spawn(init, message, 1);
+    check(live != NULL);
+    check(oreslang_source_actor_try_send(live, 42));
+    oreslang_source_actor_stop(live);
+    check(!oreslang_source_actor_try_send(live, 42));
     for (int phase = 0; phase < 3; ++phase)
         for (int action = 0; action < 3; ++action)
             expect_abort(argv[0], phase, action);
