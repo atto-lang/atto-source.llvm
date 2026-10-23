@@ -2317,7 +2317,9 @@ private:
                         *argument, variables, functions, depth + 1);
                     const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
                     if (actual != (index ? ScalarType::I64 : element))
-                        throw std::runtime_error("native array argument type mismatch, got " +
+                        throw std::runtime_error(std::string(element == ScalarType::I64
+                            ? "native Array<int> arguments require int, got "
+                            : "native Array<String> argument type mismatch, got ") +
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
