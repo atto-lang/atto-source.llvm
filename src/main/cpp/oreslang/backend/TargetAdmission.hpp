@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/SemanticDependencies.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
@@ -100,6 +101,12 @@ inline void validate_wasm32(
                 !actor.on_message.early_returns.empty())
             throw std::runtime_error(
                 "wasm32 actor guest requires synchronous scalar handler");
+
+        const auto dependencies =
+            scan_semantic_dependencies(actor);
+        if (!dependencies.direct_calls.empty())
+            throw std::runtime_error(
+                "wasm32 actor guest callable expressions are not implemented");
     }
 
     for (const auto& klass : source.classes)
