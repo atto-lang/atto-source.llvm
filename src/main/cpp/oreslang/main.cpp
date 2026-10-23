@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/SemanticDependencies.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
@@ -78,15 +79,12 @@ static bool paths_alias(const char* source_path, const std::string& report_path)
     throw std::runtime_error("cannot safely compare rt-report/source identity");
 }
 
-static std::vector<std::string> tree_shake_function_calls(
+static std::set<oreslang::CallableId> tree_shake_function_calls(
         const oreslang::Function& function,
         std::size_t remaining_budget) {
-    const auto facts =
-            oreslang::realtime_detail::direct_facts(function, remaining_budget);
-    if (facts.call_budget_exceeded)
-        throw std::runtime_error(
-            "tree shaking call graph exceeds compiler edge budget");
-    return facts.calls;
+    oreslang::SemanticScanBudget budget;
+    budget.max_dependency_edges = remaining_budget;
+    return oreslang::scan_semantic_dependencies(function, budget).direct_calls;
 }
 
 static void require_function_only_tree_shake_surface(
@@ -111,26 +109,26 @@ static void require_function_only_tree_shake_surface(
 }
 
 static void tree_shake_functions(oreslang::Program& program, const std::vector<std::string>& requested_roots) {
-    std::unordered_map<std::string, std::size_t> definitions;
+    std::map<oreslang::CallableId, std::size_t> definitions;
     for (std::size_t i = 0; i < program.functions.size(); ++i) {
         const auto& function = program.functions[i];
-        const std::string key =
-            oreslang::realtime_detail::function_key(
-                function.name, function.parameters.size());
+        const oreslang::CallableId key{
+            function.name, function.parameters.size()};
         if (!definitions.emplace(key, i).second)
             throw std::runtime_error(
                 "tree shaking requires unique native function name/arity identities");
     }
 
-    std::vector<std::string> pending;
-    std::unordered_set<std::string> reachable;
+    std::vector<oreslang::CallableId> pending;
+    std::set<oreslang::CallableId> reachable;
     if (!requested_roots.empty()) {
         for (const auto& requested : requested_roots) {
-            std::vector<std::string> matches;
+            std::vector<oreslang::CallableId> matches;
             for (const auto& function : program.functions) {
                 if (function.name == requested)
-                    matches.push_back(oreslang::realtime_detail::function_key(
-                        function.name, function.parameters.size()));
+                    matches.push_back(
+                        oreslang::CallableId{
+                            function.name, function.parameters.size()});
             }
             if (matches.empty())
                 throw std::runtime_error("unknown tree-shake root: " + requested);
@@ -141,9 +139,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     } else {
         for (const auto& function : program.functions) {
             if (function.exported || function.name == "main") {
-                const std::string key =
-                    oreslang::realtime_detail::function_key(
-                        function.name, function.parameters.size());
+                const oreslang::CallableId key{
+                    function.name, function.parameters.size()};
                 if (reachable.insert(key).second) pending.push_back(key);
             }
             if (function.exported) {
@@ -153,9 +150,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
                 // silently rename the surviving exported ABI symbol.
                 for (const auto& sibling : program.functions) {
                     if (sibling.name != function.name) continue;
-                    const std::string sibling_key =
-                        oreslang::realtime_detail::function_key(
-                            sibling.name, sibling.parameters.size());
+                    const oreslang::CallableId sibling_key{
+                        sibling.name, sibling.parameters.size()};
                     if (reachable.insert(sibling_key).second)
                         pending.push_back(sibling_key);
                 }
@@ -171,12 +167,13 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         const auto definition = definitions.find(pending[cursor]);
         if (definition == definitions.end())
             throw std::runtime_error("tree shaking found an unresolved function root");
-        if (scanned_edges >= oreslang::realtime_detail::kMaxRealtimeCallEdges)
+        constexpr std::size_t kTreeShakeMaxEdges = 30000;
+        if (scanned_edges >= kTreeShakeMaxEdges)
             throw std::runtime_error(
                 "tree shaking call graph exceeds compiler edge budget");
         const auto calls = tree_shake_function_calls(
                 program.functions[definition->second],
-                oreslang::realtime_detail::kMaxRealtimeCallEdges - scanned_edges);
+                kTreeShakeMaxEdges - scanned_edges);
         scanned_edges += calls.size();
         for (const auto& call : calls) {
             if (!definitions.count(call))
@@ -189,8 +186,9 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     program.functions.erase(
         std::remove_if(program.functions.begin(), program.functions.end(),
             [&](const oreslang::Function& function) {
-                return !reachable.count(oreslang::realtime_detail::function_key(
-                    function.name, function.parameters.size()));
+                return !reachable.count(
+                    oreslang::CallableId{
+                        function.name, function.parameters.size()});
             }),
         program.functions.end());
 }
