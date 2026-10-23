@@ -10,7 +10,7 @@
 #define ORES_MAX_SCRATCH_BYTES (16u * 1024u * 1024u)
 /* Prevent parameter multiplication from creating a multi-GiB actor arena. */
 #define ORES_MAX_ACTOR_BYTES (64u * 1024u * 1024u)
-typedef struct { uint64_t generation, page_claim; size_t length; uint32_t loans; unsigned char live; } Slot;
+typedef struct { uint64_t generation, page_claim; size_t length, claim_count; uint32_t loans; unsigned char live; } Slot;
 typedef struct { uint64_t nonce, index, generation; } LoanEntry;
 struct OresActorArena {
     atomic_flag lock;
@@ -271,8 +271,11 @@ uint64_t ores_actor_arena_claim_pages(OresActorArena* a, OresArenaTurn turn,
         }
     }
     const uint64_t claim = a->next_page_claim++;
-    for (size_t i = 0; i < count; ++i)
-        a->meta[pages[i].index].page_claim = claim;
+    for (size_t i = 0; i < count; ++i) {
+        Slot* s = &a->meta[pages[i].index];
+        s->page_claim = claim;
+        s->claim_count = count;
+    }
     leave_lock(a);
     return claim;
 }
@@ -294,7 +297,8 @@ int ores_actor_arena_unclaim_pages(OresActorArena* a, OresArenaTurn turn,
         }
         const Slot* s = &a->meta[h.index];
         if (!s->live || s->generation != h.generation
-                || s->page_claim != claim || s->loans) {
+                || s->page_claim != claim || s->claim_count != count
+                || s->loans) {
             leave_lock(a);
             return 0;
         }
@@ -305,8 +309,11 @@ int ores_actor_arena_unclaim_pages(OresActorArena* a, OresArenaTurn turn,
             }
         }
     }
-    for (size_t i = 0; i < count; ++i)
-        a->meta[pages[i].index].page_claim = 0;
+    for (size_t i = 0; i < count; ++i) {
+        Slot* s = &a->meta[pages[i].index];
+        s->page_claim = 0;
+        s->claim_count = 0;
+    }
     leave_lock(a);
     return 1;
 }
