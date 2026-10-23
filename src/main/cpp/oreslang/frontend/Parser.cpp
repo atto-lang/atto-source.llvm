@@ -473,6 +473,9 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
+            fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
+                 decl.name + "' cannot be redefined");
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
             require("=");
             decl.alias_target = type_alias_target();
@@ -909,7 +912,13 @@ private:
                         fail("duplicate generic parameter '" + slot.name + "'");
                 if (accept("=")) {
                     if (accept("int")) slot.default_type = "int";
-                    else {
+                    else if (token_.kind == Kind::Identifier &&
+                             scalar_alias_targets_.count(std::string(token_.text))) {
+                        std::string type_name = identifier();
+                        if (resolve_scalar_alias(type_name) != ScalarType::I64)
+                            fail("native scalar generic default requires int ABI");
+                        slot.default_type = "int";
+                    } else {
                         const std::string dependency = identifier();
                         const bool earlier = std::any_of(value.generic_parameters.begin(),
                             value.generic_parameters.end(),
@@ -1845,7 +1854,13 @@ private:
                         fail("positional generic argument after named argument");
                     if (accept("_")) argument.infer = true;
                     else if (accept("int")) argument.type = "int";
-                    else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
+                    else if (token_.kind == Kind::Identifier &&
+                             scalar_alias_targets_.count(std::string(token_.text))) {
+                        std::string alias = identifier();
+                        if (resolve_scalar_alias(alias) != ScalarType::I64)
+                            fail("native scalar generic type requires int ABI");
+                        argument.type = "int";
+                    } else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
                     expr->type_arguments.push_back(std::move(argument));
                 } while (accept(","));
                 require(">");
