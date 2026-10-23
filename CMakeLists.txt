@@ -2303,6 +2303,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-typed-control-exclusive-test)
     set_tests_properties(native_actor_typed_panic_exclusive_carrier PROPERTIES TIMEOUT 20)
 
+    # Characterize a distinct-second-child CONTROL overflow while DATA is
+    # saturated. Does NOT by itself prove durable failure retry at the owner.
+    add_executable(oreslang-native-supervisor-control-overflow-test
+        tests/native_supervisor_control_overflow_adversarial_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-supervisor-control-overflow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-supervisor-control-overflow-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-supervisor-control-overflow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_supervisor_control_overflow_characterization
+        COMMAND oreslang-native-supervisor-control-overflow-test)
+    set_tests_properties(native_supervisor_control_overflow_characterization PROPERTIES TIMEOUT 20)
+
     add_executable(oreslang-native-actor-exclusive-control-test
         tests/native_actor_exclusive_control_test.c
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
