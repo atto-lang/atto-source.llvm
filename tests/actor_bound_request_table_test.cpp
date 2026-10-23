@@ -56,6 +56,10 @@ int main() {
     assert(!broker.close(worker, *moved));
     assert(!broker.retire(worker));
     assert(broker.available() == 1); // read lease delays reuse
+    // Even after retirement, the exact old identity and lower generations
+    // must never be readmitted (otherwise stale caller identity resurrects).
+    assert(!broker.activate(worker));
+    assert(!broker.activate(Identity{2,0}));
     assert(broker.activate(restarted));
     assert(!broker.borrow(restarted, *moved));
     assert(!broker.close(restarted, *moved));
@@ -73,6 +77,8 @@ int main() {
     assert(broker.available() == 1);
     unfinished.reset();
     assert(broker.available() == 2);
+    assert(!broker.activate(worker));
+    assert(!broker.activate(restarted));
     assert(broker.activate(Identity{2,3}));
     auto newRequest = broker.begin(Identity{2,3});
     assert(newRequest);
@@ -139,5 +145,21 @@ int main() {
     view.reset();
     assert(broker.available() == 2);
     assert(broker.retire(supervisor).value() == 0);
+    // Bounded incarnation history is NEVER evicted: fill the history for
+    // distinct IDs and fail closed instead of resurrecting a forgotten ID.
+    using SmallBroker = oreslang::runtime::ActorBoundRequestTable<1, 1, 8, 2>;
+    SmallBroker small;
+    assert(small.activate(Identity{41,1}));
+    assert(small.retire(Identity{41,1}).value() == 0);
+    assert(!small.activate(Identity{41,1})); // replay
+    assert(small.activate(Identity{41,2})); // strictly newer
+    assert(small.retire(Identity{41,2}).value() == 0);
+    assert(small.activate(Identity{42,1}));
+    assert(small.retire(Identity{42,1}).value() == 0);
+    assert(!small.activate(Identity{43,1})); // history budget consumed
+    assert(!small.activate(Identity{41,1}));
+    assert(!small.activate(Identity{42,1}));
+    assert(small.activate(Identity{41,3})); // existing ID still has authority
+    assert(small.retire(Identity{41,3}).value() == 0);
     return 0;
 }
