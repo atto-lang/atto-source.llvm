@@ -2274,6 +2274,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-supervisor-test)
     set_tests_properties(native_vm_supervisor_owner_typed_quiescent_control
         PROPERTIES TIMEOUT 30)
+    # Real trusted NativeOresVM bridge: two independently finalized children
+    # must remain queued while ordinary CONTROL and USER are saturated.
+    add_executable(oreslang-native-vm-multi-child-control-test
+        tests/native_vm_multi_child_control_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-multi-child-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-multi-child-control-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-multi-child-control-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_multi_child_failure_delivery
+        COMMAND oreslang-native-vm-multi-child-control-test)
+    set_tests_properties(native_vm_multi_child_failure_delivery PROPERTIES TIMEOUT 30)
+
     # Host/supervisor execution lease transitions: linearizable carrier claim,
     # stop/retirement quiescence, stale resume and generation exhaustion.
     add_executable(oreslang-native-execution-authority-test
