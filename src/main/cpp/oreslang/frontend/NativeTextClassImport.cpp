@@ -271,6 +271,36 @@ private:
     Token token_;
 };
 
+// Imported code is checked with the same strict UTF-8 boundaries as entry code.
+void require_import_utf8(std::string_view source) {
+    for (std::size_t i = 0; i < source.size();) {
+        const auto lead = static_cast<unsigned char>(source[i]);
+        if (lead == 0) throw std::runtime_error("imported source contains NUL");
+        if (lead <= 0x7f) { ++i; continue; }
+        std::size_t count = 0;
+        unsigned char minimum = 0x80, maximum = 0xbf;
+        if (lead >= 0xc2 && lead <= 0xdf) count = 1;
+        else if (lead >= 0xe0 && lead <= 0xef) {
+            count = 2;
+            if (lead == 0xe0) minimum = 0xa0;
+            if (lead == 0xed) maximum = 0x9f;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            count = 3;
+            if (lead == 0xf0) minimum = 0x90;
+            if (lead == 0xf4) maximum = 0x8f;
+        } else throw std::runtime_error("imported source is not valid UTF-8");
+        if (source.size() - i <= count)
+            throw std::runtime_error("imported source is not valid UTF-8");
+        for (std::size_t j = 1; j <= count; ++j) {
+            const auto byte = static_cast<unsigned char>(source[i + j]);
+            if (byte < (j == 1 ? minimum : 0x80) ||
+                byte > (j == 1 ? maximum : 0xbf))
+                throw std::runtime_error("imported source is not valid UTF-8");
+        }
+        i += count + 1;
+    }
+}
+
 std::string read_import(const std::filesystem::path& entry, const std::string& name) {
     const std::filesystem::path relative(name);
     // First stage admits one literal, sibling .ores import; traversal and
@@ -287,7 +317,9 @@ std::string read_import(const std::filesystem::path& entry, const std::string& n
     if (!input) throw std::runtime_error("cannot read native class import");
     std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     if (source.size() != bytes) throw std::runtime_error("native class import changed during read");
-    if (source.find('\0') != std::string::npos) throw std::runtime_error("NUL in imported source");
+    require_import_utf8(source);
+    if (source.find("// ores:") != std::string::npos)
+        throw std::runtime_error("imported target headers require shared linker verification");
     return source;
 }
 
