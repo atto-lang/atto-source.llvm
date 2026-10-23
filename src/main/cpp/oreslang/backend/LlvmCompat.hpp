@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 // One LLVM-version boundary for lifetime markers, traps and opaque pointer types.
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/IRBuilder.h"
