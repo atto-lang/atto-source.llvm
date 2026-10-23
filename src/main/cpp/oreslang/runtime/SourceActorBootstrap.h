@@ -24,6 +24,10 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
 void oreslang_source_actor_stop(void* actor);
+/* Host-only deterministic test probe; never exposed to Oreslang guest code. */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+int oreslang_source_actor_test_stopping(void* actor);
+#endif
 
 /*
  * Restricted compiler-generated await slice:
