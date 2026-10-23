@@ -66,7 +66,8 @@ a tracked or untracked checkout is modified, or a previous receipt already
 exists. It requires `jq` to independently verify the versioned receipt schema,
 both exact checkout SHAs, the complete nine-case corpus, execution counts,
 identical hexadecimal stdout bytes and exit statuses before it publishes a
-receipt. A nonempty file or a process exit zero is not sufficient.
+receipt. JSON is slurped as **exactly one** document; concatenated receipts
+are rejected. A nonempty file or a process exit zero is not sufficient.
 
 The Java reference launcher must be reviewed to ensure it really executes
 guest Oreslang source. The manifest includes checkout commit IDs, but the
@@ -80,8 +81,8 @@ do not place source or tokens in public logs/artifacts.
 Run `bash tests/java_llvm_parity_gate_admission.sh` and
 `bash tests/java_llvm_parity_receipt_admission.sh` before attempting any
 private-source runner. The latter uses mocked toolchains to prove that malformed
-JSON, a forged Java revision, missing fixture results, divergent guest stdout
-and malformed hex output **cannot** publish a success receipt. These admission
+JSON, a forged Java revision, missing fixture results, divergent guest stdout,
+concatenated JSON documents and malformed hex output **cannot** publish a success receipt. These admission
 tests provide no real compiled source evidence.
 
 The first suite creates disposable **synthetic** Git repositories to
