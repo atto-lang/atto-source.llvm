@@ -27,3 +27,37 @@ if "$compiler" "$work/traversal.ores" > "$work/traversal.ll" 2> "$work/error"; t
 fi
 test ! -s "$work/traversal.ll"
 grep -q 'sibling .ores' "$work/error"
+
+# Unrecognized, wrong-arity and recursive method calls must fail *before* IR.
+cp "$(dirname "$entry")/main-1.ores" "$work/main-1.ores"
+sed -e 's/f.bar()/f.missing()/' "$entry" > "$work/main.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "unknown method unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q 'unknown native class method' "$work/error"
+
+sed -e 's/f.bar()/f.bar("unexpected")/' "$entry" > "$work/main.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "wrong method arity unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q "expected ')'" "$work/error"
+
+cp "$entry" "$work/main.ores"
+sed -e 's/return "hiiii";/return self.bar();/' \
+    "$(dirname "$entry")/main-1.ores" > "$work/main-1.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "recursive native class method unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q 'recursive native string method cycle' "$work/error"
+
+# Reject invalid byte sequences inside imported source, just like entry input.
+cp "$(dirname "$entry")/main-1.ores" "$work/main-1.ores"
+printf '\377' >> "$work/main-1.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "invalid imported UTF-8 unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q 'imported source is not valid UTF-8' "$work/error"
