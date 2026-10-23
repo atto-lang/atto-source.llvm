@@ -37,13 +37,21 @@ explicit private-source export authorization. Set up and build LLVM normally:
 Provide an **executable launcher inside the independently checked-out Java
 repository** that accepts the .ores source filename as its last argument,
 executes that file using the real Java/GraalVM guest runtime, and preserves
-stdout, stderr and process exit status. The launcher must not fabricate
-expected output or invoke the LLVM executable. Example invocation:
+stdout, stderr and process exit status. The companion tracked Java launcher
+is scripts/run-source-parity.sh (Java PR pending merge); build its classpath
+before invoking it:
+
+    cd /authorized/checkouts/oreslang-source.java
+    mvn -B -ntp -DskipTests package
+    mvn -B -ntp -q dependency:build-classpath -Dmdep.outputFile=target/conformance-classpath.txt
+
+The launcher must not fabricate expected output or invoke the LLVM executable.
+From the LLVM checkout, invoke:
 
     bash scripts/verify-java-llvm-source-parity.sh \
       ./build \
       /authorized/checkouts/oreslang-source.java \
-      /authorized/checkouts/oreslang-source.java/run-ores \
+      /authorized/checkouts/oreslang-source.java/scripts/run-source-parity.sh \
       clang
 
 The command runs the actual compiled Rust harness and refuses to issue a
