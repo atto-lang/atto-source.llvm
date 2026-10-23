@@ -1,0 +1,15 @@
+// Cross-backend scalar ABI checkpoint, NOT a guest allocation or I/O binding.
+// Request ticket: (incarnation << 32) | row, with 0 <= row <= 65535.
+// Receipt: (serial << 32) | (row * 8 + lane + 1).
+// Tests positive signed-i64 division/modulo without new guest builtins.
+fnc ticket_roundtrip(): int {
+  return ((17 * 4294967296 + 65535) / 4294967296 - 17)
+       + ((17 * 4294967296 + 65535) % 4294967296 - 65535);
+}
+fnc receipt_roundtrip(): int {
+  return ((23 * 4294967296 + 59) / 4294967296 - 23)
+       + (((23 * 4294967296 + 59) % 4294967296 - 1) / 8 - 7);
+}
+pub fnc main(): int {
+  return 42 + ticket_roundtrip() + receipt_roundtrip();
+}
