@@ -214,7 +214,24 @@ int main() {
 
     auto program = oreslang::parse_program(source);
     assert(program.models.size() == 1);
+    assert(program.models.front().exported);
     assert(program.model_runs.size() == 1);
+
+    // Visibility spelling is syntactic sugar, not part of graph identity.
+    std::string canonical_source = source;
+    const std::string legacy_spelling = "pub define model PriceAdjust";
+    const auto visibility_at = canonical_source.find(legacy_spelling);
+    assert(visibility_at != std::string::npos);
+    canonical_source.replace(visibility_at, std::string("pub define model").size(),
+                             "define pub model");
+    const auto canonical_program = oreslang::parse_program(canonical_source);
+    assert(canonical_program.models.size() == 1);
+    assert(canonical_program.models.front().exported);
+    assert(canonical_program.models.front().graph_digest ==
+           program.models.front().graph_digest);
+    assert(canonical_program.model_runs.size() == 1);
+    assert(canonical_program.model_runs.front().configured_graph_digest ==
+           program.model_runs.front().configured_graph_digest);
     assert(program.models.front().name == "PriceAdjust");
     assert(program.models.front().graph_digest ==
            "6c5e66eb67149e59c7d4d2d962b5671850ee3298f729214127d1452cb8d5ca21");
