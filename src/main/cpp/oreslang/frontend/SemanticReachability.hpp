@@ -180,6 +180,17 @@ inline void require_known(
             ": " + semantic_declaration_key(id));
 }
 
+inline void insert_edge(
+        std::set<SemanticReachabilityEdge>& edges,
+        SemanticReachabilityEdge edge,
+        const SemanticGraphBudget& budget) {
+    const auto [it, inserted] = edges.insert(std::move(edge));
+    (void)it;
+    if (inserted && edges.size() > budget.max_edges)
+        throw std::runtime_error(
+            "semantic reachability graph edge budget exceeded");
+}
+
 inline void add_dependency_edges(
         const SemanticDeclarationId& from,
         const SemanticDependencyFacts& facts,
@@ -190,27 +201,24 @@ inline void add_dependency_edges(
     for (const auto& call : facts.direct_calls) {
         const auto to = function_declaration_id(call);
         require_known(nodes, to, "direct call");
-        edges.insert({from, to, call_reason});
+        insert_edge(edges, {from, to, call_reason}, budget);
     }
     for (const auto& klass : facts.class_references) {
         const auto to = class_declaration_id(klass);
         require_known(nodes, to, "class reference");
-        edges.insert({
-            from,
-            to,
-            SemanticReachabilityReason::ClassReference});
+        insert_edge(
+            edges,
+            {from, to, SemanticReachabilityReason::ClassReference},
+            budget);
     }
     for (const auto& actor : facts.actor_spawns) {
         const auto to = actor_declaration_id(actor);
         require_known(nodes, to, "actor spawn");
-        edges.insert({
-            from,
-            to,
-            SemanticReachabilityReason::ActorSpawn});
+        insert_edge(
+            edges,
+            {from, to, SemanticReachabilityReason::ActorSpawn},
+            budget);
     }
-    if (edges.size() > budget.max_edges)
-        throw std::runtime_error(
-            "semantic reachability graph edge budget exceeded");
 }
 
 inline void add_root(
@@ -287,10 +295,14 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
             const auto from = function_declaration_id(callable);
             for (const auto& sibling : family) {
                 if (sibling == callable) continue;
-                edges.insert({
-                    from,
-                    function_declaration_id(sibling),
-                    SemanticReachabilityReason::ExportedOverloadAbi});
+                insert_edge(
+                    edges,
+                    {
+                        from,
+                        function_declaration_id(sibling),
+                        SemanticReachabilityReason::ExportedOverloadAbi
+                    },
+                    budget);
             }
         }
     }
