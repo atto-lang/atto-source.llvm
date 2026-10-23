@@ -295,6 +295,9 @@ public:
             }
             const bool exported = accept("pub");
             require("define");
+            if (token_.text == "mtd")
+                fail("EXTENSION_BACKEND_UNSUPPORTED: native mtd requires checked"
+                     " alias-receiver identity and static LLVM call lowering");
             if (token_.text == "type" || token_.text == "trait" ||
                     token_.text == "interface" || token_.text == "pub") {
                 type_only_declaration(program, true, exported);
@@ -348,6 +351,9 @@ public:
                          " for this native runtime declaration");
                 }
             } else if (accept("define")) {
+                if (token_.text == "mtd")
+                    fail("EXTENSION_BACKEND_UNSUPPORTED: native mtd requires checked"
+                         " alias-receiver identity and static LLVM call lowering");
                 if (token_.text == "type" || token_.text == "trait" ||
                         token_.text == "interface" || token_.text == "pub") {
                     type_only_declaration(program, true);
