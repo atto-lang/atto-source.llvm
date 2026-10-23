@@ -1274,6 +1274,19 @@ if(BUILD_TESTING)
 
     # Host-runtime QoS admission primitive only. Supervisor CONTROL scheduling
     # and actor-turn exclusivity are explicitly exercised by the test.
+    # Allocation faults must not steal an exclusive handle, consume the
+    # mailbox sequence, or strand a pending admission reservation.
+    add_executable(oreslang-native-actor-port-alloc-fault-test
+        tests/native_actor_port_allocation_failure_test.cpp)
+    target_include_directories(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_ownership_allocator_rollback
+        COMMAND oreslang-native-actor-port-alloc-fault-test)
+    set_tests_properties(native_actor_port_ownership_allocator_rollback
+        PROPERTIES TIMEOUT 15)
+
     add_executable(oreslang-priority-actor-inbox-test tests/priority_actor_inbox_test.cpp)
     target_include_directories(oreslang-priority-actor-inbox-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-priority-actor-inbox-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
