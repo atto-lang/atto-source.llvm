@@ -85,6 +85,7 @@ enum class SemanticReachabilityReason {
     ContinuationAbi,
     DirectCall,
     ActorSpawn,
+    ActorInitializer,
     ActorHandler,
     ClassReference,
     ClassInitializer
@@ -100,6 +101,7 @@ inline const char* semantic_reachability_reason_name(
         case SemanticReachabilityReason::ContinuationAbi: return "CONTINUATION_ABI";
         case SemanticReachabilityReason::DirectCall: return "DIRECT_CALL";
         case SemanticReachabilityReason::ActorSpawn: return "ACTOR_SPAWN";
+        case SemanticReachabilityReason::ActorInitializer: return "ACTOR_INITIALIZER";
         case SemanticReachabilityReason::ActorHandler: return "ACTOR_HANDLER";
         case SemanticReachabilityReason::ClassReference: return "CLASS_REFERENCE";
         case SemanticReachabilityReason::ClassInitializer: return "CLASS_INITIALIZER";
@@ -276,10 +278,13 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
                 id, facts, nodes, edges, budget,
                 SemanticReachabilityReason::ClassInitializer);
         } else if (node.actor) {
-            const auto facts = scan_semantic_dependencies(
+            const auto facts = scan_actor_semantic_dependencies(
                 *node.actor, budget.scan);
             add_dependency_edges(
-                id, facts, nodes, edges, budget,
+                id, facts.initializers, nodes, edges, budget,
+                SemanticReachabilityReason::ActorInitializer);
+            add_dependency_edges(
+                id, facts.handler, nodes, edges, budget,
                 SemanticReachabilityReason::ActorHandler);
         }
     }
@@ -294,25 +299,24 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
             SemanticReachabilityReason::RootExplicit,
             nodes, roots, root_reason_set);
 
-    if (policy.explicit_function_roots.empty()) {
-        if (policy.build_kind == SemanticBuildKind::Executable &&
-                policy.root_default_main) {
-            const auto main = function_declaration_id(
-                CallableId{"main", 0});
-            if (nodes.count(main))
-                add_root(
-                    main,
-                    SemanticReachabilityReason::RootEntry,
-                    nodes, roots, root_reason_set);
-        }
-        if (policy.build_kind == SemanticBuildKind::Library) {
-            for (const auto& [callable, function] : functions) {
-                if (!function->exported) continue;
-                add_root(
-                    function_declaration_id(callable),
-                    SemanticReachabilityReason::RootPublicApi,
-                    nodes, roots, root_reason_set);
-            }
+    if (policy.build_kind == SemanticBuildKind::Executable &&
+            policy.explicit_function_roots.empty() &&
+            policy.root_default_main) {
+        const auto main = function_declaration_id(
+            CallableId{"main", 0});
+        if (nodes.count(main))
+            add_root(
+                main,
+                SemanticReachabilityReason::RootEntry,
+                nodes, roots, root_reason_set);
+    }
+    if (policy.build_kind == SemanticBuildKind::Library) {
+        for (const auto& [callable, function] : functions) {
+            if (!function->exported) continue;
+            add_root(
+                function_declaration_id(callable),
+                SemanticReachabilityReason::RootPublicApi,
+                nodes, roots, root_reason_set);
         }
     }
 
