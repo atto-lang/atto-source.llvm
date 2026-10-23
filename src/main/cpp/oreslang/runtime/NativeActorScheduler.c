@@ -153,12 +153,23 @@ static void publish_terminal_locked(
     if (!lane->spawned || lane->terminal_valid
             || !lane->retired || lane->active || lane->queued || lane->has_control)
         return;
+
+    /* DONE is a physical-release receipt, never just a logical stop flag.
+     * Every caller must retire the execution authority before publishing it. */
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
+        abort();
+
     if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
             && lane->requested_terminal_kind
                 != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
         abort();
-    if (lane->processed_user_messages > lane->accepted_user_messages)
+
+    /* The current scheduler drains every accepted DATA envelope before DONE.
+     * Do not fabricate zero abandonment if accounting ever diverges. A future
+     * force/failure path must explicitly publish abandoned counts instead. */
+    if (lane->processed_user_messages != lane->accepted_user_messages)
+        abort();
+
     lane->terminal = (OresNativeActorTerminalState){
         .actor = {s->domain, (uint64_t)actor_index, lane->generation},
         .kind = lane->requested_terminal_kind,
@@ -168,6 +179,8 @@ static void publish_terminal_locked(
         .abandoned_control_messages = 0,
     };
     lane->terminal_valid = 1;
+}
+
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
