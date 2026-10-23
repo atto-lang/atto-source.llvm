@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
+#include <map>
 #include <new>
+#include <set>
 #include <fstream>
 #include <filesystem>
 #include <functional>
@@ -178,7 +180,8 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
         for (const auto& call : calls) {
             if (!definitions.count(call))
                 throw std::runtime_error(
-                    "tree shaking found an unresolved direct call: " + call);
+                    "tree shaking found an unresolved direct call: " +
+                    oreslang::analysis_callable_key(call));
             if (reachable.insert(call).second) pending.push_back(call);
         }
     }
