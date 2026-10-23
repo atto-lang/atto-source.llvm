@@ -53,6 +53,8 @@ int main(void) {
     s.parent=ores_native_actor_scheduler_spawn(s.scheduler,0);
     s.child=ores_native_actor_scheduler_spawn(s.scheduler,1);
     check(s.parent.scheduler_domain && s.child.scheduler_domain);
+    check(ores_native_actor_scheduler_bind_supervisor(
+        s.scheduler, s.parent, s.child));
     check(ores_native_actor_scheduler_send(s.scheduler,s.parent,41));
     wait_for(&s.held);
     check(!ores_native_actor_scheduler_send(s.scheduler,s.parent,42));
