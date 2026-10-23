@@ -300,6 +300,9 @@ public:
                 type_only_declaration(program, true, exported);
                 continue;
             }
+            if (token_.text == "model")
+                fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified "
+                     "operation provenance, configuration and codegen parity");
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -441,8 +444,6 @@ private:
                 require("fnc");
                 TypeOnlyDecl::Method method;
                 method.name = identifier();
-                if (!member_names.insert(method.name).second)
-                    fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate method '" + method.name + "'");
                 require("(");
                 if (!accept(")")) {
                     do {
@@ -462,6 +463,11 @@ private:
                     } while (accept(","));
                     require(")");
                 }
+                // Method overload identity is name + arity, not return type.
+                const std::string key = method.name + "/" +
+                    std::to_string(method.parameter_types.size());
+                if (!member_names.insert(key).second)
+                    fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate method slot '" + key + "'");
                 if (!accept(":")) {
                     // '=' and '>' are separate lexer tokens: require adjacency.
                     if (token_.text != "=" || peek_next().text != ">" ||
@@ -2293,7 +2299,63 @@ private:
             throw std::runtime_error("using effects require transitive call summaries");
     }
 
+    static void validate_type_only_declarations(const Program& program) {
+        using TypeKind = TypeOnlyDecl::Kind;
+        std::unordered_map<std::string, std::size_t> declarations;
+        for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
+            const auto& decl = program.type_only_declarations[i];
+            if (!declarations.emplace(decl.name, i).second)
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: duplicate type-only declaration '"
+                                         + decl.name + "'");
+            if (decl.kind == TypeKind::Alias && decl.alias_target != "int" &&
+                    decl.alias_target != "bool")
+                throw std::runtime_error("TYPE_ONLY_UNSUPPORTED_TYPE: invalid scalar alias");
+        }
+        for (const auto& cls : program.classes) {
+            if (declarations.count(cls.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: class '" + cls.name
+                                         + "' collides with a type-only declaration");
+        }
+        for (const auto& actor : program.actors) {
+            if (declarations.count(actor.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: actor '" + actor.name
+                                         + "' collides with a type-only declaration");
+        }
+        for (const auto& contract : program.contracts) {
+            if (declarations.count(contract.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: contract '" + contract.name
+                                         + "' collides with a type-only declaration");
+        }
+        // Reject missing parents, interface/trait kind laundering and cycles
+        // before the LLVM backend sees any type metadata.
+        std::vector<unsigned char> state(program.type_only_declarations.size(), 0);
+        std::function<void(std::size_t)> visit = [&](std::size_t index) {
+            if (state[index] == 2) return;
+            if (state[index] == 1)
+                throw std::runtime_error("TYPE_PARENT_CYCLE: cycle in trait/interface inheritance");
+            state[index] = 1;
+            const auto& decl = program.type_only_declarations[index];
+            for (const auto& parent : decl.parents) {
+                auto found = declarations.find(parent);
+                if (found == declarations.end())
+                    throw std::runtime_error("TYPE_PARENT_UNKNOWN: '" + decl.name +
+                                             "' extends unknown type '" + parent + "'");
+                const auto& inherited = program.type_only_declarations[found->second];
+                if (inherited.kind != decl.kind ||
+                        inherited.kind == TypeKind::Alias)
+                    throw std::runtime_error("TYPE_PARENT_KIND_MISMATCH: '" + decl.name +
+                                             "' cannot extend a different type-only kind '" +
+                                             parent + "'");
+                visit(found->second);
+            }
+            state[index] = 2;
+        };
+        for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i)
+            visit(i);
+    }
+
     static void validate(const Program& program) {
+        validate_type_only_declarations(program);
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (!classes.insert(cls.name).second)
