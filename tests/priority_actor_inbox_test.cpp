@@ -251,6 +251,54 @@ static void native_dispatch_does_not_steal_mail_from_active_carrier() {
     inbox.close();
 }
 
+static void terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success() {
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    CHECK(inbox.offer(Lane::Normal, 101, 8));  // global sequence 1
+    CHECK(inbox.offer(Lane::Urgent, 202, 8));  // global sequence 2
+    CHECK(inbox.offer(Lane::Bulk, 303, 8));    // global sequence 3
+    CHECK(inbox.snapshot() == 3);
+    auto urgent = inbox.try_receive();
+    CHECK(urgent && urgent->lane() == Lane::Urgent && urgent->sequence() == 2);
+    CHECK(urgent->acknowledge_released());
+    CHECK(inbox.watermark() == 0);
+    CHECK(inbox.retire_queued_after_quiescence() == 2);
+    CHECK(inbox.watermark() == 3);
+    CHECK(inbox.drain_status(0) == Inbox::DrainStatus::Delivered);
+    CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
+    CHECK(inbox.drain_status(2) == Inbox::DrainStatus::Aborted);
+    CHECK(inbox.drain_status(3) == Inbox::DrainStatus::Aborted);
+    CHECK(!inbox.completed_through(3));
+    CHECK(!inbox.try_receive());
+    CHECK(inbox.used_frames(Lane::Urgent) == 0);
+    CHECK(inbox.used_frames(Lane::Normal) == 0);
+    CHECK(inbox.used_frames(Lane::Bulk) == 0);
+    CHECK(inbox.retire_queued_after_quiescence() == 0);
+    bool sealed = false;
+    try { (void)inbox.offer(Lane::Bulk, 404, 8); }
+    catch (const std::logic_error&) { sealed = true; }
+    CHECK(sealed);
+    inbox.close();
+}
+
+static void terminal_retirement_waits_for_inflight_owner_to_ack() {
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    CHECK(inbox.offer(Lane::Normal, 11, 8));   // first
+    auto inflight = inbox.try_receive();
+    CHECK(inflight && inflight->sequence() == 1);
+    CHECK(inbox.offer(Lane::Urgent, 22, 8));  // second
+    const auto drain = inbox.snapshot();
+    CHECK(inbox.retire_queued_after_quiescence() == 1);
+    CHECK(inbox.watermark() == 0);
+    CHECK(inbox.drain_status(drain) == Inbox::DrainStatus::Pending);
+    CHECK(inbox.used_frames(Lane::Normal) == 1);
+    CHECK(inflight->acknowledge_released());
+    CHECK(inbox.watermark() == drain);
+    CHECK(inbox.drain_status(drain) == Inbox::DrainStatus::Aborted);
+    CHECK(inbox.used_frames(Lane::Normal) == 0);
+    CHECK(!inflight->retire_aborted_after_quiescence()); // no double release
+    inbox.close();
+}
+
 static void failed_queue_publication_retains_sequence_and_window_credit() {
     oreslang::runtime::ActorMailboxCompletion ledger(2);
     CHECK(ledger.reserve_prepare());
@@ -416,6 +464,8 @@ int main() {
     supervisor_control_and_actor_single_flight_precede_user_priority();
     actual_native_dispatch_obeys_control_and_logical_actor_turn();
     native_dispatch_does_not_steal_mail_from_active_carrier();
+    terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success();
+    terminal_retirement_waits_for_inflight_owner_to_ack();
     failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
