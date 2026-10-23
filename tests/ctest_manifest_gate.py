@@ -138,10 +138,16 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
             raise ManifestFailure(f"private-field gate changed negative evidence: {name}")
         return
     if name in NATIVE_EXECUTABLES:
+        is_alias_matrix = name.startswith("native_borrow_alias_matrix_")
+        if is_alias_matrix and name.endswith("_sanitizer") and "--sanitize" not in command:
+            raise ManifestFailure("borrow matrix sanitizer missing --sanitize")
+        expected_count = (5 + int(name.endswith("_sanitizer")) if is_alias_matrix
+                          else 2 if name == "portable_target_abi_v1" else 1)
         if (Path(command[0]).name != NATIVE_EXECUTABLES[name]
-                or (len(command) != 2 if name == "portable_target_abi_v1"
-                    else len(command) != 1)):
+                or len(command) != expected_count):
             raise ManifestFailure(f"critical native test targets wrong executable: {name}")
+        if is_alias_matrix and Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc":
+            raise ManifestFailure(f"borrow matrix targets wrong compiler: {name}")
         if name == "portable_target_abi_v1" and not command[1].endswith(
                 "/contracts/architecture/v1/targets.tsv"):
             raise ManifestFailure("target ABI test targets wrong contract file")
