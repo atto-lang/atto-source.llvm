@@ -167,6 +167,24 @@ NEGATIVE = {
         "define type Flag = bool;\n" + ENTRY,
         "native bool borrow ABI is not yet admitted"
     ),
+    "bool-disguised-as-int-return": (
+        "declare type Flag;\n"
+        "fnc bad(Flag flag): int { return flag; }\n"
+        "define type Flag = bool;\n" + ENTRY,
+        "native function return requires int, got bool"
+    ),
+    "int-disguised-as-bool-argument": (
+        "declare type Code;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "define type Code = int;\n"
+        "pub fnc main(): int { return id(true); }\n",
+        "argument 'code' requires int, got bool"
+    ),
+    "forward-class-impersonation": (
+        "declare type Box;\n"
+        "define class Box as pub let int value = 1; end\n" + ENTRY,
+        "unresolved native forward type"
+    ),
 }
 
 def run(compiler, root, name, source):
