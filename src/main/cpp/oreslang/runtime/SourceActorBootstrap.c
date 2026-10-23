@@ -345,7 +345,18 @@ void* oreslang_source_actor_spawn(
         }
     }
 
-    ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
+    if (group.next_slot >= SOURCE_GROUP_ROOT_SLOT) {
+        /* Capacity exhaustion must reject nested actor admission rather
+         * than abort an unrelated tenant's VM. The caller retains the
+         * checked NULL result and no slot, heap or scheduler ref is made. */
+        if (parent) {
+            group_unlock();
+            return NULL;
+        }
+        /* Top-level compiler lowering still assumes an infallible spawn;
+         * preserve fail-closed legacy behavior until typed effects land. */
+        ensure(0 && "source actor group slots exhausted");
+    }
     const size_t slot = group.next_slot++;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
