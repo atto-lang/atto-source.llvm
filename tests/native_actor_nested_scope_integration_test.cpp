@@ -206,6 +206,8 @@ int main() {
         check(group.finalized(child), "failed-join child did not retire");
         check(parent.child_join_notification_failed(),
               "failed last-child enqueue was discarded");
+        check(!group.finalized(parent),
+              "parent DONE bypassed undelivered child-drained notification");
         check(wakes == 0, "failed enqueue manufactured parent notification");
         check(parent.get_done().wait_for(0ms) == std::future_status::timeout,
               "failed join manufactured parent DONE");
@@ -260,6 +262,8 @@ int main() {
         check(child_finalizer->finalized(), "detached child failed retirement");
         check(parent->child_join_notification_failed(),
               "detached child lost failed parent wakeup");
+        check(!parent_finalizer->finalized(),
+              "detached parent DONE bypassed failed join enqueue");
         check(NativeActorGroup::retry_failed_children_drained(*parent),
               "post-destruction parent wakeup not retryable");
         check(delivered->load() == 1 && !parent->child_join_notification_failed(),
