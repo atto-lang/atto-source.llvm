@@ -20,8 +20,9 @@ typedef struct {
     uint64_t failure_code;
     uint64_t correlation;
 } OresNativeActorTerminalFailure;
-/* Typed terminal failure is copied into the reserved parent CONTROL slot.
- * A supervisor handler runs only on the parent's single logical actor lane.
+/* Typed terminal failure is copied into its child's pre-reserved receipt.
+ * The associated supervisor's single logical lane dispatches and acknowledges
+ * each child receipt after callback return. No actor-memory pointer is shared.
  */
 typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
@@ -89,15 +90,27 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
-/* A failed/retired child publishes a typed control envelope (encoded in
- * payload) to the parent. Returns 0 if the reserved slot is full or if the
- * target is stale/stopped; caller must retry or explicitly escalate.
+/* Ordinary single-slot CONTROL is still capacity limited; STOP/CANCEL
+ * admission fences must be out of band and not rely on this guest-inaccessible
+ * optional control payload queue. This entrypoint does not publish failures.
  */
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
-/* Child must be a valid actor in the same scheduler, distinct from parent.
- * Returns 0 on reserved CONTROL saturation, stale refs or parent retirement.
- * Never invokes on_panic directly on the publishing child's carrier.
+/* Trusted bootstrap-only supervisor-child association. Must be established
+ * before a child publishes a terminal failure, and never from guest code.
+ * Immutable across the lifetime of this (non-reincarnating) scheduler slot.
+ */
+int ores_native_actor_scheduler_bind_supervisor(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
+    OresNativeActorRef child);
+/* One typed terminal receipt per pre-bound, generation-checked child.
+ * Durable admission is independent of both the ordinary CONTROL slot and
+ * USER mailbox fullness; distinct child events cannot overwrite each other.
+ * Return 0 for duplicate, unbound, stale, stopped, or resource exhaustion.
+ * A successful receipt is acknowledged only after the supervisor callback
+ * returns and the physical actor gate is released; it is NOT a promise of
+ * application-level recovery or a crash-persistent transport guarantee.
+ * Never invokes on_panic on the caller's carrier.
  */
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
