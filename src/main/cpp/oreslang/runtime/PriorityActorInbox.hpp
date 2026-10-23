@@ -87,6 +87,31 @@ public:
     PriorityActorInbox(const PriorityActorInbox&) = delete;
     PriorityActorInbox& operator=(const PriorityActorInbox&) = delete;
 
+    /**
+     * Bind this inbox exactly once to the actor incarnation. The generation
+     * cannot be rotated on a live inbox; restarting an actor requires a new
+     * inbox, with the old generation retired and its leases quiesced.
+     */
+    void bind_target(const NativeActorRef& target) {
+        std::lock_guard<std::mutex> guard(service_mutex_);
+        if (bound_target_ || completion_->snapshot() != 0)
+            throw std::logic_error("actor inbox target already bound or active");
+        bound_target_ = OwnerKey{target.runtime_id(), target.actor_id(),
+                                 target.generation()};
+    }
+
+    // Runtime entry point for generation-fenced enqueue; the issuer's rights
+    // to choose URGENT still require separate capability verification.
+    bool offer_to(const NativeActorRef& target, Lane lane, T&& value,
+                  std::size_t bytes) {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (!bound_target_ || !same_target(target))
+                throw std::logic_error("stale or foreign actor mailbox target");
+        }
+        return offer(lane, std::move(value), bytes);
+    }
+
     // Called only by trusted admission after source/role/priority validation.
     // Failed offers leave the producer's T untouched and do not queue a waiter.
     bool offer(Lane lane, T&& value, std::size_t bytes) {
@@ -124,6 +149,10 @@ public:
     template<class Process>
     Dispatch dispatch_next(NativeActorGroup& group, const NativeActorRef& actor,
                            Process&& process) {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (!bound_target_ || !same_target(actor)) return Dispatch::Retired;
+        }
         switch (group.run_control_turn(actor)) {
             case NativeActorGroup::ControlTurn::executed: return Dispatch::Control;
             case NativeActorGroup::ControlTurn::busy: return Dispatch::Busy;
@@ -198,6 +227,18 @@ public:
     }
 
 private:
+    struct OwnerKey {
+        std::uint64_t runtime;
+        std::uint64_t actor;
+        std::uint64_t generation;
+    };
+
+    bool same_target(const NativeActorRef& ref) const noexcept {
+        return bound_target_->runtime == ref.runtime_id()
+            && bound_target_->actor == ref.actor_id()
+            && bound_target_->generation == ref.generation();
+    }
+
     BoundedActorPort<T>& port(Lane lane) {
         switch (lane) {
             case Lane::Urgent: return urgent_;
@@ -223,6 +264,7 @@ private:
     BoundedActorPort<T> normal_;
     BoundedActorPort<T> bulk_;
     std::mutex service_mutex_;
+    std::optional<OwnerKey> bound_target_;
     std::size_t next_slot_ = 0;
 };
 
