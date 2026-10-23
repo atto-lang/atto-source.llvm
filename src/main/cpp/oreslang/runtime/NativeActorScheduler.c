@@ -766,6 +766,8 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     s->retired = 1;
     for (size_t i = 0; i < s->actor_count; ++i) {
         ActorLane* lane = &s->actors[i];
+        if (lane->spawned && !lane->retired)
+            lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_RUNTIME_RETIRED;
         lane->retired = 1;
         if (lane->spawned) {
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
@@ -774,6 +776,7 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             if (!lane->active && !lane->queued && !lane->has_control
                 && ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING)
                 if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
+            publish_terminal_locked(s, i);
         }
     }
     pthread_cond_broadcast(&s->ready);
@@ -830,7 +833,8 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
             if (lane->spawned
-                && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED) {
+                && (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
+                    || !lane->terminal_valid)) {
                 ready = 0;
                 break;
             }
