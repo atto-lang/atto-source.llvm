@@ -78,7 +78,7 @@ if [[ -e "$report" || -L "$report" ]]; then
   exit 73
 fi
 
-staging="$build_root/.java-llvm-source-parity.pending.$"
+staging="$build_root/.java-llvm-source-parity.pending.$RANDOM.$PPID"
 if [[ -e "$staging" || -L "$staging" ]]; then
   echo "refusing to reuse a stale parity staging file: $staging" >&2
   exit 73
