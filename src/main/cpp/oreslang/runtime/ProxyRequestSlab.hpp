@@ -226,10 +226,10 @@ private:
         constexpr std::size_t kChunkWords = kChunkBytes / sizeof(std::uint32_t);
         const std::array<std::uint32_t, kChunkWords> zero{};
         std::size_t offset = 0;
-        while (offset < words) {
+        while (offset < pages_.size() * page_words_) {
             const auto page = offset / page_words_;
             const auto within = offset % page_words_;
-            const auto extent = std::min({words - offset,
+            const auto extent = std::min({pages_.size() * page_words_ - offset,
                 page_words_ - within, kChunkWords});
             ores_actor_arena_write(arena_, turn_, pages_[page],
                 within * sizeof(std::uint32_t), zero.data(),
