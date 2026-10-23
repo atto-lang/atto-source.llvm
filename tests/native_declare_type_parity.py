@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Native LLVM *source compiler* acceptance/rejection; requires a built llvmc."""
+import argparse
+from pathlib import Path
+import subprocess
+import tempfile
+
+ENTRY = "pub fnc main(): int { return 7; }\n"
+
+POSITIVE = {
+    "scalar-int-forward": (
+        "declare type Code;\n"
+        "define type Code = int;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "pub fnc main(): int { return id(7); }\n"
+    ),
+    "public-int-forward": (
+        "declare pub type Code;\n"
+        "define pub type Code = int;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "pub fnc main(): int { return id(7); }\n"
+    ),
+    "legacy-public-define": (
+        "declare pub type Code;\n"
+        "pub define type Code = int;\n" + ENTRY
+    ),
+    "module-scope-alias": (
+        "define module foo as\n"
+        "  declare type Code;\n"
+        "  define type Code = int;\n"
+        "  fnc id(Code code): Code { return code; }\n"
+        "  pub fnc main(): int { return id(7); }\n"
+        "end\n"
+    ),
+    "bool-alias": (
+        "declare type Flag;\n"
+        "define type Flag = bool;\n"
+        "fnc ready(Flag value): Flag { return value; }\n"
+        "pub fnc main(): int { return ready(true) ? 7 : 0; }\n"
+    ),
+    "alias-chain": (
+        "type Raw = int;\n"
+        "declare type Code;\n"
+        "define type Code = Raw;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "pub fnc main(): int { return id(7); }\n"
+    ),
+}
+
+NEGATIVE = {
+    "missing-definition": ("declare type Missing;\n"+ENTRY, "unresolved native forward type"),
+    "duplicate-forward": (
+        "declare type Code;\ndeclare type Code;\ndefine type Code = int;\n"+ENTRY,
+        "duplicate native forward"
+    ),
+    "visibility-widen": (
+        "declare type Code;\ndefine pub type Code = int;\n"+ENTRY,
+        "visibility mismatch"
+    ),
+    "visibility-narrow": (
+        "declare pub type Code;\ndefine type Code = int;\n"+ENTRY,
+        "visibility mismatch"
+    ),
+    "duplicate-definition": (
+        "type Code = int;\ntype Code = bool;\n"+ENTRY,
+        "duplicate native type alias"
+    ),
+    "generic-forward": (
+        "declare type Code<T>;\ndefine type Code = int;\n"+ENTRY,
+        "generic type alias forward"
+    ),
+    "generic-definition": (
+        "define type Code<T> = int;\n"+ENTRY,
+        "generic type alias"
+    ),
+    "unsupported-trait": ("declare trait Printable;\n"+ENTRY, "native trait/interface forward"),
+    "unsupported-interface": ("declare interface Named;\n"+ENTRY, "native trait/interface forward"),
+    "unsupported-actor": ("declare actor Worker;\n"+ENTRY, "native declare supports only"),
+    "unsupported-enum": ("declare enum Status;\n"+ENTRY, "native declare supports only"),
+    "non-scalar-alias": (
+        "declare type Code;\ndefine type Code = Option<int>;\n"+ENTRY,
+        "scalar target"
+    ),
+    "self-alias": (
+        "declare type Code;\ndefine type Code = Code;\n"+ENTRY,
+        "scalar target"
+    ),
+    "builtin-shadowing": ("type int = bool;\n"+ENTRY, "reserved"),
+    "class-collision": (
+        "define type Box = int;\n"
+        "define class Box as pub let int count = 1; end\n"+ENTRY,
+        "collides with type alias"
+    ),
+    "actor-collision": (
+        "define type Worker = int;\n"
+        "define actor Worker as\n"
+        "  let count: int = 0;\n"
+        "  pub fnc on_message(int value): int { return value; }\n"
+        "end\n"+ENTRY,
+        "collides with type alias"
+    ),
+    "use-before-definition-not-yet-admitted": (
+        "declare type Code;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "define type Code = int;\n"+ENTRY,
+        "native return type"
+    ),
+}
+
+def run(compiler, root, name, source):
+    path = root / (name + ".ores")
+    path.write_text(source)
+    return subprocess.run([compiler, str(path)], capture_output=True,
+                          text=True, timeout=30, check=False)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--compiler", required=True)
+    args = ap.parse_args()
+    with tempfile.TemporaryDirectory(prefix="ores-native-declare-parity-") as tmp:
+        root = Path(tmp)
+        for name, source in POSITIVE.items():
+            p = run(args.compiler, root, name, source)
+            if p.returncode or not p.stdout.startswith("; ModuleID"):
+                raise AssertionError(("positive native source failed", name, p.returncode,
+                                      p.stderr, p.stdout[:400]))
+        for name, (source, expected) in NEGATIVE.items():
+            p = run(args.compiler, root, name, source)
+            if p.returncode == 0 or p.stdout.strip() or expected not in p.stderr:
+                raise AssertionError(("unsupported source admitted or missing diagnostic",
+                                      name, p.returncode, p.stderr, p.stdout[:400]))
+    print("PASS native source-forward scalar type: "
+          f"{len(POSITIVE)} accepted, {len(NEGATIVE)} rejected; "
+          "type/trait/interface full JVM parity NOT CLAIMED")
+
+if __name__ == "__main__":
+    main()
