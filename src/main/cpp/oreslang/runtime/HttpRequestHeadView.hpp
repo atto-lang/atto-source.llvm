@@ -112,8 +112,18 @@ public:
                 value.remove_suffix(1);
             if (eql_ci(name, "Host")) {
                 if (++host_count != 1 || value.empty()) return false;
-                for (unsigned char c : value)
-                    if (c <= 0x20 || c >= 0x7f) return false;
+                // Deliberately narrow authority syntax: ASCII hostname,
+                // numeric port or bracketed IPv6. Never forward commas,
+                // userinfo, paths or other proxy-ambiguous host forms.
+                for (unsigned char c : value) {
+                    const bool alpha = (c >= 'a' && c <= 'z') ||
+                                       (c >= 'A' && c <= 'Z');
+                    const bool digit = c >= '0' && c <= '9';
+                    if (!alpha && !digit && c != '-' && c != '.' &&
+                        c != ':' && c != '[' && c != ']') return false;
+                }
+                if (value.front() == ':' || value.front() == '-' ||
+                    value.front() == '.' || value.front() == ']') return false;
             } else if (eql_ci(name, "Content-Length")) {
                 // Deliberately stricter than RFC: only canonical zero and no
                 // duplicates, never a length list or partial request body.
