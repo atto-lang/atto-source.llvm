@@ -192,6 +192,66 @@ int main() {
     }
 
     {
+        Program cortex;
+        cortex.functions.push_back(fn("work"));
+        validate_cortex_m_source_program(
+            cortex, false, false);
+    }
+
+    {
+        Program cortex;
+        cortex.functions.push_back(fn("main"));
+        bool rejected = false;
+        try {
+            validate_cortex_m_source_program(
+                cortex, false, false);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected);
+    }
+
+    {
+        Program cortex;
+        Function recursive = fn("work");
+        recursive.result = std::make_unique<Expression>();
+        recursive.result->kind = Expression::Kind::Call;
+        recursive.result->name = "work";
+        cortex.functions.push_back(std::move(recursive));
+
+        bool rejected = false;
+        try {
+            validate_cortex_m_source_program(
+                cortex, false, false);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected);
+    }
+
+    {
+        Program cortex;
+        cortex.functions.push_back(fn("work"));
+        bool owned_rejected = false;
+        try {
+            validate_cortex_m_source_program(
+                cortex, true, false);
+        } catch (const std::runtime_error&) {
+            owned_rejected = true;
+        }
+        assert(owned_rejected);
+
+        bool loop_rejected = false;
+        try {
+            validate_cortex_m_source_program(
+                cortex, false, true);
+        } catch (const std::runtime_error&) {
+            loop_rejected = true;
+        }
+        assert(loop_rejected);
+    }
+
+    {
         Program scalar;
         Function loop = fn("main");
         loop.scalar_while = std::make_unique<ScalarWhileLoop>();
