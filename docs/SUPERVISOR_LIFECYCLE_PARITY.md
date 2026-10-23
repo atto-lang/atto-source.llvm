@@ -164,3 +164,21 @@ separate release gates.
 **Evidence:** The CTest target is committed, but exact-head compiler,
 CTest, sanitizer and real guest-execution results are pending. GitHub Actions
 failure without executed steps is not a test failure or passing result.
+
+
+### Last-child join wakeup (additional audit hardening)
+
+The owner registry now offers
+`register_children_drained(parent, host_enqueue_callback)`: a trusted,
+generation-checked one-shot re-finalization hint. It returns `true` if the
+parent has no outstanding children; otherwise a bounded single callback is
+retained and delivered outside locks when the last child finalizes. Duplicate
+subscriptions reject. Both live-group and group-detached child finalizers
+trigger the same wakeup. **The callback does not certify local physical
+retirement, and does not complete parent DONE.** Trusted actor/carrier
+finalization must actually retry, and must retain its obligation if scheduling
+the hint fails. The separate arena/continuation/FFI release gate remains.
+
+Test coverage is committed for post-close wakeups, duplicate registration and
+already-joined paths. Separate isolated C++17 model testing passed 1,001 cases
+with strict warnings and ASan/UBSan; this is **not** exact-head repository CTest.
