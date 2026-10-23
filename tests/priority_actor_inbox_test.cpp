@@ -48,7 +48,7 @@ struct SupervisorHooks final : SupervisorControlTurn::Hooks {
 
 static void bounded_lanes_and_deterministic_fairness() {
     Inbox inbox({16, 128}, {8, 64}, {2, 16});
-    for (int n = 0; n < 16; ++n) CHECK(inbox.offer(Lane::Urgent, n, 8));
+    for (int n = 0; n < 16; ++n) CHECK(inbox.offer(Lane::Urgent, int(n), 8));
     for (int n = 0; n < 8; ++n) CHECK(inbox.offer(Lane::Normal, 100 + n, 8));
     for (int n = 0; n < 2; ++n) CHECK(inbox.offer(Lane::Bulk, 200 + n, 8));
     CHECK(!inbox.offer(Lane::Urgent, 999, 8));
