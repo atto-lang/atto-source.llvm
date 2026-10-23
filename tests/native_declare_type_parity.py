@@ -116,6 +116,7 @@ def run(compiler, root, name, source):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
+    ap.add_argument("--clang", required=True)
     args = ap.parse_args()
     with tempfile.TemporaryDirectory(prefix="ores-native-declare-parity-") as tmp:
         root = Path(tmp)
@@ -124,13 +125,26 @@ def main():
             if p.returncode or not p.stdout.startswith("; ModuleID"):
                 raise AssertionError(("positive native source failed", name, p.returncode,
                                       p.stderr, p.stdout[:400]))
+            ir_file = root / (name + ".ll")
+            ir_file.write_text(p.stdout)
+            executable = root / (name + ".exe")
+            linked = subprocess.run(
+                [args.clang, "-O1", "-x", "ir", str(ir_file), "-o", str(executable)],
+                capture_output=True, text=True, timeout=60, check=False)
+            if linked.returncode:
+                raise AssertionError(("LLVM IR link failed", name, linked.stderr))
+            ran = subprocess.run([str(executable)], capture_output=True, text=True,
+                                 timeout=30, check=False)
+            if ran.returncode != 7:
+                raise AssertionError(("native guest exit mismatch", name, ran.returncode,
+                                      ran.stdout, ran.stderr))
         for name, (source, expected) in NEGATIVE.items():
             p = run(args.compiler, root, name, source)
             if p.returncode == 0 or p.stdout.strip() or expected not in p.stderr:
                 raise AssertionError(("unsupported source admitted or missing diagnostic",
                                       name, p.returncode, p.stderr, p.stdout[:400]))
     print("PASS native source-forward scalar type: "
-          f"{len(POSITIVE)} accepted, {len(NEGATIVE)} rejected; "
+          f"{len(POSITIVE)} compiled and executed, {len(NEGATIVE)} rejected; "
           "type/trait/interface full JVM parity NOT CLAIMED")
 
 if __name__ == "__main__":
