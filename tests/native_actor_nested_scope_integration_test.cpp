@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 using oreslang::runtime::NativeActorGroup;
 using oreslang::runtime::NativeActorRef;
