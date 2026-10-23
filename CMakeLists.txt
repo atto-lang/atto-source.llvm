@@ -308,6 +308,17 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-native-semantic-reachability-test
+        tests/native_semantic_reachability_test.cpp)
+    target_include_directories(oreslang-native-semantic-reachability-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-semantic-reachability-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_semantic_reachability_observation_only
+        COMMAND oreslang-native-semantic-reachability-test)
+    set_tests_properties(native_semantic_reachability_observation_only
+        PROPERTIES TIMEOUT 30)
+
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
     add_test(NAME native_tree_shaking_direct_calls
