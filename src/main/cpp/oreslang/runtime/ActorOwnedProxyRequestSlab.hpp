@@ -228,6 +228,7 @@ private:
     template<class F>
     auto in_turn(F&& function) const -> decltype(function()) {
         require_owner();
+        if (closed_) throw std::logic_error("proxy request slab is closed");
         ArenaTurn session(arena_, owner_);
         slab_->resume(session.turn());
         return std::forward<F>(function)();
