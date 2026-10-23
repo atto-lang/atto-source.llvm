@@ -189,6 +189,12 @@ public:
          * Detachment publishes a no-new-turns fence. All fields belong to
          * the ref's shared generation-fenced ticket and survive group close.
          */
+        // Bind terminal mailbox retirement to this exact actor incarnation
+        // and opaque readiness ticket; numeric IDs alone are not authority.
+        bool matches(const NativeActorRef& ref) const noexcept {
+            return ref_ == ref && ref_.ticket_ == ref.ticket_;
+        }
+
         bool ready_for_resource_reclamation() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
