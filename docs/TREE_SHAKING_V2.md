@@ -54,10 +54,12 @@ forward its invariants and tests, but rebuild semantic reachability on current
    cancel functions, future GPU kernels, and other target-visible symbols are
    roots supplied by the target contract rather than inferred from naming.
 
-7. **Open-world builds preserve ABI.** Library/plugin/hot-load builds retain
-   externally reachable API surfaces unless a closed-world link contract proves
-   otherwise. Exact executable roots may be more aggressive only when explicitly
-   requested.
+7. **Build kind is explicit.** Reachability receives an explicit
+   executable/closed-world versus library/open-world build kind. Do not infer
+   ABI policy merely from whether explicit roots were supplied. Library/plugin/
+   hot-load builds retain externally reachable API surfaces unless a
+   closed-world link contract proves otherwise. Exact executable roots may be
+   more aggressive only under an explicit closed-world contract.
 
 8. **Runtime features are a separate graph.** Semantic declarations determine
    retained source. Backend implementation features determine runtime imports,
@@ -104,6 +106,13 @@ forward its invariants and tests, but rebuild semantic reachability on current
     namespaces/contracts participate in semantic admission and type dependency
     checking but do not become runtime roots merely because they exist.
 
+16. **Target admission is a verifier, not discarded codegen.** Phase 0 may use
+    full IR emission as the existing fail-closed preflight, but v2 should
+    extract a pure `validate_for_target(Program, Target)`/lowering-admission
+    boundary. Tree shaking must not require generating and discarding a full
+    target module before generating the real one. The verifier and emitter must
+    share the same admission rules so dead target-invalid code still rejects.
+
 ## Rollout
 
 ### Phase 0 — harden the shipped function-only pass
@@ -121,8 +130,9 @@ claim runtime-subsystem tree shaking.
 
 Extract a policy-neutral semantic dependency scanner from the current shared
 analysis traversal. Introduce typed `CallableId` and declaration IDs shared by
-reachability, ownership/static analysis, and codegen selection. Build and
-validate roots, nodes, edges, reasons, and complete retained/removed
+reachability, ownership/static analysis, and codegen selection. Introduce an
+explicit build-kind/root-policy input and a pure target-admission verifier.
+Build and validate roots, nodes, edges, reasons, and complete retained/removed
 classification, but keep deletion behavior equal to Phase 0.
 
 Compile-time-only declarations such as structural contracts/conformance
