@@ -183,6 +183,33 @@ static void supervisor_control_and_actor_single_flight_precede_user_priority() {
 }
 
 
+static void failed_queue_publication_retains_sequence_and_window_credit() {
+    oreslang::runtime::ActorMailboxCompletion ledger(2);
+    CHECK(ledger.reserve_prepare());
+    bool failed = false;
+    try {
+        (void)ledger.publish([](std::uint64_t) {
+            throw std::runtime_error("injected publication failure");
+        });
+    } catch (const std::runtime_error&) { failed = true; }
+    CHECK(failed);
+    CHECK(ledger.snapshot() == 0);
+    // The failed queue insertion still owns a *preparing* reservation until
+    // rollback. Nothing may be considered delivered or completed.
+    CHECK(ledger.reserve_prepare());
+    CHECK(!ledger.reserve_prepare()); // finite admission window
+    ledger.cancel_prepare();
+    const auto first = ledger.publish([](std::uint64_t seq) { CHECK(seq == 1); });
+    CHECK(first == 1 && ledger.snapshot() == 1);
+    CHECK(!ledger.completed_through(1));
+    ledger.complete(first);
+    CHECK(ledger.completed_through(1));
+    bool duplicate = false;
+    try { ledger.complete(first); }
+    catch (const std::logic_error&) { duplicate = true; }
+    CHECK(duplicate);
+}
+
 static void global_drain_never_passes_overtaken_normal() {
     Inbox inbox({4, 32}, {4, 32}, {4, 32});
     CHECK(inbox.offer(Lane::Normal, 101, 8));
@@ -319,6 +346,7 @@ int main() {
     sustained_urgent_flood_cannot_starve_normal_or_bulk();
     seal_rejects_all_lanes_but_keeps_admitted_receipts_drainable();
     supervisor_control_and_actor_single_flight_precede_user_priority();
+    failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
     failed_admission_never_consumes_global_identity();
