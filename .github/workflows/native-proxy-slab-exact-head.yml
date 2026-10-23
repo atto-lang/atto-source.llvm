@@ -1,0 +1,43 @@
+name: Native proxy slab exact-head C++20
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
+      - 'tests/native_proxy_request_slab_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-proxy-slab-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  standalone-host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact Git source head and tree
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Compile strict C++20 host slab
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp -o /tmp/proxy-slab-host
+          test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
+      - name: Exercise ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp -o /tmp/proxy-slab-sanitized
+          ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
