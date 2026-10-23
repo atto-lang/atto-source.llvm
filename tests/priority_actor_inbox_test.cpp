@@ -253,6 +253,91 @@ static void native_dispatch_does_not_steal_mail_from_active_carrier() {
     inbox.close();
 }
 
+// This uses the real NativeActorGroup implementation (not an API stub).
+// The host-only promise gates establish ordering; production actor scheduling
+// must never block a carrier on a future or condition_variable.
+static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() {
+    NativeActorGroup group(8841, 1);
+    std::atomic<int> stop_requests{0};
+    auto actor = group.adopt(8841, 19, 7, [&] {
+        ++stop_requests;
+    });
+    auto finalizer = group.runtime_finalizer(actor);
+    CHECK(group.mark_ready(actor));
+
+    Inbox inbox({1, 8}, {1, 8}, {1, 8}, 3);
+    inbox.bind_target(actor);
+    CHECK(inbox.offer_to(actor, Lane::Normal, 101, 8)); // sequence 1
+    CHECK(inbox.offer_to(actor, Lane::Urgent, 202, 8)); // sequence 2
+    CHECK(inbox.offer_to(actor, Lane::Bulk, 303, 8));   // sequence 3
+    CHECK(inbox.snapshot() == 3);
+    CHECK(!inbox.offer_to(actor, Lane::Normal, 404, 8));
+    CHECK(!inbox.offer_to(actor, Lane::Urgent, 404, 8));
+    CHECK(!inbox.offer_to(actor, Lane::Bulk, 404, 8));
+
+    std::promise<void> entered, allowed_to_finish;
+    auto entered_future = entered.get_future();
+    auto exit_gate = allowed_to_finish.get_future().share();
+    std::atomic<int> user_turns{0};
+    std::thread carrier([&] {
+        CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery& receipt) {
+            CHECK(receipt.lane() == Lane::Urgent);
+            CHECK(receipt.sequence() == 2 && receipt.value() == 202);
+            ++user_turns;
+            entered.set_value();
+            exit_gate.wait(); // TEST ONLY: emulate an active host carrier
+            CHECK(receipt.acknowledge_released());
+        }) == Inbox::Dispatch::User);
+    });
+    entered_future.wait();
+    CHECK(user_turns.load() == 1);
+    CHECK(group.enqueue_control(actor, [] {}));
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery&) {
+        CHECK(false && "CONTROL-pending actor must not admit another USER");
+    }) == Inbox::Dispatch::Busy);
+    CHECK(inbox.watermark() == 0);
+    CHECK(!finalizer.ready_for_resource_reclamation());
+    CHECK(!group.finalized(actor)); // CONTROL reserved and user active
+
+    // close() never waits on an actor carrier: STOP callback is host-only.
+    group.close();
+    CHECK(group.closed());
+    CHECK(stop_requests.load() == 1);
+    CHECK(actor.control_delivery_lost()); // pending CONTROL dropped, not ACKed
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery&) {
+        CHECK(false && "closed actor received user mail");
+    }) == Inbox::Dispatch::Retired);
+    CHECK(!finalizer.ready_for_resource_reclamation());
+    CHECK(!finalizer.finalized("actor turn still active"));
+    CHECK(inbox.used_frames(Lane::Urgent) == 1);
+    CHECK(inbox.used_frames(Lane::Normal) == 1);
+    CHECK(inbox.used_frames(Lane::Bulk) == 1);
+
+    allowed_to_finish.set_value();
+    carrier.join();
+    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(inbox.watermark() == 0); // earlier NORMAL has not finished
+    CHECK(inbox.retire_queued_after_quiescence() == 2);
+    CHECK(inbox.watermark() == 3);
+    CHECK(inbox.drain_status(1) == Inbox::DrainStatus::Aborted);
+    CHECK(inbox.drain_status(2) == Inbox::DrainStatus::Aborted);
+    CHECK(inbox.drain_status(3) == Inbox::DrainStatus::Aborted);
+    CHECK(!inbox.completed_through(3));
+    CHECK(inbox.used_frames(Lane::Urgent) == 0);
+    CHECK(inbox.used_frames(Lane::Normal) == 0);
+    CHECK(inbox.used_frames(Lane::Bulk) == 0);
+    CHECK(inbox.retire_queued_after_quiescence() == 0);
+    inbox.close();
+
+    CHECK(finalizer.finalized());
+    CHECK(!finalizer.finalized());
+    actor.get_done().get();
+    CHECK(inbox.dispatch_next(group, actor, [&](Inbox::Delivery&) {
+        CHECK(false && "finalized actor received user mail");
+    }) == Inbox::Dispatch::Retired);
+    CHECK(user_turns.load() == 1);
+}
+
 static void terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success() {
     Inbox inbox({2, 16}, {2, 16}, {2, 16});
     CHECK(inbox.offer(Lane::Normal, 101, 8));  // global sequence 1
@@ -599,6 +684,7 @@ int main() {
     supervisor_control_and_actor_single_flight_precede_user_priority();
     actual_native_dispatch_obeys_control_and_logical_actor_turn();
     native_dispatch_does_not_steal_mail_from_active_carrier();
+    closed_group_never_reclaims_saturated_inbox_with_active_user_turn();
     terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success();
     terminal_retirement_waits_for_inflight_owner_to_ack();
     stale_generation_cannot_reuse_a_live_native_actor_inbox();
