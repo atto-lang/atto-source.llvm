@@ -307,6 +307,8 @@ public:
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!defined_type_aliases_.empty() || !forwards_.empty())
+                    fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
                 if (accept("conforms")) {
                     do program.conforms.push_back(identifier()); while (accept(","));
@@ -417,12 +419,19 @@ private:
         if (token_.text == "<")
             fail("native generic type alias forward requires a verified monomorphization ABI");
         require(";");
-        if (defined_type_aliases_.count(name) || !forwards_.emplace(name, ForwardType{exported}).second) {
+        if (!forwards_.emplace(name, ForwardType{exported}).second) {
             fail("duplicate native forward type declaration '" + name + "'");
         }
+        // Forward signatures are permitted after a matching definition in
+        // the same scope, but never change the effective export authority.
+        const auto existing = defined_type_aliases_.find(name);
+        if (existing != defined_type_aliases_.end() && existing->second.exported != exported)
+            fail("native forward type visibility mismatch for '" + name + "'");
     }
 
     void parse_scalar_type_alias(bool exported) {
+        if (token_.text == "int" || token_.text == "bool")
+            fail("native type alias cannot shadow a builtin or reserved language name");
         const std::string name = identifier();
         if (token_.text == "<")
             fail("native generic type alias requires a verified monomorphization ABI");
