@@ -204,6 +204,39 @@ void ores_actor_arena_write(OresActorArena* a, OresArenaTurn turn,
     if (bytes) memcpy(a->slab + (size_t) handle.index * a->slot_bytes + offset, src, bytes);
     leave_lock(a);
 }
+int ores_actor_arena_validate_pages(OresActorArena* a, OresArenaTurn turn,
+                                    const OresArenaHandle* pages,
+                                    size_t count, size_t page_bytes) {
+    enter_lock(a);
+    require_turn(a, turn);
+    if (!pages || !count || count > a->slots || !page_bytes
+            || page_bytes > a->slot_bytes) {
+        leave_lock(a);
+        return 0;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const OresArenaHandle h = pages[i];
+        if (h.domain != a->domain || h.index >= a->slots) {
+            leave_lock(a);
+            return 0;
+        }
+        const Slot* slot = &a->meta[h.index];
+        if (!slot->live || slot->generation != h.generation
+                || slot->length != page_bytes) {
+            leave_lock(a);
+            return 0;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (pages[j].index == h.index) {
+                leave_lock(a);
+                return 0;
+            }
+        }
+    }
+    leave_lock(a);
+    return 1;
+}
+
 void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
     enter_lock(a);
     require_turn(a, turn);
