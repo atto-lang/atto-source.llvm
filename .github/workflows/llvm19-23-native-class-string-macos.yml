@@ -6,7 +6,7 @@ on:
       - '.github/workflows/llvm19-23-native-class-string-macos.yml'
       - 'src/main/cpp/oreslang/backend/**'
       - 'src/main/cpp/oreslang/frontend/**'
-      - 'src/main/cpp/oreslang/runtime/NativeStringRegion.*'
+      - 'src/main/cpp/oreslang/runtime/Native*Region.*'
       - 'tests/native_class_string_parity.rs'
       - 'tests/fixtures/native-class-string/**'
       - 'scripts/verify-native-class-string-macos.sh'
