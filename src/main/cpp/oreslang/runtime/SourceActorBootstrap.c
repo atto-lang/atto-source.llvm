@@ -307,11 +307,18 @@ void* oreslang_source_actor_spawn(
     SourceActor* parent = current_source_actor;
     if (parent) {
         const size_t parent_slot = (size_t)parent->ref.actor_slot;
-        ensure(parent->magic == SOURCE_ACTOR_MAGIC && !parent->stopping
-            && parent_slot < group.next_slot
-            && group.actors[parent_slot] == parent
-            && !ores_native_vm_poll_done(
-                group.vm, ORES_NATIVE_VM_MAIN, parent->ref));
+        if (parent->magic != SOURCE_ACTOR_MAGIC || parent->stopping
+            || parent_slot >= group.next_slot
+            || group.actors[parent_slot] != parent
+            || ores_native_vm_poll_done(
+                group.vm, ORES_NATIVE_VM_MAIN, parent->ref)) {
+            /* A STOP-vs-spawn loser cannot consume a slot or create an
+             * orphan. Do not abort the entire VM from a guest actor turn.
+             * Native source lowering must eventually expose this rejection
+             * as a checked spawn/cancellation effect. */
+            group_unlock();
+            return NULL;
+        }
     }
 
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
