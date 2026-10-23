@@ -101,7 +101,7 @@ public:
     std::uint64_t admit(std::uint32_t epoch, std::uint32_t connection,
                         std::uint32_t route) {
         check_open();
-        if (epoch == 0 || connection > kLimit || route > kLimit) {
+        if (epoch == 0 || epoch > kLimit || connection > kLimit || route > kLimit) {
             throw std::invalid_argument("invalid request metadata");
         }
         if (free_head_ == kNoSlot) return 0;
