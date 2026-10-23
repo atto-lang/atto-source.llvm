@@ -638,6 +638,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
+    llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
@@ -649,6 +650,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
         fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
+        actorScopedNew = module.getOrInsertFunction("ores_actor_i64_heap_scoped_new",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, i64, i64, native_ptr}, false));
+        actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
+            llvm::FunctionType::get(voidTy,
+                {native_ptr, i64, i64, native_ptr}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
@@ -757,7 +764,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64, actor->fields.size())}, spawn.name + ".actor.ref");
+                llvm::ConstantInt::get(i64,
+                    actor->fields.size() + actor->on_message.locals.size())},
+                spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
         // An explicitly "owned int" lives in a bounded native C region;
@@ -1655,6 +1664,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.CreateStore(value, slot);
             values.emplace(field.name, slot);
         }
+        // The compiler owns these three-word stack tokens. Source locals
+        // are immutable, synchronous and cannot be moved or borrowed here.
+        std::vector<llvm::Value*> actor_owned_tokens;
+        for (const auto& local : actor.on_message.locals) {
+            if (!local.heap_owned || !local.initializer)
+                throw std::runtime_error("unexpected actor handler owned-local kind");
+            llvm::Value* initial = lower(*local.initializer, builder, i64,
+                values, emptyFields, declarations);
+            llvm::Value* token = builder.CreateAlloca(
+                llvm::ArrayType::get(i64, 3), nullptr,
+                local.name + ".actor.owned.token");
+            builder.CreateCall(actorScopedNew,
+                {actorHeap, currentDomain, currentEpoch, initial, token});
+            // Pure reads of an immutable scalar agree with the native payload.
+            llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
+                local.name + ".actor.owned.cached");
+            builder.CreateStore(initial, slot);
+            values.emplace(local.name, slot);
+            actor_owned_tokens.push_back(token);
+        }
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
                 [&](const LocalBinding& f) { return f.name == write.field; });
@@ -1668,6 +1697,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
             emptyFields, declarations);
+        // The native actor scheduler admits no next message until the current
+        // synchronous handler has dropped all temporary owners in LIFO order.
+        for (auto it = actor_owned_tokens.rbegin();
+             it != actor_owned_tokens.rend(); ++it)
+            builder.CreateCall(actorScopedDrop,
+                {actorHeap, currentDomain, currentEpoch, *it});
         builder.CreateRet(result);
     }
 

@@ -527,8 +527,40 @@ private:
         require(":");
         require("int");
         require("{");
+        // The first compiler-lowered per-message owned value slice is
+        // deliberately synchronous and immutable. Handler temporaries are
+        // allocated in the existing actor heap and dropped before returning;
+        // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (token_.text == "const") {
+                if (!method.actor_field_writes.empty())
+                    fail("native actor owned temporaries must precede field writes");
+                if (!experimental_owned_int_)
+                    fail("experimental owned int requires --experimental-owned-int");
+                LocalBinding local;
+                local.offset = token_.offset;
+                advance();
+                local.name = identifier();
+                if (local.name == method.parameters.front().name ||
+                        names.count(local.name))
+                    fail("actor temporary shadows a field or parameter");
+                if (method.locals.size() >= 8)
+                    fail("native actor temporary owner limit exceeded (8)");
+                require(":");
+                require("owned");
+                require("int");
+                require("=");
+                local.initializer = expression();
+                if (!native_constructor_scalar_tree(*local.initializer))
+                    fail("native actor owned temporary requires pure scalar initializer");
+                require(";");
+                if (!names.insert(local.name).second)
+                    fail("duplicate actor temporary owner");
+                local.heap_owned = true;
+                method.locals.push_back(std::move(local));
+                continue;
+            }
             ActorFieldWrite write;
             write.offset = token_.offset;
             write.field = identifier();
@@ -539,6 +571,15 @@ private:
         }
         require("return");
         method.result = expression();
+        if (!method.locals.empty()) {
+            // This slice has one drop epilogue. No taken/moved or borrowed
+            // reference can escape the handler in its scalar return value.
+            if (!native_constructor_scalar_tree(*method.result))
+                fail("native actor owned temporary return requires pure scalar expression");
+            for (const auto& write : method.actor_field_writes)
+                if (!native_constructor_scalar_tree(*write.expression))
+                    fail("native actor owned temporary field write requires pure scalar expression");
+        }
         require(";");
         require("}");
         actor.on_message = std::move(method);
@@ -2506,6 +2547,20 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (!fields.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
+            // Validate in declaration order. An owned actor-handler local
+            // becomes visible only AFTER its initializer is fully checked.
+            // Never treat a forward reference as an arbitrary field or let
+            // an undefined identifier reach LLVM slot lookup.
+            for (const auto& local : method.locals) {
+                if (!local.heap_owned || local.owner_mutable || !local.initializer)
+                    throw std::runtime_error(
+                        "native actor owned local requires immutable initialized slot");
+                validate_expression(*local.initializer, fields, functions);
+                if (!fields.insert(local.name).second)
+                    throw std::runtime_error(
+                        "actor owned local shadows field, parameter or previous owner '" +
+                        local.name + "'");
+            }
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
