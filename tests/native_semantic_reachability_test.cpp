@@ -1,4 +1,4 @@
-#include "oreslang/frontend/SemanticReachability.hpp"
+#include "oreslang/frontend/ReachabilityManifest.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -126,6 +126,42 @@ int main() {
         assert(explanation.incoming_edges.size() == 1);
         assert(explanation.incoming_edges.front().reason ==
                SemanticReachabilityReason::DirectCall);
+
+        auto manifest = make_reachability_manifest_v1(
+            program,
+            result,
+            SemanticBuildKind::Executable);
+        assert(manifest.roots ==
+               std::vector<std::string>{"__root__.main"});
+        assert(manifest.retained_symbols ==
+               (std::vector<std::string>{
+                   "__root__.leaf", "__root__.main"}));
+        assert(manifest.removed_symbols ==
+               std::vector<std::string>{"__root__.dead"});
+        assert(canonical_reachability_manifest_json(manifest) ==
+               "{\"format\":\"ores-reachability/1\","
+               "\"buildKind\":\"executable\","
+               "\"roots\":[\"__root__.main\"],"
+               "\"retainedSymbols\":["
+               "\"__root__.leaf\",\"__root__.main\"],"
+               "\"removedSymbols\":[\"__root__.dead\"],"
+               "\"compileTimeConstants\":{}}");
+
+        manifest.compile_time_constants.emplace(
+            "__root__.flag", true);
+        manifest.compile_time_constants.emplace(
+            "__root__.label", std::string("line\n☃"));
+        manifest.compile_time_constants.emplace(
+            "__root__.limit", std::int64_t{42});
+        const auto constant_json =
+            canonical_reachability_manifest_json(manifest);
+        assert(constant_json.find(
+            "\"__root__.flag\":true") != std::string::npos);
+        assert(constant_json.find(
+            "\"__root__.label\":\"line\\n☃\"") !=
+            std::string::npos);
+        assert(constant_json.find(
+            "\"__root__.limit\":42") != std::string::npos);
     }
 
     {
@@ -406,6 +442,66 @@ int main() {
             rejected = true;
         }
         assert(rejected && "removed declaration must not be explainable");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("pick", integer(1)));
+        Function pick_two = fn("pick", integer(2));
+        Parameter first;
+        first.name = "first";
+        Parameter second;
+        second.name = "second";
+        pick_two.parameters.push_back(std::move(first));
+        pick_two.parameters.push_back(std::move(second));
+        program.functions.push_back(std::move(pick_two));
+        program.functions.push_back(fn("main", call("pick"), true));
+
+        const auto result = analyze_semantic_reachability(program);
+        bool rejected = false;
+        try {
+            (void)make_reachability_manifest_v1(
+                program, result, SemanticBuildKind::Executable);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected &&
+               "v1 manifest must reject undefined shared overload identity");
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("Thing", integer(1)));
+        program.functions.push_back(fn("main", integer(0), true));
+        ClassDecl klass;
+        klass.name = "Thing";
+        program.classes.push_back(std::move(klass));
+
+        const auto result = analyze_semantic_reachability(program);
+        bool rejected = false;
+        try {
+            (void)make_reachability_manifest_v1(
+                program, result, SemanticBuildKind::Executable);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected &&
+               "v1 manifest must reject lexical semantic symbol collisions");
+    }
+
+    {
+        OresReachabilityManifestV1 forged;
+        forged.build_kind = "executable";
+        forged.roots = {"__root__.main"};
+        forged.retained_symbols = {"__root__.leaf"};
+        bool rejected = false;
+        try {
+            (void)canonical_reachability_manifest_json(forged);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        assert(rejected &&
+               "canonical serialization must validate forged root closure");
     }
 
     {
