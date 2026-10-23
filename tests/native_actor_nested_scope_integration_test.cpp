@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -189,6 +190,83 @@ int main() {
     }
     // Concurrent last-child finalization versus observer registration has
     // exactly one legal outcome: synchronous already-drained, or one wakeup.
+    {
+        // Failing STOP admission is NOT delivery. It must remain retryable
+        // without marking physical DONE, even after phase==stopping.
+        NativeActorGroup group(9101, 3);
+        auto attempts = std::make_shared<std::atomic<int>>(0);
+        auto actor = group.adopt(9101, 1, 1, [attempts] {
+            if (attempts->fetch_add(1) == 0)
+                throw std::runtime_error("transient STOP enqueue rejection");
+        });
+        check(group.mark_ready(actor), "retry worker readiness failed");
+        group.stop_workers();
+        check(attempts->load() == 1, "initial STOP admission not attempted");
+        check(actor.stop_delivery_failed(), "STOP failure was incorrectly acknowledged");
+        check(actor.get_done().wait_for(0ms) == std::future_status::timeout,
+              "failed STOP fabricated physical DONE");
+        group.stop_workers();
+        check(attempts->load() == 2, "STOP admission did not retry after failure");
+        check(!actor.stop_delivery_failed(), "successful STOP retained failure receipt");
+        group.stop_workers();
+        check(attempts->load() == 2, "successful STOP callback issued twice");
+        check(group.finalized(actor), "retry worker did not finalize");
+    }
+    {
+        // The finalizer and trusted STOP retry token survive closing and
+        // *destroying* their native manager. The callback capture itself is
+        // heap-owned; the manager reference must never be captured here.
+        std::optional<NativeActorRef> actor;
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        auto attempts = std::make_shared<std::atomic<int>>(0);
+        {
+            NativeActorGroup group(9102, 2);
+            actor = group.adopt(9102, 1, 1, [attempts] {
+                if (attempts->fetch_add(1) == 0)
+                    throw std::runtime_error("first STOP delivery rejected");
+            });
+            check(group.mark_ready(*actor), "detached retry startup failed");
+            finalizer = group.runtime_finalizer(*actor);
+            group.close();
+            check(actor->stop_delivery_failed(), "detached STOP failure lost");
+            check(attempts->load() == 1, "detached STOP not attempted");
+        }
+        check(actor->get_done().wait_for(0ms) == std::future_status::timeout,
+              "detached STOP failure fabricated DONE");
+        check(NativeActorGroup::retry_failed_stop(*actor),
+              "retry after manager destruction did not deliver STOP");
+        check(!actor->stop_delivery_failed(), "detached STOP failure not cleared");
+        check(attempts->load() == 2, "detached STOP callback not retried exactly once");
+        check(!NativeActorGroup::retry_failed_stop(*actor),
+              "successful detached STOP allowed duplicate retry");
+        check(finalizer->finalized(), "physically retired detached actor rejected");
+        actor->get_done().get();
+    }
+    {
+        // Retrying the complete subtree must reissue only the child whose
+        // first STOP attempt failed; successful parent STOP is not duplicated.
+        NativeActorGroup group(9103, 3);
+        auto failures = std::make_shared<std::atomic<int>>(0);
+        auto parent_stops = std::make_shared<std::atomic<int>>(0);
+        auto parent = group.adopt(9103, 1, 1, [parent_stops] { ++*parent_stops; });
+        auto child = group.adopt_child(parent, 9103, 2, 1, [failures] {
+            if (failures->fetch_add(1) == 0)
+                throw std::runtime_error("child STOP transient rejection");
+        });
+        check(group.mark_ready(parent) && group.mark_ready(child),
+              "subtree retry readiness failed");
+        group.stop_subtree(parent);
+        check(parent_stops->load() == 1 && failures->load() == 1,
+              "first subtree STOP callbacks not invoked");
+        check(child.stop_delivery_failed(), "subtree child STOP failure lost");
+        check(!group.finalized(parent), "parent reclaimed while child live");
+        group.stop_subtree(parent);
+        check(failures->load() == 2 && parent_stops->load() == 1,
+              "subtree retry omitted child or duplicated successful parent");
+        check(!child.stop_delivery_failed(), "subtree STOP failure did not clear");
+        check(group.finalized(child), "subtree child finalization rejected");
+        check(group.finalized(parent), "subtree parent join finalization rejected");
+    }
     for (int round = 0; round < 200; ++round) {
         const auto rid = static_cast<std::uint64_t>(8000 + round);
         NativeActorGroup group(rid, 2);
