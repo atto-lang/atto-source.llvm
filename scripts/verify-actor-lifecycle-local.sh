@@ -71,6 +71,9 @@ run_matrix() {
   local mode="$1" target_build="$2"
   shift 2
   local -a cmake_args=("$@")
+  if [[ -n "${LLVM_DIR:-}" ]]; then
+    cmake_args+=("-DLLVM_DIR=$LLVM_DIR")
+  fi
   echo "BUILD_MATRIX=$mode SOURCE_HEAD=$actual SOURCE_TREE=$tree"
   cmake -S "$root" -B "$target_build" -DBUILD_TESTING=ON \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo "${cmake_args[@]}"
