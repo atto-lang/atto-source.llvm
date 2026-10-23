@@ -98,6 +98,24 @@ int main() {
         check(primary.finalized(parent), "parent did not retire");
         check(foreign.finalized(outsider), "outside actor did not retire");
     }
+    {
+        NativeActorGroup group(6105, 3);
+        auto parent = group.adopt(6105, 1, 1, [] {});
+        auto old_child = group.adopt_child(parent, 6105, 2, 1, [] {});
+        check(group.mark_ready(parent) && group.mark_ready(old_child),
+              "old generation failed readiness");
+        check(group.finalized(old_child), "old generation not retired");
+        auto replacement = group.adopt_child(parent, 6105, 2, 2, [] {});
+        check(group.mark_ready(replacement), "new generation failed readiness");
+        check(!group.finalized(old_child), "stale finalizer acknowledged new child");
+        check(!group.finalized(parent),
+              "late old-generation finalizer satisfied replacement join");
+        check(group.spawned_by(replacement) ==
+                std::make_optional(std::pair<std::uint64_t, std::uint64_t>{1, 1}),
+              "replacement lost exact parent incarnation");
+        check(group.finalized(replacement), "replacement did not retire");
+        check(group.finalized(parent), "parent join did not release after replacement");
+    }
     for (int round = 0; round < 100; ++round) {
         const auto rid = static_cast<std::uint64_t>(7000 + round);
         NativeActorGroup group(rid, 2);
