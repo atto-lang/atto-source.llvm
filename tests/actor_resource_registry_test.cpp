@@ -269,6 +269,65 @@ int main() {
         assert(called == 1);
     }
 
+    // Deterministic native analogue of Java's cancel-after-dequeue race.
+    // An actor's terminal STOP/Task cancellation is not proof that a
+    // scheduler-owned grant has returned its physical mutex permit.
+    for (std::uint64_t incarnation = 1; incarnation <= 64; ++incarnation) {
+        ActorResourceRegistry cancelledGrant(63, incarnation);
+        oreslang::runtime::LogicalMutex<int> gate(19);
+        auto ownerToken = gate.request();
+        auto queuedToken = gate.request();
+        assert(gate.owns(ownerToken.token));
+        assert(!gate.owns(queuedToken.token));
+        std::atomic<int> arenaDrops{0};
+        cancelledGrant.register_resource(Kind::native_allocation,
+                                         [&] { ++arenaDrops; });
+        auto claim = cancelledGrant.acquire_handoff();
+        std::atomic<bool> afterDequeue{false};
+        std::atomic<bool> allowReclaim{false};
+        std::thread grantCarrier([&] {
+            afterDequeue.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now()
+                                  + std::chrono::seconds(3);
+            while (!allowReclaim.load(std::memory_order_acquire)
+                    && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            // The queued token was cancelled by the owning Task before
+            // delivery. Releasing the old owner MUST NOT regrant it.
+            assert(!gate.release(ownerToken.token));
+            cancelledGrant.release_handoff(claim);
+        });
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::seconds(2);
+        while (!afterDequeue.load(std::memory_order_acquire)
+                && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        assert(afterDequeue.load(std::memory_order_acquire));
+        cancelledGrant.retire();
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+        assert(!gate.release(queuedToken.token));  // cancel before publish
+        assert(!gate.owns(queuedToken.token));
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+
+        // Handoff tickets are incarnation- and role-scoped. A mismatched
+        // release must not forge physical settlement.
+        bool wrongRole = false;
+        try { cancelledGrant.release_loan(claim); }
+        catch (const std::logic_error&) { wrongRole = true; }
+        assert(wrongRole);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        allowReclaim.store(true, std::memory_order_release);
+        grantCarrier.join();
+        assert(cancelledGrant.try_reclaim().status == Reclaim::complete);
+        assert(arenaDrops.load() == 1);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::complete);
+        assert(arenaDrops.load() == 1);
+    }
+
     ActorResourceRegistry bounded(17, 1, 1);
     bounded.register_resource(Kind::socket, [] {});
     rejected = false;
