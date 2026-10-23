@@ -38,6 +38,34 @@ POSITIVE = {
         "fnc ready(Flag value): Flag { return value; }\n"
         "pub fnc main(): int { return ready(true) ? 7 : 0; }\n"
     ),
+    "forward-use-before-definition": (
+        "declare type Code;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "define type Code = int;\n"
+        "pub fnc main(): int { return id(7); }\n"
+    ),
+    "forward-bool-before-definition": (
+        "declare type Flag;\n"
+        "fnc ready(Flag value): Flag { return value; }\n"
+        "define type Flag = bool;\n"
+        "pub fnc main(): int { return ready(true) ? 7 : 0; }\n"
+    ),
+    "module-forward-before-definition": (
+        "define module foo as\n"
+        "  declare type Code;\n"
+        "  fnc id(Code code): Code { return code; }\n"
+        "  define type Code = int;\n"
+        "  pub fnc main(): int { return id(7); }\n"
+        "end\n"
+    ),
+    "forward-alias-dependency-chain": (
+        "declare type Code;\n"
+        "declare type Raw;\n"
+        "fnc id(Code code): Code { return code; }\n"
+        "define type Code = Raw;\n"
+        "define type Raw = int;\n"
+        "pub fnc main(): int { return id(7); }\n"
+    ),
     "alias-chain": (
         "type Raw = int;\n"
         "declare type Code;\n"
@@ -95,7 +123,19 @@ NEGATIVE = {
     ),
     "self-alias": (
         "declare type Code;\ndefine type Code = Code;\n"+ENTRY,
-        "scalar target"
+        "native type alias cycle"
+    ),
+    "mutual-alias-cycle": (
+        "declare type One;\n"
+        "declare type Two;\n"
+        "define type One = Two;\n"
+        "define type Two = One;\n"+ENTRY,
+        "native type alias cycle"
+    ),
+    "alias-forward-without-definition": (
+        "declare type Code;\n"
+        "define type Raw = Code;\n"+ENTRY,
+        "unresolved native forward type"
     ),
     "builtin-shadowing": ("type int = bool;\n"+ENTRY, "reserved"),
     "class-collision": (
@@ -111,11 +151,17 @@ NEGATIVE = {
         "end\n"+ENTRY,
         "collides with type alias"
     ),
-    "use-before-definition-not-yet-admitted": (
-        "declare type Code;\n"
+    "use-before-forward-not-admitted": (
         "fnc id(Code code): Code { return code; }\n"
+        "declare type Code;\n"
         "define type Code = int;\n"+ENTRY,
         "native return type"
+    ),
+    "borrow-bool-through-forward": (
+        "declare type Flag;\n"
+        "fnc invalid(borrow Flag flag): bool { return flag; }\n"
+        "define type Flag = bool;\n" + ENTRY,
+        "native bool borrow ABI is not yet admitted"
     ),
 }
 
