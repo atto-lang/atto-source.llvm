@@ -308,6 +308,17 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-native-target-admission-test
+        tests/native_target_admission_test.cpp)
+    target_include_directories(oreslang-native-target-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-target-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_target_admission_model
+        COMMAND oreslang-native-target-admission-test)
+    set_tests_properties(native_target_admission_model
+        PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-semantic-reachability-test
         tests/native_semantic_reachability_test.cpp)
     target_include_directories(oreslang-native-semantic-reachability-test PRIVATE
