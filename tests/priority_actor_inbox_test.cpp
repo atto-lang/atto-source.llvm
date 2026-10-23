@@ -477,6 +477,52 @@ static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
     inbox.close();
 }
 
+// An actor's numeric runtime/id/generation may be reused after physical
+// finalization. It must not grant old capability holders access to a new
+// incarnation's inbox, even though the routing labels are equal (ABA).
+static void same_numeric_identity_cannot_reuse_old_incarnation_ticket() {
+    NativeActorGroup old_group(751, 1);
+    auto old_actor = old_group.adopt(751, 9, 1, [] {});
+    CHECK(old_group.mark_ready(old_actor));
+    CHECK(old_group.finalized(old_actor));
+    old_actor.get_done().get();
+
+    NativeActorGroup next_group(751, 1);
+    auto next_actor = next_group.adopt(751, 9, 1, [] {});
+    CHECK(next_group.mark_ready(next_actor));
+    CHECK(old_actor == next_actor); // identical numeric routing labels
+    CHECK(!old_actor.same_incarnation(next_actor)); // distinct native tickets
+
+    Inbox inbox({2, 16}, {2, 16}, {2, 16});
+    inbox.bind_target(next_actor);
+    int stale_payload = 404;
+    bool rejected = false;
+    try { (void)inbox.offer_to(old_actor, Lane::Urgent,
+                               std::move(stale_payload), 8); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && stale_payload == 404);
+    CHECK(inbox.snapshot() == 0);
+    CHECK(next_actor.outstanding_resource_loans() == 0);
+
+    auto stolen_owner = std::make_unique<int>(17);
+    rejected = false;
+    try { (void)inbox.offer_owned_to(old_actor, Lane::Normal, stolen_owner, 8); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && stolen_owner && *stolen_owner == 17);
+    CHECK(next_actor.outstanding_resource_loans() == 0);
+
+    CHECK(inbox.offer_to(next_actor, Lane::Normal, 5, 8));
+    CHECK(inbox.dispatch_next(next_group, next_actor, [&](Inbox::Delivery& item) {
+        CHECK(item.value() == 5 && item.sequence() == 1);
+        CHECK(item.acknowledge_released());
+    }) == Inbox::Dispatch::User);
+    CHECK(inbox.watermark() == 1);
+    CHECK(next_actor.outstanding_resource_loans() == 0);
+    CHECK(next_group.finalized(next_actor));
+    next_actor.get_done().get();
+    inbox.close();
+}
+
 static void failed_queue_publication_retains_sequence_and_window_credit() {
     oreslang::runtime::ActorMailboxCompletion ledger(2);
     CHECK(ledger.reserve_prepare());
@@ -857,6 +903,7 @@ int main() {
     terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success();
     terminal_retirement_waits_for_inflight_owner_to_ack();
     stale_generation_cannot_reuse_a_live_native_actor_inbox();
+    same_numeric_identity_cannot_reuse_old_incarnation_ticket();
     failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
