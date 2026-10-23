@@ -1,0 +1,11 @@
+fnc helper(): int {
+  return 42;
+}
+
+fnc dead(): int {
+  return 7;
+}
+
+pub fnc main(): int {
+  return helper();
+}
