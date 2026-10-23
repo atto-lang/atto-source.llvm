@@ -188,11 +188,21 @@ int ores_native_vm_has_hard_security_boundary(
     return 0;
 }
 
+static void control_lock(OresNativeVM* vm);
+static void control_unlock(OresNativeVM* vm);
+
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
     OresNativeActorRef invalid = {0, 0, 0};
-    return vm && valid_domain(domain)
-        ? ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot) : invalid;
+    if (!vm || !valid_domain(domain)) return invalid;
+    control_lock(vm);
+    OresNativeActorRef admitted = invalid;
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress) {
+        admitted = ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot);
+        if (admitted.scheduler_domain) vm->guest_actor_admitted = 1;
+    }
+    control_unlock(vm);
+    return admitted;
 }
 
 
@@ -203,9 +213,6 @@ static int same_actor(OresNativeActorRef a, OresNativeActorRef b) {
         && a.scheduler_domain == b.scheduler_domain
         && a.actor_slot == b.actor_slot && a.generation == b.generation;
 }
-static void control_lock(OresNativeVM* vm);
-static void control_unlock(OresNativeVM* vm);
-
 OresNativeActorRef ores_native_vm_spawn_supervised(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     size_t actor_slot, OresNativeActorRef supervisor) {
@@ -213,7 +220,8 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
     OresNativeActorRef child = invalid;
-    if (!vm->control_retired && vm->typed_failure_enabled[domain]
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress
+        && vm->typed_failure_enabled[domain]
         && actor_slot < vm->actor_slots[domain]
         && supervisor.actor_slot != (uint64_t)actor_slot
         && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
@@ -225,6 +233,7 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
                 &vm->supervisors[domain][actor_slot];
             entry->child = child;
             entry->supervisor = supervisor;
+            vm->guest_actor_admitted = 1;
         }
     }
     control_unlock(vm);
