@@ -60,6 +60,12 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Logical STOP is refused while any directly bound child incarnation has
+ * no accepted terminal failure receipt, even if that child is already
+ * physically stopped. Accepted receipts continue to drain on the stopped
+ * supervisor's exclusive lane. Global scheduler retire() is a distinct
+ * fail-closed teardown and requires external host reconciliation.
+ */
 int ores_native_actor_scheduler_stop(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Nonblocking host readiness/termination observations. Source-level
