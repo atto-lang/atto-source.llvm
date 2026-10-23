@@ -93,7 +93,7 @@ public:
     // as a body-framing decision. A production proxy must still implement
     // full RFC 9112 validation, connection state and timeout budgets.
     bool safe_unframed_request() const noexcept {
-        if (head_end_ == 0 || head_end_ != supplied_bytes_) return false;
+        if (header_end_ == 0 || header_end_ != supplied_bytes_) return false;
         if (method_ != "GET" && method_ != "HEAD") return false;
         std::size_t host_count = 0;
         std::size_t length_count = 0;
