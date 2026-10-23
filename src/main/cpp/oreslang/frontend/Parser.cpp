@@ -297,6 +297,12 @@ public:
                 parse_scalar_type_alias(defined_public);
                 continue;
             }
+            if (token_.text == "trait" || token_.text == "interface") {
+                fail("native trait/interface definitions require a verified type-level linker and lowering");
+            }
+            if (token_.text == "enum") {
+                fail("native user-defined tagged enum requires ADT layout and constructor lowering");
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
@@ -354,6 +360,10 @@ public:
                     continue;
                 }
                 if (defined_public) fail("native public define supports only scalar type aliases in this source subset");
+                if (token_.text == "trait" || token_.text == "interface")
+                    fail("native trait/interface definitions require a verified type-level linker and lowering");
+                if (token_.text == "enum")
+                    fail("native user-defined tagged enum requires ADT layout and constructor lowering");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
