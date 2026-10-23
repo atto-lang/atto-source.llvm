@@ -257,3 +257,47 @@ holds physical completion, 10 child-first STOP / parent retry cases,
 32 concurrently stopped independent roots and 100 spawn-vs-STOP races.
 These tests are **committed/registered, not reported as passing** until the
 exact private LLVM PR tree is actually built and run under CTest/sanitizers.
+
+
+### Native host STOP dispatch recovery and turn-admission fence
+
+The C++ `NativeActorGroup` CONTROL-plane substrate now rejects *new*
+ordinary DATA and CONTROL handler admission after its worker enters
+`Phase::stopping`; an already reserved CONTROL envelope remains drainable
+on the actor's exclusive lane. A stopped actor can never admit additional
+guest work merely because its physical finalizer has not yet completed.
+
+A throwing trusted STOP enqueue callback no longer counts as delivery.
+The actor's generation-specific shared ticket records
+`stop_delivery_failed()`, clears the dispatch gate and retains the same
+underlying mutable, idempotent host STOP callback after manager detachment.
+A trusted scheduler can invoke `NativeActorGroup::retry_failed_stop(ref)`
+even after group destruction. Retrying a STOP never acknowledges physical
+DONE or calls guest code; true completion still requires the generation-
+checked physical finalizer. Existing `stop_workers`, `stop_subtree` and
+`close` can reissue a callback whose preceding delivery was unconfirmed.
+All copies of the callback dispatch wrapper share the same callable object;
+a mutable callback does not restart from its pre-failure captured state.
+
+**Required host contract:** STOP callbacks must be idempotent and signal
+unconfirmed admission by throwing. They must not throw after confirming
+delivery. Callback captures must remain lifetime-safe until delivery or
+physical terminal acknowledgment, and the trusted scheduler must retain
+failed STOP retry obligations after close. An exception swallowed by a
+callback itself cannot be diagnosed by the native group.
+
+New regression cases cover transient STOP rejection in the live manager,
+a child failure followed by full-subtree retry, a detached manager retry,
+and a mutable callback whose state must survive manager destruction.
+The actor-group lifecycle suite also checks STOP rejects fresh DATA/CONTROL
+admissions but drains CONTROL reserved before the fence.
+
+**Verification status:** these are committed source/test changes, not an
+exact-head CTest or sanitizers pass; source-organization Actions still
+report zero-step failures. An independent source-free C++17 model of the
+retry ticket ran 2,000 trials with four concurrent retry contenders and
+passed optimized GCC plus Clang ASan/UBSan. That model is not production
+source execution. The review-only private carrier [Java draft #1959]
+(https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1959)
+does not authorize cross-organization transfers; issue #962 remains the
+security gate.
