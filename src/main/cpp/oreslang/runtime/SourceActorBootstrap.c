@@ -17,13 +17,19 @@
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 
-typedef struct {
+typedef struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    /* Source actor family edges are trusted runtime-only and lifetime-bound.
+     * No extra supervisor, scheduler or guest-visible pointer is allocated.
+     * As children always receive strictly later slots, descending slot
+     * order is also a valid leaf-first retirement order. */
+    struct SourceActor* lifetime_parent;
+    int stopping;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -61,6 +67,7 @@ typedef struct {
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
+static _Thread_local SourceActor* current_source_actor;
 
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
@@ -200,7 +207,10 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     SourceActor* instance = lookup(slot);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    SourceActor* previous = current_source_actor;
+    current_source_actor = instance;
     instance->constructor(instance->heap, turn.domain, turn.epoch);
+    current_source_actor = previous;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
 
@@ -224,8 +234,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    SourceActor* previous = current_source_actor;
+    current_source_actor = instance;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    current_source_actor = previous;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
@@ -291,6 +304,16 @@ void* oreslang_source_actor_spawn(
     group_lock();
     if (!group.vm) open_group_locked();
 
+    SourceActor* parent = current_source_actor;
+    if (parent) {
+        const size_t parent_slot = (size_t)parent->ref.actor_slot;
+        ensure(parent->magic == SOURCE_ACTOR_MAGIC && !parent->stopping
+            && parent_slot < group.next_slot
+            && group.actors[parent_slot] == parent
+            && !ores_native_vm_poll_done(
+                group.vm, ORES_NATIVE_VM_MAIN, parent->ref));
+    }
+
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     const size_t slot = group.next_slot++;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
@@ -301,6 +324,7 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->lifetime_parent = parent;
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref =
@@ -423,65 +447,93 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
+/*
+ * Admission and STOP linearize under group.mutex. An actor currently
+ * executing its constructor/message is the implicit parent for any actor
+ * it spawns. The trusted top-level source stop seals the entire subtree,
+ * requests STOP from leaves to root, and joins each scheduler DONE before
+ * releasing any owned actor heap. It never blocks while holding group.mutex.
+ * This restricted source ABI has no per-actor get_done() yet.
+ */
 void oreslang_source_actor_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    /* A blocking stop from a carrier would deadlock its own scheduler. */
+    ensure(current_source_actor == NULL);
 
-    /*
-     * Stop admission is serialized with group metadata, but the blocking host
-     * wait MUST NOT hold group.mutex: constructor completion may need that
-     * mutex to settle a registered readiness Future.
-     */
+    SourceActor* descendants[SOURCE_GROUP_ROOT_SLOT] = {0};
+    size_t count = 0;
     group_lock();
+    ensure(group.vm);
     const size_t slot = (size_t)instance->ref.actor_slot;
-    ensure(group.vm && slot < group.next_slot
-        && group.actors[slot] == instance);
-    ensure(ores_native_vm_stop(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    ensure(slot < group.next_slot && group.actors[slot] == instance
+        && !instance->stopping);
+
+    for (size_t i = 0; i < group.next_slot; ++i) {
+        SourceActor* candidate = group.actors[i];
+        if (!candidate) continue;
+        /* Walk frozen acyclic runtime-only ownership edges. */
+        SourceActor* cursor = candidate;
+        while (cursor && cursor != instance) cursor = cursor->lifetime_parent;
+        if (cursor != instance) continue;
+        ensure(count < SOURCE_GROUP_ROOT_SLOT && !candidate->stopping);
+        descendants[count++] = candidate;
+    }
+    ensure(count >= 1 && descendants[0] == instance);
+    /* Fence *all* descendant admissions before a single STOP is issued.
+     * Any concurrent actor-carrier spawn waits on this same lock and loses. */
+    for (size_t i = 0; i < count; ++i)
+        descendants[i]->stopping = 1;
+    /* Creation-order slots are strictly increasing along parent edges. */
+    for (size_t i = count; i > 0; --i)
+        ensure(ores_native_vm_stop(
+            group.vm, ORES_NATIVE_VM_MAIN, descendants[i - 1]->ref));
     group_unlock();
 
-    ensure(ores_native_vm_wait_done(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    /* Never wait on a scheduler/carrier while retaining group.mutex. */
+    for (size_t i = count; i > 0; --i)
+        ensure(ores_native_vm_wait_done(
+            group.vm, ORES_NATIVE_VM_MAIN, descendants[i - 1]->ref));
 
     group_lock();
-    ensure(group.actors[slot] == instance);
-    ensure(atomic_load_explicit(
-        &instance->initialized, memory_order_acquire) == 1);
-    ensure(ores_native_vm_poll_done(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
-
-    ores_actor_i64_heap_retire(instance->heap);
-    ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    for (size_t i = count; i > 0; --i) {
+        SourceActor* retired = descendants[i - 1];
+        const size_t at = (size_t)retired->ref.actor_slot;
+        ensure(group.actors[at] == retired && retired->stopping);
+        ensure(atomic_load_explicit(
+            &retired->initialized, memory_order_acquire) == 1);
+        ensure(ores_native_vm_poll_done(
+            group.vm, ORES_NATIVE_VM_MAIN, retired->ref));
+        ores_actor_i64_heap_retire(retired->heap);
+        ensure(ores_actor_i64_heap_try_destroy(retired->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
-    fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
-        (unsigned long long)atomic_load_explicit(
-            &instance->processed, memory_order_acquire),
-        (long long)atomic_load_explicit(
-            &instance->last_result, memory_order_relaxed));
+        fprintf(stderr,
+            "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\\n",
+            (unsigned long long)atomic_load_explicit(
+                &retired->processed, memory_order_acquire),
+            (long long)atomic_load_explicit(
+                &retired->last_result, memory_order_relaxed));
 #endif
-    group.actors[slot] = NULL;
-    instance->magic = 0;
-    free(instance);
-    ensure(group.live > 0);
-    group.live--;
-
+        group.actors[at] = NULL;
+        retired->magic = 0;
+        free(retired);
+        ensure(group.live > 0);
+        --group.live;
+    }
     if (group.live == 0) {
         ensure(group.pending_ready == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
-
         ensure(ores_native_vm_close(group.vm));
         group.vm = NULL;
         group.root_ref = (OresNativeActorRef){0, 0, 0};
-
         ensure(ores_native_continuation_store_close(group.continuations));
         group.continuations = NULL;
         ensure(ores_native_execution_context_store_close(group.executions));
         group.executions = NULL;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         fprintf(stderr,
-            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
+            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\\n",
             group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
 #endif
         group.next_slot = 0;
