@@ -39,11 +39,25 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
     if (llvm::verifyModule(*module))
         throw std::runtime_error("ORC JIT: LLVM module verification failed");
 
+    // LLVM global ctors/dtors can run outside the explicit main() call.
+    // Inline assembly, aliases and ifuncs likewise bypass the first closed-IR
+    // execution slice. The Oreslang source compiler is not supposed to emit
+    // any of them here: reject future lowering changes until separately proven.
+    if (!module->getModuleInlineAsm().empty())
+        throw std::runtime_error("ORC JIT: module inline assembly is not admitted");
+    if (module->alias_begin() != module->alias_end() ||
+        module->ifunc_begin() != module->ifunc_end())
+        throw std::runtime_error("ORC JIT: aliases and indirect functions are not admitted");
+    if (module->getNamedGlobal("llvm.global_ctors") ||
+        module->getNamedGlobal("llvm.global_dtors"))
+        throw std::runtime_error("ORC JIT: global constructors/destructors are not admitted");
+
     // The native compiler's wrapper defines the guest process-exit contract.
     // Calling the guest i64 entry directly would bypass its 0..255 validation.
     const auto* entry = module->getFunction("main");
     if (!entry || entry->isDeclaration() || entry->isVarArg() ||
-        entry->arg_size() != 0 || !entry->getReturnType()->isIntegerTy(32))
+        entry->arg_size() != 0 || !entry->getReturnType()->isIntegerTy(32) ||
+        entry->getCallingConv() != llvm::CallingConv::C)
         throw std::runtime_error("ORC JIT: requires native i32 main() wrapper");
 
     // Initial JIT slice accepts closed IR modules only. Runtime-host and FFI
