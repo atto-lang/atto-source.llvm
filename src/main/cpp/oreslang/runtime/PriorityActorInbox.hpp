@@ -42,9 +42,11 @@ public:
     class Delivery final {
     public:
         Delivery(Lane lane, OwnedDelivery&& owned,
-                 std::shared_ptr<ActorMailboxCompletion> completion)
+                 std::shared_ptr<ActorMailboxCompletion> completion,
+                 std::optional<NativeActorRef> actor)
             : lane_(lane), owned_(std::move(owned)),
-              completion_(std::move(completion)) {}
+              completion_(std::move(completion)),
+              bound_actor_(std::move(actor)) {}
         Delivery(Delivery&&) noexcept = default;
         Delivery& operator=(Delivery&&) noexcept = delete;
         Delivery(const Delivery&) = delete;
@@ -75,6 +77,7 @@ public:
         Lane lane_;
         OwnedDelivery owned_;
         std::shared_ptr<ActorMailboxCompletion> completion_;
+        std::optional<NativeActorRef> bound_actor_;
     };
 
     PriorityActorInbox(Limits urgent, Limits normal, Limits bulk,
