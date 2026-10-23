@@ -78,11 +78,31 @@ failed:
             if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) abort();
             if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
         }
+    if (pthread_cond_destroy(&vm->nio_idle) != 0) abort();
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         free(vm->supervisors[i]);
     free(vm);
     return NULL;
+}
+
+int ores_native_vm_prepare_realtime(OresNativeVM* vm) {
+    if (!vm) return 0;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (!ores_native_actor_scheduler_prestart_realtime(vm->schedulers[i]))
+            return 0;
+    }
+    return 1;
+}
+
+OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config) {
+    OresNativeVM* vm = ores_native_vm_open(config);
+    if (!vm) return NULL;
+    if (!ores_native_vm_prepare_realtime(vm)) {
+        if (!ores_native_vm_close(vm)) abort();
+        return NULL;
+    }
+    return vm;
 }
 
 size_t ores_native_vm_effective_cpu_budget(void) {
