@@ -48,7 +48,10 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             bool denied = false;
             try { (void)state.slab->settle(state.pin); }
             catch (const std::logic_error&) { denied = true; }
-            state.foreign_denied = denied;
+            bool identity_denied = false;
+            try { (void)state.slab->identity(); }
+            catch (const std::logic_error&) { identity_denied = true; }
+            state.foreign_denied = denied && identity_denied;
             return;
         }
         assert(actor == 0);
