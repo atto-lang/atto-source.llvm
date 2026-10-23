@@ -963,8 +963,6 @@ private:
                         [&](const GenericParameter& p) { return p.name == type; });
                     if (generic) {
                         parameter.generic_type = type;
-                    } else if (forward_scalar_alias_names_.count(type)) {
-                        parameter.pending_scalar_alias = type;
                     } else if (scalar_alias_targets_.count(type)) {
                         parameter.pending_scalar_alias = type;
                     } else if (type_only_nominals_.count(type)) {
@@ -998,8 +996,6 @@ private:
                     [&](const GenericParameter& p) { return p.name == type; });
                 if (generic) {
                     value.return_type = ScalarType::I64;
-                } else if (forward_scalar_alias_names_.count(type)) {
-                    value.pending_return_alias = type;
                 } else if (scalar_alias_targets_.count(type)) {
                     value.pending_return_alias = type;
                 } else if (type_only_nominals_.count(type)) {
@@ -1121,9 +1117,6 @@ private:
                         } else if (accept("bool")) {
                             binding.scalar_type = ScalarType::Bool;
                         } else if (token_.kind == Kind::Identifier &&
-                                   forward_scalar_alias_names_.count(std::string(token_.text))) {
-                            binding.pending_scalar_alias = identifier();
-                        } else if (token_.kind == Kind::Identifier &&
                                    scalar_alias_targets_.count(std::string(token_.text))) {
                             binding.pending_scalar_alias = identifier();
                         } else {
@@ -1198,9 +1191,6 @@ private:
                     require(":");
                     if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
                     else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
-                    else if (token_.kind == Kind::Identifier &&
-                             forward_scalar_alias_names_.count(std::string(token_.text)))
-                        statement.branch_local->pending_scalar_alias = identifier();
                     else if (token_.kind == Kind::Identifier &&
                              scalar_alias_targets_.count(std::string(token_.text)))
                         statement.branch_local->pending_scalar_alias = identifier();
@@ -2467,49 +2457,17 @@ private:
     static void validate_type_only_declarations(const Program& program) {
         using TypeKind = TypeOnlyDecl::Kind;
         std::unordered_map<std::string, std::size_t> declarations;
-        std::unordered_map<std::string, bool> forward_visibility;
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
             const auto& decl = program.type_only_declarations[i];
-            if (decl.forward_declaration) {
-                if (declarations.count(decl.name))
-                    throw std::runtime_error("TYPE_FORWARD_AFTER_DEFINITION: type '" + decl.name +
-                                             "' cannot be promised after completion");
-                if (decl.kind != TypeKind::Alias ||
-                        !forward_visibility.emplace(decl.name, decl.exported).second)
-                    throw std::runtime_error("TYPE_FORWARD_DUPLICATE: repeated opaque declaration '"
-                                             + decl.name + "'");
-                continue;
-            }
+            // Both 'declare type' and 'define type' produce an identical,
+            // completed alias. Neither introduces a promise or an extra slot.
             if (!declarations.emplace(decl.name, i).second)
                 throw std::runtime_error("TYPE_DECL_NAME_COLLISION: duplicate type-only declaration '"
                                          + decl.name + "'");
         }
-        for (const auto& promise : forward_visibility) {
-            auto it = declarations.find(promise.first);
-            if (it == declarations.end()) {
-                const bool concrete_name =
-                    std::any_of(program.classes.begin(), program.classes.end(),
-                        [&](const ClassDecl& c) { return c.name == promise.first; }) ||
-                    std::any_of(program.actors.begin(), program.actors.end(),
-                        [&](const ActorDecl& actor) { return actor.name == promise.first; }) ||
-                    std::any_of(program.contracts.begin(), program.contracts.end(),
-                        [&](const ModuleContract& contract) { return contract.name == promise.first; });
-                if (concrete_name)
-                    throw std::runtime_error("TYPE_FORWARD_KIND_MISMATCH: '" + promise.first +
-                                             "' is not completed by a type-only scalar alias");
-                throw std::runtime_error("TYPE_FORWARD_UNRESOLVED: '" + promise.first +
-                                         "' has no completed type definition");
-            }
-            const auto& complete = program.type_only_declarations[it->second];
-            if (complete.kind != TypeKind::Alias)
-                throw std::runtime_error("TYPE_FORWARD_KIND_MISMATCH: '" + promise.first +
-                                         "' must be completed by a type definition");
-            if (complete.exported != promise.second)
-                throw std::runtime_error("TYPE_FORWARD_VISIBILITY_MISMATCH: '" + promise.first +
-                                         "' changes public visibility");
-        }
-        // Validate the complete catalog, including unused/forward-targeted
-        // aliases. Native aliases are transparent i64/bool spellings, never
+        // Validate the complete catalog, including unused aliases
+        // and completed aliases that target other completed definitions.
+        // Native aliases are transparent i64/bool spellings, never
         // nominal class layouts, trait objects, or runtime constructors.
         std::vector<unsigned char> alias_state(program.type_only_declarations.size(), 0);
         std::function<ScalarType(std::size_t, std::size_t)> resolve_alias =
@@ -2539,7 +2497,6 @@ private:
         };
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
             if (program.type_only_declarations[i].kind == TypeKind::Alias &&
-                    !program.type_only_declarations[i].forward_declaration &&
                     alias_state[i] == 0)
                 (void)resolve_alias(i, 1);
         }
