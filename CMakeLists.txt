@@ -30,6 +30,7 @@ add_executable(oreslang-llvmc
     src/main/cpp/oreslang/frontend/Parser.cpp
     src/main/cpp/oreslang/types/OwnershipChecker.cpp
     src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+    src/main/cpp/oreslang/backend/OrcJitRunner.cpp
     src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp
 )
 
@@ -38,7 +39,7 @@ target_include_directories(oreslang-llvmc PRIVATE
     "${LLVM_INCLUDE_DIRS}"
 )
 add_definitions(${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
+llvm_map_components_to_libnames(ORE_LLVM_LIBS core support irreader orcjit native)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
@@ -270,6 +271,13 @@ if(BUILD_TESTING)
     set_tests_properties(native_int_array_model_differential PROPERTIES TIMEOUT 90)
 
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # Source -> verified LLVM IR -> in-process ORC JIT -> observed exit.
+    # Deliberately separate from the Clang AOT conformance gate.
+    add_test(NAME native_orc_jit_compiled_source
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orc_jit_execution.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_orc_jit_compiled_source PROPERTIES TIMEOUT 90)
     add_test(NAME native_realtime_profile_cli
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_realtime_profile_cli.py"
