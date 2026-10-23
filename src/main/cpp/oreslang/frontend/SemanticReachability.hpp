@@ -145,6 +145,7 @@ struct SemanticGraphBudget {
 };
 
 struct SemanticReachabilityResult {
+    SemanticBuildKind build_kind = SemanticBuildKind::Executable;
     std::vector<SemanticDeclarationId> roots;
     std::vector<SemanticDeclarationId> retained;
     std::vector<SemanticDeclarationId> removed;
@@ -383,6 +384,7 @@ inline SemanticReachabilityResult analyze_semantic_reachability(
     }
 
     SemanticReachabilityResult result;
+    result.build_kind = policy.build_kind;
     result.roots.assign(roots.begin(), roots.end());
     result.retained.assign(retained.begin(), retained.end());
     result.removed = std::move(removed);
