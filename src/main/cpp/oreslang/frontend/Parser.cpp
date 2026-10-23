@@ -2419,11 +2419,32 @@ private:
     static void validate_type_only_declarations(const Program& program) {
         using TypeKind = TypeOnlyDecl::Kind;
         std::unordered_map<std::string, std::size_t> declarations;
+        std::unordered_map<std::string, bool> forward_visibility;
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
             const auto& decl = program.type_only_declarations[i];
+            if (decl.forward_declaration) {
+                if (decl.kind != TypeKind::Alias ||
+                        !forward_visibility.emplace(decl.name, decl.exported).second)
+                    throw std::runtime_error("TYPE_FORWARD_DUPLICATE: repeated opaque declaration '"
+                                             + decl.name + "'");
+                continue;
+            }
             if (!declarations.emplace(decl.name, i).second)
                 throw std::runtime_error("TYPE_DECL_NAME_COLLISION: duplicate type-only declaration '"
                                          + decl.name + "'");
+        }
+        for (const auto& promise : forward_visibility) {
+            auto it = declarations.find(promise.first);
+            if (it == declarations.end())
+                throw std::runtime_error("TYPE_FORWARD_UNRESOLVED: '" + promise.first +
+                                         "' has no completed type definition");
+            const auto& complete = program.type_only_declarations[it->second];
+            if (complete.kind != TypeKind::Alias)
+                throw std::runtime_error("TYPE_FORWARD_KIND_MISMATCH: '" + promise.first +
+                                         "' must be completed by a type definition");
+            if (complete.exported != promise.second)
+                throw std::runtime_error("TYPE_FORWARD_VISIBILITY_MISMATCH: '" + promise.first +
+                                         "' changes public visibility");
         }
         // Validate the complete catalog, including unused/forward-targeted
         // aliases. Native aliases are transparent i64/bool spellings, never
@@ -2456,6 +2477,7 @@ private:
         };
         for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
             if (program.type_only_declarations[i].kind == TypeKind::Alias &&
+                    !program.type_only_declarations[i].forward_declaration &&
                     alias_state[i] == 0)
                 (void)resolve_alias(i, 1);
         }
