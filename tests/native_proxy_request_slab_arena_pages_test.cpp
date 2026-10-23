@@ -120,7 +120,10 @@ int main() {
     // logical words, including those at the last physical page boundary.
     ores_actor_arena_write(arena, turn, pages[1], 60, &secret, sizeof(secret));
     ores_actor_arena_write(arena, turn, pages[1], kPageBytes - 4, &secret, sizeof(secret));
+    const auto closing_page = pages[1];
+    pages[1] = pages[0]; // must not redirect the second-page close scrub
     slab.close();
+    pages[1] = closing_page; // restore independent host probe handles
     std::array<std::uint32_t, 1024> check{};
     for (std::size_t off = 0; off < 2 * kPageWords;) {
         const auto page = off / kPageWords;
