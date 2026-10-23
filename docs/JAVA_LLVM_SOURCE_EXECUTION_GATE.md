@@ -62,7 +62,11 @@ From the LLVM checkout, invoke:
 
 The command runs the actual compiled Rust harness and refuses to issue a
 receipt if a Java fixture fails, stdout diverges, a pinned SHA is malformed,
-a tracked checkout is modified, or a previous receipt already exists.
+a tracked or untracked checkout is modified, or a previous receipt already
+exists. It requires `jq` to independently verify the versioned receipt schema,
+both exact checkout SHAs, the complete nine-case corpus, execution counts,
+identical hexadecimal stdout bytes and exit statuses before it publishes a
+receipt. A nonempty file or a process exit zero is not sufficient.
 
 The Java reference launcher must be reviewed to ensure it really executes
 guest Oreslang source. The manifest includes checkout commit IDs, but the
@@ -73,8 +77,14 @@ do not place source or tokens in public logs/artifacts.
 
 ## Source-free admission regression proof
 
-Run `bash tests/java_llvm_parity_gate_admission.sh` before attempting any
-private-source runner. It creates disposable **synthetic** Git repositories to
+Run `bash tests/java_llvm_parity_gate_admission.sh` and
+`bash tests/java_llvm_parity_receipt_admission.sh` before attempting any
+private-source runner. The latter uses mocked toolchains to prove that malformed
+JSON, a forged Java revision, missing fixture results, divergent guest stdout
+and malformed hex output **cannot** publish a success receipt. These admission
+tests provide no real compiled source evidence.
+
+The first suite creates disposable **synthetic** Git repositories to
 exercise denial of untracked LLVM and Java sources, a modified tracked source,
 committed Java/LLVM fixture divergence, and an untracked launcher. It also
 syntax-checks the actual strict runner. These tests are safe to execute without
