@@ -513,6 +513,74 @@ int main() {
         }
     }
     {
+        // stop_workers() also invokes the trusted stop callback outside the
+        // group mutex. Once stop has been issued, live-group physical DONE
+        // cannot be acknowledged until that callback returns.
+        NativeActorGroup group(8300, 1);
+        std::promise<void> stop_entered;
+        std::promise<void> release_stop;
+        auto stop_gate = release_stop.get_future().share();
+        auto worker = group.adopt(8300, 1, 1, [&] {
+            stop_entered.set_value();
+            stop_gate.wait();
+        });
+        check(group.mark_ready(worker), "live stop barrier actor not ready");
+
+        std::thread stopper([&] { group.stop_workers(); });
+        stop_entered.get_future().wait();
+
+        check(!group.finalized(worker),
+              "live-group finalized DONE while stop callback still active");
+        check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+              "live stop callback did not fence get_done");
+
+        release_stop.set_value();
+        stopper.join();
+
+        check(group.finalized(worker),
+              "returned live stop callback did not permit physical DONE");
+        worker.get_done().get();
+    }
+
+    {
+        // close() publishes detachment before invoking stop callbacks outside
+        // the group mutex. A concurrent runtime finalizer must not treat that
+        // intermediate state as physical quiescence or settle get_done().
+        NativeActorGroup group(8301, 1);
+        std::promise<void> stop_entered;
+        std::promise<void> release_stop;
+        auto stop_gate = release_stop.get_future().share();
+        auto worker = group.adopt(8301, 1, 1, [&] {
+            stop_entered.set_value();
+            stop_gate.wait();
+        });
+        auto finalizer = group.runtime_finalizer(worker);
+        check(group.mark_ready(worker), "stop-dispatch barrier actor not ready");
+
+        std::thread closer([&] { group.close(); });
+        stop_entered.get_future().wait();
+
+        check(!finalizer.ready_for_resource_reclamation(),
+              "detachment exposed reclamation while stop callback still active");
+        check(!finalizer.finalized(),
+              "runtime finalizer settled DONE while stop callback still active");
+        check(!group.finalized(worker),
+              "group finalizer settled DONE while post-close stop callback still active");
+        check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+              "get_done crossed stop callback completion barrier");
+
+        release_stop.set_value();
+        closer.join();
+
+        check(finalizer.ready_for_resource_reclamation(),
+              "returned stop callback did not open reclamation gate");
+        check(finalizer.finalized(),
+              "post-stop runtime finalization was not accepted");
+        worker.get_done().get();
+        check(!finalizer.finalized(), "stop-dispatch barrier allowed duplicate DONE");
+    }
+
+    {
         // Close drops undelivered CONTROL work, but only a post-close
         // runtime finalizer can acknowledge physical retirement. Neither
         // token nor close may execute the actor handler inline.
@@ -603,5 +671,101 @@ int main() {
         check(failed == 1, "terminal error subscriber notified incorrectly");
         check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
     }
+    {
+        // DONE is the reincarnation barrier: once it becomes observable, the
+        // old physical ticket is already retired and a strictly newer
+        // generation can be admitted immediately under the same logical id.
+        NativeActorGroup group(8500, 1);
+        auto old = group.adopt(8500, 55, 7, [] {});
+        check(group.mark_ready(old), "DONE-order actor not ready");
+
+        std::promise<void> waiter_started;
+        std::promise<void> waiter_finished;
+        std::atomic<bool> physical_seen{false};
+        std::atomic<bool> replacement_admitted{false};
+        NativeActorGroup successor(8500, 1);
+
+        std::thread waiter([&] {
+            waiter_started.set_value();
+            old.get_done().get();
+            physical_seen.store(old.physically_done(), std::memory_order_release);
+            try {
+                auto replacement = successor.adopt(8500, 55, 8, [] {});
+                replacement_admitted.store(true, std::memory_order_release);
+                check(successor.mark_ready(replacement),
+                      "DONE-order replacement not ready");
+                check(successor.finalized(replacement),
+                      "DONE-order replacement not finalized");
+                replacement.get_done().get();
+            } catch (...) {
+                replacement_admitted.store(false, std::memory_order_release);
+            }
+            waiter_finished.set_value();
+        });
+
+        waiter_started.get_future().wait();
+        check(group.finalized(old), "DONE-order physical ack rejected");
+        waiter_finished.get_future().wait();
+        waiter.join();
+
+        check(physical_seen.load(std::memory_order_acquire),
+              "get_done became observable before physical retirement");
+        check(replacement_admitted.load(std::memory_order_acquire),
+              "same-id newer generation could not admit immediately after DONE");
+    }
+
+    {
+        // Wire identity is (runtime, actor, generation), not the private
+        // shared ticket pointer. Once an incarnation physically retires, the
+        // registry must remember its generation forever so the same or an
+        // older generation can never be re-adopted.
+        NativeActorGroup group(8501, 1);
+        auto first = group.adopt(8501, 77, 5, [] {});
+        check(group.mark_ready(first), "generation high-water actor not ready");
+        check(group.finalized(first), "generation high-water actor not finalized");
+        first.get_done().get();
+
+        bool same_rejected = false;
+        try { (void) group.adopt(8501, 77, 5, [] {}); }
+        catch (const std::logic_error&) { same_rejected = true; }
+        check(same_rejected, "retired generation was reused");
+
+        bool older_rejected = false;
+        try { (void) group.adopt(8501, 77, 4, [] {}); }
+        catch (const std::logic_error&) { older_rejected = true; }
+        check(older_rejected, "older generation bypassed retired high-water mark");
+
+        auto next = group.adopt(8501, 77, 6, [] {});
+        check(!group.mark_ready(first),
+              "stale prior-generation ref mutated replacement incarnation");
+        check(group.mark_ready(next), "strictly newer generation not admitted");
+        check(!group.finalized(first),
+              "stale prior-generation ref finalized replacement incarnation");
+        check(group.finalized(next), "new generation could not finalize");
+        next.get_done().get();
+    }
+
+    {
+        // The high-water mark is runtime-global, not group-local. A new
+        // supervisor cannot resurrect the same wire generation after transfer
+        // or destruction of the previous group.
+        NativeActorGroup original(8502, 1);
+        auto old = original.adopt(8502, 9, 11, [] {});
+        check(original.mark_ready(old), "cross-group generation actor not ready");
+        check(original.finalized(old), "cross-group generation actor not finalized");
+
+        NativeActorGroup replacement_group(8502, 1);
+        bool stale_rejected = false;
+        try { (void) replacement_group.adopt(8502, 9, 11, [] {}); }
+        catch (const std::logic_error&) { stale_rejected = true; }
+        check(stale_rejected, "new group reused retired wire generation");
+
+        auto replacement = replacement_group.adopt(8502, 9, 12, [] {});
+        check(replacement_group.mark_ready(replacement),
+              "new group rejected strictly newer generation");
+        check(replacement_group.finalized(replacement),
+              "new group could not finalize newer generation");
+    }
+
 
 }

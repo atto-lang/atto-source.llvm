@@ -52,6 +52,15 @@ public:
     }
 
     /**
+     * Host-only physical retirement observation. If get_done() is ready, this
+     * must already be true; DONE is never allowed to outrun owner-registry
+     * retirement or physical resource quiescence.
+     */
+    bool physically_done() const noexcept {
+        return ticket_->physically_done.load(std::memory_order_acquire);
+    }
+
+    /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
      * code inline from the acknowledging or subscribing host thread.
@@ -109,6 +118,11 @@ private:
         std::shared_future<void> done_future = done_promise.get_future().share();
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
+        // Becomes true only after the trusted stop callback has returned,
+        // including exceptional return. Post-close resource reclamation and
+        // DONE publication must stay behind this barrier: close() publishes
+        // detachment before it dispatches callbacks outside the group mutex.
+        std::atomic<bool> stop_request_returned{false};
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
         std::atomic<bool> detached_from_group{false};
@@ -191,6 +205,7 @@ public:
          */
         bool ready_for_resource_reclamation() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
+                && ref_.ticket_->stop_request_returned.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
@@ -304,12 +319,36 @@ public:
         const Key key{runtime_id, actor_id};
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
+        auto high = owners.high_water.find(key);
+        if (high != owners.high_water.end() && generation <= high->second)
+            throw std::logic_error(
+                "actor generation must advance beyond every retired incarnation");
+
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
+
+        bool inserted_high_water = false;
+        std::uint64_t previous_high_water = 0;
         try {
-            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
+            if (high == owners.high_water.end()) {
+                auto inserted = owners.high_water.emplace(key, generation);
+                if (!inserted.second)
+                    throw std::logic_error("actor generation registry insertion raced");
+                high = inserted.first;
+                inserted_high_water = true;
+            } else {
+                previous_high_water = high->second;
+                high->second = generation;
+            }
+
+            auto live = owners.live.emplace(
+                key, Owner{generation, group_id_, ref.ticket_});
+            if (!live.second)
+                throw std::logic_error("actor owner registry insertion raced");
         } catch (...) {
+            if (inserted_high_water) owners.high_water.erase(key);
+            else if (high != owners.high_water.end()) high->second = previous_high_water;
             workers_.erase(actor_id);
             throw;
         }
@@ -369,7 +408,9 @@ public:
             // is still active or reserved. Failed admission is side-effect-free.
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
-                || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                || ref.ticket_->control_reserved.load(std::memory_order_acquire)
+                || (ref.ticket_->stop_issued.load(std::memory_order_acquire)
+                    && !ref.ticket_->stop_request_returned.load(std::memory_order_acquire)))
                 return false;
             // Close may settle readiness after detaching the worker table,
             // outside the group lock. The ticket mutex decides the winner.
@@ -385,11 +426,14 @@ public:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            // Settle done ONLY on acknowledged physical finalization.
-            done_callbacks = settle_done(ref, failure);
+            // Publish physical retirement and release logical ownership before
+            // making DONE observable. adopt() takes owners.mutex, so a waiter
+            // released by get_done() can immediately re-admit only a newer
+            // generation and can never race a stale live-owner entry.
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
+            done_callbacks = settle_done(ref, failure);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
@@ -510,6 +554,10 @@ private:
     struct OwnerRegistry {
         std::mutex mutex;
         std::map<Key, Owner> live;
+        // Persistent per-(runtime, actor) generation high-water mark. Physical
+        // finalization removes live authority but never makes an old wire
+        // identity reusable.
+        std::map<Key, std::uint64_t> high_water;
     };
     static OwnerRegistry& registry() {
         static OwnerRegistry instance;
@@ -554,6 +602,7 @@ private:
                 || it->second.generation != ref.generation()
                 || it->second.ticket != ref.ticket_
                 || !ref.ticket_->detached_from_group.load(std::memory_order_acquire)
+                || !ref.ticket_->stop_request_returned.load(std::memory_order_acquire)
                 || ref.ticket_->physically_done.load(std::memory_order_acquire)
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
@@ -567,9 +616,11 @@ private:
                 if (!ref.ticket_->result.ready)
                     failure = ref.ticket_->result.error;
             }
-            done_callbacks = settle_done(ref, failure);
+            // Same ordering as live-group finalization: resource retirement
+            // and owner-registry release happen before DONE becomes observable.
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             owners.live.erase(it);
+            done_callbacks = settle_done(ref, failure);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
@@ -634,6 +685,10 @@ private:
         if (ref.ticket_->stop_issued.exchange(true, std::memory_order_acq_rel))
             return;
         try { stop(); } catch (...) { /* do not strand sibling workers */ }
+        // Release-publish only after the callback is no longer executing.
+        // A runtime finalizer acquiring this bit therefore cannot free actor
+        // resources while the stop callback still has authority to touch them.
+        ref.ticket_->stop_request_returned.store(true, std::memory_order_release);
     }
 
     static void request_stops(

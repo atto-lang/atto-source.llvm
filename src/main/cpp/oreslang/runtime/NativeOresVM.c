@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeCpuBudget.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <errno.h>
 #include <stdlib.h>
 
 typedef struct {
@@ -23,7 +24,35 @@ struct OresNativeVM {
     pthread_mutex_t control_lock;
     unsigned pending_control_wakes;
     int control_retired;
+    int guest_actor_admitted; /* NIO bootstrap barrier: no late reactor creation */
+    int nio_bootstrap_in_progress; /* CONTROL-gated cold-start reservation */
+    pthread_t nio_bootstrap_owner; /* only the reserver may complete/abort */
+    void* nio_backend;
+    OresNativeVMNioDestroy nio_destroy;
+    /* Under control_lock. A backend borrow pins accepted host operations
+     * until external-host VM close has fenced and drained them. */
+    size_t nio_borrows;
+    pthread_cond_t nio_idle;
 };
+
+/* Fixed-capacity host-only, thread-affine NIO borrow ledger. Nested leases
+ * have separate counts; at most 16 distinct VMs per host thread. No heap
+ * allocation, blocking, or guest-owned state on NIO acquisition paths.
+ */
+#define ORES_NIO_THREAD_LEASE_CAPACITY 16
+typedef struct { OresNativeVM* vm; size_t depth; } OresNioLocalBorrow;
+static _Thread_local OresNioLocalBorrow nio_local_borrows[ORES_NIO_THREAD_LEASE_CAPACITY];
+static OresNioLocalBorrow* nio_local_find(OresNativeVM* vm) {
+    if (!vm) return NULL;
+    for (size_t i = 0; i < ORES_NIO_THREAD_LEASE_CAPACITY; ++i)
+        if (nio_local_borrows[i].vm == vm) return &nio_local_borrows[i];
+    return NULL;
+}
+static OresNioLocalBorrow* nio_local_empty(void) {
+    for (size_t i = 0; i < ORES_NIO_THREAD_LEASE_CAPACITY; ++i)
+        if (!nio_local_borrows[i].vm) return &nio_local_borrows[i];
+    return NULL;
+}
 
 static int valid_domain(enum OresNativeVMDomain domain) {
     return domain >= ORES_NATIVE_VM_MAIN && domain < ORES_NATIVE_VM_DOMAIN_COUNT;
@@ -34,6 +63,11 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));
     if (!vm) return NULL;
     if (pthread_mutex_init(&vm->control_lock, NULL) != 0) {
+        free(vm);
+        return NULL;
+    }
+    if (pthread_cond_init(&vm->nio_idle, NULL) != 0) {
+        if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
         free(vm);
         return NULL;
     }
@@ -65,6 +99,7 @@ failed:
             if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) abort();
             if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
         }
+    if (pthread_cond_destroy(&vm->nio_idle) != 0) abort();
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         free(vm->supervisors[i]);
@@ -137,6 +172,29 @@ size_t ores_native_vm_active_physical_turns(const OresNativeVM* vm) {
         ? ores_native_turn_gate_active(&vm->physical_gate) : 0;
 }
 
+/* Caller must not publish the VM to producers before this completes.
+ * All four domains must be cold: if any prestart fails, the caller must
+ * retire the partially prestarted VM instead of entering service.
+ */
+int ores_native_vm_prepare_realtime(OresNativeVM* vm) {
+    if (!vm) return 0;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (!ores_native_actor_scheduler_prestart_realtime(vm->schedulers[i]))
+            return 0;
+    }
+    return 1;
+}
+
+OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config) {
+    OresNativeVM* vm = ores_native_vm_open(config);
+    if (!vm) return NULL;
+    if (!ores_native_vm_prepare_realtime(vm)) {
+        if (!ores_native_vm_close(vm)) abort();
+        return NULL;
+    }
+    return vm;
+}
+
 size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain) {
     return vm && valid_domain(domain)
@@ -155,11 +213,24 @@ int ores_native_vm_has_hard_security_boundary(
     return 0;
 }
 
+static void control_lock(OresNativeVM* vm);
+static void control_unlock(OresNativeVM* vm);
+
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot) {
     OresNativeActorRef invalid = {0, 0, 0};
-    return vm && valid_domain(domain)
-        ? ores_native_actor_scheduler_spawn(vm->schedulers[domain], actor_slot) : invalid;
+    if (!vm || !valid_domain(domain)) return invalid;
+    // Shared lock order CONTROL -> actor scheduler. Bootstrap attachment must
+    // never race first guest spawn and silently add reactor threads later.
+    control_lock(vm);
+    OresNativeActorRef admitted = invalid;
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress) {
+        admitted = ores_native_actor_scheduler_spawn(
+            vm->schedulers[domain], actor_slot);
+        if (admitted.scheduler_domain) vm->guest_actor_admitted = 1;
+    }
+    control_unlock(vm);
+    return admitted;
 }
 
 
@@ -170,8 +241,6 @@ static int same_actor(OresNativeActorRef a, OresNativeActorRef b) {
         && a.scheduler_domain == b.scheduler_domain
         && a.actor_slot == b.actor_slot && a.generation == b.generation;
 }
-static void control_lock(OresNativeVM* vm);
-static void control_unlock(OresNativeVM* vm);
 
 OresNativeActorRef ores_native_vm_spawn_supervised(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
@@ -180,7 +249,8 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
     if (!vm || !valid_domain(domain)) return invalid;
     control_lock(vm);
     OresNativeActorRef child = invalid;
-    if (!vm->control_retired && vm->typed_failure_enabled[domain]
+    if (!vm->control_retired && !vm->nio_bootstrap_in_progress
+        && vm->typed_failure_enabled[domain]
         && actor_slot < vm->actor_slots[domain]
         && supervisor.actor_slot != (uint64_t)actor_slot
         && ores_native_actor_scheduler_poll_ready(vm->schedulers[domain], supervisor)) {
@@ -192,6 +262,7 @@ OresNativeActorRef ores_native_vm_spawn_supervised(
                 &vm->supervisors[domain][actor_slot];
             entry->child = child;
             entry->supervisor = supervisor;
+            vm->guest_actor_admitted = 1;
         }
     }
     control_unlock(vm);
@@ -307,6 +378,16 @@ int ores_native_vm_poll_done(
     return vm && valid_domain(domain)
         && ores_native_actor_scheduler_poll_done(vm->schedulers[domain], ref);
 }
+int ores_native_vm_actor_terminal_state(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, OresNativeActorTerminalState* output) {
+    // A null/retired VM or invalid domain cannot leave a prior actor's
+    // terminal receipt in caller-owned output. Return value is authoritative.
+    if (output) *output = (OresNativeActorTerminalState){0};
+    return vm && valid_domain(domain) && output
+        && ores_native_actor_scheduler_terminal_state(
+            vm->schedulers[domain], ref, output);
+}
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
     return vm && valid_domain(domain)
@@ -379,6 +460,112 @@ unsigned ores_native_vm_control_pump(OresNativeVM* vm) {
     control_unlock(vm);
     return signalled;
 }
+/* Trusted bootstrap probe. A concurrent first actor spawn can still
+ * win before the later final attachment CAS; the host must fence producers
+ * during initialization. Check again inside attach_nio under CONTROL lock.
+ */
+int ores_native_vm_nio_can_attach(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_bootstrap_in_progress && !vm->nio_backend;
+    control_unlock(vm);
+    return ok;
+}
+
+/* Reserve the cold-start NIO phase before creating OS descriptors or
+ * selector threads. Guest actor spawn fails admission while reserved; it
+ * cannot race an in-progress selector bootstrap into a live actor profile.
+ * These trusted host functions do not allocate memory or wait on reactors.
+ */
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm) {
+    if (!vm) return 0;
+    control_lock(vm);
+    int granted = !vm->control_retired && !vm->guest_actor_admitted
+        && !vm->nio_backend && !vm->nio_bootstrap_in_progress;
+    if (granted) {
+        vm->nio_bootstrap_in_progress = 1;
+        vm->nio_bootstrap_owner = pthread_self();
+    }
+    control_unlock(vm);
+    return granted;
+}
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm) {
+    if (!vm) return;
+    control_lock(vm);
+    // A foreign host cannot revoke another host's in-flight cold-start.
+    if (vm->nio_bootstrap_in_progress &&
+        pthread_equal(vm->nio_bootstrap_owner, pthread_self())) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired &&
+            pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+}
+
+/* The VM owns the opaque selector backend, but never calls a C++ symbol
+ * from its C scheduler core. This preserves standalone C-only host tests.
+ * Attachment is linearized against retirement under the VM CONTROL lock.
+ */
+int ores_native_vm_attach_nio(
+    OresNativeVM* vm, void* backend, OresNativeVMNioDestroy destroy) {
+    if (!vm || !backend || !destroy) return 0;
+    control_lock(vm);
+    const int accepted = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self())
+        && !vm->control_retired && !vm->guest_actor_admitted && !vm->nio_backend;
+    if (accepted) {
+        vm->nio_backend = backend;
+        vm->nio_destroy = destroy;
+    }
+    if (vm->nio_bootstrap_in_progress &&
+        pthread_equal(vm->nio_bootstrap_owner, pthread_self())) {
+        vm->nio_bootstrap_in_progress = 0;
+        if (vm->control_retired &&
+            pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+    return accepted;
+}
+/* A borrowed pointer is valid until its exactly-once release. This is a
+ * trusted-host operation lease, never transferable to guest actor code.
+ * Final VM close still requires an external producer/API-entry fence.
+ */
+void* ores_native_vm_nio_acquire(OresNativeVM* vm) {
+    if (!vm) return NULL;
+    // This is a try-admission hot path, not a CONTROL wait. A contended
+    // lifecycle lock must reject immediately; the owning scheduler may
+    // arrange a later retry without parking an actor/carrier thread.
+    int lock_status = pthread_mutex_trylock(&vm->control_lock);
+    if (lock_status == EBUSY) return NULL;
+    if (lock_status != 0) abort();
+    void* backend = NULL;
+    if (!vm->control_retired && vm->nio_backend && vm->nio_borrows != (size_t)-1) {
+        OresNioLocalBorrow* local = nio_local_find(vm);
+        if (!local) local = nio_local_empty();
+        if (local && local->depth != (size_t)-1) {
+            local->vm = vm;
+            ++local->depth;
+            ++vm->nio_borrows;
+            backend = vm->nio_backend;
+        }
+    }
+    control_unlock(vm);
+    return backend;
+}
+void ores_native_vm_nio_release(OresNativeVM* vm, void* backend) {
+    if (!vm || !backend) abort();
+    OresNioLocalBorrow* local = nio_local_find(vm);
+    if (!local || !local->depth) abort(); // cross-thread release is forbidden
+    control_lock(vm);
+    if (!vm->nio_borrows || backend != vm->nio_backend) abort();
+    if (--local->depth == 0) local->vm = NULL;
+    if (--vm->nio_borrows == 0 && vm->control_retired) {
+        if (pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
+    }
+    control_unlock(vm);
+}
+
 void ores_native_vm_retire(OresNativeVM* vm) {
     if (!vm) return;
     control_lock(vm);
@@ -400,12 +587,40 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
             return 0;
+    /*
+     * A host thread that still OWNS its NIO bootstrap reservation cannot
+     * synchronously close this VM: final close waits for that reservation
+     * to be canceled or attached by its owner, which is this very thread.
+     * Reject BEFORE draining/destroying any scheduler, so the owner can
+     * cancel its reservation and a later external close can safely retry.
+     * A foreign closer still waits as before for the owner to finish.
+     */
+    control_lock(vm);
+    const int owns_bootstrap = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self());
+    control_unlock(vm);
+    // Self-owned host NIO borrows cannot drain while their owner is blocked
+    // closing the VM. A foreign closer still waits for the lease to release.
+    if (owns_bootstrap || nio_local_find(vm)) return 0;
     /* No callback can synchronously join or destroy its own scheduler. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_try_destroy(vm->schedulers[i])) abort();
+    // Only the externally fenced host closer waits here; actor, CONTROL and
+    // epoll carriers never park while attempting guest I/O admission.
+    control_lock(vm);
+    while (vm->nio_borrows || vm->nio_bootstrap_in_progress) {
+        if (pthread_cond_wait(&vm->nio_idle, &vm->control_lock) != 0) abort();
+    }
+    void* backend = vm->nio_backend;
+    OresNativeVMNioDestroy destroy = vm->nio_destroy;
+    vm->nio_backend = NULL;
+    vm->nio_destroy = NULL;
+    control_unlock(vm);
+    if (backend) destroy(backend);
+    if (pthread_cond_destroy(&vm->nio_idle) != 0) abort();
     if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         free(vm->supervisors[i]);

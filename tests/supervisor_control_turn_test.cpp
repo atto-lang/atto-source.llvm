@@ -13,12 +13,18 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     SupervisorControlTurn::Decision next = SupervisorControlTurn::Decision::Acknowledge;
     bool restart_ok = true;
     bool fail_once = false;
-    SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
-        CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
+    SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure& f) override {
+        CHECK(f.summary == "throw");
+        CHECK(f.origin_kind == SupervisorFailureLane::Kind::Throw);
+        CHECK(f.origin_code == 41u);
+        order.push_back("throw");
         return next;
     }
-    SupervisorControlTurn::Decision on_raise(const SupervisorFailureLane::Failure&) override {
-        CHECK(false && "actor terminal Raise may never reach supervisor on_raise");
+    SupervisorControlTurn::Decision on_raise(const SupervisorFailureLane::Failure& f) override {
+        CHECK(f.summary == "raise");
+        CHECK(f.origin_kind == SupervisorFailureLane::Kind::Raise);
+        CHECK(f.origin_code == 42u);
+        order.push_back("raise");
         return next;
     }
     SupervisorControlTurn::Decision on_panic(const SupervisorFailureLane::Failure& f) override {
@@ -69,8 +75,14 @@ int main() {
     CHECK(hooks.order == std::vector<std::string>({"panic"}));
     CHECK(lane.urgent());
     CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
-    CHECK(hooks.order == std::vector<std::string>({"panic", "panic"}));
+    CHECK(hooks.order == std::vector<std::string>({"panic", "throw"}));
     CHECK(!lane.urgent());
+    Key raised{"child-raised", 6};
+    lane.reserve_child(raised);
+    CHECK(lane.publish_child(raised, Kind::Raise, "raise", "parent",
+                             std::nullopt, 42u));
+    CHECK(lane.admit_turn(hooks, true) == SupervisorControlTurn::Admitted::Control);
+    CHECK(hooks.order.back() == "raise");
     // A forged origin mismatching a raw child terminal must fail closed.
     lane.reserve_child(Key{"invalid-origin", 7});
     bool bad_origin = false;

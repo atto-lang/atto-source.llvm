@@ -66,13 +66,11 @@ int main() {
     CHECK(!lane.dispatch_one(handler));
     CHECK(lane.reserved_count() == 0);
     CHECK(handler.events.size() == 5);
-    CHECK(handler.events[0] == Lane::Kind::Panic);
-    CHECK(handler.events[1] == Lane::Kind::Panic);
-    CHECK(handler.events[4] == Lane::Kind::Panic);
-    CHECK(handler.origins == std::vector<Lane::Kind>({
+    CHECK(handler.events == std::vector<Lane::Kind>({
         Lane::Kind::Raise, Lane::Kind::Panic, Lane::Kind::Cancel,
         Lane::Kind::HostFailure, Lane::Kind::Throw
     }));
+    CHECK(handler.origins == handler.events);
     CHECK(handler.origin_codes == std::vector<std::uint32_t>(5, 0u));
     CHECK(normal_mail.size() == 100000);
 
@@ -151,8 +149,7 @@ int main() {
     CHECK(unicode_lane.publish_preallocated(key(91), Lane::Kind::Panic, "valid"));
     unicode_lane.ack(unicode_lane.poll()->actor);
 
-    // Direct low-level lane writers must normalize unhandled actor
-    // Throw/Raise to supervisor-visible Panic and retain provenance.
+    // Direct low-level lane writers preserve Throw/Raise/Panic typing.
     Lane normalized(2);
     normalized.reserve(key(101));
     normalized.reserve(key(102));
@@ -161,12 +158,12 @@ int main() {
     CHECK(normalized.publish_preallocated(key(102), Lane::Kind::Raise,
             "second", "parent", std::nullopt, 91u));
     auto thrown = normalized.poll();
-    CHECK(thrown && thrown->kind == Lane::Kind::Panic);
+    CHECK(thrown && thrown->kind == Lane::Kind::Throw);
     CHECK(thrown->origin_kind == Lane::Kind::Throw);
     CHECK(thrown->origin_code == 0xffffffffu);
     normalized.ack(key(101));
     auto raised = normalized.poll();
-    CHECK(raised && raised->kind == Lane::Kind::Panic);
+    CHECK(raised && raised->kind == Lane::Kind::Raise);
     CHECK(raised->origin_kind == Lane::Kind::Raise);
     CHECK(raised->origin_code == 91u);
     normalized.ack(key(102));

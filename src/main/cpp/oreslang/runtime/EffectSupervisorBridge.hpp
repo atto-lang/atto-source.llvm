@@ -11,9 +11,8 @@ namespace oreslang {
 
 /**
  * Host-runtime bridge from typed native unwind outcomes to the reserved
- * supervisor CONTROL lane. Actor-terminal Throw/Raise are promoted to
- * supervisor-visible Panic; original Throw/Raise is retained as typed origin.
- * This is intentionally separate from the data
+ * supervisor CONTROL lane. Actor-terminal Throw/Raise/Panic remain distinct
+ * typed events. This is intentionally separate from the data
  * mailbox; it cannot execute supervisor callbacks on the failing actor.
  *
  * The caller must reserve a child slot before its execution begins and retire
@@ -90,12 +89,10 @@ private:
     }
 
     static SupervisorFailureLane::Kind terminal_kind(EffectKind kind) {
-        // This promotion is actor-boundary-specific. Ordinary non-actor
-        // call frames continue propagating until their task/root boundary.
         using K = SupervisorFailureLane::Kind;
         switch (kind) {
-            case EffectKind::Throw:
-            case EffectKind::Raise:
+            case EffectKind::Throw: return K::Throw;
+            case EffectKind::Raise: return K::Raise;
             case EffectKind::Panic: return K::Panic;
             case EffectKind::Cancel: return K::Cancel;
             case EffectKind::Fatal:

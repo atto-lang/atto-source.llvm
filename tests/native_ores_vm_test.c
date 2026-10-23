@@ -15,6 +15,13 @@ typedef struct {
     OresNativeVM* vm;
 } State;
 static void require(int ok) { if (!ok) abort(); }
+static void require_empty_terminal(const OresNativeActorTerminalState* t) {
+    require(t->actor.scheduler_domain == 0 && t->actor.actor_slot == 0
+        && t->actor.generation == 0 && t->kind == 0
+        && t->accepted_user_messages == 0 && t->processed_user_messages == 0
+        && t->abandoned_user_messages == 0
+        && t->abandoned_control_messages == 0);
+}
 static void deliver(void* opaque, size_t actor, uint64_t value) {
     State* state = (State*)opaque;
     if (actor == 1) {
@@ -80,6 +87,14 @@ int main(void) {
                 == ORES_NATIVE_SEND_INVALID_REF);
             require(!ores_native_vm_publish_control(vm, kind, refs[source], 7));
             require(!ores_native_vm_stop(vm, kind, refs[source]));
+            OresNativeActorTerminalState foreign_terminal = {
+                .actor = refs[source],
+                .kind = ORES_NATIVE_TERMINATION_STOPPED,
+                .accepted_user_messages = 17
+            };
+            require(!ores_native_vm_actor_terminal_state(
+                vm, kind, refs[source], &foreign_terminal));
+            require_empty_terminal(&foreign_terminal);
         }
     }
     /* A forged enum must never select a different scheduler by array access. */
@@ -92,6 +107,14 @@ int main(void) {
             == ORES_NATIVE_SEND_INVALID_REF);
         require(!ores_native_vm_publish_control(vm, kind, refs[0], 7));
         require(!ores_native_vm_stop(vm, kind, refs[0]));
+        OresNativeActorTerminalState bad_terminal = {
+            .actor = refs[0],
+            .kind = ORES_NATIVE_TERMINATION_STOPPED,
+            .processed_user_messages = 99
+        };
+        require(!ores_native_vm_actor_terminal_state(
+            vm, kind, refs[0], &bad_terminal));
+        require_empty_terminal(&bad_terminal);
     }
     OresNativeActorRef other_main = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, 1);
     require(other_main.scheduler_domain == refs[ORES_NATIVE_VM_MAIN].scheduler_domain);
@@ -160,6 +183,53 @@ int main(void) {
     /* A retired VM must still deliver already admitted DATA; release the
      * blocked carrier before external drain/close joins its pool. */
     atomic_store(&one->unblock, 1);
+
+    /* Retained terminal state is domain-scoped and immutable. The callback
+     * close already retired the whole VM, so these are runtime-retired rather
+     * than explicit per-actor STOP records. */
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        enum OresNativeVMDomain kind = (enum OresNativeVMDomain)i;
+        require(ores_native_vm_wait_done(vm, kind, refs[i]));
+        OresNativeActorTerminalState terminal = {0};
+        require(ores_native_vm_actor_terminal_state(
+            vm, kind, refs[i], &terminal));
+        require(terminal.actor.scheduler_domain == refs[i].scheduler_domain);
+        require(terminal.actor.actor_slot == refs[i].actor_slot);
+        require(terminal.actor.generation == refs[i].generation);
+        require(terminal.kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED);
+        require(terminal.accepted_user_messages == terminal.processed_user_messages);
+        require(terminal.abandoned_user_messages == 0);
+        require(terminal.abandoned_control_messages == 0);
+
+        OresNativeActorTerminalState repeated = {0};
+        require(ores_native_vm_actor_terminal_state(
+            vm, kind, refs[i], &repeated));
+        require(repeated.kind == terminal.kind);
+        require(repeated.accepted_user_messages == terminal.accepted_user_messages);
+        require(repeated.processed_user_messages == terminal.processed_user_messages);
+
+        for (int wrong = 0; wrong < ORES_NATIVE_VM_DOMAIN_COUNT; ++wrong) {
+            if (wrong == i) continue;
+            repeated = terminal;
+            require(!ores_native_vm_actor_terminal_state(
+                vm, (enum OresNativeVMDomain)wrong, refs[i], &repeated));
+            require_empty_terminal(&repeated);
+        }
+    }
+    require(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, other_main));
+    OresNativeActorTerminalState other_terminal = {0};
+    require(ores_native_vm_actor_terminal_state(
+        vm, ORES_NATIVE_VM_MAIN, other_main, &other_terminal));
+    require(other_terminal.kind == ORES_NATIVE_TERMINATION_RUNTIME_RETIRED);
+    require(other_terminal.accepted_user_messages == 1);
+    require(other_terminal.processed_user_messages == 1);
+    OresNativeActorTerminalState missing_vm = other_terminal;
+    require(!ores_native_vm_actor_terminal_state(
+        NULL, ORES_NATIVE_VM_MAIN, other_main, &missing_vm));
+    require_empty_terminal(&missing_vm);
+    require(!ores_native_vm_actor_terminal_state(
+        vm, ORES_NATIVE_VM_MAIN, other_main, NULL));
+
     /* External submitters are fenced: now a host thread can safely finish. */
     require(ores_native_vm_close(vm));
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {

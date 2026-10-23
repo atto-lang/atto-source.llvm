@@ -391,6 +391,16 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+    // Backend entrypoint can receive a Program constructed outside Parser.
+    // Do not lower MEDIUM/HIGH as though they were the single-flight default.
+    // No IR, object code, or guest actor is permitted before safe per-turn
+    // frames and actor-owned state loans have been verified.
+    for (const auto& actor : source.actors) {
+        if (actor.max_actor_threads != MaxActorThreads::LOW) {
+            throw std::runtime_error("parallel actor LLVM lowering requires"
+                                     " compiler-proven per-turn actor state isolation");
+        }
+    }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
         if (wasm32_target || !source.classes.empty() || !source.actors.empty())

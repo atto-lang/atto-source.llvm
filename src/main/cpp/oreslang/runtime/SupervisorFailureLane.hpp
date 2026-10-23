@@ -41,8 +41,8 @@ public:
     struct Failure {
         ActorKey actor;
         Kind kind;
-        // Original pre-promotion effect. Terminal actor Throw/Raise is delivered
-        // as Panic, but the supervisor still receives typed provenance.
+        // Original terminal effect retained for diagnostics. Canonical actor
+        // supervision preserves Throw/Raise/Panic as distinct CONTROL kinds.
         Kind origin_kind;
         // Opaque numeric error discriminator copied before the actor is reclaimed.
         // No borrowed exception pointer or actor-owned object crosses CONTROL.
@@ -115,16 +115,8 @@ public:
             case Kind::Cancel: case Kind::HostFailure: break;
             default: throw std::invalid_argument("invalid supervisor origin kind");
         }
-        // Every route into actor supervision, including direct lane writers,
-        // delivers unhandled Throw/Raise as Panic. Do NOT change origin_kind.
-        if (kind == Kind::Throw || kind == Kind::Raise) {
-            if (original != kind) {
-                throw std::invalid_argument("actor terminal origin contradicts effect");
-            }
-            kind = Kind::Panic;
-        } else if (original != kind && !(kind == Kind::Panic
-                && (original == Kind::Throw || original == Kind::Raise))) {
-            throw std::invalid_argument("invalid supervisor terminal/origin pair");
+        if (original != kind) {
+            throw std::invalid_argument("supervisor terminal origin contradicts effect");
         }
         Slot& slot = require(actor);
         if (slot.has_event) return false;
