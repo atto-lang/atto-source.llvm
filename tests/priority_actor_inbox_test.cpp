@@ -331,7 +331,10 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
 
     allowed_to_finish.set_value();
     carrier.join();
-    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(finalizer.ready_for_actor_turn_quiescence());
+    CHECK(!finalizer.ready_for_resource_reclamation());
+    CHECK(actor.outstanding_resource_loans() == 2);
+    CHECK(!finalizer.finalized("queued receipts still own memory"));
     CHECK(inbox.watermark() == 0); // earlier NORMAL has not finished
     CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 2);
     CHECK(inbox.watermark() == 3);
@@ -342,6 +345,8 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     CHECK(inbox.used_frames(Lane::Urgent) == 0);
     CHECK(inbox.used_frames(Lane::Normal) == 0);
     CHECK(inbox.used_frames(Lane::Bulk) == 0);
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(finalizer.ready_for_resource_reclamation());
     CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 0);
     inbox.close();
 
