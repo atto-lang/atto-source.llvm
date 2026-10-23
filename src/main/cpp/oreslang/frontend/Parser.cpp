@@ -343,7 +343,7 @@ public:
                 fail("native trait/interface definitions require a verified type-level linker and lowering");
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
-                    fail("native user-defined tagged enum requires ADT layout and constructor lowering");
+                    fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
                 if (exported) fail("built-in MaxActorThreads enum cannot be public in the native subset");
                 built_in_actor_threads_enum();
                 continue;
@@ -415,7 +415,7 @@ public:
                 }
                 if (accept("enum")) {
                     if (token_.text != "MaxActorThreads")
-                        fail("native user-defined tagged enum requires ADT layout and constructor lowering");
+                        fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
                     built_in_actor_threads_enum();
                 }
                 else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
