@@ -1377,6 +1377,20 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-dop-layout-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME dop_layout_checked_geometry COMMAND oreslang-dop-layout-test)
 
+    # Heterogeneous u32/f64/bool/ref32 geometry; 4 distinct AoS/SoA/AoSoA/SoAoS
+    # plans. Native host ABI tests only; source-compiled guest parity is separate.
+    add_executable(oreslang-dop-heterogeneous-layout-test
+        tests/dop_heterogeneous_layout_test.cpp)
+    target_include_directories(oreslang-dop-heterogeneous-layout-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-heterogeneous-layout-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-heterogeneous-layout-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME dop_heterogeneous_four_layout_checked_geometry
+        COMMAND oreslang-dop-heterogeneous-layout-test)
+    set_tests_properties(dop_heterogeneous_four_layout_checked_geometry
+        PROPERTIES TIMEOUT 20)
+
     # Host-only physical AoS/SoA/AoSoA storage and checked opaque row identity.
     # No guest Ref<T> lowering or actor execution authority is implied.
     add_executable(oreslang-dop-checked-region-test tests/dop_checked_region_test.cpp)
@@ -1956,6 +1970,10 @@ if(BUILD_TESTING)
         oreslang_contract_test(cfg_exec_mutated_multifield_early_true cfg-multifield-mutator-early-true.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(cfg_exec_mutated_multifield_early_false cfg-multifield-mutator-early-false.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(class_exec_three_field_mutator class-multifield-independent-write.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        # Exact same .ores source is exercised by GraalVM ParityScalarEcsGuestTest.
+        # This runs actual emitted LLVM IR through Clang; NOT four-layout lowering.
+        oreslang_contract_test(parity_source_scalar_ecs_guest
+            ecs-scalar-guest-baseline.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(cfg_exec_multifield_guard_taken cfg-multifield-guard-true.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi --ir "guard.return")
         oreslang_contract_test(cfg_exec_multifield_guard_fallthrough cfg-multifield-guard-false.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi --ir "guard.next")
         oreslang_contract_test(cfg_exec_multifield_guard_chain cfg-multifield-guard-chain.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
