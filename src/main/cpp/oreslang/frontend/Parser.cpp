@@ -340,8 +340,10 @@ public:
                 continue;
             }
             if (token_.text == "trait" || token_.text == "interface")
-                fail("native trait/interface requires typed linker and lowering");
+                fail("native trait/interface definitions require a verified type-level linker and lowering");
             if (accept("enum")) {
+                if (token_.text != "MaxActorThreads")
+                    fail("native user-defined tagged enum requires ADT layout and constructor lowering");
                 if (exported) fail("built-in MaxActorThreads enum cannot be public in the native subset");
                 built_in_actor_threads_enum();
                 continue;
@@ -405,13 +407,17 @@ public:
                     continue;
                 }
                 if (token_.text == "trait" || token_.text == "interface")
-                    fail("native trait/interface requires typed linker and lowering");
+                    fail("native trait/interface definitions require a verified type-level linker and lowering");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("enum")) built_in_actor_threads_enum();
+                if (accept("enum")) {
+                    if (token_.text != "MaxActorThreads")
+                        fail("native user-defined tagged enum requires ADT layout and constructor lowering");
+                    built_in_actor_threads_enum();
+                }
                 else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
