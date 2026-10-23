@@ -30,10 +30,14 @@ def require(condition, message, outcome=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True, type=Path)
+    parser.add_argument("--clang", required=True, type=Path)
     args = parser.parse_args()
     compiler = args.compiler.resolve(strict=True)
+    clang = args.clang.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-orc-source-") as tmp:
         source = Path(tmp) / "main.ores"
+        native_ir = Path(tmp) / "main.ll"
+        native_exe = Path(tmp) / "main-native"
 
         # AOT and ORC share parse, type/borrow checking, LLVM codegen, and
         # the generated i32 native wrapper's lossless 0..255 exit policy.
@@ -53,11 +57,31 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
             normal = run(compiler, source)
             require(normal.returncode == 0 and b"define i32 @main(" in normal.stdout,
                     "compiler did not produce native wrapper for " + name, normal)
+            # The same emitted LLVM IR must compile and execute through Clang.
+            # Match *observed process behavior* rather than IR text alone.
+            native_ir.write_bytes(normal.stdout)
+            linked = subprocess.run(
+                [str(clang), "-O0", "-x", "ir", str(native_ir), "-o", str(native_exe)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False, timeout=20)
+            require(linked.returncode == 0 and native_exe.is_file(),
+                    "Clang AOT link failed for " + name, linked)
+            native = subprocess.run(
+                [str(native_exe)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False, timeout=20)
+            require(native.returncode == status and not native.stdout and not native.stderr,
+                    "Clang AOT outcome mismatch for " + name, native)
             for iteration in range(2):
                 executed = run(compiler, source, "--jit")
                 require(executed.returncode == status and not executed.stdout
                         and not executed.stderr,
                         "ORC exit mismatch for " + name + "/" + str(iteration), executed)
+
+        source.write_text(positives[1][1] + "\\n", encoding="utf-8")
+        shaken = run(compiler, source, "--jit", "--tree-shake")
+        require(shaken.returncode == 42 and not shaken.stdout and not shaken.stderr,
+                "ORC tree-shake source execution diverged", shaken)
 
         # Do not execute code merely because ORC could accept its LLVM IR.
         negatives = [
@@ -83,7 +107,7 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
             if diagnostic is not None:
                 require(diagnostic.encode() in rejected.stderr,
                         "missing specific rejection diagnostic: " + name, rejected)
-    print("ORC JIT compiled-source 7x2 host execution + 8 negative admission PASS")
+    print("ORC JIT 14 source executions + 7 Clang AOT comparisons + tree-shake + 8 negative admissions PASS")
     return 0
 
 
