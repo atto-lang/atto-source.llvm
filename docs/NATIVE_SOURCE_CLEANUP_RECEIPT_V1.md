@@ -17,6 +17,27 @@ construct host bindings or manipulate the native continuation store. Actual
 scheduler-owned exclusive admission and source-to-native lowering remain
 mandatory release gates.
 
+## Normal-completion admission hardening (October 23)
+
+The native cleanup gate's normal positive completion method is now private,
+available to production only through
+`NativeSourceCleanupBinding::complete_normally`. That binding rejects any
+unclaimed, stale-generation or foreign actor continuation before the
+pending-to-completed CAS. The test-only peer retains gate transition access
+for adversarial state-machine tests.
+
+**Executed locally against exact committed gate/binding/test Git blobs:**
+Clang 17, GCC 14, and Clang 17 ASan+UBSan passed the 1,600-race-pair gate
+test; a separate mocked-C-store binding smoke passed under the same
+configurations. A production-mode negative compile confirmed direct
+`gate.complete_normally(ticket)` fails due to private member access.
+
+**Not yet proven:** real C continuation-store CTest, atomic admission with
+the scheduler's physical single-writer lease, unforgeable native runtime
+authority, source-to-native compiler lowering or GraalVM parity. The host
+must still prove lexical frame and all FFI/loan teardown before calling
+`complete_normally`; binding validation alone cannot prove those events.
+
 # Native source-cleanup receipt v1 (host prerequisite; not guest lowering)
 
 Java/Graal PR [#1887](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1887)
