@@ -112,7 +112,9 @@ public:
     bool offer_to(const NativeActorRef& target, Lane lane, T&& value,
                   std::size_t bytes) {
         AdmissionGuard admission(*this, &target);
-        return port(lane).offer(std::move(value), bytes);
+        const bool accepted = port(lane).offer(std::move(value), bytes);
+        if (accepted) admission.commit();
+        return accepted;
     }
 
     // Called only by trusted admission after source/role/priority validation.
@@ -135,7 +137,9 @@ public:
     bool offer_owned_to(const NativeActorRef& target, Lane lane,
                         std::unique_ptr<T>& value, std::size_t bytes) {
         AdmissionGuard admission(*this, &target);
-        return port(lane).offer_owned(value, bytes);
+        const bool accepted = port(lane).offer_owned(value, bytes);
+        if (accepted) admission.commit();
+        return accepted;
     }
 
     /**
