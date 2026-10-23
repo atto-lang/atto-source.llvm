@@ -78,7 +78,8 @@ def main():
          "declare type Item = int;\ndeclare interface Item as end\n"
          + main_fn, "TYPE_DECL_NAME_COLLISION"),
         ("reject interface/class name collision",
-         "declare interface Item as end\ndefine class Item as end\n"
+         "declare interface Item as end\ndefine class Item as\n"
+         " pub let int field = 1;\nend\n"
          + main_fn, "TYPE_DECL_NAME_COLLISION"),
         ("reject duplicate method overload slot",
          "declare trait Api as\n fnc read() => int;\n fnc read(): bool;\nend\n"
@@ -87,7 +88,7 @@ def main():
          "declare interface Api as\n fnc read() = > int;\nend\n"
          + main_fn, "TYPE_ONLY_BAD_ARROW"),
         ("reject duplicate visibility",
-         "declare pub pub interface Bad as end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
+         "declare pub pub interface Bad as end\n" + main_fn, "TYPE_ONLY_DUPLICATE_VISIBILITY"),
         ("reject runtime use of type-only trait",
          "declare trait Tagged as end\npub fnc main(): int { return Tagged; }\n",
          None),
