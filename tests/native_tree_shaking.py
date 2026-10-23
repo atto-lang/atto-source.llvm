@@ -38,11 +38,46 @@ PRIVATE_ONLY = """fnc hidden(): int {
 }
 """
 
-def compile_ir(compiler, source, shaken, roots=()):
+CLASS_SURFACE = """define class Pair as
+  pub final int a: start + 1;
+  pub final mut int b: start * 2;
+  constructor(int start) { return; }
+end
+pub fnc main(): int {
+  let Pair p = new Pair(13);
+  return p.a + p.b;
+}
+"""
+
+ACTOR_SURFACE = """define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(1);
+  stop worker;
+  return 42;
+}
+"""
+
+SCALAR_CONTINUATION_SURFACE = """pub routine count_to_one_thousand(): int {
+  val count: int = 0;
+  while (count < 1000) {
+    count = count + 1;
+  }
+  return count;
+}
+"""
+
+def compile_ir(compiler, source, shaken, roots=(), compiler_args=()):
     with tempfile.TemporaryDirectory(prefix="oreslang-tree-shake-source-") as td:
         path=Path(td)/"case.ores"
         path.write_text(source,encoding="utf-8")
-        argv=[str(compiler)]
+        argv=[str(compiler), *compiler_args]
         if shaken:
             argv.append("--tree-shake")
             argv.extend("--tree-shake-root="+root for root in roots)
@@ -99,6 +134,37 @@ def main():
     require(missing.returncode!=0 and missing.stdout==b"" and
             b"unknown tree-shake root" in missing.stderr,
             "unknown explicit tree-shake root did not fail closed")
+
+    class_control=compile_ir(args.compiler,CLASS_SURFACE,False)
+    class_shaken=compile_ir(args.compiler,CLASS_SURFACE,True)
+    require(class_control.returncode==0,
+            "class control compile failed: "+repr(class_control.stderr[:1024]))
+    require(class_shaken.returncode!=0 and class_shaken.stdout==b"" and
+            b"rejects class declarations until class initializer roots are modeled" in class_shaken.stderr,
+            "class tree shaking did not fail closed")
+
+    actor_control=compile_ir(args.compiler,ACTOR_SURFACE,False)
+    actor_shaken=compile_ir(args.compiler,ACTOR_SURFACE,True)
+    require(actor_control.returncode==0,
+            "actor control compile failed: "+repr(actor_control.stderr[:1024]))
+    require(actor_shaken.returncode!=0 and actor_shaken.stdout==b"" and
+            b"rejects actor declarations until actor roots are modeled" in actor_shaken.stderr,
+            "actor tree shaking did not fail closed")
+
+    continuation_control=compile_ir(
+        args.compiler,SCALAR_CONTINUATION_SURFACE,False,
+        compiler_args=("--experimental-rt-scalar-loop",))
+    continuation_shaken=compile_ir(
+        args.compiler,SCALAR_CONTINUATION_SURFACE,True,
+        compiler_args=("--experimental-rt-scalar-loop",))
+    require(continuation_control.returncode==0,
+            "continuation control compile failed: "+
+            repr(continuation_control.stderr[:1024]))
+    require(continuation_shaken.returncode!=0 and
+            continuation_shaken.stdout==b"" and
+            b"rejects scalar continuation functions until continuation ABI roots are modeled"
+            in continuation_shaken.stderr,
+            "scalar continuation tree shaking did not fail closed")
     return 0
 
 if __name__=="__main__":
