@@ -38,6 +38,17 @@ struct ReentrantPayload {
     ~ReentrantPayload() { if (on_destroy) on_destroy(); }
 };
 
+struct ReentrantMove {
+    std::function<void()> on_move;
+    explicit ReentrantMove(std::function<void()> hook) : on_move(std::move(hook)) {}
+    ReentrantMove(ReentrantMove&& other) noexcept
+        : on_move(std::move(other.on_move)) {
+        if (on_move) on_move();
+    }
+    ReentrantMove(const ReentrantMove&) = delete;
+    ReentrantMove& operator=(const ReentrantMove&) = delete;
+};
+
 struct ThrowOnMove {
     static inline bool fail_next_move = false;
     int value;
@@ -104,6 +115,51 @@ int main() {
     check(callback_ran && credit_remained);
     check(reentrant.used_frames() == 0 && reentrant.used_bytes() == 0);
     reentrant.close();
+
+    // User-defined move constructors may re-enter their mailbox. Admission
+    // must already own the bounded credits, but the port mutex must be free.
+    BoundedActorPort<ReentrantMove> move_reentry(1, 8);
+    bool saw_reserved_credits = false, reentrant_rejected = false;
+    ReentrantMove move_callback([&] {
+        saw_reserved_credits =
+                move_reentry.used_frames() == 1 && move_reentry.used_bytes() == 8;
+        ReentrantMove nested({});
+        reentrant_rejected = !move_reentry.offer(std::move(nested), 8);
+    });
+    check(move_reentry.offer(std::move(move_callback), 8));
+    check(saw_reserved_credits && reentrant_rejected);
+    auto moved_receipt = move_reentry.try_receive();
+    check(moved_receipt && moved_receipt->id() == 1);
+    check(moved_receipt->acknowledge_released());
+    move_reentry.close();
+
+    // Closing during an already admitted but still preparing move cannot
+    // discard its owned receipt or admit post-close work. Close seals new
+    // writes and reports outstanding credits until the old write commits.
+    BoundedActorPort<ReentrantMove> close_race(1, 8);
+    std::atomic<bool> move_started{false}, release_move{false}, write_done{false};
+    ReentrantMove slow_move([&] {
+        move_started.store(true, std::memory_order_release);
+        while (!release_move.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    });
+    std::thread preparing([&] {
+        write_done.store(close_race.offer(std::move(slow_move), 8),
+                         std::memory_order_release);
+    });
+    while (!move_started.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    rejected([&] { close_race.close(); });
+    ReentrantMove after_seal({});
+    rejected([&] { (void)close_race.offer(std::move(after_seal), 8); });
+    release_move.store(true, std::memory_order_release);
+    preparing.join();
+    check(write_done.load(std::memory_order_acquire));
+    check(close_race.used_frames() == 1 && close_race.used_bytes() == 8);
+    auto sealed_receipt = close_race.try_receive();
+    check(sealed_receipt && sealed_receipt->id() == 1);
+    check(sealed_receipt->acknowledge_released());
+    close_race.close();
 
     // A move/allocator failure must not admit a phantom frame, consume an
     // identity, or change sender ownership before publication.
