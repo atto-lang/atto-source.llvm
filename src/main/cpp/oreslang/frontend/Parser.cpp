@@ -1007,6 +1007,17 @@ private:
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
+            } else if (token_.text == "val" && peek_next().text == "Array") {
+                advance(); require("Array"); require("<");
+                if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+                else require("int");
+                require(">"); binding.name = identifier(); require("=");
+                require("new"); require("Array"); require("<");
+                if (binding.array_element_type == ScalarType::String) {
+                    if (!accept("String")) require("string");
+                } else require("int");
+                require(">"); require("("); require(")");
+                binding.int_array = binding.owner_mutable = true;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -1048,14 +1059,17 @@ private:
                         fail("native Array<int> requires let mut owner");
                     require("Array");
                     require("<");
-                    require("int");
+                    if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+                    else require("int");
                     require(">");
                     binding.name = identifier();
                     require("=");
                     require("new");
                     require("Array");
                     require("<");
-                    require("int");
+                    if (binding.array_element_type == ScalarType::String) {
+                        if (!accept("String")) require("string");
+                    } else require("int");
                     require(">");
                     require("(");
                     require(")");
@@ -2285,20 +2299,29 @@ private:
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
+                std::string receiver;
+                if (expr.left && expr.left->kind == Expression::Kind::Variable) receiver = expr.left->name;
+                else if (expr.left && expr.left->kind == Expression::Kind::Field && expr.left->left &&
+                        expr.left->left->kind == Expression::Kind::Variable)
+                    receiver = expr.left->left->name + "." + expr.left->name;
+                const auto element_slot = variables.find(receiver + ".$element");
+                const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
                 const std::size_t expected = expr.name == "get" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
                         std::to_string(expr.offset));
-                for (const auto& argument : expr.arguments) {
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    if (actual != ScalarType::I64)
-                        throw std::runtime_error("native Array<int> arguments require int, got " +
+                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    if (actual != (index ? ScalarType::I64 : element))
+                        throw std::runtime_error("native array argument type mismatch, got " +
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
-                return ScalarType::I64;
+                return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
             case Expression::Kind::Call: {
                 const auto family = functions.find(expr.name);
@@ -2850,6 +2873,8 @@ private:
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
+                    if (binding.int_array)
+                        scalar_types.emplace(binding.name + ".$element", binding.array_element_type);
                     if (binding.new_class) {
                         for (const auto& arg : binding.constructor_arguments)
                             require_scalar(*arg, ScalarType::I64,
