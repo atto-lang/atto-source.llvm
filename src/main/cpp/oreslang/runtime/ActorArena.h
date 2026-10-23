@@ -42,6 +42,20 @@ void ores_actor_arena_write(OresActorArena*, OresArenaTurn, OresArenaHandle, siz
 int ores_actor_arena_validate_pages(OresActorArena*, OresArenaTurn,
                                     const OresArenaHandle* pages,
                                     size_t count, size_t page_bytes);
+/* Atomic all-or-none trusted-host page claim. Nonzero tokens are unique
+ * within one arena lifetime and never wrap; zero rejects invalid, borrowed,
+ * aliased or already-claimed pages without changing their ownership state.
+ * This fences competing logical slabs, not every trusted raw arena reader.
+ * The caller must hold the currently authenticated physical arena turn. */
+uint64_t ores_actor_arena_claim_pages(OresActorArena*, OresArenaTurn,
+                                      const OresArenaHandle* pages,
+                                      size_t count, size_t page_bytes);
+/* Exactly-once release of an entire claim, during its owning arena turn.
+ * Return zero for stale/mismatched receipts without altering any claim.
+ * The caller MUST first quiesce logical request receipts and scrub all pages. */
+int ores_actor_arena_unclaim_pages(OresActorArena*, OresArenaTurn,
+                                   const OresArenaHandle* pages,
+                                   size_t count, uint64_t claim);
 void ores_actor_arena_drop(OresActorArena*, OresArenaTurn, OresArenaHandle);
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);
