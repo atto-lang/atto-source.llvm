@@ -328,9 +328,13 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-semantic-reachability-source-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     add_test(NAME native_semantic_reachability_current_source
-        COMMAND oreslang-native-semantic-reachability-source-test)
+        COMMAND oreslang-native-semantic-reachability-source-test
+            tests/fixtures/reachability-scalar-direct-call.ores
+            tests/fixtures/reachability-scalar-direct-call.json)
     set_tests_properties(native_semantic_reachability_current_source
-        PROPERTIES TIMEOUT 30)
+        PROPERTIES
+            TIMEOUT 30
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
