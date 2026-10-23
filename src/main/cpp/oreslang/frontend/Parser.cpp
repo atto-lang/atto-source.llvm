@@ -482,6 +482,9 @@ private:
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
             // 'declare type' and 'define type' share this exact grammar.
             // Incomplete 'declare type Code;' never creates an alias.
+            if (token_.text != "=")
+                fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
+                     " both require '= <type>'");
             require("=");
             decl.alias_target = type_alias_target();
             require(";");
