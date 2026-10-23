@@ -224,11 +224,15 @@ struct Function {
     bool has_declared_effects = false;
 };
 
+/** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
+enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
+
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
+    MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.

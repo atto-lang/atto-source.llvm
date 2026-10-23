@@ -3057,3 +3057,143 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_proxy_slab_generation_and_quota
         PROPERTIES TIMEOUT 30)
 endif()
+# Host-only fixed-size, lock-free physical turn credits. This does NOT enable
+# concurrent source actors or relax the existing NativeExecutionAuthority.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-turn-credits-test
+        tests/native_actor_turn_credits_test.cpp)
+    target_include_directories(oreslang-native-actor-turn-credits-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-turn-credits-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-turn-credits-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_physical_turn_credit_host_only
+        COMMAND oreslang-native-actor-turn-credits-test)
+    set_tests_properties(native_actor_physical_turn_credit_host_only
+        PROPERTIES TIMEOUT 25)
+endif()
+
+# Dedicated Linux epoll reactor thread, bounded completion ring and generation
+# fencing. Host-only substrate; no compiler source-level await linkage yet.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-epoll-reactor-test tests/native_epoll_reactor_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_generation_completion
+        COMMAND oreslang-native-epoll-reactor-test)
+    set_tests_properties(native_epoll_reactor_generation_completion PROPERTIES TIMEOUT 20)
+
+    # Separate translation unit interposes eventfd only for controlled
+    # constructor failure-injection, checking both errno and FD reclamation.
+    add_executable(oreslang-native-epoll-reactor-bootstrap-failure-test
+        tests/native_epoll_reactor_bootstrap_failure_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-bootstrap-failure-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_eventfd_bootstrap_failclosed
+        COMMAND oreslang-native-epoll-reactor-bootstrap-failure-test)
+    set_tests_properties(native_epoll_reactor_eventfd_bootstrap_failclosed PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-epoll-reactor-manager-test
+        tests/native_epoll_reactor_manager_test.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-manager-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-reactor-manager-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-manager-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_manager_rt_preallocated
+        COMMAND oreslang-native-epoll-reactor-manager-test)
+    set_tests_properties(native_epoll_reactor_manager_rt_preallocated PROPERTIES TIMEOUT 20)
+endif()
+
+# Native RT profile has no pthread creation after VM preparation. Existing
+# throughput open remains metadata-only until first runnable admission.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-vm-realtime-prestart-test
+        tests/native_vm_realtime_prestart_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-realtime-prestart-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-realtime-prestart-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-realtime-prestart-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_vm_realtime_preallocated_startup
+        COMMAND oreslang-native-vm-realtime-prestart-test)
+    set_tests_properties(native_vm_realtime_preallocated_startup PROPERTIES TIMEOUT 25)
+endif()
+
+# Narrow C ABI for the C++ Linux reactor domain. Validates C compiler + C++
+# link, typed generation tickets, readiness/completion, and RT startup mode.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-epoll-reactor-abi-test
+        tests/native_epoll_reactor_abi_test.c
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-epoll-reactor-abi-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-epoll-reactor-abi-test PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-epoll-reactor-abi-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-epoll-reactor-abi-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_epoll_reactor_c_abi
+        COMMAND oreslang-native-epoll-reactor-abi-test)
+    set_tests_properties(native_epoll_reactor_c_abi PROPERTIES TIMEOUT 25)
+endif()
+
+# Host VM ↔ epoll integration. C-only actor/scheduler paths remain linkable
+# without NIO C++ objects; only this opt-in Linux target links the bridge.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-vm-nio-lifecycle-test
+        tests/native_vm_nio_lifecycle_test.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-vm-nio-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-vm-nio-lifecycle-test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    target_compile_features(oreslang-native-vm-nio-lifecycle-test PRIVATE c_std_11 cxx_std_17)
+    target_link_libraries(oreslang-native-vm-nio-lifecycle-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-nio-lifecycle-test PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_vm_nio_lifecycle_and_rt_prestart
+        COMMAND oreslang-native-vm-nio-lifecycle-test)
+    set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
+        PROPERTIES TIMEOUT 30)
+endif()
+
+# This compiles the REAL native frontend parser and ownership checker,
+# independent of LLVM IR emission. LOW is executable; MEDIUM/HIGH fail closed
+# before codegen until safe per-turn actor frames and state loans exist.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-actor-max-threads-admission-test
+        tests/actor_max_threads_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-actor-max-threads-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-max-threads-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-max-threads-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_max_threads_source_admission
+        COMMAND oreslang-native-actor-max-threads-admission-test)
+    set_tests_properties(native_actor_max_threads_source_admission
+        PROPERTIES TIMEOUT 20)
+endif()
