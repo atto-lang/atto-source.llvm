@@ -293,7 +293,7 @@ def main():
             for forbidden in (
                 "@Tagged", "@Endpoint", "@LocalId", "@PublicId",
                 "@UserId", "@BaseId", "@Outer", "@Inner", "@Flag",
-                "@Ready", "@Count", "@Id"
+                "@Ready", "@Count", "@Id", "@Code", "@UserId", "@Flag"
             ):
                 if forbidden in result.stdout:
                     raise AssertionError((label, "type-only runtime emission", forbidden))
