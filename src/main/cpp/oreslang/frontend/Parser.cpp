@@ -1812,7 +1812,22 @@ private:
             auto expr = make_expression(Expression::Kind::Console, offset);
             expr->name = identifier();
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
-            require("("); expr->left = expression(); require(")");
+            // Java stdio.print/println concatenate arguments without an
+            // inserted separator and append at most one newline. Lower all
+            // string arguments to the existing checked string-concat AST so
+            // evaluation order, type admission, effects and region ownership
+            // are identical to ordinary string concatenation.
+            require("(");
+            expr->left = expression();
+            std::size_t argc = 1;
+            while (accept(",")) {
+                if (++argc > 32) fail("native stdio argument count exceeds 32");
+                auto joined = make_expression(Expression::Kind::Add, offset);
+                joined->left = std::move(expr->left);
+                joined->right = expression();
+                expr->left = std::move(joined);
+            }
+            require(")");
             return expr;
         }
         if (accept("(")) {
