@@ -1412,6 +1412,14 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-supervisor-hierarchy-test PRIVATE Threads::Threads)
     add_test(NAME native_supervisor_hierarchy_control COMMAND oreslang-supervisor-hierarchy-test)
 
+    # Runtime-only child lifetime ledger; separate from recovery supervisor.
+    add_executable(oreslang-native-child-scope-test tests/native_child_scope_test.cpp)
+    target_include_directories(oreslang-native-child-scope-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-child-scope-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-child-scope-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_implicit_child_scope COMMAND oreslang-native-child-scope-test)
+    set_tests_properties(native_actor_implicit_child_scope PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-supervisor-lifecycle-fsm-test tests/supervisor_lifecycle_fsm_test.cpp)
     target_include_directories(oreslang-supervisor-lifecycle-fsm-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-supervisor-lifecycle-fsm-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
