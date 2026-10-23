@@ -1222,6 +1222,29 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-implicit-child-scope-test)
     set_tests_properties(source_actor_implicit_child_scope PROPERTIES TIMEOUT 90)
 
+    # Negative stale ActorRef tests each exec in a fresh child process.
+    # Never dereference a bogus or retired opaque pointer before membership
+    # validation under SourceActorBootstrap's group admission lock.
+    add_executable(oreslang-source-actor-opaque-ref-validation-test
+        tests/source_actor_opaque_ref_validation_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-opaque-ref-validation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-opaque-ref-validation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-source-actor-opaque-ref-validation-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME source_actor_opaque_ref_validation
+        COMMAND oreslang-source-actor-opaque-ref-validation-test)
+    set_tests_properties(source_actor_opaque_ref_validation PROPERTIES TIMEOUT 60)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
