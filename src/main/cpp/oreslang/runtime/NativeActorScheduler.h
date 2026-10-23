@@ -97,16 +97,22 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
 /* Trusted bootstrap-only supervisor-child association. Must be established
- * before a child publishes a terminal failure, and never from guest code.
- * Immutable across the lifetime of this (non-reincarnating) scheduler slot.
+ * BEFORE the child's first accepted DATA/ordinary CONTROL operation; late
+ * binding after admission is rejected, even if that work has since drained.
+ * Never callable from guest code. Immutable for this scheduler incarnation.
  */
 int ores_native_actor_scheduler_bind_supervisor(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
     OresNativeActorRef child);
 /* One typed terminal receipt per pre-bound, generation-checked child.
- * Durable admission is independent of both the ordinary CONTROL slot and
- * USER mailbox fullness; distinct child events cannot overwrite each other.
- * Return 0 for duplicate, unbound, stale, stopped, or resource exhaustion.
+ * Only a STOPPED, physically retired child with no active/queued callbacks
+ * and a TERMINATED execution authority may report its terminal event. Logical
+ * stop() is NOT a finalization receipt. The VM additionally requires a trusted
+ * confirmation of host-owned cleanup before making this call.
+ * Durable admission is independent of the ordinary CONTROL slot and USER
+ * mailbox fullness; distinct child events cannot overwrite each other.
+ * Return 0 for duplicate, premature, unbound, stale, stopped parent,
+ * or resource exhaustion.
  * A successful receipt is acknowledged only after the supervisor callback
  * returns and the physical actor gate is released; it is NOT a promise of
  * application-level recovery or a crash-persistent transport guarantee.
