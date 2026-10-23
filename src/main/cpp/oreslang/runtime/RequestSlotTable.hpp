@@ -7,11 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace oreslang::runtime {
@@ -186,6 +188,23 @@ public:
             return std::nullopt;
         ++slot->readers;
         return ReadLease(this, index(h));
+    }
+    // Trusted-native lexical loan helper, intended as a lowering target for
+    // `using request.borrow() as view { ... }`. It performs no guest execution
+    // and does not itself prove that a C++ callback cannot capture/escape a
+    // string_view. The source compiler must make that proof independently.
+    // Requiring void return avoids inadvertently returning a dangling view.
+    template <typename Visitor>
+    bool with_borrow(Handle h, std::uint64_t owner, Visitor&& visitor) {
+        static_assert(std::is_same_v<
+                std::invoke_result_t<Visitor&, std::string_view>, void>,
+                "borrow scope callback cannot return a value or borrowed view");
+        auto loan = borrow(h, owner);
+        if (!loan) return false;
+        std::invoke(std::forward<Visitor>(visitor), loan->view());
+        // RAII returns the lease even when visitor throws. Never hold the
+        // table mutex while invoking arbitrary trusted native code.
+        return true;
     }
     // Handoff invalidates the old handle and all old-owner authority.
     // Cannot transfer during an active view lease.
