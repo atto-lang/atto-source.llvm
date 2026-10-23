@@ -32,6 +32,16 @@ void ores_actor_arena_read(OresActorArena*, OresArenaTurn, OresArenaHandle, size
                            void* out, size_t bytes);
 void ores_actor_arena_write(OresActorArena*, OresArenaTurn, OresArenaHandle, size_t offset,
                             const void* src, size_t bytes);
+/* Trusted actor-turn preflight, without mutation or raw pointer export.
+ * Returns 1 only if every page belongs to THIS arena, is live at the exact
+ * generation, has the requested length, and names a distinct physical slot.
+ * Invalid page vectors return 0 before callers touch any backing words.
+ * The caller must already hold a valid physical arena turn; misuse of turn
+ * authority retains the existing fail-stop rule. This is not an exclusive
+ * reservation against separately created host views. */
+int ores_actor_arena_validate_pages(OresActorArena*, OresArenaTurn,
+                                    const OresArenaHandle* pages,
+                                    size_t count, size_t page_bytes);
 void ores_actor_arena_drop(OresActorArena*, OresArenaTurn, OresArenaHandle);
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);
