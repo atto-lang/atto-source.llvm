@@ -27,6 +27,14 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  * The current guest ABI is still void, pending checked effect lowering. */
 int oreslang_source_actor_try_send(void* actor, int64_t payload);
 void oreslang_source_actor_send(void* actor, int64_t payload);
+/* Checked host-only lifetime STOP. Serializes against nested spawn, send
+ * and concurrent overlapping STOP. Returns 0 without side effects when
+ * absent, already stopping, overlapping another subtree STOP, or unsafe
+ * to block on a scheduler carrier. On success it seals descendants, waits
+ * physical scheduler DONE, and releases every actor-owned heap leaf-first.
+ * This is a BLOCKING trusted-host API, not a guest actor operation.
+ */
+int oreslang_source_actor_try_stop(void* actor);
 void oreslang_source_actor_stop(void* actor);
 /* Host-only deterministic test probe; never exposed to Oreslang guest code. */
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
