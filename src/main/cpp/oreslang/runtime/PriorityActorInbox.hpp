@@ -94,7 +94,7 @@ public:
      */
     void bind_target(const NativeActorRef& target) {
         std::lock_guard<std::mutex> guard(service_mutex_);
-        if (bound_target_ || active_admissions_ != 0 ||
+        if (sealed_ || bound_target_ || active_admissions_ != 0 ||
             completion_->snapshot() != 0)
             throw std::logic_error("actor inbox target already bound or active");
         bound_target_ = OwnerKey{target.runtime_id(), target.actor_id(),
@@ -224,6 +224,7 @@ public:
             std::lock_guard<std::mutex> guard(service_mutex_);
             if (!bound_target_ || !same_target(actor))
                 throw std::logic_error("actor mailbox retirement wrong generation");
+            sealed_ = true;
         }
         return retire_queued_impl();
     }
@@ -235,6 +236,9 @@ public:
             std::lock_guard<std::mutex> guard(service_mutex_);
             if (bound_target_)
                 throw std::logic_error("bound actor mailbox requires finalizer fence");
+            // Prevent a new bind/send from racing the transition to terminal
+            // cleanup even if the inbox has never published a message.
+            sealed_ = true;
         }
         return retire_queued_impl();
     }
@@ -269,6 +273,10 @@ public:
     // Seal all lanes even if the first lane still has outstanding credits.
     // Previously admitted messages remain drainable after close.
     void close() {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            sealed_ = true; // publishing barrier for bind and new admission
+        }
         std::exception_ptr first;
         auto seal = [&first](BoundedActorPort<T>& lane) {
             try { lane.close(); }
@@ -290,6 +298,8 @@ private:
         AdmissionGuard(PriorityActorInbox& inbox, const NativeActorRef* target)
             : inbox(inbox) {
             std::lock_guard<std::mutex> guard(inbox.service_mutex_);
+            if (inbox.sealed_)
+                throw std::logic_error("sealed actor inbox rejects new sends");
             if (target) {
                 if (!inbox.bound_target_ || !inbox.same_target(*target))
                     throw std::logic_error("stale or foreign actor mailbox target");
@@ -345,6 +355,7 @@ private:
     BoundedActorPort<T> bulk_;
     std::mutex service_mutex_;
     std::optional<OwnerKey> bound_target_;
+    bool sealed_ = false;
     std::size_t active_admissions_ = 0;
     std::size_t next_slot_ = 0;
 };
