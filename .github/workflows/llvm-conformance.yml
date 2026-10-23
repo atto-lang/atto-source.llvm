@@ -14,6 +14,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Java/LLVM strict parity receipt admission (Rust)
+        run: |
+          rustc --edition=2021 -D warnings --test tests/native_class_string_parity.rs -o /tmp/oreslang-parity-admission-tests
+          /tmp/oreslang-parity-admission-tests
       - name: Verify AI smoke admission unit tests
         run: python3 scripts/test_ai_conformance_smoke.py
       - name: Prepare Python schema validator
