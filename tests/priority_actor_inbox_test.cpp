@@ -558,6 +558,69 @@ struct PausedPublication {
     PausedPublication(const PausedPublication&) = delete;
 };
 
+static void actor_binding_rejects_unpublished_preparation_and_unguarded_send() {
+    NativeActorGroup group(8850, 1);
+    auto actor = group.adopt(8850, 43, 1, [] {});
+    CHECK(group.mark_ready(actor));
+    using PrepInbox = PriorityActorInbox<PausedPublication>;
+    using PrepLane = PrepInbox::Lane;
+    PrepInbox unbound({1, 8}, {1, 8}, {1, 8}, 3);
+    std::promise<void> entered, release;
+    auto moved = entered.get_future();
+    auto release_gate = release.get_future().share();
+    PausedPublication input([&] {
+        entered.set_value();
+        release_gate.wait(); // TEST ONLY: pause between quota and publication
+    });
+    std::atomic<bool> published{false};
+    std::thread producer([&] {
+        published.store(unbound.offer(PrepLane::Normal, std::move(input), 8),
+                        std::memory_order_release);
+    });
+    moved.wait();
+    CHECK(unbound.snapshot() == 0);
+    CHECK(unbound.used_frames(PrepLane::Normal) == 1);
+    bool rejected = false;
+    try { unbound.bind_target(actor); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected); // unpublished send is still active admission
+    release.set_value();
+    producer.join();
+    CHECK(published.load(std::memory_order_acquire));
+    CHECK(unbound.snapshot() == 1);
+    rejected = false;
+    try { unbound.bind_target(actor); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected); // binding a previously used inbox is never permitted
+    auto old = unbound.try_receive();
+    CHECK(old && old->acknowledge_released());
+    unbound.close();
+
+    PrepInbox bound({1, 8}, {1, 8}, {1, 8}, 3);
+    bound.bind_target(actor);
+    PausedPublication plain([] {});
+    rejected = false;
+    try { (void)bound.offer(PrepLane::Normal, std::move(plain), 8); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && bound.snapshot() == 0);
+    auto owner = std::make_unique<PausedPublication>([] {});
+    rejected = false;
+    try { (void)bound.offer_owned(PrepLane::Bulk, owner, 8); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected && owner && bound.snapshot() == 0);
+    CHECK(bound.offer_to(actor, PrepLane::Normal, std::move(plain), 8));
+    CHECK(bound.offer_owned_to(actor, PrepLane::Bulk, owner, 8));
+    CHECK(!owner);
+    for (int i = 0; i != 2; ++i) {
+        auto item = bound.try_receive();
+        CHECK(item && item->acknowledge_released());
+    }
+    CHECK(bound.completed_through(2));
+    bound.close();
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+}
+
 static void stop_cannot_leave_a_preparing_message_unaccounted() {
     using PortInbox = PriorityActorInbox<PausedPublication>;
     using PortLane = PortInbox::Lane;
@@ -700,6 +763,7 @@ int main() {
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
     failed_admission_never_consumes_global_identity();
+    actor_binding_rejects_unpublished_preparation_and_unguarded_send();
     stop_cannot_leave_a_preparing_message_unaccounted();
     owned_handle_admission_never_steals_on_rejection_or_constructor_fault();
     concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
