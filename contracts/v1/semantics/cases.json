@@ -13,6 +13,17 @@
       }
     },
     {
+      "id": "native.proxy-packed-receipt",
+      "feature": "proxy.receipt-scalar-abi",
+      "source": "fixtures/proxy-packed-receipt.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
       "id": "native.precedence",
       "feature": "numeric.precedence",
       "source": "fixtures/precedence.ores",
