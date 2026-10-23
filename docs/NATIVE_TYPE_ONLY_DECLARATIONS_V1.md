@@ -64,6 +64,11 @@ end
   implicit trait evidence/dictionaries and cross-unit import/link resolution.
 - Arbitrary nominal, owned, borrowed, floating, string or generic members,
   trait/interface transport, dynamic dispatch or typeclass instance selection.
+- `define mtd name on Alias(...): Result { ... }` extension methods require
+  name-preserving static receiver dispatch. Native LLVM compilation currently
+  fails closed with `EXTENSION_BACKEND_UNSUPPORTED`; it must not treat a
+  Code-specific extension as an arbitrary primitive int call or generate
+  unspecified runtime dictionary dispatch.
 - `define model` general computational graphs, model constructor values,
   digests, composition and execution. The frontend explicitly emits
   `MODEL_BACKEND_UNSUPPORTED` until shared-model, checked operation-provenance,
