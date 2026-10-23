@@ -72,7 +72,8 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
-    bool int_array = false; // non-Copy owned Array<int> local, no escape
+    bool int_array = false; // non-Copy owned i64-slot array local, no escape
+    ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.

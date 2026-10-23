@@ -49,6 +49,22 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "typed-string-array-path-segments",
+            include_str!("fixtures/native-class-string/string-array.ores"),
+            "foo\nbaz\n",
+        ),
+        (
+            "string-array-retains-immutable-values",
+            r#"pub routine main():int {
+                let mut Array<string> values = new Array<string>();
+                values.add("a\u0000b");
+                values.add(values.get(0));
+                values.set(0, "changed");
+                return values.size == 2 && values.get(1) == "a"+"\u0000b" && values.get(0) == "changed" ? 0 : 1;
+              }"#,
+            "",
+        ),
+        (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
               pub routine main():int {
@@ -145,7 +161,10 @@ fn main() {
             .arg("ir")
             .arg(&ir)
             .args(["-x", "c", "-std=c11"])
+            .arg("-I")
+            .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
             .arg("-pthread")
             .arg("-o")
             .arg(&binary));
@@ -182,6 +201,15 @@ fn main() {
         }
     }
     let negatives = [
+        ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
+        ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
+        ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),
+        ("string-array-integer-set", "pub fnc main():int{val Array<String> a=new Array<String>();a.set(0,42);return 0;}".to_owned(), foo.to_owned()),
+        ("string-array-handle-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(0);}".to_owned(), foo.to_owned()),
+        ("string-array-wrong-constructor", "pub fnc main():int{val Array<String> a=new Array<int>();return 0;}".to_owned(), foo.to_owned()),
+        ("string-array-copy-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();val n:int=a;return n;}".to_owned(), foo.to_owned()),
+        ("string-array-take-into-int-field", "define class Box as pub mut Array<int> values=new Array<int>(); end pub fnc main():int{let mut Box b=new Box();val Array<String> a=new Array<String>();b.values=rt take a;return 0;}".to_owned(), foo.to_owned()),
+        ("unsupported-object-array", "pub fnc main():int{val Array<Foo> a=new Array<Foo>();return 0;}".to_owned(), foo.to_owned()),
         (
             "string-integer-equality",
             r#"pub fnc main():int{return "a" == 1 ? 0 : 1;}"#.to_owned(),
