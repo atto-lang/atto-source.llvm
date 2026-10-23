@@ -5,6 +5,7 @@
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -33,6 +34,9 @@ inline void validate_actor_field_writes(
         const ActorDecl& actor) {
     for (const auto& write :
             actor.on_message.actor_field_writes) {
+        if (!write.expression)
+            throw std::runtime_error(
+                "actor field write lowering requires an expression");
         const auto field = std::find_if(
             actor.fields.begin(),
             actor.fields.end(),
@@ -159,11 +163,38 @@ inline void validate_cortex_m() {
 inline void validate_lowering_structure(const Program& source) {
     using namespace target_admission_detail;
     for (const auto& actor : source.actors) {
+        if (actor.fields.empty() || actor.fields.size() > 16)
+            throw std::runtime_error(
+                "actor lowering requires 1..16 scalar fields");
+        if (actor.on_message.parameters.size() != 1 ||
+                !actor.on_message.result ||
+                actor.on_message.returns_void ||
+                !actor.on_message.statements.empty() ||
+                !actor.on_message.locals.empty() ||
+                !actor.on_message.early_returns.empty())
+            throw std::runtime_error(
+                "actor lowering requires one synchronous scalar handler");
+
+        std::set<std::string> field_names;
         for (const auto& field : actor.fields) {
             if (!field.initializer)
                 throw std::runtime_error(
                     "actor field lowering requires an initializer");
+            if (field.heap_owned || field.int_array ||
+                    !field.class_name.empty() ||
+                    field.new_class || field.move_class)
+                throw std::runtime_error(
+                    "actor lowering requires scalar field storage");
+            if (!field_names.insert(field.name).second)
+                throw std::runtime_error(
+                    "duplicate actor field in lowering structure");
         }
+
+        if (field_names.count(
+                actor.on_message.parameters.front().name))
+            throw std::runtime_error(
+                "actor handler parameter shadows a field");
+
         validate_actor_field_writes(actor);
     }
 }
