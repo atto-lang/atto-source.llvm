@@ -71,8 +71,23 @@ public:
         const auto count = required_words(layout, capacity, lanes);
         if (!arena_ || pages_.empty() || page_words_ == 0
                 || page_words_ > (1024U * 1024U) / sizeof(std::uint32_t)
-                || pages_.size() < (count + page_words_ - 1) / page_words_) {
+                || pages_.size() != (count + page_words_ - 1) / page_words_) {
             throw std::invalid_argument("invalid arena-backed proxy pages");
+        }
+        // These pages are exclusively owned by this logical slab. Refuse
+        // duplicate aliases before zeroing any caller-provided arena data.
+        for (std::size_t i = 0; i < pages_.size(); ++i) {
+            const auto& left = pages_[i];
+            if (!left.domain || !left.generation) {
+                throw std::invalid_argument("invalid actor arena page handle");
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                const auto& right = pages_[j];
+                if (left.domain == right.domain && left.index == right.index
+                        && left.generation == right.generation) {
+                    throw std::invalid_argument("duplicate proxy arena page");
+                }
+            }
         }
         rows_ = layout_ == Layout::AoSoA
             ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
