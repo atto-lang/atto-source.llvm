@@ -1281,6 +1281,19 @@ if(BUILD_TESTING)
     add_test(NAME native_priority_user_inbox_control_isolation
         COMMAND oreslang-priority-actor-inbox-test)
     set_tests_properties(native_priority_user_inbox_control_isolation PROPERTIES TIMEOUT 30)
+    # Exact native completion-ledger model: deterministic seeded admission,
+    # injected enqueue failure, duplicate ACK rejection, terminal aborts and
+    # 4-producer/4-consumer contention. Uses no private external CI carrier.
+    add_executable(oreslang-actor-mailbox-completion-model-test
+        tests/actor_mailbox_completion_model_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-completion-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-mailbox-completion-model-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-completion-model-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_completion_model
+        COMMAND oreslang-actor-mailbox-completion-model-test)
+    set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
