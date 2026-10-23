@@ -263,7 +263,7 @@ private:
         put(row, kRoute, 0);
         put(row, kEpoch, 0);
         --live_;
-        if (get(row, kIncarnation) == kLimit) {
+        if (get(row, kIncarnation) == kLimit || get(row, kSerial) == kLimit) {
             put(row, kPhase, kExhausted);
         } else {
             put(row, kPhase, kFree);
