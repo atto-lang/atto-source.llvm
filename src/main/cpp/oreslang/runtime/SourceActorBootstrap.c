@@ -512,16 +512,25 @@ int oreslang_source_actor_test_stopping(void* opaque) {
  * releasing any owned actor heap. It never blocks while holding group.mutex.
  * This restricted source ABI has no per-actor get_done() yet.
  */
-void oreslang_source_actor_stop(void* opaque) {
-    /* A blocking stop from a carrier would deadlock its own scheduler. */
-    ensure(current_source_actor == NULL);
-
+int oreslang_source_actor_try_stop(void* opaque) {
+    /* A blocking STOP from any actor or CONTROL carrier would deadlock
+     * its scheduler. This checked host ABI refuses without side effects. */
+    if (current_source_actor != NULL) return 0;
     SourceActor* descendants[SOURCE_GROUP_ROOT_SLOT] = {0};
     size_t count = 0;
     group_lock();
+    OresNativeExecutionContext carrier = {0};
+    if (group.vm && ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier)) {
+        group_unlock();
+        return 0;
+    }
     SourceActor* instance = find_actor_locked(opaque);
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && !instance->stopping);
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
+        || instance->stopping) {
+        group_unlock();
+        return 0;
+    }
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(slot < group.next_slot && group.actors[slot] == instance);
 
@@ -532,7 +541,16 @@ void oreslang_source_actor_stop(void* opaque) {
         SourceActor* cursor = candidate;
         while (cursor && cursor != instance) cursor = cursor->lifetime_parent;
         if (cursor != instance) continue;
-        ensure(count < SOURCE_GROUP_ROOT_SLOT && !candidate->stopping);
+        /* Two concurrent STOPs on overlapping lifetime subtrees must
+         * never double-finalize a heap or abort the whole VM. One wins
+         * admission; the other is a checked denial and may retry. */
+        if (candidate->stopping
+            || (group.pending_ready
+                && group.pending_ready->actor == candidate)) {
+            group_unlock();
+            return 0;
+        }
+        ensure(count < SOURCE_GROUP_ROOT_SLOT);
         descendants[count++] = candidate;
     }
     ensure(count >= 1 && descendants[0] == instance);
@@ -596,4 +614,11 @@ void oreslang_source_actor_stop(void* opaque) {
         group.peak = 0;
     }
     group_unlock();
+    return 1;
+}
+
+void oreslang_source_actor_stop(void* opaque) {
+    /* Compatibility with existing linear top-level source lowering.
+     * The checked API is appropriate for host cancellation races. */
+    ensure(oreslang_source_actor_try_stop(opaque));
 }
