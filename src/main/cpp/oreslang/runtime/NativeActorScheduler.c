@@ -30,7 +30,7 @@ typedef struct {
     size_t first_failure, last_failure, next_failure, pending_failures;
     unsigned supervisor_bound, failure_state; /* 0 unused, 1 queued,
                                                 * 2 executing, 3 acknowledged */
-    unsigned spawned, retired;
+    unsigned spawned, retired, ever_admitted;
     uint64_t generation;
     /* Stable actor-lifetime allocation capability, independent of turn ids. */
     OresNativeAllocationDomainRef allocation_domain;
@@ -416,6 +416,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    a->ever_admitted = 1; /* Admission to a child is a binding fence. */
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
@@ -534,6 +535,7 @@ int ores_native_actor_scheduler_publish_control(
         if (new_lane) ++s->runnable_lanes;
         lane->control_payload = payload;
         lane->has_control = 1;
+        lane->ever_admitted = 1;
         ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
@@ -553,7 +555,8 @@ int ores_native_actor_scheduler_bind_supervisor(
         && !s->actors[parent.actor_slot].retired
         && !s->actors[child.actor_slot].retired
         && !s->actors[child.actor_slot].supervisor_bound
-        && !s->actors[child.actor_slot].failure_state;
+        && !s->actors[child.actor_slot].failure_state
+        && !s->actors[child.actor_slot].ever_admitted;
     if (ok) {
         s->actors[child.actor_slot].supervisor = parent;
         s->actors[child.actor_slot].supervisor_bound = 1;
@@ -583,7 +586,13 @@ int ores_native_actor_scheduler_publish_failure(
     if (ok) {
         ActorLane* child = &s->actors[failure.child.actor_slot];
         ActorLane* parent_lane = &s->actors[parent.actor_slot];
+        /* A terminal receipt is only valid after the child physically
+         * returned from its last native carrier, not merely after stop().
+         * This is enforced even through the raw trusted scheduler API. */
         ok = child->supervisor_bound && child->failure_state == 0
+            && child->retired && !child->queued && !child->active
+            && !child->has_control && !child->pending_failures
+            && ores_execution_phase(&child->authority) == ORES_EXEC_TERMINATED
             && child->supervisor.scheduler_domain == parent.scheduler_domain
             && child->supervisor.actor_slot == parent.actor_slot
             && child->supervisor.generation == parent.generation;
