@@ -1159,24 +1159,32 @@ if(BUILD_TESTING)
         set_tests_properties(native_owned_scalar_cfg_generated_stress PROPERTIES TIMEOUT 240)
     endif()
     # Class moves are compiled and exercised through real native guests.
-    if(ORE_CLANG)
+    find_program(ORE_MOVE_RUSTC rustc)
+    if(ORE_CLANG AND ORE_MOVE_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
+            COMMAND "${ORE_MOVE_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
+            DEPENDS tests/class_move_native_matrix.rs VERBATIM)
+        add_custom_target(oreslang-class-move-native-matrix-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix")
         add_test(NAME native_class_move_source_execution
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
         add_test(NAME native_class_move_source_asan_ubsan
-            COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}" --sanitize)
-        # Python -O removes language-level asserts: run the exact native
-        # move/borrow proof in optimized mode to prevent vacuous CI passes.
-        add_test(NAME native_class_move_source_python_opt
-            COMMAND "${Python3_EXECUTABLE}" -O
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/class_move_native_matrix.py"
-                --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        add_test(NAME native_class_move_optimized_rust_assertions
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-class-move-native-matrix" --self-test)
         set_tests_properties(native_class_move_source_execution
             native_class_move_source_asan_ubsan
-            native_class_move_source_python_opt PROPERTIES TIMEOUT 180)
+            native_class_move_optimized_rust_assertions PROPERTIES TIMEOUT 180)
+    else()
+        foreach(move_gate IN ITEMS native_class_move_source_execution
+                native_class_move_source_asan_ubsan native_class_move_optimized_rust_assertions)
+            add_test(NAME ${move_gate} COMMAND "${CMAKE_COMMAND}" -E false)
+        endforeach()
     endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
