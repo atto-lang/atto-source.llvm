@@ -22,9 +22,11 @@ struct State {
     std::unique_ptr<ActorShardBudget> actor_budget;
     ActorShardBudget vm_budget{16U * 1024U * 1024U};
     std::unique_ptr<ActorOwnedProxyRequestSlab> slab;
+    std::unique_ptr<ActorOwnedProxyRequestSlab> other_slab;
+    ActorOwnedProxyRequestSlab::Receipt other_pin{};
     std::uint64_t stale_ticket = 0;
     std::uint64_t ticket = 0;
-    std::uint64_t pin = 0;
+    ActorOwnedProxyRequestSlab::Receipt pin{};
     bool foreign_denied = false;
     bool failed = false;
 };
@@ -72,7 +74,19 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             state.stale_ticket = state.slab->admit(5, 1, 42);
             assert(state.stale_ticket != 0 && state.slab->route(state.stale_ticket) == 42);
             state.pin = state.slab->pin(state.stale_ticket);
-            assert(state.pin != 0 && state.slab->retire(state.stale_ticket));
+            assert(state.pin.claim != 0 && state.slab->retire(state.stale_ticket));
+            // A second slab deliberately mints the same raw low-level
+            // claim. Identity/callback provenance must block misdelivery.
+            state.other_slab = std::make_unique<ActorOwnedProxyRequestSlab>(
+                state.scheduler, state.owner, *state.actor_budget,
+                state.vm_budget, state.layout, 1, state.lanes);
+            const auto second_ticket = state.other_slab->admit(7, 3, 88);
+            state.other_pin = state.other_slab->pin(second_ticket);
+            assert(state.other_pin.claim == state.pin.claim);
+            assert(state.other_pin.slab_identity != state.pin.slab_identity);
+            assert(!state.other_slab->settle(state.pin));
+            assert(state.other_slab->retire(second_ticket));
+            assert(state.other_slab->live() == 1);
             assert(state.slab->live() == 1 && state.slab->full());
             assert(state.slab->admit(6, 2, 55) == 0);
         } else if (step == 2) {
@@ -84,11 +98,22 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.slab->route(state.ticket) == 55);
             assert(!state.slab->retire(state.stale_ticket));
             assert(!state.slab->settle(state.pin));
+            // Tampered actor generation and claim correlation reject safely.
+            auto tampered = state.other_pin;
+            ++tampered.actor_generation;
+            assert(!state.other_slab->settle(tampered));
+            auto wrong_request = state.other_pin;
+            wrong_request.request = state.ticket;
+            assert(!state.other_slab->settle(wrong_request));
+            assert(state.other_slab->settle(state.other_pin));
+            assert(!state.other_slab->settle(state.other_pin));
+            assert(state.other_slab->live() == 0);
             assert(state.slab->retire(state.ticket));
             assert(state.slab->live() == 0);
         } else if (step == 4) {
             assert(state.slab->live() == 0);
             state.slab->close();
+            state.other_slab->close();
         } else {
             state.failed = true;
         }
@@ -132,6 +157,7 @@ int main() {
             assert(state.actor_budget->retired());
             assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
             state.slab.reset(); // scrub+free before paired accounting refund
+            state.other_slab.reset();
             assert(state.actor_budget->used_bytes() == 0);
             assert(state.vm_budget.used_bytes() == 0);
         }
