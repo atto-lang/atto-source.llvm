@@ -58,6 +58,11 @@ public:
         return ticket_->stop_delivery_failed.load(std::memory_order_acquire);
     }
 
+    /** Trusted scheduler: last-child wakeup enqueue failed. */
+    bool child_join_notification_failed() const noexcept {
+        return ticket_->child_join_delivery_failed.load(std::memory_order_acquire);
+    }
+
     /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
@@ -119,6 +124,10 @@ private:
         std::atomic<bool> stop_delivery_failed{false};
         // Immutable host callback outlives group.close() on the actor ticket.
         std::function<void()> stop_retry;
+        // One in-flight or retryable wakeup per parent incarnation.
+        std::atomic<bool> child_join_delivery_pending{false};
+        std::atomic<bool> child_join_delivery_failed{false};
+        std::function<void()> child_join_retry; // guarded by ticket mutex
         std::atomic<bool> physically_done{false};
         // True only after the group worker table was detached by close().
         std::atomic<bool> detached_from_group{false};
@@ -377,6 +386,32 @@ public:
             && !ref.ticket_->stop_delivery_failed.load(std::memory_order_acquire);
     }
 
+    /**
+     * Trusted host only: retry a failed last-child notification after
+     * close(), or even after destruction of the ActorGroup. Enqueue-only
+     * callback must be idempotent and throw only before admission.
+     */
+    static bool retry_failed_children_drained(const NativeActorRef& parent) noexcept {
+        auto ticket = parent.ticket_;
+        std::function<void()> callback;
+        {
+            std::lock_guard<std::mutex> guard(ticket->mutex);
+            if (!ticket->child_join_retry) return false;
+            callback = std::move(ticket->child_join_retry);
+        }
+        try {
+            callback();
+            ticket->child_join_delivery_failed.store(false, std::memory_order_release);
+            ticket->child_join_delivery_pending.store(false, std::memory_order_release);
+            return true;
+        } catch (...) {
+            std::lock_guard<std::mutex> guard(ticket->mutex);
+            ticket->child_join_retry = std::move(callback);
+            ticket->child_join_delivery_failed.store(true, std::memory_order_release);
+            return false;
+        }
+    }
+
     bool register_children_drained(const NativeActorRef& parent,
                                    std::function<void()> notify) {
         if (!notify) throw std::invalid_argument("missing child join notifier");
@@ -387,6 +422,10 @@ public:
             || it->second.generation != parent.generation()
             || it->second.ticket != parent.ticket_)
             throw std::invalid_argument("unknown or stale child join parent");
+        // Reject a replacement observer until the previous enqueue receipt
+        // is fully delivered; never overwrite a failed parent wakeup.
+        if (parent.ticket_->child_join_delivery_pending.load(std::memory_order_acquire))
+            throw std::logic_error("pending child join notification must be retried");
         if (it->second.live_children == 0) return true;
         if (it->second.join_notify)
             throw std::logic_error("parent already has a child join notifier");
@@ -501,6 +540,7 @@ public:
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         std::vector<NativeActorRef::DoneContinuation> done_callbacks;
         std::function<void()> wake_parent;
+        std::shared_ptr<NativeActorRef::Ticket> wake_parent_ticket;
         auto& owners = registry();
         {
             std::scoped_lock guard(mutex_, owners.mutex);
@@ -533,13 +573,13 @@ public:
             // Settle done ONLY on acknowledged physical finalization.
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
-            retire_parent_link_locked(owners, it, wake_parent);
+            retire_parent_link_locked(owners, it, wake_parent, wake_parent_ticket);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
-        notify_join(wake_parent);
+        notify_join(wake_parent, wake_parent_ticket);
         return true;
     }
 
@@ -749,7 +789,8 @@ private:
     static void retire_parent_link_locked(
             OwnerRegistry& owners,
             const std::map<Key, Owner>::iterator& child,
-            std::function<void()>& wake_parent) noexcept {
+            std::function<void()>& wake_parent,
+            std::shared_ptr<NativeActorRef::Ticket>& wake_parent_ticket) noexcept {
         if (!child->second.parent) return;
         const auto parent = owners.live.find(*child->second.parent);
         if (parent == owners.live.end()
@@ -757,8 +798,14 @@ private:
             || parent->second.group_id != child->second.group_id
             || parent->second.live_children == 0)
             std::terminate(); // impossible under synchronized admission/join; fail closed
-        if (--parent->second.live_children == 0)
+        if (--parent->second.live_children == 0) {
             wake_parent = std::move(parent->second.join_notify);
+            if (wake_parent) {
+                wake_parent_ticket = parent->second.ticket;
+                wake_parent_ticket->child_join_delivery_pending.store(
+                    true, std::memory_order_release);
+            }
+        }
     }
 
     /**
@@ -772,6 +819,7 @@ private:
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         std::vector<NativeActorRef::DoneContinuation> done_callbacks;
         std::function<void()> wake_parent;
+        std::shared_ptr<NativeActorRef::Ticket> wake_parent_ticket;
         auto& owners = registry();
         {
             std::lock_guard<std::mutex> guard(owners.mutex);
@@ -797,12 +845,12 @@ private:
             }
             done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
-            retire_parent_link_locked(owners, it, wake_parent);
+            retire_parent_link_locked(owners, it, wake_parent, wake_parent_ticket);
             owners.live.erase(it);
         }
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
-        notify_join(wake_parent);
+        notify_join(wake_parent, wake_parent_ticket);
         return true;
     }
 
@@ -858,12 +906,22 @@ private:
         }
     }
 
-    static void notify_join(const std::function<void()>& notify) noexcept {
+    static void notify_join(
+            std::function<void()>& notify,
+            const std::shared_ptr<NativeActorRef::Ticket>& parent_ticket) noexcept {
         if (!notify) return;
-        try { notify(); } catch (...) {
-            // This is a retry hint, NOT a physical-release receipt.
-            // Failure cannot manufacture parent DONE; trusted scheduler must
-            // separately retain its parent's physical-finalizer obligation.
+        if (!parent_ticket) std::terminate();
+        try {
+            notify();
+            parent_ticket->child_join_delivery_pending.store(
+                false, std::memory_order_release);
+        } catch (...) {
+            // Retain original callable on the parent incarnation. A failed
+            // scheduler enqueue is not physical DONE or CONTROL delivery.
+            std::lock_guard<std::mutex> guard(parent_ticket->mutex);
+            parent_ticket->child_join_retry = std::move(notify);
+            parent_ticket->child_join_delivery_failed.store(
+                true, std::memory_order_release);
         }
     }
 
