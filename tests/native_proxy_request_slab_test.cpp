@@ -47,6 +47,30 @@ static void bounded_contract(ProxyRequestSlab::Layout layout, std::uint32_t lane
     for (auto value : memory) require(value == 0);
 }
 
+static void serial_exhaustion_contract(ProxyRequestSlab::Layout layout,
+                                      std::uint32_t lanes) {
+    std::vector<std::uint32_t> memory(
+        ProxyRequestSlab::required_words(layout, 1, lanes));
+    ProxyRequestSlab slab(layout, 1, lanes, memory);
+    const auto ticket = slab.admit(7, 3, 4);
+    require(ticket != 0);
+    // Inject a legal terminal per-row receipt serial directly into this
+    // host-only backing. Do not spin INT32_MAX operations in the CI suite.
+    const auto serial_word = layout == ProxyRequestSlab::Layout::SoA
+        ? std::size_t{7} : std::size_t{7} * lanes;
+    memory[serial_word] = ProxyRequestSlab::kLimit;
+    bool rejected = false;
+    try { (void)slab.pin(ticket); }
+    catch (const std::overflow_error&) { rejected = true; }
+    require(rejected && slab.live() == 1);
+    require(slab.retire(ticket));
+    require(slab.live() == 0 && slab.full());
+    // Never recycle a slot that will always fail pin(), even after its
+    // last request has retired; bounded backpressure must remain honest.
+    require(slab.admit(8, 3, 4) == 0);
+    slab.close();
+}
+
 static void seeded_churn(ProxyRequestSlab::Layout layout, std::uint32_t lanes,
                          std::uint32_t capacity) {
     std::vector<std::uint32_t> memory(ProxyRequestSlab::required_words(layout, capacity, lanes));
@@ -99,8 +123,10 @@ int main() {
         }
         require(invalid_tiles_rejected);
         bounded_contract(ProxyRequestSlab::Layout::SoA, 1);
+        serial_exhaustion_contract(ProxyRequestSlab::Layout::SoA, 1);
         for (std::uint32_t lanes : {16U, 32U, 64U}) {
             bounded_contract(ProxyRequestSlab::Layout::AoSoA, lanes);
+            serial_exhaustion_contract(ProxyRequestSlab::Layout::AoSoA, lanes);
         }
         for (std::uint32_t capacity : {1U, 3U, 16U, 31U, 32U, 33U, 64U, 65U}) {
             seeded_churn(ProxyRequestSlab::Layout::SoA, 1, capacity);
