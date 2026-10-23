@@ -69,6 +69,24 @@ static void seeded_churn(ProxyRequestSlab::Layout layout, std::uint32_t lanes,
 
 int main() {
     try {
+        // Static validation must reject unknown discriminants before
+        // potentially dividing by a zero/invalid AoSoA lane count.
+        bool invalid_layout_rejected = false;
+        try {
+            (void) ProxyRequestSlab::required_words(
+                static_cast<ProxyRequestSlab::Layout>(255), 1, 0);
+        } catch (const std::invalid_argument&) {
+            invalid_layout_rejected = true;
+        }
+        require(invalid_layout_rejected);
+        bool invalid_tiles_rejected = false;
+        try {
+            (void) ProxyRequestSlab::required_words(
+                ProxyRequestSlab::Layout::AoSoA, 3, 0);
+        } catch (const std::invalid_argument&) {
+            invalid_tiles_rejected = true;
+        }
+        require(invalid_tiles_rejected);
         bounded_contract(ProxyRequestSlab::Layout::SoA, 1);
         for (std::uint32_t lanes : {16U, 32U, 64U}) {
             bounded_contract(ProxyRequestSlab::Layout::AoSoA, lanes);
