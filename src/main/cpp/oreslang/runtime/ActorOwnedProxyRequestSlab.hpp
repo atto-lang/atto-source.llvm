@@ -18,7 +18,20 @@
 namespace oreslang::runtime {
 
 // Unique within this native process (not a cryptographic capability).
+// Saturate permanently on exhaustion; fetch_add wrapping would eventually
+// reissue a slab identity and allow a stale completion envelope to match.
 inline std::atomic<std::uint64_t> next_proxy_slab_identity{1};
+inline std::uint64_t reserve_proxy_slab_identity() {
+    auto next = next_proxy_slab_identity.load(std::memory_order_relaxed);
+    for (;;) {
+        if (next == 0 || next == UINT64_MAX) {
+            throw std::overflow_error("proxy slab identity exhausted");
+        }
+        if (next_proxy_slab_identity.compare_exchange_weak(
+                next, next + 1, std::memory_order_relaxed,
+                std::memory_order_relaxed)) return next;
+    }
+}
 
 /**
  * Exact-generation native actor wrapper over *physical ActorArena persistent
@@ -54,8 +67,7 @@ public:
             ActorShardBudget& actor_budget, ActorShardBudget& vm_budget,
             Layout layout, std::uint32_t capacity, std::uint32_t lanes)
         : scheduler_(scheduler), owner_(owner), actor_budget_(actor_budget),
-          vm_budget_(vm_budget), identity_(next_proxy_slab_identity.fetch_add(
-                  1, std::memory_order_relaxed)) {
+          vm_budget_(vm_budget), identity_(reserve_proxy_slab_identity()) {
         require_owner();
         if (!identity_ || identity_ == UINT64_MAX || owner_.actor_slot == UINT64_MAX
                 || &actor_budget_ == &vm_budget_
