@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <cstdio>
 #include <span>
 
@@ -32,6 +33,24 @@ int main() {
     ores_actor_arena_write(arena, turn, pages[0], 0, &secret, sizeof(secret));
     ores_actor_arena_write(arena, turn, pages[1], 60, &secret, sizeof(secret));
     ores_actor_arena_write(arena, turn, pages[1], kPageBytes - 4, &secret, sizeof(secret));
+    // Invalid page aliases and surplus handles must fail before zeroing
+    // any already-owned arena bytes.
+    bool alias_rejected = false, extra_rejected = false;
+    std::array<OresArenaHandle, 2> alias{pages[0], pages[0]};
+    try {
+        ProxyRequestSlab bad(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
+            arena, turn, alias, kPageWords);
+    } catch (const std::invalid_argument&) { alias_rejected = true; }
+    std::array<OresArenaHandle, 3> extra{pages[0], pages[1], pages[0]};
+    try {
+        ProxyRequestSlab bad(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
+            arena, turn, extra, kPageWords);
+    } catch (const std::invalid_argument&) { extra_rejected = true; }
+    assert(alias_rejected && extra_rejected);
+    std::uint32_t unchanged = 0;
+    ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
+                          &unchanged, sizeof(unchanged));
+    assert(unchanged == secret); // invalid constructors did not zero pages.
     ProxyRequestSlab slab(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
         arena, turn, pages, kPageWords);
     std::uint32_t first = 9, last = 9;
