@@ -2719,7 +2719,8 @@ endif()
 # not guest Oreslang lowering or a live HTTP/CONNECT transport.
 if(BUILD_TESTING)
     add_executable(oreslang-native-proxy-request-slab-test
-        tests/native_proxy_request_slab_test.cpp)
+        tests/native_proxy_request_slab_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
     target_include_directories(oreslang-native-proxy-request-slab-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-proxy-request-slab-test PRIVATE cxx_std_20)
