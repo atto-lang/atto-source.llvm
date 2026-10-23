@@ -457,7 +457,12 @@ private:
         std::string target;
         if (accept("int")) target = "int";
         else if (accept("bool")) target = "bool";
-        else {
+        else if (accept("string")) {
+            if (token_.text == "with" || token_.text == "as")
+                fail("native refined string aliases require Zorde UTF-8/charset checks "
+                     "and proof-preserving LLVM lowering; unsupported");
+            fail("native string type alias ABI is not yet admitted");
+        } else {
             // Do not eagerly copy the aliased layout: a forward chain may
             // resolve after this declaration. The second pass checks cycles,
             // missing definitions and the ultimate primitive scalar kind.
