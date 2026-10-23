@@ -21,7 +21,9 @@ class NativeActorResourceQuarantine;
 // across a guest actor boundary.  A registry is owned by one actor incarnation.
 class ActorResourceRegistry final {
 public:
-    enum class Kind { socket, file, timer, ffi_callback, native_allocation };
+    // lock_permit is a logical scheduler-owned lease, not an OS-thread mutex.
+    // Its trusted revoker runs only after turns, loans and callbacks quiesce.
+    enum class Kind { socket, file, timer, ffi_callback, lock_permit, native_allocation };
     enum class Phase { live, retiring, closing, reclaimed, failed };
     enum class Reclaim { not_retired, busy, closing, complete, failed };
     enum class Activity { turn, loan, callback };
@@ -85,6 +87,14 @@ public:
         if (entries_.size() >= capacity_)
             throw std::length_error("actor resource registry capacity exceeded");
         entries_.push_back({kind, std::move(close)});
+    }
+
+    // Register only a trusted, idempotent logical lock-permit revoker.
+    // This cannot forcibly unlock a native thread-affine mutex or execute
+    // guest code. The caller must retain this registry through actor stop.
+    // Any revocation failure quarantines the registry and dependent arenas.
+    void register_lock_permit(std::function<void()> revoke) {
+        register_resource(Kind::lock_permit, std::move(revoke));
     }
 
     // Scheduler-only tokens. Tokens are observations of outstanding activity,
