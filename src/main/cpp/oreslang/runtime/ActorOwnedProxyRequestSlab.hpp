@@ -119,9 +119,18 @@ public:
     ActorOwnedProxyRequestSlab& operator=(ActorOwnedProxyRequestSlab&&) = delete;
 
     ~ActorOwnedProxyRequestSlab() {
-        // Never silently free a backing allocation when completion handlers
-        // might still hold it. Explicit owner-turn close is a release gate.
-        if (!closed_ || !arena_) std::abort();
+        if (!arena_ || !slab_) std::abort();
+        if (!closed_) {
+            // An actor may have drained all requests but missed explicit
+            // close() during terminal cancellation. Permit trusted host
+            // cleanup ONLY after the scheduler-done retirement fence.
+            // Anything still live, including pending I/O, remains fail-stop.
+            if (!actor_budget_.retired() || slab_->live() != 0) std::abort();
+            ArenaTurn session(arena_, owner_);
+            slab_->resume(session.turn());
+            slab_->close();
+            closed_ = true;
+        }
         slab_.reset();
         ores_actor_arena_retire(arena_);
         if (!ores_actor_arena_try_destroy(arena_)) std::abort();
