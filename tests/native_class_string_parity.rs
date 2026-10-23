@@ -65,6 +65,12 @@ fn main() {
                  return 0;
                }"#,
             "ababc\n"),
+        ("variadic-print-utf8-nul",
+            r#"pub routine main():int{
+                 stdio.print("A", "\u0000", "é");
+                 return 0;
+               }"#,
+            "A\0é"),
         (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
@@ -247,6 +253,12 @@ fn main() {
         (
             "variadic-console-type-mismatch",
             r#"pub fnc main():int{stdio.println("a", 2);return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-too-many-args",
+            format!("pub fnc main():int{{stdio.println({});return 0;}}",
+                    vec!["\"x\""; 33].join(",")),
             foo.to_owned(),
         ),
         (
