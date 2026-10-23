@@ -53,10 +53,13 @@ end
 
 ## Explicitly unsupported (must fail, not silently lower)
 
-- Using an alias declared *after its first executable use*, standalone forward
-  declarations (`declare type Id;`), alias-based class fields, and materializing
-  trait/interface instances. Declaration order is required for functions and
-  local scalar bindings even though a chain of alias targets may refer forward.
+- Using an alias without either an earlier completed declaration or an
+  earlier `declare type Id;` promise. Standalone promises now require exactly
+  one subsequent definition with matching name, declaration kind and visibility
+  in the same native compilation unit. The compiler holds executable scalar
+  signatures/locals until completion and checks bool borrowing before LLVM IR.
+  Alias-based class fields and materializing trait/interface instances are
+  still unsupported.
 - Generic aliases/traits/interfaces, structural fields, default implementations,
   implicit trait evidence/dictionaries and cross-unit import/link resolution.
 - Arbitrary nominal, owned, borrowed, floating, string or generic members,
@@ -83,6 +86,26 @@ end
    ordinary classes or callables.
 5. Independently approve any private-source cross-organization CI carrier
    through protected source repository policy before exporting a tree.
+
+## Forward-declared scalar alias example
+
+```oreslang
+declare type Code;
+
+fnc identity(Code value): Code {
+  return value;
+}
+
+define type Code = int;
+```
+
+The promise is not emitted to LLVM as a runtime value. The compiler requires
+one same-unit completed type of identical visibility, rejects unresolved,
+repeated and incompatible completions, resolves pending scalar parameter,
+return, local and trait/interface method metadata after completion, and
+rechecks bool-ownership constraints before code generation. Full opaque
+nominal types, generic forward aliases, cross-module resolution, and
+`with`/refinement constraint codegen still require separate semantic proofs.
 
 ## Executable scalar alias example
 
