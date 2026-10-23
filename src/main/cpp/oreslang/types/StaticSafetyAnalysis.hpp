@@ -100,7 +100,11 @@ analyze_native_static_safety(const Program& program) {
     for (const auto& entry : callables) {
         const auto& id = entry.first;
         const Function& f = *entry.second;
-        const auto direct = realtime_detail::direct_facts(f);
+        // The shared scanner may stop at its budget; never analyze a partial
+        // call graph as if it were complete.
+        const auto direct = realtime_detail::direct_facts(f, 30000 - arcs.size());
+        if (direct.call_budget_exceeded)
+            throw std::runtime_error("native static safety graph budget exceeded");
         for (const auto& callee : direct.calls) {
             if (callables.count(callee)) arcs.push_back({id, callee, "call"});
         }
@@ -124,6 +128,8 @@ analyze_native_static_safety(const Program& program) {
                     "spawned actor message handler unresolved", {}});
                 continue;
             }
+            if (arcs.size() >= 30000)
+                throw std::runtime_error("native static safety graph budget exceeded");
             arcs.push_back({id, destination->second, "actor_delivery_after_spawn"});
         }
     }
