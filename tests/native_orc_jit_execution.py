@@ -78,6 +78,40 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
                         and not executed.stderr,
                         "ORC exit mismatch for " + name + "/" + str(iteration), executed)
 
+        # Execute existing checked-in source fixtures, not merely bespoke JIT
+        # examples. Each fixture must agree with Clang AOT and LLVM ORC.
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        fixture_cases = [
+            ("forward-call-main.ores", 42),
+            ("native-borrow-read.ores", 83),
+            ("native-reborrow-mut.ores", 40),
+            ("native-name-arity-overloads.ores", 24),
+            ("named-call-reordered-main.ores", 43),
+            ("class-final-read-native.ores", 42),
+        ]
+        for fixture_name, expected in fixture_cases:
+            fixture = fixtures / fixture_name
+            require(fixture.is_file(), "missing checked-in fixture: " + fixture_name)
+            compiled = run(compiler, fixture)
+            require(compiled.returncode == 0 and b"define i32 @main(" in compiled.stdout,
+                    "fixture failed source-to-IR: " + fixture_name, compiled)
+            native_ir.write_bytes(compiled.stdout)
+            linked = subprocess.run(
+                [str(clang), "-O0", "-x", "ir", str(native_ir), "-o", str(native_exe)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False, timeout=20)
+            require(linked.returncode == 0, "fixture failed Clang link: " + fixture_name,
+                    linked)
+            native = subprocess.run(
+                [str(native_exe)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False, timeout=20)
+            require(native.returncode == expected and not native.stdout and not native.stderr,
+                    "fixture failed Clang AOT: " + fixture_name, native)
+            jit = run(compiler, fixture, "--jit")
+            require(jit.returncode == expected and not jit.stdout and not jit.stderr,
+                    "fixture ORC/AOT divergence: " + fixture_name, jit)
+
         source.write_text(positives[1][1] + "\n", encoding="utf-8")
         shaken = run(compiler, source, "--jit", "--tree-shake")
         require(shaken.returncode == 42 and not shaken.stdout and not shaken.stderr,
@@ -107,7 +141,7 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
             if diagnostic is not None:
                 require(diagnostic.encode() in rejected.stderr,
                         "missing specific rejection diagnostic: " + name, rejected)
-    print("ORC JIT 14 source executions + 7 Clang AOT comparisons + tree-shake + 8 negative admissions PASS")
+    print("ORC JIT 20 executions + 13 Clang AOT comparisons + tree-shake + 8 negative admissions PASS")
     return 0
 
 
