@@ -967,6 +967,8 @@ private:
                         [&](const GenericParameter& p) { return p.name == type; });
                     if (generic) {
                         parameter.generic_type = type;
+                    } else if (forward_scalar_alias_names_.count(type)) {
+                        parameter.pending_scalar_alias = type;
                     } else if (scalar_alias_targets_.count(type)) {
                         parameter.scalar_type = resolve_scalar_alias(type);
                         if (parameter.scalar_type == ScalarType::Bool &&
@@ -1003,6 +1005,8 @@ private:
                     [&](const GenericParameter& p) { return p.name == type; });
                 if (generic) {
                     value.return_type = ScalarType::I64;
+                } else if (forward_scalar_alias_names_.count(type)) {
+                    value.pending_return_alias = type;
                 } else if (scalar_alias_targets_.count(type)) {
                     value.return_type = resolve_scalar_alias(type);
                 } else if (type_only_nominals_.count(type)) {
@@ -1124,6 +1128,9 @@ private:
                         } else if (accept("bool")) {
                             binding.scalar_type = ScalarType::Bool;
                         } else if (token_.kind == Kind::Identifier &&
+                                   forward_scalar_alias_names_.count(std::string(token_.text))) {
+                            binding.pending_scalar_alias = identifier();
+                        } else if (token_.kind == Kind::Identifier &&
                                    scalar_alias_targets_.count(std::string(token_.text))) {
                             binding.scalar_type = resolve_scalar_alias(identifier());
                         } else {
@@ -1198,6 +1205,9 @@ private:
                     require(":");
                     if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
                     else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
+                    else if (token_.kind == Kind::Identifier &&
+                             forward_scalar_alias_names_.count(std::string(token_.text)))
+                        statement.branch_local->pending_scalar_alias = identifier();
                     else if (token_.kind == Kind::Identifier &&
                              scalar_alias_targets_.count(std::string(token_.text)))
                         statement.branch_local->scalar_type = resolve_scalar_alias(identifier());
