@@ -41,6 +41,41 @@ public:
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     std::uint64_t generation() const noexcept { return generation_; }
 
+    // Trusted native resource accounting for physical loans issued to this
+    // actor generation. The top bit seals registration at finalization; a
+    // successful registration cannot race past physical DONE. This is not a
+    // guest-visible reference capability.
+    void retain_resource_loan() const {
+        auto current = ticket_->resource_state.load(std::memory_order_acquire);
+        for (;;) {
+            if (current & terminal_resource_bit)
+                throw std::logic_error("actor resources already terminal");
+            if (current == terminal_resource_bit - 1)
+                throw std::overflow_error("actor resource loan counter exhausted");
+            if (ticket_->resource_state.compare_exchange_weak(
+                    current, current + 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                return;
+        }
+    }
+
+    void release_resource_loan() const noexcept {
+        auto current = ticket_->resource_state.load(std::memory_order_acquire);
+        for (;;) {
+            if (current == 0 || (current & terminal_resource_bit))
+                std::terminate();
+            if (ticket_->resource_state.compare_exchange_weak(
+                    current, current - 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                return;
+        }
+    }
+
+    std::uint64_t outstanding_resource_loans() const noexcept {
+        return ticket_->resource_state.load(std::memory_order_acquire)
+            & (terminal_resource_bit - 1);
+    }
+
     // HOST-ONLY futures: guest awaits must suspend the scheduler, never block
     // a carrier using shared_future::get(). Not cancellation capabilities.
     std::shared_future<void> get_ready() const { return ticket_->ready_future; }
@@ -96,6 +131,9 @@ public:
     }
 
 private:
+    static constexpr std::uint64_t terminal_resource_bit =
+        std::uint64_t{1} << 63;
+
     struct Ticket {
         std::mutex mutex;
         bool settled = false;
@@ -116,6 +154,9 @@ private:
         std::atomic<bool> control_reserved{false};
         std::atomic<bool> control_dropped{false};
         std::atomic<bool> logical_turn_active{false};
+        // Actor incarnation loan counter; terminal flag atomically prevents
+        // late registration after DONE is committed.
+        std::atomic<std::uint64_t> resource_state{0};
     };
 
     friend class NativeActorGroup;
@@ -195,11 +236,20 @@ public:
             return ref_ == ref && ref_.ticket_ == ref.ticket_;
         }
 
-        bool ready_for_resource_reclamation() const noexcept {
+        // Phase 1: safe to *retire queued* messages after STOP. Their owned
+        // receipts may still be charged, so this deliberately ignores loans.
+        bool ready_for_actor_turn_quiescence() const noexcept {
             return ref_.ticket_->detached_from_group.load(std::memory_order_acquire)
                 && !ref_.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_active.load(std::memory_order_acquire)
                 && !ref_.ticket_->control_reserved.load(std::memory_order_acquire);
+        }
+
+        // Phase 2: physical reclamation is legal only after all native loans
+        // (including preparing, queued, checked-out mailbox receipts) retire.
+        bool ready_for_resource_reclamation() const noexcept {
+            return ready_for_actor_turn_quiescence()
+                && ref_.outstanding_resource_loans() == 0;
         }
 
         bool finalized(std::string failure = "") const {
@@ -376,6 +426,11 @@ public:
             if (ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                return false;
+            std::uint64_t unsealed = 0;
+            if (!ref.ticket_->resource_state.compare_exchange_strong(
+                    unsealed, NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
                 return false;
             // Close may settle readiness after detaching the worker table,
             // outside the group lock. The ticket mutex decides the winner.
@@ -564,6 +619,11 @@ private:
                 || ref.ticket_->logical_turn_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
+                return false;
+            std::uint64_t unsealed = 0;
+            if (!ref.ticket_->resource_state.compare_exchange_strong(
+                    unsealed, NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
                 return false;
             ActorReadyResult rejected{false,
                 failure.empty() ? "actor terminated before ready" : failure};
