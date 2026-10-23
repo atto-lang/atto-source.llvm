@@ -81,6 +81,19 @@ public:
         return true;
     }
 
+    /** Revoke a timer before scheduler delivery, including polled ready tickets. */
+    bool revoke_before_dispatch(NativeTimerHandle handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (handle.domain != domain_ || closed_) return false;
+        const auto it = by_id_.find(handle.id);
+        if (it != by_id_.end()) {
+            by_deadline_.erase(it->second);
+            by_id_.erase(it);
+            return true;
+        }
+        return ready_.erase(handle.id) == 1;
+    }
+
     /** Returns at most max_items expired handles; does NOT execute callbacks. */
     std::vector<Expired> poll(std::uint64_t now_ns, std::size_t max_items) {
         std::vector<Expired> result;

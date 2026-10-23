@@ -5,6 +5,10 @@ import pathlib
 import subprocess
 import tempfile
 
+# Every safety assertion below is part of the CI gate: never silently remove it.
+if not __debug__:
+    raise SystemExit("source actor execution gate forbids optimized Python (-O)")
+
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
@@ -23,16 +27,29 @@ def main():
         ("source-actor-spawn-stop.ores", 1, 0, None),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
-        ("source-actor-method-keyword.ores", 1, 0, None),
-        ("source-actor-bare-method.ores", 1, 0, None),
+        ("source-actor-method-keyword.ores", 1, 2, 3),
+        ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
+        ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
+        ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
+        ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-owned-unknown-initializer-reject.ores":
+            "unknown parameter 'not_yet_declared'",
+        "source-actor-owned-forward-reference-reject.ores":
+            "unknown parameter 'second'",
+        "source-actor-unflagged-owned.ores":
+            "experimental owned int requires --experimental-owned-int",
+        "source-actor-scoped-owned-escape-reject.ores":
+            "native actor owned temporary return requires pure scalar expression",
+        "source-actor-static-method-reject.ores": "static method is invalid",
+        "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
@@ -40,7 +57,8 @@ def main():
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
-        "source-actor-spawn-unavailable-await.ores": "native async/channel/select boundary unsupported",
+        "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
+        "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -60,23 +78,40 @@ def main():
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
-        result = run([args.compiler, str(fixtures / name)])
+        flags = ["--experimental-owned-int"] if (
+            name.startswith("source-actor-scoped-owned-")
+            or name.startswith("source-actor-owned-")
+        ) else []
+        result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
-            guest = run([args.compiler, str(fixtures / name)])
+            flags = ["--experimental-owned-int"] if name.startswith(
+                "source-actor-scoped-owned-") else []
+            guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
-                "source-actor-method-keyword.ores",
-                "source-actor-bare-method.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-scoped-owned-i64.ores":
+                assert guest.stdout.count(
+                    "call void @ores_actor_i64_heap_scoped_new(") == 2, name
+                assert guest.stdout.count(
+                    "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
+                # One actor-native heap for the retained field plus two
+                # reusable temporary slots: the second mailbox delivery
+                # must fail if either compiler drop was omitted.
+                assert "i64 3" in guest.stdout, (
+                    name, "actor heap needs bounded local slot reserve")
+            if name == "source-actor-await-ready.ores":
+                assert "oreslang_source_actor_await_ready" in guest.stdout, name
+                assert "ready_continuation" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -93,7 +128,12 @@ def main():
                 "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
                 str(runtime / "NativeActorScheduler.c"),
                 str(runtime / "NativeOresVM.c"),
+                str(runtime / "NativeActorFuture.c"),
                 str(runtime / "SourceActorBootstrap.c"),
+                str(runtime / "NativeExecutionContextStore.c"),
+                str(runtime / "NativeContinuationStore.c"),
+                str(runtime / "NativeAwaitTraceBridge.c"),
+                str(runtime / "NativeLogicalTrace.c"),
                 "-std=c11", "-pthread", "-I", str(source_dirs),
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
             ]
@@ -106,6 +146,11 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
+            if name == "source-actor-await-ready.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)

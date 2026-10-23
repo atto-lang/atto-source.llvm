@@ -69,6 +69,29 @@ int main() {
     }
     assert(rejected_unknown_kind);
 
+    // Parity with the Java/Graal recovery integrity gate: rejecting malformed
+    // foreign metadata must not overwrite or downgrade the pending failure.
+    Failure pending_integrity = Failure::make(FailureKind::Raise, "pending-raise");
+    bool rejected_foreign_metadata = false;
+    try {
+        (void)Failure::make(static_cast<FailureKind>(0xfe), "hostile metadata");
+    } catch (const std::invalid_argument&) {
+        rejected_foreign_metadata = true;
+    }
+    assert(rejected_foreign_metadata);
+    assert(pending_integrity.kind() == FailureKind::Raise);
+    assert(pending_integrity.diagnostic() == "pending-raise");
+    assert(pending_integrity.suppressed().empty());
+
+    auto weaker_callback_failure = combine_failure(
+        Failure::make(FailureKind::Raise, "pending-raise"),
+        Failure::make(FailureKind::Throw, "callback-throw"));
+    assert(weaker_callback_failure.kind() == FailureKind::Raise);
+    assert(weaker_callback_failure.diagnostic() == "pending-raise");
+    assert(weaker_callback_failure.suppressed().size() == 1);
+    assert(weaker_callback_failure.suppressed()[0].kind() == FailureKind::Throw);
+    assert(weaker_callback_failure.suppressed()[0].diagnostic() == "callback-throw");
+
     // All 36 rank pairs share the Java OresExceptionPolicy regression lattice.
     constexpr std::array<FailureKind, 6> kinds = {
         FailureKind::Throw, FailureKind::Raise, FailureKind::Panic,

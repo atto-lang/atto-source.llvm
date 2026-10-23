@@ -1,0 +1,3 @@
+fnc consume(Entry<int, int> value): int {
+  return 0;
+}

@@ -1,0 +1,2 @@
+fnc read(borrow mut int n):int{return rt copy n;}
+pub fnc main():int{val n:int=42;return read(rt mut borrow mut n);}
