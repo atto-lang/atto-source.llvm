@@ -95,6 +95,7 @@ int main(void) {
     require(atomic_load(&s.entered));
     require(ores_native_actor_scheduler_try_send(s.scheduler, s.parent, 8)
             == ORES_NATIVE_SEND_MAILBOX_FULL);
+    require(!ores_native_actor_scheduler_stop(s.scheduler, s.parent));
 
     OresNativeActorTerminalFailure forged = {
         ORES_NATIVE_CONTROL_PANIC, children[0], 99, 1
@@ -118,6 +119,9 @@ int main(void) {
         event.failure_code = 100;
         require(!ores_native_actor_scheduler_publish_failure(
             s.scheduler, s.parent, event));
+        if (i + 1 < CHILDREN) {
+            require(!ores_native_actor_scheduler_stop(s.scheduler, s.parent));
+        }
     }
     require(s.count == 0);
     atomic_store(&s.release, 1);
