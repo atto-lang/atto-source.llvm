@@ -435,6 +435,10 @@ private:
         // Method signatures retain only verified native scalar ABI spellings.
         // A preceding, already-resolved alias can be canonicalized here.
         if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
+                forward_scalar_alias_names_.count(std::string(token_.text))) {
+            return identifier(); // resolved and canonicalized after type completion
+        }
+        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
                 scalar_alias_targets_.count(std::string(token_.text))) {
             const std::string name = identifier();
             return resolve_scalar_alias(name) == ScalarType::Bool ? "bool" : "int";
@@ -2417,6 +2421,26 @@ private:
     }
 
     void resolve_forward_alias_uses(Program& program) const {
+        // Forward alias spellings in trait/interface signatures never create
+        // executable instances, but still require resolved scalar ABI types.
+        for (auto& declaration : program.type_only_declarations) {
+            if (declaration.kind == TypeOnlyDecl::Kind::Alias) continue;
+            for (auto& member : declaration.methods) {
+                for (auto& parameter_type : member.parameter_types) {
+                    if (parameter_type != "int" && parameter_type != "bool") {
+                        const std::string name = parameter_type;
+                        parameter_type = resolve_scalar_alias(name) == ScalarType::Bool
+                            ? "bool" : "int";
+                    }
+                }
+                if (member.return_type != "int" &&
+                        member.return_type != "bool" && member.return_type != "void") {
+                    const std::string name = member.return_type;
+                    member.return_type = resolve_scalar_alias(name) == ScalarType::Bool
+                        ? "bool" : "int";
+                }
+            }
+        }
         std::function<void(Statement&)> check_statement = [&](Statement& stmt) {
             if (stmt.branch_local && !stmt.branch_local->pending_scalar_alias.empty()) {
                 stmt.branch_local->scalar_type = resolve_scalar_alias(
