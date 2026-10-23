@@ -2,6 +2,6 @@
 fnc read(borrow int x): int { return x; }
 fnc read(borrow mut int x, int delta): int { return x + delta; }
 fnc wrapper(int x): int {
-  return read(rt borrow x) + read(rt borrow mut x, 1);
+  return read(rt borrow x) + read(rt mut borrow x, 1);
 }
 pub fnc main(): int { return wrapper(20); }
