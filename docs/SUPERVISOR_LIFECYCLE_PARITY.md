@@ -230,3 +230,30 @@ still produce zero recorded job steps. Do not claim this suite passed.
 Source-runtime send, await-ready and STOP validate opaque ActorRef pointer membership while holding the same group mutex that guards actor reclamation. The new `oreslang_source_actor_try_send` returns false for missing/stale/stopping handles without aborting. The legacy void guest ABI keeps its existing fail-closed contract pending checked-effect lowering. This pointer-membership fix does not address allocator-address reuse (ABA); full source handles still require incarnation fencing.
 
 The `source_actor_opaque_ref_validation` CTest covers live checked admission, invalid/stale handles and retired pointers while another actor keeps the VM active or after complete VM shutdown. Negative legacy-ABI tests use fresh exec'd processes, not forked copies of an active multithreaded scheduler. The subtree STOP race fixture also checks that a later try_send rejects admission. Test targets are committed but exact-head CTest is not yet executed.
+
+### Monotonic source handles and overlapping STOP (follow-on)
+
+The native C `SourceActorBootstrap` no longer publishes malloc addresses
+as source ActorRef values. Its restricted `void*` ABI represents a monotonic,
+process-unique, nonzero actor ID; admission compares that ID against currently
+live group registry records while holding the group mutex. The root
+`await_ready` continuation receives the same token encoding. This prevents
+a freed allocation address being recycled into authority for an earlier
+source ActorRef. The token is **not** a sandbox-secret capability; untrusted
+source code must not be permitted to forge/cast arbitrary native pointers,
+and a portable typed `ActorRef` value format remains a future gate.
+
+A checked trusted-host `oreslang_source_actor_try_stop` refuses a missing
+or already-stopping actor, overlapping parent/child STOP claims, and
+carrier-context blocking. It also refuses to reclaim an actor pinned by a
+pending ready continuation. A successfully admitted STOP still seals the
+whole subtree atomically under the group lock, waits for scheduler DONE
+outside the lock, and physically retires actor-owned heaps leaf-first.
+The legacy `stop` maintains the original fail-closed single-owner behavior.
+
+Committed regressions cover 32 source ActorRef retirement/reuse cycles,
+concurrent parent/descendant STOP denial while a live grandchild carrier
+holds physical completion, 10 child-first STOP / parent retry cases,
+32 concurrently stopped independent roots and 100 spawn-vs-STOP races.
+These tests are **committed/registered, not reported as passing** until the
+exact private LLVM PR tree is actually built and run under CTest/sanitizers.
