@@ -454,6 +454,25 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+int oreslang_source_actor_test_stopping(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    group_lock();
+    int stopped = 0;
+    if (group.vm && instance) {
+        /* Test-only: caller must hold this actor alive with a gated carrier. */
+        for (size_t i = 0; i < group.next_slot; ++i) {
+            if (group.actors[i] == instance) {
+                stopped = instance->stopping;
+                break;
+            }
+        }
+    }
+    group_unlock();
+    return stopped;
+}
+#endif
+
 /*
  * Admission and STOP linearize under group.mutex. An actor currently
  * executing its constructor/message is the implicit parent for any actor
