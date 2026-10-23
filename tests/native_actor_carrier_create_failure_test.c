@@ -25,6 +25,13 @@ static void deliver(void* opaque, size_t actor, uint64_t message) {
         atomic_fetch_add(&s->other_executed, 1);
     }
 }
+static void unexpected_panic(
+        void* opaque, size_t actor, OresNativeActorTerminalFailure failure) {
+    (void)opaque;
+    (void)actor;
+    (void)failure;
+    abort();
+}
 static void until(atomic_int* flag) {
     for (int spins = 0; spins < 2000000 && !atomic_load(flag); ++spins)
         sched_yield();
@@ -49,6 +56,78 @@ int main(void) {
     ores_native_actor_scheduler_retire(prestart);
     require(ores_native_actor_scheduler_drain(prestart));
     require(ores_native_actor_scheduler_try_destroy(prestart));
+
+    /* RT prestart is a one-way bootstrap transition. A failed pthread
+     * allocation permanently poisons this scheduler instance; silently
+     * succeeding on a later retry would make deadline admission depend on
+     * transient host resource timing despite the documented teardown rule. */
+    OresNativeActorScheduler* poisoned =
+        ores_native_actor_scheduler_open(1, 1, 2, deliver, &state);
+    require(poisoned != NULL);
+    ores_native_actor_scheduler_test_fail_next_create();
+    require(!ores_native_actor_scheduler_prestart_realtime(poisoned));
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+    require(!ores_native_actor_scheduler_prestart_realtime(poisoned));
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+
+    /* Poison applies to every later admission path, not only another RT
+     * prestart call. Before this regression, a normal send could retry
+     * pthread_create(), silently recover, and make the failed RT bootstrap
+     * resource-timing dependent. */
+    OresNativeActorRef poisoned_actor =
+        ores_native_actor_scheduler_spawn(poisoned, 0);
+    require(poisoned_actor.generation != 0);
+    require(ores_native_actor_scheduler_try_send(
+        poisoned, poisoned_actor, 99) == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    require(ores_native_actor_scheduler_accepted(poisoned) == 0);
+    require(ores_native_actor_scheduler_started_carriers(poisoned) == 0);
+
+    ores_native_actor_scheduler_retire(poisoned);
+    require(ores_native_actor_scheduler_drain(poisoned));
+    require(ores_native_actor_scheduler_try_destroy(poisoned));
+
+    /* Partial RT bootstrap is the harder case: one carrier exists before the
+     * second pthread create fails. That already-started carrier must remain
+     * idle until teardown, while every later admission surface stays closed. */
+    OresNativeActorScheduler* partial =
+        ores_native_actor_scheduler_open_typed_control(
+            2, 1, 2, deliver, deliver, unexpected_panic, &state);
+    require(partial != NULL);
+    ores_native_actor_scheduler_test_fail_create_after(1);
+    require(!ores_native_actor_scheduler_prestart_realtime(partial));
+    require(ores_native_actor_scheduler_started_carriers(partial) == 1);
+
+    OresNativeActorRef partial_parent =
+        ores_native_actor_scheduler_spawn(partial, 0);
+    OresNativeActorRef partial_child =
+        ores_native_actor_scheduler_spawn(partial, 1);
+    require(partial_parent.generation != 0 && partial_child.generation != 0);
+
+    require(ores_native_actor_scheduler_try_send(
+        partial, partial_parent, 77) == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    require(!ores_native_actor_scheduler_submit(partial, 0, 77));
+    require(!ores_native_actor_scheduler_publish_control(
+        partial, partial_parent, 88));
+    OresNativeActorTerminalFailure partial_failure = {
+        ORES_NATIVE_CONTROL_PANIC, partial_child, 123, 456
+    };
+    require(!ores_native_actor_scheduler_publish_failure(
+        partial, partial_parent, partial_failure));
+    require(ores_native_actor_scheduler_accepted(partial) == 0);
+    require(ores_native_actor_scheduler_control_completed(partial) == 0);
+    require(ores_native_actor_scheduler_rejected(partial) == 4);
+    require(ores_native_actor_scheduler_started_carriers(partial) == 1);
+
+    ores_native_actor_scheduler_retire(partial);
+    require(ores_native_actor_scheduler_drain(partial));
+    require(ores_native_actor_scheduler_poll_done(partial, partial_parent));
+    require(ores_native_actor_scheduler_poll_done(partial, partial_child));
+    OresNativeActorTerminalState partial_terminal = {0};
+    require(ores_native_actor_scheduler_terminal_state(
+        partial, partial_parent, &partial_terminal));
+    require(partial_terminal.accepted_user_messages == 0);
+    require(partial_terminal.processed_user_messages == 0);
+    require(ores_native_actor_scheduler_try_destroy(partial));
 
     OresNativeActorScheduler* s =
         ores_native_actor_scheduler_open(2, 2, 2, deliver, &state);

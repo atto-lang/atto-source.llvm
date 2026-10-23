@@ -12,8 +12,36 @@ typedef struct {
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
-enum { ORES_NATIVE_CONTROL_PANIC = 1, ORES_NATIVE_CONTROL_CANCELLED = 2,
-       ORES_NATIVE_CONTROL_STOPPED = 3 };
+
+typedef enum {
+    ORES_NATIVE_TERMINATION_STOPPED = 1,
+    ORES_NATIVE_TERMINATION_RUNTIME_RETIRED = 2
+} OresNativeActorTerminationKind;
+
+/*
+ * Immutable retained per-ActorRef terminal metadata.
+ *
+ * This is host runtime substrate, not a source-level supervision policy.
+ * The current native scheduler drains every accepted DATA/CONTROL envelope
+ * before DONE, so abandoned counts are zero for both terminal kinds below.
+ * A future force/failure path must populate them explicitly rather than
+ * fabricating successful processing.
+ */
+typedef struct {
+    OresNativeActorRef actor;
+    OresNativeActorTerminationKind kind;
+    uint64_t accepted_user_messages;
+    uint64_t processed_user_messages;
+    uint64_t abandoned_user_messages;
+    uint64_t abandoned_control_messages;
+} OresNativeActorTerminalState;
+enum {
+    ORES_NATIVE_CONTROL_PANIC = 1,
+    ORES_NATIVE_CONTROL_CANCELLED = 2,
+    ORES_NATIVE_CONTROL_STOPPED = 3,
+    ORES_NATIVE_CONTROL_THROW = 4,
+    ORES_NATIVE_CONTROL_RAISE = 5
+};
 typedef struct {
     uint64_t kind;
     OresNativeActorRef child;
@@ -23,8 +51,9 @@ typedef struct {
 /* Typed terminal failure is copied into the reserved parent CONTROL slot.
  * A supervisor handler runs only on the parent's single logical actor lane.
  */
-typedef void (*OresNativeActorPanicFn)(
+typedef void (*OresNativeActorSupervisorFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
+typedef OresNativeActorSupervisorFn OresNativeActorPanicFn;
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
  * Spawning activates exactly one preallocated actor slot; no ambient cross-
  * actor mutable references, host heap allocation, or slot reincarnation.
@@ -68,6 +97,18 @@ int ores_native_actor_scheduler_poll_ready(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 int ores_native_actor_scheduler_poll_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/*
+ * Nonblocking immutable terminal-state lookup. Returns 1 only after the exact
+ * generation-bound ActorRef is fully retired and its retained record has been
+ * published. Repeated reads return the same value. Stale/foreign refs fail.
+ * On denial, all fields of a non-null output are cleared, including when
+ * the scheduler is null or the actor is not yet terminal. Only return 1
+ * establishes an authenticated generation-bound terminal receipt.
+ */
+int ores_native_actor_scheduler_terminal_state(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef actor,
+    OresNativeActorTerminalState* output);
 /* Trusted external supervisor barrier: block only the host caller until
  * the selected stopped actor drains. This is NOT a guest await/Future;
  * never invoke it on a scheduler worker/actor carrier. */
@@ -85,7 +126,7 @@ typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t pa
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
-    OresNativeActorPanicFn on_panic, void* ctx);
+    OresNativeActorSupervisorFn on_supervisor, void* ctx);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
@@ -160,15 +201,27 @@ int ores_native_actor_scheduler_all_carriers_started(
  * (or a separately qualified synchronization protocol). */
 int ores_native_actor_scheduler_priority_inheritance_enabled(
     OresNativeActorScheduler* scheduler);
-/* Carriers created on demand unless explicitly prestarted; includes workers
- * until retirement. */
+/* Before any runnable DATA/CONTROL is admitted, prestart the complete
+ * configured carrier set and permanently forbid additional pthread creation.
+ * Used by the zero-GC real-time VM bootstrap. Partial failure requires
+ * retiring/closing the unexposed scheduler; it cannot be retried on hot path.
+ * This does not prove OS-level hard real-time scheduling or WCET.
+ */
+int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* scheduler);
+/* Carrier count starts at zero for ordinary throughput profile. RT profile
+ * deliberately prestarts workers before exposing the scheduler. */
 size_t ores_native_actor_scheduler_started_carriers(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_accepted(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_rejected(OresNativeActorScheduler* scheduler);
 uint64_t ores_native_actor_scheduler_completed(OresNativeActorScheduler* scheduler);
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
-/* Test-only deterministic worker-create failure; no production symbol. */
+/* Test-only deterministic worker-create failure; no production symbols. */
 void ores_native_actor_scheduler_test_fail_next_create(void);
+/* Allow exactly N create attempts to reach pthread_create(), then inject one
+ * EAGAIN on the following create attempt. Used to prove partial RT bootstrap
+ * failure cannot later recover through ordinary DATA/CONTROL admission. */
+void ores_native_actor_scheduler_test_fail_create_after(
+    size_t successful_creates_before_failure);
 #endif
 #ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
 /* Test-only execution-id exhaustion control; no production symbol. */
