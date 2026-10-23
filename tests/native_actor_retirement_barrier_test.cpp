@@ -219,6 +219,127 @@ static void done_waits_for_group_detachment() {
     ref.get_done().get();
 }
 
+static void foreign_registry_cannot_release_live_heap_callback() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(306, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+    ActorResourceRegistry foreign(7, 3);
+    auto* heap = ores_actor_i64_heap_open(7, 3, 1);
+    int freed = 0;
+    registry->register_resource(Kind::native_allocation, [heap, &freed] {
+        require(ores_actor_i64_heap_try_destroy(heap) == 1, "heap still pinned");
+        ++freed;
+    });
+    // A real external callback must hold its registry pin until it stops
+    // touching heap storage. Equal numeric identities do not release that pin.
+    const auto held = registry->acquire_callback();
+    const auto other = foreign.acquire_callback();
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(306, 7, 3, [&] {
+        ores_actor_i64_heap_retire(heap);
+        barrier->retire();
+    });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
+    barrier = &owned;
+    require(group.mark_ready(ref), "actor readiness");
+    group.close();
+    bool rejected = false;
+    try { registry->release_callback(other); }
+    catch (const std::logic_error&) { rejected = true; }
+    require(rejected, "foreign registry released the live heap callback");
+    require(owned.poll() == Poll::pending && freed == 0,
+            "foreign callback ticket authorized heap destruction");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                    == std::future_status::timeout, "foreign ticket fabricated done");
+    registry->release_callback(held);
+    require(owned.poll() == Poll::completed && freed == 1, "own callback did not drain heap");
+    ref.get_done().get();
+    require(owned.poll() == Poll::completed && freed == 1, "heap destroyed twice");
+    foreign.release_callback(other);
+    foreign.retire();
+    require(foreign.try_reclaim().status == ActorResourceRegistry::Reclaim::complete,
+            "foreign registry lost its own callback");
+}
+
+static void foreign_release_races_with_retirement_and_last_callback() {
+    for (unsigned round = 0; round < 32; ++round) {
+        NativeActorResourceQuarantine quarantine(1);
+        NativeActorGroup group(307, 1);
+        auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+        ActorResourceRegistry foreign(7, 3);
+        auto* heap = ores_actor_i64_heap_open(7, 3, 1);
+        std::atomic<int> freed{0};
+        registry->register_resource(Kind::native_allocation, [&] {
+            require(ores_actor_i64_heap_try_destroy(heap) == 1, "heap still pinned");
+            freed.fetch_add(1, std::memory_order_relaxed);
+        });
+        const auto held = registry->acquire_callback();
+        const auto other = foreign.acquire_callback();
+        NativeActorRetirementBarrier* barrier = nullptr;
+        auto ref = group.adopt(307, 7, 3, [&] {
+            ores_actor_i64_heap_retire(heap);
+            barrier->retire();
+        });
+        NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
+        barrier = &owned;
+        require(group.mark_ready(ref), "actor readiness");
+        std::atomic<bool> early_done{false}, final_release{false};
+        std::exception_ptr attacker_error, release_error, stop_error;
+        std::uint64_t rejected = 0;
+        std::thread attacker([&] {
+            const auto attempt = [&] {
+                try { registry->release_callback(other); }
+                catch (const std::logic_error&) { ++rejected; return; }
+                throw std::runtime_error("foreign callback released live activity during race");
+            };
+            try { for (unsigned i = 0; i < 64; ++i) attempt(); }
+            catch (...) { attacker_error = std::current_exception(); }
+            early_done.store(true, std::memory_order_release);
+            try {
+                // Keep attacking while group.close retires the actor, then
+                // race the valid final release and concurrent barrier polls.
+                while (!final_release.load(std::memory_order_acquire)) {
+                    attempt();
+                    std::this_thread::yield();
+                }
+                for (unsigned i = 0; i < 128; ++i) attempt();
+            }
+            catch (...) { attacker_error = std::current_exception(); }
+        });
+        std::thread stopper([&] {
+            while (!early_done.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { group.close(); } catch (...) { stop_error = std::current_exception(); }
+        });
+        std::thread callback([&] {
+            while (!final_release.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { registry->release_callback(held); }
+            catch (...) { release_error = std::current_exception(); }
+        });
+        stopper.join();
+        // Capture observations before releasing the held pin; defer failure
+        // reporting until all workers join so no test thread outlives storage.
+        const bool pinned = owned.poll() == Poll::pending && freed.load() == 0
+            && ref.get_done().wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout;
+        final_release.store(true, std::memory_order_release);
+        bool valid_poll = true;
+        for (unsigned i = 0; i < 256; ++i) {
+            const auto result = owned.poll();
+            valid_poll = valid_poll && (result == Poll::pending || result == Poll::completed);
+            std::this_thread::yield();
+        }
+        attacker.join();
+        callback.join();
+        for (const auto& error : {attacker_error, release_error, stop_error})
+            if (error) std::rethrow_exception(error);
+        require(pinned && valid_poll && rejected >= 192, "retirement race lost its pin or accepted a foreign ticket");
+        require(owned.poll() == Poll::completed && freed.load() == 1, "racing callback did not reclaim exactly once");
+        ref.get_done().get();
+        require(owned.poll() == Poll::completed && freed.load() == 1, "racing done reclaimed twice");
+        foreign.release_callback(other);
+        foreign.retire();
+        require(foreign.try_reclaim().status == ActorResourceRegistry::Reclaim::complete, "foreign callback was consumed");
+    }
+}
 
 static void deferred_source_cleanup_physically_fences_actor_done() {
     NativeActorResourceQuarantine quarantine(1);
@@ -305,4 +426,7 @@ int main() {
     quarantine_saturation_does_not_settle_done();
     done_waits_for_group_detachment();
     physical_reclamation_waits_for_admitted_actor_turn();
+    foreign_registry_cannot_release_live_heap_callback();
+    foreign_release_races_with_retirement_and_last_callback();
 }
+

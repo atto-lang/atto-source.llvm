@@ -34,11 +34,20 @@ def main():
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
+        ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-owned-unknown-initializer-reject.ores":
+            "unknown parameter 'not_yet_declared'",
+        "source-actor-owned-forward-reference-reject.ores":
+            "unknown parameter 'second'",
+        "source-actor-unflagged-owned.ores":
+            "experimental owned int requires --experimental-owned-int",
+        "source-actor-scoped-owned-escape-reject.ores":
+            "native actor owned temporary return requires pure scalar expression",
         "source-actor-static-method-reject.ores": "static method is invalid",
         "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
@@ -69,13 +78,19 @@ def main():
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
-        result = run([args.compiler, str(fixtures / name)])
+        flags = ["--experimental-owned-int"] if (
+            name.startswith("source-actor-scoped-owned-")
+            or name.startswith("source-actor-owned-")
+        ) else []
+        result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
-            guest = run([args.compiler, str(fixtures / name)])
+            flags = ["--experimental-owned-int"] if name.startswith(
+                "source-actor-scoped-owned-") else []
+            guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
@@ -84,6 +99,16 @@ def main():
                 "source-actor-spawn-stop.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-scoped-owned-i64.ores":
+                assert guest.stdout.count(
+                    "call void @ores_actor_i64_heap_scoped_new(") == 2, name
+                assert guest.stdout.count(
+                    "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
+                # One actor-native heap for the retained field plus two
+                # reusable temporary slots: the second mailbox delivery
+                # must fail if either compiler drop was omitted.
+                assert "i64 3" in guest.stdout, (
+                    name, "actor heap needs bounded local slot reserve")
             if name == "source-actor-await-ready.ores":
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name

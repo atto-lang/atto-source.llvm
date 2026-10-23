@@ -10,5 +10,5 @@ fnc outer(borrow mut Box b): int {
 pub fnc main(): int {
   let mut Box b = new Box();
   b.value = 42;
-  return outer(rt borrow mut b);
+  return outer(rt mut borrow b);
 }

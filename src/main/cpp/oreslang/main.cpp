@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include "oreslang/runtime/CoreLog.hpp"
 #include "oreslang/types/RealtimeAnalysis.hpp"
@@ -23,43 +24,6 @@
 #include <array>
 #include <string_view>
 
-// Reject malformed Unicode (overlong encodings, surrogates, truncated input and
-// code points above U+10FFFF) and binary NUL before native parser admission.
-static void require_valid_source_utf8(std::string_view source) {
-    for (std::size_t i = 0; i < source.size();) {
-        const auto lead = static_cast<unsigned char>(source[i]);
-        if (lead == 0) throw std::runtime_error("native source contains NUL byte");
-        if (lead <= 0x7f) { ++i; continue; }
-
-        std::size_t continuation_count = 0;
-        unsigned char min_first = 0x80;
-        unsigned char max_first = 0xbf;
-        if (lead >= 0xc2 && lead <= 0xdf) {
-            continuation_count = 1;
-        } else if (lead >= 0xe0 && lead <= 0xef) {
-            continuation_count = 2;
-            if (lead == 0xe0) min_first = 0xa0;
-            if (lead == 0xed) max_first = 0x9f;
-        } else if (lead >= 0xf0 && lead <= 0xf4) {
-            continuation_count = 3;
-            if (lead == 0xf0) min_first = 0x90;
-            if (lead == 0xf4) max_first = 0x8f;
-        } else {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        if (source.size() - i <= continuation_count) {
-            throw std::runtime_error("native source is not valid UTF-8");
-        }
-        for (std::size_t j = 1; j <= continuation_count; ++j) {
-            const auto byte = static_cast<unsigned char>(source[i + j]);
-            if (byte < (j == 1 ? min_first : 0x80) ||
-                byte > (j == 1 ? max_first : 0xbf)) {
-                throw std::runtime_error("native source is not valid UTF-8");
-            }
-        }
-        i += continuation_count + 1;
-    }
-}
 
 static bool paths_alias(const char* source_path, const std::string& report_path) {
     std::error_code source_error;
@@ -74,6 +38,11 @@ static bool paths_alias(const char* source_path, const std::string& report_path)
     std::error_code identity_error;
     const bool same_file = std::filesystem::equivalent(source, report, identity_error);
     if (!identity_error) return same_file;
+    // libc++ may report a generic identity error when the destination does
+    // not exist yet. Check that case explicitly without swallowing failures.
+    std::error_code exists_error;
+    const bool report_exists = std::filesystem::exists(report, exists_error);
+    if (!exists_error && !report_exists) return false;
     if (identity_error == std::errc::no_such_file_or_directory) return false;
     throw std::runtime_error("cannot safely compare rt-report/source identity");
 }
@@ -311,9 +280,10 @@ int main(int argc, char** argv) {
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
+        SourceIdentity source_identity;
         const auto text = read_regular_source(path, kMaxSourceBytes, cortex_m_target
             ? "cortex-m source exceeds 128 KiB limit"
-            : "native source exceeds 8 MiB admission limit");
+            : "native source exceeds 8 MiB admission limit", &source_identity);
         require_valid_source_utf8(text);
         // Target/capability directives are lexical comments in the native
         // subset. Reject rather than silently discard unverified portability
@@ -330,8 +300,8 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        auto ast = oreslang::parse_program(text, experimental_owned_int,
-                                           experimental_rt_scalar_loop);
+        auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
+                                                 experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
 
         if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");
