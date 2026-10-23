@@ -1,0 +1,10 @@
+fnc helper(int value): int {
+  return value + 1;
+}
+
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    return helper(n);
+  }
+}
