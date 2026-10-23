@@ -351,9 +351,11 @@ private:
     };
 
     bool same_target(const NativeActorRef& ref) const noexcept {
-        return bound_target_->runtime == ref.runtime_id()
+        return bound_target_ && bound_actor_
+            && bound_target_->runtime == ref.runtime_id()
             && bound_target_->actor == ref.actor_id()
-            && bound_target_->generation == ref.generation();
+            && bound_target_->generation == ref.generation()
+            && bound_actor_->same_incarnation(ref);
     }
 
     BoundedActorPort<T>& port(Lane lane) {
