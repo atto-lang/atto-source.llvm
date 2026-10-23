@@ -100,6 +100,35 @@ int main() {
     hold.reset();
     closing.join();
     assert(table.available() == 2);
+    // Scoped native callback must retire its loan even if user code throws.
+    // Calling close inside a live view revokes authority, not view memory.
+    auto scopedIngress = table.begin(7);
+    assert(scopedIngress);
+    std::memcpy(scopedIngress->data(), "scoped", 6);
+    const auto scoped = scopedIngress->publish(6);
+    const auto scopedBefore = allocations.load(std::memory_order_relaxed);
+    bool called = false;
+    assert(table.with_borrow(scoped, 7, [&](std::string_view bytes) {
+        called = true;
+        assert(bytes == "scoped");
+        assert(!table.transfer(scoped, 7, 9));
+    }));
+    assert(called);
+    assert(allocations.load(std::memory_order_relaxed) == scopedBefore);
+    assert(!table.with_borrow(scoped, 9, [](std::string_view) {}));
+    bool caught = false;
+    try {
+        table.with_borrow(scoped, 7, [&](std::string_view bytes) {
+            assert(bytes == "scoped");
+            assert(table.close(scoped, 7));
+            assert(table.available() == 1);
+            throw 17; // tests unwind without allocating exception storage
+        });
+    } catch (int code) {
+        caught = code == 17;
+    }
+    assert(caught && table.available() == 2);
+    assert(!table.with_borrow(scoped, 7, [](std::string_view) {}));
 #if defined(ORES_TEST_TCP)
     // Live loopback TCP -> transport slot -> handle-only actor handoff.
     using namespace oreslang::runtime;
