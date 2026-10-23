@@ -148,7 +148,11 @@ building blocks, not a substitute for the remaining guest-language support.
   capability limits without weakening the full host backend parity target.
 
 The detailed status matrix and open obligations live in the
-[source parity contract](docs/SOURCE_PARITY.md).
+[source parity contract](docs/SOURCE_PARITY.md). The first strict source-level
+Java/GraalVM ↔ LLVM execution gate is documented in
+[Java/LLVM source-execution qualification](docs/JAVA_LLVM_SOURCE_EXECUTION_GATE.md).
+LLVM-only native CTests are important regression evidence, but never count as
+completed Java differential execution without a pinned, executed Java run.
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 
