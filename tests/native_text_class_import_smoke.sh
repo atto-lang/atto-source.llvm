@@ -20,6 +20,27 @@ if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
 fi
 test ! -s "$work/invalid.ll"
 grep -q 'method is private' "$work/error"
+# The import is checked against the opened inode, not a prior path lookup.
+# A symlink supplied directly (or swapped in before open) must fail closed.
+cp "$entry" "$work/main.ores"
+rm -f "$work/main-1.ores"
+ln -s "$(dirname "$entry")/main-1.ores" "$work/main-1.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "symlink class import unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q 'regular, non-symlink file' "$work/error"
+
+# A swapped-in FIFO must neither be admitted nor hang the compiler at open().
+rm -f "$work/main-1.ores"
+mkfifo "$work/main-1.ores"
+if "$compiler" "$work/main.ores" > "$work/invalid.ll" 2> "$work/error"; then
+  echo "FIFO class import unexpectedly accepted" >&2; exit 1
+fi
+test ! -s "$work/invalid.ll"
+grep -q 'regular, non-symlink file' "$work/error"
+rm -f "$work/main-1.ores"
+
 # No relative path traversal accepted by the bounded first-stage importer.
 sed -e 's@"./main-1.ores"@"../main-1.ores"@' "$entry" > "$work/traversal.ores"
 if "$compiler" "$work/traversal.ores" > "$work/traversal.ll" 2> "$work/error"; then
