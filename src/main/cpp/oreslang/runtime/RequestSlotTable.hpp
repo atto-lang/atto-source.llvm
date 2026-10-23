@@ -160,7 +160,8 @@ public:
     ~RequestSlotTable() {
         // Transport shutdown must quiesce every ingress/borrow before teardown.
         for (std::size_t i = 0; i < Slots; ++i)
-            assert(slots_[i].readers == 0 && slots_[i].phase != Phase::writing);
+            assert(slots_[i].readers == 0 &&
+                   (slots_[i].phase == Phase::free || slots_[i].phase == Phase::retired));
     }
     std::optional<Ingress> begin(std::uint64_t owner) {
         if (owner == 0) return std::nullopt;
