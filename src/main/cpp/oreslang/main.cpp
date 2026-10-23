@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/TargetAdmission.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/SemanticDependencies.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
@@ -529,6 +530,11 @@ int main(int argc, char** argv) {
             };
             for (const auto& fn : ast.functions) (void)walk(fn.name);
         }
+        // Pure target/lowering admission is additive. Full LLVM emission
+        // remains the authoritative backstop until equivalence is proven.
+        oreslang::validate_target_admission(
+            ast, wasm32_target, cortex_m_target);
+
         if (tree_shake) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
