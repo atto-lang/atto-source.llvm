@@ -454,6 +454,52 @@ static void failed_admission_never_consumes_global_identity() {
     inbox.close();
 }
 
+struct PausedPublication {
+    std::function<void()> during_move;
+    explicit PausedPublication(std::function<void()> callback)
+        : during_move(std::move(callback)) {}
+    PausedPublication(PausedPublication&& other) noexcept
+        : during_move(std::move(other.during_move)) {
+        if (during_move) during_move();
+    }
+    PausedPublication(const PausedPublication&) = delete;
+};
+
+static void stop_cannot_leave_a_preparing_message_unaccounted() {
+    using PortInbox = PriorityActorInbox<PausedPublication>;
+    using PortLane = PortInbox::Lane;
+    PortInbox inbox({1, 8}, {1, 8}, {1, 8}, 3);
+    std::promise<void> entered, release;
+    auto entered_future = entered.get_future();
+    auto release_gate = release.get_future().share();
+    PausedPublication source([&] {
+        entered.set_value();
+        release_gate.wait(); // TEST ONLY: guest actor carriers may never park
+    });
+    std::atomic<bool> admitted{false};
+    std::thread publisher([&] {
+        admitted.store(inbox.offer(PortLane::Normal, std::move(source), 8),
+                       std::memory_order_release);
+    });
+    entered_future.wait();
+    CHECK(inbox.used_frames(PortLane::Normal) == 1);
+    CHECK(inbox.snapshot() == 0); // preparation is not publication
+    bool denied_unfenced_retirement = false;
+    try { (void)inbox.retire_queued_after_quiescence(); }
+    catch (const std::logic_error&) { denied_unfenced_retirement = true; }
+    CHECK(denied_unfenced_retirement);
+    CHECK(inbox.snapshot() == 0);
+    release.set_value();
+    publisher.join();
+    CHECK(admitted.load(std::memory_order_acquire));
+    CHECK(inbox.snapshot() == 1);
+    CHECK(inbox.retire_queued_after_quiescence() == 1);
+    CHECK(inbox.watermark() == 1);
+    CHECK(inbox.drain_status(1) == PortInbox::DrainStatus::Aborted);
+    CHECK(inbox.used_frames(PortLane::Normal) == 0);
+    inbox.close();
+}
+
 static void owned_handle_admission_never_steals_on_rejection_or_constructor_fault() {
     // Even a payload with a deliberately throwing move constructor is safe:
     // the transport only moves unique_ptr (no T constructor under the lock).
@@ -560,6 +606,7 @@ int main() {
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
     failed_admission_never_consumes_global_identity();
+    stop_cannot_leave_a_preparing_message_unaccounted();
     owned_handle_admission_never_steals_on_rejection_or_constructor_fault();
     concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
 }
