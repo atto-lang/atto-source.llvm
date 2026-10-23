@@ -50,7 +50,9 @@ public:
         Delivery(const Delivery&) = delete;
         Delivery& operator=(const Delivery&) = delete;
         Delivery(Delivery&&) noexcept = default;
-        Delivery& operator=(Delivery&&) noexcept = default;
+        // Overwriting a live delivery would orphan its unacknowledged
+        // accounting receipt. Only move construction is safe.
+        Delivery& operator=(Delivery&&) noexcept = delete;
         T& value() {
             if (acknowledged_ || !payload_) throw std::logic_error("stale owned actor payload");
             return *payload_;
@@ -66,13 +68,16 @@ public:
          * ownership/borrow fences have acknowledged quiescence. */
         bool acknowledge_released() {
             if (acknowledged_ || !state_) return false;
+            // Terminalize the receipt before invoking potentially reentrant
+            // payload cleanup. Its bytes stay charged until destructor and
+            // external release hooks finish; never run them under our mutex.
+            acknowledged_ = true;
+            payload_.reset();
             std::lock_guard<std::mutex> guard(state_->mutex);
             if (!state_->used_frames || state_->used_bytes < bytes_)
                 throw std::logic_error("actor port accounting corrupted");
-            acknowledged_ = true;
             --state_->used_frames;
             state_->used_bytes -= bytes_;
-            payload_.reset();
             return true;
         }
 
@@ -107,7 +112,10 @@ public:
             bytes > state_->max_bytes - state_->used_bytes)
             return false;
         auto owned = std::make_unique<T>(std::move(payload));
-        state_->queue.push_back(Envelope{state_->next_id++, bytes, std::move(owned)});
+        // Advance the frame identity only after queue publication succeeds:
+        // an allocator failure must not consume an unadmitted ID.
+        state_->queue.push_back(Envelope{state_->next_id, bytes, std::move(owned)});
+        ++state_->next_id;
         ++state_->used_frames;
         state_->used_bytes += bytes;
         return true;
