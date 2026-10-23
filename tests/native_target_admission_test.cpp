@@ -85,6 +85,23 @@ int main() {
         Program program;
         ActorDecl actor;
         actor.name = "Worker";
+        LocalBinding field;
+        field.name = "total";
+        field.field_mutable = true;
+        actor.fields.push_back(std::move(field));
+        Parameter message;
+        message.name = "message";
+        actor.on_message.parameters.push_back(std::move(message));
+        actor.on_message.result = integer(0);
+        program.actors.push_back(std::move(actor));
+        assert(rejects(program, NativeTargetKind::Host));
+        assert(rejects(program, NativeTargetKind::Wasm32));
+    }
+
+    {
+        Program program;
+        ActorDecl actor;
+        actor.name = "Worker";
 
         LocalBinding field;
         field.name = "total";
@@ -147,6 +164,16 @@ int main() {
 
         Program cortex;
         validate_target_admission(cortex, NativeTargetKind::CortexM);
+    }
+
+    {
+        Program scalar;
+        Function loop = fn("main");
+        loop.scalar_while = std::make_unique<ScalarWhileLoop>();
+        scalar.functions.push_back(std::move(loop));
+        validate_target_admission(scalar, NativeTargetKind::Host);
+        assert(rejects(scalar, NativeTargetKind::Wasm32));
+        assert(rejects(scalar, NativeTargetKind::CortexM));
     }
 
     return 0;
