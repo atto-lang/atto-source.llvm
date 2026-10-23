@@ -46,6 +46,7 @@ void validate_native_scalar_types(const Program& program) {
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
+        const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
             case E::Integer: return scalar(false);
@@ -66,7 +67,7 @@ void validate_native_scalar_types(const Program& program) {
                 return scalar(true);
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
-                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool)) fail(e.offset, "equality operand types");
+                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");
                 return scalar(true);
             }
             case E::Less: case E::LessEqual: case E::Greater: case E::GreaterEqual:
@@ -118,11 +119,20 @@ void validate_native_scalar_types(const Program& program) {
             }
         }
         fail(e.offset, "unsupported expression");
+        };
+        const Type result = evaluate();
+        // Preserve the admitted operand type for lowering. Handles are i64 at
+        // the ABI boundary, so codegen must never infer String equality from
+        // their physical representation or from syntax alone.
+        if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
+        else if (result.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
+        else if (result.kind == Kind::Int) e.resolved_type = ScalarType::I64;
+        return result;
     };
     auto compare = [&](const Expression& lhs, const Expression& rhs, const Locals& locals) {
         const auto left = expression(lhs, locals), right = expression(rhs, locals);
         if ((left.kind != Kind::Int && left.kind != Kind::Bool) || !(left == right))
-            fail(lhs.offset, "equality operands must have matching int or bool types");
+            fail(lhs.offset, "legacy equality operands must have matching int or bool types");
     };
     // Constructor slots currently have explicit int types. Bool literals can
     // initialize bool fields; integer bit patterns cannot become boolean storage.

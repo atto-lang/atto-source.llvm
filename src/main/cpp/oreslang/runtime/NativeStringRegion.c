@@ -176,6 +176,11 @@ int64_t ores_string_concat(int64_t left, int64_t right) {
     if (b.size) memcpy(bytes + a.size, b.data, b.size);
     return publish((String){bytes, size, bytes});
 }
+int64_t ores_string_equal(int64_t left, int64_t right) {
+    String a = lookup(left), b = lookup(right);
+    if (atomic_load(&region.failed)) return 0;
+    return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
+}
 int64_t ores_string_print(int64_t handle, int64_t newline) {
     Region *r = &region;
     String value = lookup(handle);

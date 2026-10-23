@@ -263,6 +263,15 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::GreaterEqual: {
             llvm::Value* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            if (expr.left->resolved_type == ScalarType::String) {
+                if (expr.kind != Expression::Kind::Equal && expr.kind != Expression::Kind::NotEqual)
+                    throw std::runtime_error("native String ordered comparison is not supported");
+                auto runtime = builder.GetInsertBlock()->getModule()->getOrInsertFunction("ores_string_equal",
+                    llvm::FunctionType::get(i64, {i64, i64}, false));
+                llvm::Value* equal = builder.CreateCall(runtime, {left, right}, "string.equal");
+                return expr.kind == Expression::Kind::Equal ? equal
+                    : builder.CreateZExt(builder.CreateICmpEQ(equal, llvm::ConstantInt::get(i64, 0)), i64, "string.not.equal");
+            }
             llvm::Value* compared = nullptr;
             switch (expr.kind) {
                 case Expression::Kind::Equal:
