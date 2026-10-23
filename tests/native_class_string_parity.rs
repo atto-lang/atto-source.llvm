@@ -1,6 +1,7 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
+    io::Write,
     path::PathBuf,
     process::{Command, Output},
     time::{SystemTime, UNIX_EPOCH},
@@ -16,9 +17,70 @@ fn run(command: &mut Command) -> Output {
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
 }
+fn valid_git_revision(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn evidence_admission(
+    require_java: bool,
+    java: Option<&str>,
+    java_revision: Option<&str>,
+    llvm_revision: Option<&str>,
+    report: Option<&str>,
+) -> Result<(), &'static str> {
+    if !require_java {
+        if report.is_some() || java_revision.is_some() || llvm_revision.is_some() {
+            return Err("revision-stamped evidence requires --require-java");
+        }
+        return Ok(());
+    }
+    if java.is_none() {
+        return Err("--require-java requires --java-command; missing Java must fail closed");
+    }
+    if !java_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --java-revision");
+    }
+    if !llvm_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --llvm-revision");
+    }
+    if report.is_none() {
+        return Err("--require-java requires --report for a durable execution receipt");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evidence_admission, valid_git_revision};
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn rejects_missing_reference_or_provenance() {
+        assert!(evidence_admission(true, None, Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), None, Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), None, Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(false, None, None, None, Some("r.json")).is_err());
+        assert!(evidence_admission(false, None, Some(SHA), Some(SHA), None).is_err());
+    }
+
+    #[test]
+    fn admits_only_pinned_strict_comparison() {
+        assert!(valid_git_revision(SHA));
+        assert!(!valid_git_revision("main"));
+        assert!(!valid_git_revision("g".repeat(40).as_str()));
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("r.json")).is_ok());
+        assert!(evidence_admission(false, None, None, None, None).is_ok());
+    }
+}
+
 fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
     let mut sanitize = false;
+    let mut require_java = false;
+    let mut java_args = Vec::<String>::new();
+    let (mut java_revision, mut llvm_revision, mut report) = (None, None, None);
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -26,9 +88,23 @@ fn main() {
             "--clang" => clang = args.next(),
             "--runtime" => runtime = args.next(),
             "--java-command" => java = args.next(),
+            "--java-arg" => java_args.push(args.next().expect("--java-arg needs a value")),
+            "--require-java" => require_java = true,
+            "--java-revision" => java_revision = args.next(),
+            "--llvm-revision" => llvm_revision = args.next(),
+            "--report" => report = args.next(),
             "--sanitize" => sanitize = true,
             _ => panic!("unknown argument {arg}"),
         }
+    }
+    if let Err(error) = evidence_admission(
+        require_java,
+        java.as_deref(),
+        java_revision.as_deref(),
+        llvm_revision.as_deref(),
+        report.as_deref(),
+    ) {
+        panic!("{error}");
     }
     let (compiler, clang, runtime) = (
         compiler.expect("--compiler"),
@@ -170,14 +246,20 @@ fn main() {
             );
         }
         if let Some(launcher) = &java {
-            let reference = run(Command::new(launcher).arg(&path));
-            assert_eq!(
-                reference.status.code(),
-                Some(0),
-                "Java {name}: {}",
-                String::from_utf8_lossy(&reference.stderr)
-            );
-            assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+            // Independent repeat is intentional: Java and LLVM must each produce
+            // stable source behavior, not merely a coincidental one-shot output.
+            for _ in 0..2 {
+                let mut reference_command = Command::new(launcher);
+                reference_command.args(&java_args).arg(&path);
+                let reference = run(&mut reference_command);
+                assert_eq!(
+                    reference.status.code(),
+                    Some(0),
+                    "Java {name}: {}",
+                    String::from_utf8_lossy(&reference.stderr)
+                );
+                assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+            }
             comparisons += 1;
         }
     }
@@ -306,5 +388,34 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
-    println!("PASS class/string parity: {} positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, sanitized={sanitize}", positives.len(), negatives.len());
+    if require_java {
+        // Exclusive creation prevents a pre-existing/stale PASS receipt from
+        // being mistaken for a report produced by this exact execution.
+        let mut receipt = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(report.expect("validated --report"))
+            .expect("parity receipt must be a new file");
+        let body = format!(
+            r#"{{"schema":"oreslang.java-llvm.source-parity.v1","status":"passed","llvm_revision":"{}","java_revision":"{}","positive_programs":{},"native_executions":{},"java_executions":{},"llvm_only_negative_rejections":{},"sanitized":{}}}"#,
+            llvm_revision.expect("validated --llvm-revision"),
+            java_revision.expect("validated --java-revision"),
+            comparisons,
+            positives.len() * 5,
+            comparisons * 2,
+            negatives.len() + 2,
+            sanitize
+        );
+        receipt.write_all(body.as_bytes()).expect("write parity receipt");
+        receipt.write_all(b"\n").expect("finish parity receipt");
+        receipt.sync_all().expect("sync parity receipt");
+    }
+    println!(
+        "PASS class/string source execution: {} positives (five native executions each), {} LLVM no-IR rejections plus two target boundaries, Java differential={}, sanitized={}, stamped_receipt={}",
+        positives.len(),
+        negatives.len(),
+        comparisons,
+        sanitize,
+        require_java
+    );
 }
