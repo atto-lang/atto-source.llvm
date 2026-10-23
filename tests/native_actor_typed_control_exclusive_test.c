@@ -86,9 +86,13 @@ int main(void) {
     OresNativeActorTerminalFailure event = {
         ORES_NATIVE_CONTROL_PANIC, s.child, 92, 104
     };
-    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, event));
+    /* A live child may not be advertised as physically finalized. */
+    require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, event));
     require(ores_native_actor_scheduler_send(s.scheduler, s.child, 21));
     until(&s.child_count);
+    require(ores_native_actor_scheduler_stop(s.scheduler, s.child));
+    require(ores_native_actor_scheduler_wait_done(s.scheduler, s.child));
+    require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, event));
     require(atomic_load(&s.child_during_parent) == 1);
     require(atomic_load(&s.panic_count) == 0);
     require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.parent));
@@ -101,7 +105,6 @@ int main(void) {
     require(atomic_load(&s.failures) == 0);
     require(ores_native_actor_scheduler_control_completed(s.scheduler) == 1);
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
-    require(ores_native_actor_scheduler_stop(s.scheduler, s.child));
     ores_native_actor_scheduler_retire(s.scheduler);
     require(ores_native_actor_scheduler_try_destroy(s.scheduler));
     return 0;
