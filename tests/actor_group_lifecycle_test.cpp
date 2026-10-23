@@ -396,6 +396,25 @@ int main() {
               "retired actor accepted stale normal admission");
     }
     {
+        // STOP seals future turn admission without dropping CONTROL work
+        // which was accepted while the actor was still live.
+        NativeActorGroup group(1206, 1);
+        auto actor = group.adopt(1206, 1, 1, [] {});
+        check(group.mark_ready(actor), "STOP lane actor failed readiness");
+        int admitted_control = 0;
+        check(group.enqueue_control(actor, [&] { ++admitted_control; }),
+              "pre-STOP CONTROL admission rejected");
+        group.stop_workers();
+        check(group.run_user_turn(actor, [] {}) == NativeActorGroup::UserTurn::retired,
+              "STOP actor accepted a fresh user DATA turn");
+        check(!group.enqueue_control(actor, [] {}),
+              "STOP actor accepted fresh CONTROL after admission fence");
+        check(group.run_control_turn(actor) == NativeActorGroup::ControlTurn::executed,
+              "pre-STOP reserved CONTROL did not drain");
+        check(admitted_control == 1, "reserved CONTROL executed wrong number of times");
+        check(group.finalized(actor), "STOP actor could not physically finalize");
+    }
+    {
         // Exceptions cannot strand the actor's logical lane.
         NativeActorGroup group(1205, 1);
         auto a = group.adopt(1205, 1, 1, [] {});
