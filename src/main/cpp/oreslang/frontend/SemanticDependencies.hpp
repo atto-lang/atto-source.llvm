@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <set>
 #include <stdexcept>
