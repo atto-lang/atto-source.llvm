@@ -396,6 +396,11 @@ public:
             if (defined_type_aliases_.count(actor.name))
                 throw std::runtime_error("native nominal actor collides with type alias '" + actor.name + "'");
         }
+        // Phase one leaves exactly one kind of unresolved source signature:
+        // a scalar alias explicitly named by a prior 'declare type'. Resolve
+        // every alias edge (including forward chains) before type/ownership
+        // checking, call ABI signatures or LLVM emission sees the Program.
+        resolve_scalar_type_aliases(program);
         if (program.functions.empty() && program.actors.empty() &&
                 program.cooperative_loops.empty())
             fail("expected at least one function or actor");
@@ -445,16 +450,21 @@ private:
         const std::string name = identifier();
         if (token_.text == "<")
             fail("native generic type alias requires a verified monomorphization ABI");
-        if (name == "int" || name == "bool" || reserved(name))
+        if (name == "int" || name == "bool" || reserved(name)
+                || callable_nominal_name(name) || entry_builtin_name(name))
             fail("native type alias cannot shadow a builtin or reserved language name");
         require("=");
         std::string target;
         if (accept("int")) target = "int";
         else if (accept("bool")) target = "bool";
         else {
-            if (defined_type_aliases_.count(std::string(token_.text)))
-                target = defined_type_aliases_.at(identifier()).target;
-            else fail("native type aliases currently require an already-resolved int/bool scalar target");
+            // Do not eagerly copy the aliased layout: a forward chain may
+            // resolve after this declaration. The second pass checks cycles,
+            // missing definitions and the ultimate primitive scalar kind.
+            const std::string candidate(token_.text);
+            if (defined_type_aliases_.count(candidate) || forwards_.count(candidate))
+                target = identifier();
+            else fail("native type aliases currently require a declared int/bool scalar target");
         }
         require(";");
         if (defined_type_aliases_.count(name))
@@ -470,6 +480,55 @@ private:
         if (it == defined_type_aliases_.end() || it->second.target != expected) return false;
         advance();
         return true;
+    }
+
+    bool accept_pending_scalar_alias(std::string& name) {
+        // Generic parameters and class types are not silently treated as
+        // scalar aliases. Forward evidence must exist in this module/file.
+        const std::string candidate(token_.text);
+        if (!defined_type_aliases_.count(candidate) && !forwards_.count(candidate))
+            return false;
+        name = identifier();
+        return true;
+    }
+
+    void resolve_scalar_type_aliases(Program& program) {
+        std::unordered_set<std::string> active;
+        std::function<std::string(const std::string&, std::size_t)> resolve =
+            [&](const std::string& name, std::size_t depth) -> std::string {
+                if (depth > 64)
+                    throw std::runtime_error("native type alias resolution depth exceeds 64");
+                auto found = defined_type_aliases_.find(name);
+                if (found == defined_type_aliases_.end())
+                    throw std::runtime_error("unresolved native scalar type alias '" + name + "'");
+                const std::string target = found->second.target;
+                if (target == "int" || target == "bool") return target;
+                if (!active.insert(name).second)
+                    throw std::runtime_error("native type alias cycle involving '" + name + "'");
+                // All edges are explicit same-scope forward or alias declarations.
+                const std::string result = resolve(target, depth + 1);
+                active.erase(name);
+                found->second.target = result;
+                return result;
+            };
+        for (auto& entry : defined_type_aliases_)
+            (void)resolve(entry.first, 0);
+
+        for (auto& fn : program.functions) {
+            for (auto& param : fn.parameters) {
+                if (param.pending_type_alias.empty()) continue;
+                const std::string type = resolve(param.pending_type_alias, 0);
+                if (type == "bool" && param.mode != Parameter::Mode::Value)
+                    throw std::runtime_error("native bool borrow ABI is not yet admitted; pass bool by value");
+                param.scalar_type = type == "bool" ? ScalarType::Bool : ScalarType::I64;
+                param.pending_type_alias.clear();
+            }
+            if (!fn.pending_return_type_alias.empty()) {
+                const std::string type = resolve(fn.pending_return_type_alias, 0);
+                fn.return_type = type == "bool" ? ScalarType::Bool : ScalarType::I64;
+                fn.pending_return_type_alias.clear();
+            }
+        }
     }
 
     Token peek_next() const {
@@ -872,6 +931,9 @@ private:
                     if (parameter.mode != Parameter::Mode::Value)
                         fail("native bool borrow ABI is not yet admitted; pass bool by value");
                     parameter.scalar_type = ScalarType::Bool;
+                } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
+                    // A deferred alias has no class ownership or generic slot.
+                    // Resolve its exact scalar kind before ABI admission.
                 } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = identifier();
@@ -898,6 +960,9 @@ private:
                 value.return_type = ScalarType::I64;
             } else if (accept("bool") || accept_scalar_alias("bool")) {
                 value.return_type = ScalarType::Bool;
+            } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
+                // Do not publish the provisional i64 default to codegen.
+                // The declaration-resolution pass will discharge this.
             } else {
                 const std::size_t type_offset = token_.offset;
                 const std::string type = identifier();
