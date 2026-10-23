@@ -222,6 +222,16 @@ public:
             // Expected: outstanding queued/checked-out/preparing credits;
             // every lane has already been sealed by close().
         }
+        // Closing admits no *new* sends, but an already reserved producer
+        // can still publish after close(). Returning successfully now would
+        // orphan that envelope and leave both mailbox credits and drain
+        // completion forever unsettled. Require an externally observed
+        // preparation fence; never park an actor scheduler carrier here.
+        if (urgent_.pending_prepares() != 0 ||
+            normal_.pending_prepares() != 0 ||
+            bulk_.pending_prepares() != 0)
+            throw std::logic_error(
+                "actor mailbox terminal retirement requires producer quiescence");
         std::size_t count = 0;
         while (auto next = try_receive()) {
             if (!next->retire_aborted_after_quiescence())
