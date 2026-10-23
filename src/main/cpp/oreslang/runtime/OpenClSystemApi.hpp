@@ -61,7 +61,7 @@ class SystemApi final : public Api {
     static constexpr cl_uint CL_DEVICE_SINGLE_FP_CONFIG = 0x101B;
     static constexpr cl_uint CL_DEVICE_ENDIAN_LITTLE = 0x1026;
     static constexpr cl_uint CL_DEVICE_NAME = 0x102B;
-    static constexpr cl_uint CL_EVENT_COMMAND_EXECUTION_STATUS = 0x1283;
+    static constexpr cl_uint CL_EVENT_COMMAND_EXECUTION_STATUS = 0x11D3;
 
     using ContextNotify = void (*)(
             const char*, const void*, std::size_t, void*);

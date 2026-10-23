@@ -152,7 +152,7 @@ pub fnc main(): int {
   } else { } fi
   return 42;
 }
-""", "expected 'int'"),
+""", "native branch-local scalar requires int or bool"),
 }
 
 

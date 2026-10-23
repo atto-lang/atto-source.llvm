@@ -247,6 +247,26 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     unlock_heap(heap);
 }
 
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorTurn turn = {domain, epoch};
+    OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, value);
+    token[0] = slot.domain;
+    token[1] = slot.index;
+    token[2] = slot.generation;
+}
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorSlot slot = {token[0], token[1], token[2]};
+    OresActorTurn turn = {domain, epoch};
+    ores_actor_i64_heap_drop(heap, turn, slot);
+    token[0] = 0;
+    token[1] = 0;
+    token[2] = 0;
+}
+
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                            OresActorTurn turn, OresActorSlot slot) {
     lock_heap(heap);

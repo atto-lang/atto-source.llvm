@@ -1,7 +1,12 @@
-# Java Oreslang to LLVM port contract
+# Oreslang Java/GraalVM ↔ LLVM parity contract
 
-Java source of truth: [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
-LLVM roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
+**Standing requirement:** Java/GraalVM and LLVM are equal-priority Oreslang backends. The language surface and observable semantics must converge on full parity: syntax, types/ADTs, modules, ownership, actors, supervision, mailboxes, async continuations, scheduling, I/O, standard library, errors and safety guarantees. A feature missing on one backend is an actionable parity gap, never an accepted permanent language divergence.
+
+Java/GraalVM currently serves as an implementation reference for many behaviors: [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java). The intended long-term source of truth is the shared language/runtime specification and cross-backend conformance suite; verified behavior must not depend on whichever backend was implemented first.
+
+LLVM parity roadmap: [issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
+
+**Evidence status (October 2026):** complete LLVM runtime parity is **not yet verified**. The implementation inventory below is a gap-closure plan, not permission to market LLVM as a reduced Oreslang dialect. Each backend change should be paired with a parity check, fixture and tracked follow-up where needed.
 
 ## Compiler fragment currently accepted
 
@@ -131,17 +136,18 @@ reborrow/alias exclusion, transitive copy contracts, projection tracking,
 suspension and actor-boundary rules, all **non-scalar** references and all
 async/channel/actor operations must **fail closed** with a nonzero compiler
 exit and **no LLVM IR**. Negative tests enforce that rule; positive
-LLVM/Clang tests verify limited scalar borrow lowering, not Java parity.
+LLVM/Clang tests verify scalar borrow lowering; full ownership parity
+requires the complex-object, actor and suspension cases below.
 
 A future complex-object ownership fixture must demonstrate full-stack type checking,
 lowering, IR emission, and runtime behavior in addition to differential
 Java/LLVM conformance; simply accepting the parser grammar is insufficient.
 
-## Cross-implementation status
+## Cross-implementation parity tracker (current verified scope)
 
 | Java capability | LLVM status |
 | --- | --- |
-| Lexer, modules, functions | Partial i64-only subset, not full Java parity |
+| Lexer, modules, functions | Partial i64-only subset; full syntax and module parity still required |
 | Function calls, expressions | i64 arithmetic and same-module calls |
 | Type/ownership checking | Name/arity, i64 explicit moves and scoped nonescaping scalar loans; heap references and async unsupported |
 | LLVM IR verification | Implemented |
@@ -164,7 +170,7 @@ positive results.
 `ctest --test-dir build --output-on-failure` checks valid/invalid syntax,
 LLVM IR fragments and, if Clang is available, native compilation + execution.
 A workflow failure with zero allocated runner steps is not an executed test.
-Record the exact Java source SHA in future differential fixtures, rather than claim parity.
+Record both source revisions in differential fixtures; claim verified parity for a feature only after matched behavior and negative cases pass.
 
 Next priorities: imported Java lexer golden cases, unambiguous checked integer semantics,
 structured control flow, typed return analysis, precise ownership and actor ABI,
@@ -197,7 +203,7 @@ by this LLVM i64-only compiler. Importing a contract from another source unit
 also deliberately fails closed because there is not yet a matching native
 cross-unit import graph and ownership-aware type environment.
 
-**Do not describe this as Java feature parity.** Next LLVM work must add a
+**Keep this feature's parity gate open until end-to-end behavior is verified.** Next LLVM work must add a
 typed source graph, full `String`/record ABI and safe memory ownership,
 cross-file contract resolution, JVM/LLVM shared conformance fixtures,
 native actor/HTTP transport execution, and full CTest/ASan gates. No native

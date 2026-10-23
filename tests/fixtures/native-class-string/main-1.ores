@@ -1,0 +1,9 @@
+define pub class Foo as
+    foo(): string {
+        return "hiiii"
+    }
+
+    pub bar(): string {
+        return "hiiii 2" + self.foo();
+    }
+end

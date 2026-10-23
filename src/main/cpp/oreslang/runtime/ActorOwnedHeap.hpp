@@ -21,6 +21,25 @@
 // Actor execution must externally enforce exclusive access and quiescence.
 namespace oreslang::runtime {
 
+// All actor byte-heap layouts share a non-wrapping identity space. A
+// fetch_add-based allocator can overflow through UINT64_MAX back to 1,
+// resurrecting a stale handle even after reporting exhaustion. The terminal
+// counter value is never advanced or reused.
+namespace detail {
+inline std::atomic<std::uint64_t> next_actor_owned_heap_id{1};
+
+inline std::uint64_t reserve_actor_owned_heap_id(
+        std::atomic<std::uint64_t>& next) {
+    auto current = next.load(std::memory_order_relaxed);
+    while (current != 0 && current != std::numeric_limits<std::uint64_t>::max()) {
+        if (next.compare_exchange_weak(current, current + 1,
+                std::memory_order_relaxed, std::memory_order_relaxed))
+            return current;
+    }
+    throw std::overflow_error("actor heap identity exhausted");
+}
+} // namespace detail
+
 template<std::size_t Bytes, std::size_t Slots>
 class ActorOwnedHeap final {
     static_assert(Bytes > 0 && Slots > 0, "bounded positive heap required");
@@ -80,11 +99,7 @@ private:
     bool retired_ = false;
 
     static std::uint64_t new_identity() {
-        static std::atomic<std::uint64_t> next{1};
-        const auto id = next.fetch_add(1, std::memory_order_relaxed);
-        if (id == 0 || id == std::numeric_limits<std::uint64_t>::max())
-            throw std::overflow_error("actor heap identity exhausted");
-        return id;
+        return detail::reserve_actor_owned_heap_id(detail::next_actor_owned_heap_id);
     }
 
     // Insert an owned extent after deterministic destruction, coalescing
@@ -172,6 +187,14 @@ public:
     ActorOwnedHeap& operator=(const ActorOwnedHeap&) = delete;
     ActorOwnedHeap(ActorOwnedHeap&&) = delete;
     ActorOwnedHeap& operator=(ActorOwnedHeap&&) = delete;
+
+    ~ActorOwnedHeap() noexcept {
+        // Defense in depth for host teardown paths that destroy a heap object
+        // after scheduler quiescence but before explicit retire_quiesced().
+        // This does not replace the retirement proof; it only prevents guest
+        // payload bytes from remaining in reclaimed host storage.
+        std::fill(memory_.begin(), memory_.end(), std::byte{0});
+    }
 
     std::uint64_t actor_id() const noexcept { return actor_id_; }
     OresNativeAllocationDomainRef allocation_domain() const noexcept {
