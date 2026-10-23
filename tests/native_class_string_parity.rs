@@ -283,6 +283,13 @@ fn main() {
                     String::from_utf8_lossy(&reference.stderr)
                 );
                 assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+                if require_java {
+                    assert!(
+                        reference.stderr.is_empty(),
+                        "Java {name}: unexpected diagnostics: {}",
+                        String::from_utf8_lossy(&reference.stderr)
+                    );
+                }
                 java_stdout = reference.stdout;
             }
             case_evidence.push(format!(
@@ -417,6 +424,10 @@ fn main() {
             "{target}: wrong rejection: {}",
             String::from_utf8_lossy(&rejected.stderr)
         );
+    }
+    if require_java {
+        assert_eq!(comparisons, positives.len(), "every positive source requires Java execution");
+        assert_eq!(case_evidence.len(), positives.len(), "every source needs a receipt");
     }
     if require_java {
         // Exclusive creation prevents a pre-existing/stale PASS receipt from
