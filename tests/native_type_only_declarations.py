@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Exact-source LLVM parser/linker admission tests for compiler-only nominal kinds.
 
-The test intentionally requires native LLVM IR on success and no LLVM IR on
-failure. It does not imply Java parity for generic traits, cross-unit imports,
-type-alias use, general models, or a runtime representation.
+The test requires LLVM IR on success and no LLVM IR on failure. Scalar aliases
+erase to the checked int/bool ABI; trait/interface objects, cross-unit imports
+and general models remain unsupported.
 """
 import argparse
 from pathlib import Path
@@ -60,13 +60,44 @@ def main():
         ("named type-only method formals",
          "declare trait Tagged { fnc tag(value: int): bool; }\n" + main_fn),
     ]
+
+    positive.extend([
+        ("transparent int alias in function parameter and return",
+         "declare type UserId = int;\n"
+         "fnc identity(UserId id): UserId { return id; }\n"
+         "pub fnc main(): int { return identity(42); }\n"),
+        ("transparent bool alias in function parameter and return",
+         "declare type Flag = bool;\n"
+         "fnc identity(Flag flag): Flag { return flag; }\n"
+         "pub fnc main(): int { return 1; }\n"),
+        ("alias chaining preserves scalar ABI",
+         "declare type BaseId = int;\n"
+         "declare pub type UserId = BaseId;\n"
+         "fnc identity(UserId id): BaseId { return id; }\n"
+         "pub fnc main(): int { return identity(7); }\n"),
+        ("forward target aliases validated before IR",
+         "declare type Outer = Inner;\n"
+         "declare type Inner = int;\n"
+         "fnc identity(Outer id): Inner { return id; }\n"
+         "pub fnc main(): int { return identity(9); }\n"),
+        ("aliases accepted in typed lexical locals",
+         "declare type Count = int;\n"
+         "pub fnc main(): int { val total: Count = 7; return total; }\n"),
+        ("aliases accepted in type-only method signatures",
+         "declare type Count = int;\n"
+         "declare interface Api as fnc get(Count id): Count; end\n"
+         + main_fn),
+        ("bool alias accepted in typed lexical local",
+         "declare type Ready = bool;\n"
+         "pub fnc main(): int { const ready: Ready = true; return 1; }\n"),
+    ])
     negative = [
         ("reject concrete declare model",
          "declare model M as Pass() end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
         ("reject concrete declare actor",
          "declare actor A as end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
         ("reject unsupported scalar alias target",
-         "declare type Id = string;\n" + main_fn, "TYPE_ONLY_UNSUPPORTED_TYPE"),
+         "declare type Id = string;\n" + main_fn, "TYPE_ALIAS_UNKNOWN_TARGET"),
         ("reject generic trait without native contract proof",
          "declare trait Generic<T> as end\n" + main_fn, None),
         ("reject trait extends interface",
@@ -104,6 +135,42 @@ def main():
          "declare trait Api as fnc read(): int { return 1; } end\n" + main_fn,
          None),
     ]
+
+    negative.extend([
+        ("missing scalar alias target fails even if unused",
+         "declare type Broken = NotDefined;\n" + main_fn,
+         "TYPE_ALIAS_UNKNOWN_TARGET"),
+        ("unused alias cycles fail before codegen",
+         "declare type First = Second;\n"
+         "declare type Second = First;\n" + main_fn,
+         "TYPE_ALIAS_CYCLE"),
+        ("self-referential alias fails",
+         "declare type Self = Self;\n" + main_fn, "TYPE_ALIAS_CYCLE"),
+        ("alias cannot target trait",
+         "declare trait Tagged as end\n"
+         "declare type Item = Tagged;\n" + main_fn,
+         "TYPE_ALIAS_KIND_MISMATCH"),
+        ("alias cannot target interface",
+         "declare interface Api as end\n"
+         "declare type Item = Api;\n" + main_fn,
+         "TYPE_ALIAS_KIND_MISMATCH"),
+        ("bool alias cannot bypass borrowing prohibition",
+         "declare type Flag = bool;\n"
+         "fnc invalid(borrow Flag value): Flag { return value; }\n" + main_fn,
+         "native bool borrow ABI"),
+        ("bool alias preserves return type checking",
+         "declare type Flag = bool;\n"
+         "fnc wrong(): Flag { return 1; }\n" + main_fn,
+         None),
+        ("alias cannot create a type-only runtime value",
+         "declare type Id = int;\n"
+         "pub fnc main(): int { return Id; }\n",
+         None),
+        ("unknown alias cannot be used in a native scalar local",
+         "pub fnc main(): int { val total: Missing = 1; return total; }\n",
+         None),
+    ])
+
     negative.extend([
         ("reject duplicate formal names",
          "declare trait Api as fnc read(int id, int id) => int; end\n"
