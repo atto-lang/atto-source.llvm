@@ -13,6 +13,7 @@ struct Hooks final : SupervisorControlTurn::Hooks {
     SupervisorControlTurn::Decision next = SupervisorControlTurn::Decision::Acknowledge;
     bool restart_ok = true;
     bool fail_once = false;
+    bool throw_restart_once = false;
     SupervisorControlTurn::Decision on_throw(const SupervisorFailureLane::Failure&) override {
         CHECK(false && "actor terminal Throw may never reach supervisor on_throw");
         return next;
@@ -45,7 +46,12 @@ struct Hooks final : SupervisorControlTurn::Hooks {
         order.push_back("escalate");
     }
     bool on_restart(const SupervisorFailureLane::Failure&) override {
-        order.push_back("restart"); return restart_ok;
+        order.push_back("restart");
+        if (throw_restart_once) {
+            throw_restart_once = false;
+            throw std::logic_error("restart hook failed before commit");
+        }
+        return restart_ok;
     }
     void on_user_turn() override { order.push_back("user"); }
 };
@@ -133,5 +139,49 @@ int main() {
     CHECK(hooks.order.back() == "escalate");
     CHECK(!lane.urgent());
     CHECK(lane.reserved_count() == 0);
+
+    // A throwing restart handler retries the same failure without spending
+    // a restart slot before a successful restart acknowledgment.
+    SupervisorControlTurn retry_restart(2, 1);
+    Hooks restart_hooks;
+    restart_hooks.next = SupervisorControlTurn::Decision::Restart;
+    const Key restart_one{"restart-one", 1};
+    const Key restart_two{"restart-two", 1};
+    retry_restart.reserve_child(restart_one);
+    retry_restart.reserve_child(restart_two);
+    CHECK(retry_restart.publish_child(restart_one, Kind::Panic, "panic"));
+    restart_hooks.throw_restart_once = true;
+    threw = false;
+    try { (void)retry_restart.admit_turn(restart_hooks, false); }
+    catch (const std::logic_error&) { threw = true; }
+    CHECK(threw && retry_restart.urgent());
+    CHECK(retry_restart.restarts_used() == 0);
+    restart_hooks.restart_ok = false;
+    CHECK(retry_restart.admit_turn(restart_hooks, false)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(retry_restart.restarts_used() == 0);
+    CHECK(restart_hooks.order.back() == "escalate");
+    restart_hooks.restart_ok = true;
+    CHECK(retry_restart.publish_child(restart_two, Kind::Panic, "panic"));
+    CHECK(retry_restart.admit_turn(restart_hooks, false)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(retry_restart.restarts_used() == 1);
+
+    // A retained lane pointer cannot bypass an already committed shutdown.
+    SupervisorControlTurn sealed(2, 1);
+    const Key old_child{"old", 1};
+    sealed.reserve_child(old_child);
+    CHECK(sealed.try_fence_shutdown());
+    bool late_rejected = false;
+    try { sealed.reserve_child(Key{"late", 2}); }
+    catch (const std::logic_error&) { late_rejected = true; }
+    CHECK(late_rejected && sealed.reserved_count() == 1);
+    CHECK(sealed.publish_child(old_child, Kind::Panic, "panic"));
+    CHECK(sealed.admit_turn(restart_hooks, true)
+            == SupervisorControlTurn::Admitted::Control);
+    CHECK(sealed.restarts_used() == 0); // fenced restart escalates
+    CHECK(sealed.reserved_count() == 0);
+    CHECK(sealed.admit_turn(restart_hooks, true)
+            == SupervisorControlTurn::Admitted::None);
     return 0;
 }
