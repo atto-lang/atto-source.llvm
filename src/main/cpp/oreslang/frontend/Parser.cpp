@@ -253,11 +253,16 @@ public:
                 require("model");
                 program.models.push_back(model_declaration(true));
             } else if (accept("define")) {
+                // Model visibility accepts both the canonical 'define pub model'
+                // and legacy 'pub define model' spellings, matching Java.
+                const bool exported = accept("pub");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("model")) program.models.push_back(model_declaration(false));
+                if (accept("model")) program.models.push_back(model_declaration(exported));
+                else if (exported)
+                    fail("native 'define pub' currently requires a model declaration");
                 else if (accept("class")) program.classes.push_back(class_declaration());
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
