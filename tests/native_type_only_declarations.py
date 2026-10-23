@@ -267,6 +267,10 @@ def main():
         ("forward cannot be defined as trait",
          "declare type Code;\ndefine trait Code as end\n"
          + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
+        ("forward cannot be defined as class",
+         "declare type Code;\ndefine class Code as\n"
+         " pub let int field = 1;\nend\n"
+         + main_fn, "TYPE_FORWARD_KIND_MISMATCH"),
         ("forward definition must be exactly once",
          "declare type Code;\ndefine type Code = int;\ndefine type Code = bool;\n"
          + main_fn, "TYPE_DECL_NAME_COLLISION"),
