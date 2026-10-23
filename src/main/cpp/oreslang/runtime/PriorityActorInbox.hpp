@@ -302,6 +302,8 @@ private:
     // rejection/exception/close paths release the transient admission fence.
     struct AdmissionGuard final {
         PriorityActorInbox& inbox;
+        bool retained = false;
+        bool committed = false;
         AdmissionGuard(PriorityActorInbox& inbox, const NativeActorRef* target)
             : inbox(inbox) {
             std::lock_guard<std::mutex> guard(inbox.service_mutex_);
@@ -310,15 +312,20 @@ private:
             if (target) {
                 if (!inbox.bound_target_ || !inbox.same_target(*target))
                     throw std::logic_error("stale or foreign actor mailbox target");
+                inbox.bound_actor_->retain_resource_loan();
+                retained = true;
             } else if (inbox.bound_target_) {
                 throw std::logic_error("bound actor inbox requires target admission");
             }
             ++inbox.active_admissions_;
         }
+        void commit() noexcept { committed = true; }
         ~AdmissionGuard() noexcept {
             std::lock_guard<std::mutex> guard(inbox.service_mutex_);
             if (!inbox.active_admissions_) std::terminate();
             --inbox.active_admissions_;
+            if (retained && !committed)
+                inbox.bound_actor_->release_resource_loan();
         }
         AdmissionGuard(const AdmissionGuard&) = delete;
         AdmissionGuard& operator=(const AdmissionGuard&) = delete;
