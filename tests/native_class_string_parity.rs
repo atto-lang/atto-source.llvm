@@ -71,6 +71,9 @@ fn main() {
                  return 0;
                }"#,
             "A\0é"),
+        ("variadic-console-at-boundary-32",
+            r#"pub fnc main():int{stdio.println("x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x");return 0;}"#,
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"),
         (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
