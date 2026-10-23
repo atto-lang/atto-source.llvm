@@ -26,12 +26,17 @@ forward its invariants and tests, but rebuild semantic reachability on current
 2. **One canonical AST edge scanner.** Tree shaking must consume the same
    current AST traversal used by compiler analysis rather than maintaining an
    independent recursive walker. New AST child fields must fail tests unless
-   the canonical scanner sees them.
+   the canonical scanner sees them. Phase 0 may reuse the existing realtime
+   scanner, but Phase 1 must extract the traversal into a policy-neutral
+   semantic dependency scanner so tree shaking is not coupled to hard-RT
+   effect policy.
 
-3. **Exact callable identity.** Function edges use the compiler's canonical
-   name+arity identity. Generic specialization, methods, callbacks, closures,
-   traits, modules, and dynamic call surfaces must not be guessed. Unsupported
-   call identity fails closed.
+3. **Typed callable identity.** Replace parallel string encodings such as
+   analysis `name/arity` and codegen `name$arityN` with one typed
+   `CallableId{name, arity, ...}` inside compiler analysis. String encoding is
+   an ABI/report boundary only. Generic specialization, methods, callbacks,
+   closures, traits, modules, and dynamic call surfaces must not be guessed.
+   Unsupported call identity fails closed.
 
 4. **No unmodeled structural owners.** Until explicitly modeled, tree shaking
    rejects programs containing actors, classes with initializer/runtime
@@ -67,9 +72,11 @@ forward its invariants and tests, but rebuild semantic reachability on current
     a root reason; every retained non-root has at least one incoming reasoned
     edge. No provenance edge may point outside the retained closure.
 
-11. **Bounded analysis.** Function/semantic graph construction has explicit
-    node/edge/depth budgets. Exceeding a budget rejects tree shaking; it never
-    silently truncates the graph.
+11. **Bounded analysis.** AST traversal and function/semantic graph
+    construction have explicit AST-node, AST-depth, graph-node, graph-edge,
+    and graph-depth budgets. Prefer an iterative worklist for untrusted deep
+    syntax. Exceeding any budget rejects tree shaking; it never silently
+    truncates the graph or risks recursive scanner stack exhaustion.
 
 12. **Final artifact evidence matters.** Source/IR symbol removal alone is not
     enough. Release qualification records final symbols, sections, imported
@@ -90,9 +97,15 @@ claim runtime-subsystem tree shaking.
 
 ### Phase 1 — graph extraction, no new deletion
 
-Introduce a current-main semantic graph API. Build and validate roots, nodes,
-edges, reasons, and complete retained/removed classification, but keep deletion
-behavior equal to Phase 0.
+Extract a policy-neutral semantic dependency scanner from the current shared
+analysis traversal. Introduce typed `CallableId` and declaration IDs shared by
+reachability, ownership/static analysis, and codegen selection. Build and
+validate roots, nodes, edges, reasons, and complete retained/removed
+classification, but keep deletion behavior equal to Phase 0.
+
+Compile-time-only declarations such as structural contracts/conformance
+evidence remain part of full-source admission but are not runtime-pruning
+targets unless lowering later gives them runtime artifacts.
 
 Required initial reason classes:
 
@@ -117,7 +130,7 @@ version adds provenance.
 Enable deletion one owner category at a time, each behind executed positive and
 negative fixtures:
 
-1. functions;
+1. functions, preserving entire public overload families in open-world mode;
 2. classes and class initializer dependencies;
 3. actors, handler dependencies, spawn edges, and target actor ABI roots;
 4. both continuation representations;
