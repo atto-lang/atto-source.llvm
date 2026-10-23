@@ -216,7 +216,36 @@ public:
      * authority. A pending producer move can still publish an admitted
      * frame after seal; callers MUST join those moves before this method.
      */
+    // For a bound actor this is the ONLY retirement entry point. A numeric
+    // generation match is insufficient: the exact NativeActorRef and
+    // RuntimeFinalizer capability must come from the owning closed group.
+    std::size_t retire_queued_after_quiescence(
+            const NativeActorGroup::RuntimeFinalizer& finalizer,
+            const NativeActorRef& actor) {
+        if (!finalizer.matches(actor) ||
+            !finalizer.ready_for_resource_reclamation())
+            throw std::logic_error("actor mailbox retirement lacks physical turn fence");
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (!bound_target_ || !same_target(actor))
+                throw std::logic_error("actor mailbox retirement wrong generation");
+        }
+        return retire_queued_impl();
+    }
+
+    // Legacy host-only helper for unbound native test/transport mailboxes.
+    // Bound actor mailboxes REQUIRE the real group finalizer capability.
     std::size_t retire_queued_after_quiescence() {
+        {
+            std::lock_guard<std::mutex> guard(service_mutex_);
+            if (bound_target_)
+                throw std::logic_error("bound actor mailbox requires finalizer fence");
+        }
+        return retire_queued_impl();
+    }
+
+private:
+    std::size_t retire_queued_impl() {
         try { close(); }
         catch (const std::logic_error&) {
             // Expected: outstanding queued/checked-out/preparing credits;
@@ -241,6 +270,7 @@ public:
         return count;
     }
 
+public:
     // Seal all lanes even if the first lane still has outstanding credits.
     // Previously admitted messages remain drainable after close.
     void close() {
