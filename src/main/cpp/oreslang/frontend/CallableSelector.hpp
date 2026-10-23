@@ -34,9 +34,13 @@ inline std::string analysis_callable_key(const CallableId& id) {
 
 inline CallableId parse_analysis_callable_key(const std::string& key) {
     const auto slash = key.rfind('/');
-    if (slash == std::string::npos || slash == 0 || slash + 1 >= key.size())
+    if (slash == std::string::npos || slash == 0 || slash + 1 >= key.size() ||
+            key.find('/') != slash)
         throw std::invalid_argument(
             "invalid analysis callable key: " + key);
+    if (slash + 2 < key.size() && key[slash + 1] == '0')
+        throw std::invalid_argument(
+            "non-canonical analysis callable arity: " + key);
 
     std::size_t arity = 0;
     for (std::size_t i = slash + 1; i < key.size(); ++i) {
