@@ -31,6 +31,10 @@ struct SemanticDeclarationId {
         return std::tie(lhs.kind, lhs.name, lhs.arity) ==
                std::tie(rhs.kind, rhs.name, rhs.arity);
     }
+    friend bool operator!=(const SemanticDeclarationId& lhs,
+                           const SemanticDeclarationId& rhs) {
+        return !(lhs == rhs);
+    }
     friend bool operator<(const SemanticDeclarationId& lhs,
                           const SemanticDeclarationId& rhs) {
         return std::tie(lhs.kind, lhs.name, lhs.arity) <
