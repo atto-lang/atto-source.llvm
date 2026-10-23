@@ -96,6 +96,18 @@ int main() {
     ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
                           &padded_tail, sizeof(padded_tail));
     assert(first == 0 && last == 0 && padded_tail == 0);
+    // Caller-owned span may be changed or destroyed after construction.
+    // The slab must use an immutable by-value handle snapshot instead.
+    const auto saved_second_page = pages[1];
+    pages[1] = pages[0];
+    const auto copied_handle_ticket = slab.admit(1, 2, 3);
+    pages[1] = saved_second_page;
+    assert(copied_handle_ticket != 0);
+    assert(slab.route(copied_handle_ticket) == 3);
+    const auto copied_handle_claim = slab.pin(copied_handle_ticket);
+    assert(copied_handle_claim != 0);
+    assert(slab.retire(copied_handle_ticket));
+    assert(slab.settle(copied_handle_claim));
     const auto ticket = slab.admit(1, 2, 3);
     assert(ticket != 0 && slab.route(ticket) == 3);
     const auto claim = slab.pin(ticket);
