@@ -1765,6 +1765,40 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-nonblocking-tcp-linux-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_linux_nonblocking_tcp_readiness COMMAND oreslang-nonblocking-tcp-linux-test)
         set_tests_properties(native_linux_nonblocking_tcp_readiness PROPERTIES TIMEOUT 20)
+        # Host-only, bounded network request buffer/loan contract. The test
+        # executes actual nonblocking TCP handoff on Linux; it does not prove
+        # Oreslang guest actor lowering or HTTP parser parity.
+        add_executable(oreslang-request-slot-table-test tests/request_slot_table_test.cpp)
+        target_include_directories(oreslang-request-slot-table-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-request-slot-table-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-request-slot-table-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_network_request_slot_borrow_host_only
+                 COMMAND oreslang-request-slot-table-test)
+        set_tests_properties(native_network_request_slot_borrow_host_only
+            PROPERTIES TIMEOUT 30)
+        # Host-only, strict-subset HTTP/1 head views over transport read leases.
+        add_executable(oreslang-http-request-head-view-test tests/http_request_head_view_test.cpp)
+        target_include_directories(oreslang-http-request-head-view-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-http-request-head-view-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-http-request-head-view-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_http_request_head_borrow_noalloc_host_only
+                 COMMAND oreslang-http-request-head-view-test)
+        set_tests_properties(native_http_request_head_borrow_noalloc_host_only
+            PROPERTIES TIMEOUT 30)
+        # Incarnation-bound host authority and teardown revocation proof.
+        # No guest actor compiler or source mailbox integration is implied.
+        add_executable(oreslang-actor-bound-request-table-test
+            tests/actor_bound_request_table_test.cpp)
+        target_include_directories(oreslang-actor-bound-request-table-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-actor-bound-request-table-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-actor-bound-request-table-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        add_test(NAME native_actor_request_incarnation_revocation_host_only
+            COMMAND oreslang-actor-bound-request-table-test)
+        set_tests_properties(native_actor_request_incarnation_revocation_host_only
+            PROPERTIES TIMEOUT 30)
     endif()
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     # Pre-source-lowering safety gate: prevents stale continuation wakeups,
