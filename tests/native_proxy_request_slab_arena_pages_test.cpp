@@ -188,6 +188,19 @@ int main() {
             arena, turn, first_page, kPageWords);
         retry.close();
     }
+    // A multi-page claim must never be partially released, even by a
+    // caller presenting the actual token and a valid first-page handle.
+    const auto group_claim = ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), pages.size(), kPageBytes);
+    assert(group_claim != 0);
+    assert(!ores_actor_arena_unclaim_pages(
+        arena, turn, first_page.data(), first_page.size(), group_claim));
+    assert(ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), pages.size(), kPageBytes) == 0);
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), pages.size(), group_claim));
+    assert(!ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), pages.size(), group_claim));
     ores_actor_arena_leave(arena, turn);
     ores_actor_arena_retire(arena);
     assert(ores_actor_arena_try_destroy(arena));
