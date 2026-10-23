@@ -27,6 +27,12 @@ int main() {
         ores_actor_arena_alloc(arena, turn, kPageBytes),
         ores_actor_arena_alloc(arena, turn, kPageBytes)
     };
+    assert(ores_actor_arena_validate_pages(arena, turn,
+        pages.data(), pages.size(), kPageBytes) == 1);
+    assert(ores_actor_arena_validate_pages(arena, turn,
+        pages.data(), pages.size(), kPageBytes - 4) == 0);
+    assert(ores_actor_arena_validate_pages(arena, turn,
+        pages.data(), 0, kPageBytes) == 0);
     const std::uint32_t secret = UINT32_C(0xDEADBEEF);
     // Contaminate both pages before constructing the guest's logical slab:
     // owner-enforced initialization must not leak prior arena bytes.
