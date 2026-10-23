@@ -6,6 +6,10 @@ automatic tiering, sandboxing, actor JIT support, or Java differential execution
 """
 import argparse
 from pathlib import Path
+
+# The cross-backend portable i64 corpus is SHA-pinned by the existing native
+# source verifier. Reuse its admission rather than silently forking the tests.
+from native_source_i64_executable import verify_cases
 import subprocess
 import sys
 import tempfile
@@ -78,6 +82,34 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
                         and not executed.stderr,
                         "ORC exit mismatch for " + name + "/" + str(iteration), executed)
 
+        # Four cases from the reviewed Java/LLVM portable-source corpus have
+        # representable OS exit codes. The other three cannot be observed
+        # losslessly through i32 main() and remain an open typed-result gate.
+        for case in verify_cases():
+            expected = int(case["expected"])
+            require(0 <= expected <= 255, "nonportable OS-exit corpus case")
+            source.write_text(
+                "pub fnc main():int { return " + case["expression"] + "; }\n",
+                encoding="utf-8")
+            verified = run(compiler, source)
+            require(verified.returncode == 0 and b"define i32 @main(" in verified.stdout,
+                    "canonical source corpus emission failed: " + case["id"], verified)
+            native_ir.write_bytes(verified.stdout)
+            linked = subprocess.run(
+                [str(clang), "-O0", "-x", "ir", str(native_ir), "-o", str(native_exe)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False, timeout=20)
+            require(linked.returncode == 0, "canonical corpus Clang link failed", linked)
+            native = subprocess.run(
+                [str(native_exe)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False, timeout=20)
+            require(native.returncode == expected and not native.stdout and not native.stderr,
+                    "canonical corpus Clang value mismatch: " + case["id"], native)
+            executed = run(compiler, source, "--jit")
+            require(executed.returncode == expected and not executed.stdout and not executed.stderr,
+                    "canonical corpus JIT/AOT divergence: " + case["id"], executed)
+
         # Execute existing checked-in source fixtures, not merely bespoke JIT
         # examples. Each fixture must agree with Clang AOT and LLVM ORC.
         fixtures = Path(__file__).resolve().parent / "fixtures"
@@ -141,7 +173,7 @@ pub fnc main():int { return twice(twice(10)) + 2; }""", 42),
             if diagnostic is not None:
                 require(diagnostic.encode() in rejected.stderr,
                         "missing specific rejection diagnostic: " + name, rejected)
-    print("ORC JIT 20 executions + 13 Clang AOT comparisons + tree-shake + 8 negative admissions PASS")
+    print("ORC JIT 24 executions + 17 Clang AOT comparisons + tree-shake + 8 negative admissions PASS")
     return 0
 
 
