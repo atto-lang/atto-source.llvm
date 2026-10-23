@@ -571,6 +571,41 @@ struct FailOnceMove {
     FailOnceMove& operator=(const FailOnceMove&) = delete;
 };
 
+static void generation_loans_refund_denied_and_throwing_admissions() {
+    NativeActorGroup group(8894, 1);
+    auto actor = group.adopt(8894, 22, 1, [] {});
+    CHECK(group.mark_ready(actor));
+    using TypedInbox = PriorityActorInbox<FailOnceMove>;
+    TypedInbox inbox({1, 8}, {1, 8}, {1, 8}, 2);
+    inbox.bind_target(actor);
+    FailOnceMove payload(55);
+    FailOnceMove::fail_move = true;
+    bool failed = false;
+    try { (void)inbox.offer_to(actor, TypedInbox::Lane::Normal,
+                               std::move(payload), 8); }
+    catch (const std::runtime_error&) { failed = true; }
+    FailOnceMove::fail_move = false;
+    CHECK(failed && payload.payload == 55);
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(inbox.snapshot() == 0);
+    CHECK(inbox.offer_to(actor, TypedInbox::Lane::Normal,
+                         std::move(payload), 8));
+    CHECK(actor.outstanding_resource_loans() == 1);
+    FailOnceMove rejected(66);
+    CHECK(!inbox.offer_to(actor, TypedInbox::Lane::Normal,
+                          std::move(rejected), 8));
+    CHECK(rejected.payload == 66);
+    CHECK(actor.outstanding_resource_loans() == 1);
+    auto transferred = inbox.try_receive();
+    CHECK(transferred && transferred->value().payload == 55);
+    CHECK(transferred->acknowledge_released());
+    CHECK(!transferred->acknowledge_released());
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+    inbox.close();
+}
+
 static void failed_admission_never_consumes_global_identity() {
     PriorityActorInbox<FailOnceMove> inbox({2, 16}, {2, 16}, {2, 16}, 2);
     FailOnceMove producer(77);
@@ -825,6 +860,7 @@ int main() {
     failed_queue_publication_retains_sequence_and_window_credit();
     global_drain_never_passes_overtaken_normal();
     stalled_ack_bounds_global_reordering_and_recovers();
+    generation_loans_refund_denied_and_throwing_admissions();
     failed_admission_never_consumes_global_identity();
     actor_binding_rejects_unpublished_preparation_and_unguarded_send();
     stop_cannot_leave_a_preparing_message_unaccounted();
