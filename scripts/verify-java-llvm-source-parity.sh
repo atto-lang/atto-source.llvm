@@ -52,6 +52,13 @@ if [[ -e "$report" || -L "$report" ]]; then
   exit 73
 fi
 
+staging="$build_root/.java-llvm-source-parity.pending.$"
+if [[ -e "$staging" || -L "$staging" ]]; then
+  echo "refusing to reuse a stale parity staging file: $staging" >&2
+  exit 73
+fi
+trap 'rm -f "$staging"' EXIT
+
 "$build_root/oreslang-native-class-string-parity" \
   --compiler "$build_root/oreslang-llvmc" \
   --clang "$clang" \
@@ -60,7 +67,7 @@ fi
   --require-java \
   --llvm-revision "$llvm_sha" \
   --java-revision "$java_sha" \
-  --report "$report"
+  --report "$staging"
 
 # Reject a checkout that moved or became dirty during the run.
 [[ "$llvm_sha" == "$(git -C "$source_root" rev-parse --verify HEAD)" ]]
@@ -69,5 +76,9 @@ for tree in "$source_root" "$java_root"; do
   git -C "$tree" diff --quiet --exit-code
   git -C "$tree" diff --cached --quiet --exit-code
 done
-test -s "$report"
+test -s "$staging"
+# Atomic no-clobber publish only after Java/LLVM source integrity is rechecked.
+ln "$staging" "$report"
+rm "$staging"
+trap - EXIT
 echo "Source-level Java/LLVM parity receipt: $report"
