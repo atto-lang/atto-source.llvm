@@ -626,7 +626,7 @@ private:
         std::optional<Key> parent;
         std::uint64_t parent_generation = 0;
         std::size_t live_children = 0;
-        std::function<void()> join_notify;
+        std::function<void()> join_notify{};
     };
     struct OwnerRegistry {
         std::mutex mutex;
