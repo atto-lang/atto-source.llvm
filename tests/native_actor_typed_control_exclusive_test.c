@@ -76,6 +76,8 @@ int main(void) {
     s.parent = ores_native_actor_scheduler_spawn(s.scheduler, 0);
     s.child = ores_native_actor_scheduler_spawn(s.scheduler, 1);
     require(s.parent.scheduler_domain != 0 && s.child.scheduler_domain != 0);
+    require(ores_native_actor_scheduler_bind_supervisor(s.scheduler, s.parent, s.child));
+    require(!ores_native_actor_scheduler_bind_supervisor(s.scheduler, s.parent, s.child));
     require(!ores_native_actor_scheduler_is_current_actor(s.scheduler, s.parent));
 
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 13));
