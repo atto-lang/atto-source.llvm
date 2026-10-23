@@ -32,7 +32,7 @@ static void normal(void* ctx, size_t actor, uint64_t payload) {
         OresNativeActorTerminalFailure failure={
             ORES_NATIVE_CONTROL_PANIC,s->child,19,702
         };
-        check(ores_native_actor_scheduler_publish_failure(s->scheduler,s->parent,failure));
+        check(!ores_native_actor_scheduler_publish_failure(s->scheduler,s->parent,failure));
         atomic_store(&s->published,1);
     }
 }
@@ -60,6 +60,9 @@ int main(void) {
     check(!ores_native_actor_scheduler_send(s.scheduler,s.parent,42));
     check(ores_native_actor_scheduler_send(s.scheduler,s.child,99));
     wait_for(&s.published);
+    check(ores_native_actor_scheduler_wait_done(s.scheduler,s.child));
+    OresNativeActorTerminalFailure terminal={ORES_NATIVE_CONTROL_PANIC,s.child,19,702};
+    check(ores_native_actor_scheduler_publish_failure(s.scheduler,s.parent,terminal));
     OresNativeActorTerminalFailure failure={ORES_NATIVE_CONTROL_PANIC,s.child,21,703};
     check(!ores_native_actor_scheduler_publish_failure(s.scheduler,s.parent,failure));
     check(!ores_native_actor_scheduler_send(s.scheduler,s.child,100));
