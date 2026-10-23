@@ -94,7 +94,8 @@ public:
      */
     void bind_target(const NativeActorRef& target) {
         std::lock_guard<std::mutex> guard(service_mutex_);
-        if (bound_target_ || completion_->snapshot() != 0)
+        if (bound_target_ || active_admissions_ != 0 ||
+            completion_->snapshot() != 0)
             throw std::logic_error("actor inbox target already bound or active");
         bound_target_ = OwnerKey{target.runtime_id(), target.actor_id(),
                                  target.generation()};
@@ -104,17 +105,14 @@ public:
     // to choose URGENT still require separate capability verification.
     bool offer_to(const NativeActorRef& target, Lane lane, T&& value,
                   std::size_t bytes) {
-        {
-            std::lock_guard<std::mutex> guard(service_mutex_);
-            if (!bound_target_ || !same_target(target))
-                throw std::logic_error("stale or foreign actor mailbox target");
-        }
-        return offer(lane, std::move(value), bytes);
+        AdmissionGuard admission(*this, &target);
+        return port(lane).offer(std::move(value), bytes);
     }
 
     // Called only by trusted admission after source/role/priority validation.
     // Failed offers leave the producer's T untouched and do not queue a waiter.
     bool offer(Lane lane, T&& value, std::size_t bytes) {
+        AdmissionGuard admission(*this, nullptr);
         return port(lane).offer(std::move(value), bytes);
     }
 
@@ -124,17 +122,14 @@ public:
      * Authority for URGENT still belongs to the trusted runtime caller.
      */
     bool offer_owned(Lane lane, std::unique_ptr<T>& value, std::size_t bytes) {
+        AdmissionGuard admission(*this, nullptr);
         return port(lane).offer_owned(value, bytes);
     }
 
     bool offer_owned_to(const NativeActorRef& target, Lane lane,
                         std::unique_ptr<T>& value, std::size_t bytes) {
-        {
-            std::lock_guard<std::mutex> guard(service_mutex_);
-            if (!bound_target_ || !same_target(target))
-                throw std::logic_error("stale or foreign actor mailbox target");
-        }
-        return offer_owned(lane, value, bytes);
+        AdmissionGuard admission(*this, &target);
+        return port(lane).offer_owned(value, bytes);
     }
 
     /**
@@ -286,6 +281,32 @@ public:
     }
 
 private:
+    // Prevent a send started before bind_target() from publishing into a
+    // newly bound actor. Drop the fairness lock BEFORE moving a payload: its
+    // user-supplied move constructor may re-enter the inbox. RAII makes all
+    // rejection/exception/close paths release the transient admission fence.
+    struct AdmissionGuard final {
+        PriorityActorInbox& inbox;
+        AdmissionGuard(PriorityActorInbox& inbox, const NativeActorRef* target)
+            : inbox(inbox) {
+            std::lock_guard<std::mutex> guard(inbox.service_mutex_);
+            if (target) {
+                if (!inbox.bound_target_ || !inbox.same_target(*target))
+                    throw std::logic_error("stale or foreign actor mailbox target");
+            } else if (inbox.bound_target_) {
+                throw std::logic_error("bound actor inbox requires target admission");
+            }
+            ++inbox.active_admissions_;
+        }
+        ~AdmissionGuard() noexcept {
+            std::lock_guard<std::mutex> guard(inbox.service_mutex_);
+            if (!inbox.active_admissions_) std::terminate();
+            --inbox.active_admissions_;
+        }
+        AdmissionGuard(const AdmissionGuard&) = delete;
+        AdmissionGuard& operator=(const AdmissionGuard&) = delete;
+    };
+
     struct OwnerKey {
         std::uint64_t runtime;
         std::uint64_t actor;
@@ -324,6 +345,7 @@ private:
     BoundedActorPort<T> bulk_;
     std::mutex service_mutex_;
     std::optional<OwnerKey> bound_target_;
+    std::size_t active_admissions_ = 0;
     std::size_t next_slot_ = 0;
 };
 
