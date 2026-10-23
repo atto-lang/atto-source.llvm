@@ -33,6 +33,7 @@ if [[ "$mode" != none ]]; then flags+=("-fsanitize=$mode"); fi
 sources=(
   tests/bounded_actor_port_test.cpp
   tests/native_actor_port_allocation_failure_test.cpp
+  tests/native_mailbox_parallel_terminal_test.cpp
   tests/priority_actor_inbox_test.cpp
   tests/actor_mailbox_completion_model_test.cpp
   tests/native_actor_control_data_lane_test.cpp
