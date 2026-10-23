@@ -1216,6 +1216,8 @@ if(BUILD_TESTING)
         Threads::Threads)
     target_compile_options(oreslang-source-actor-implicit-child-scope-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
+    target_compile_definitions(oreslang-source-actor-implicit-child-scope-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
     add_test(NAME source_actor_implicit_child_scope
         COMMAND oreslang-source-actor-implicit-child-scope-test)
     set_tests_properties(source_actor_implicit_child_scope PROPERTIES TIMEOUT 90)
