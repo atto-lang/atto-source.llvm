@@ -81,6 +81,9 @@ int main() {
         "GET / HTTP/1.1\r\n\r\n", // Host mandatory for HTTP/1.1
         "GET / HTTP/1.1\r\nHost: x\r\nHost: y\r\n\r\n",
         "GET / HTTP/1.1\r\nHost:\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: example.test,evil.test\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: user@example.test\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: example.test/admin\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 00\r\n\r\n",
         "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
