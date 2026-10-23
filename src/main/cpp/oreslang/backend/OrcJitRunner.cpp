@@ -63,8 +63,10 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
     auto symbol = jit->lookup("main");
     if (!symbol)
         throw std::runtime_error("ORC JIT: " + llvm::toString(symbol.takeError()));
-#if LLVM_VERSION_MAJOR >= 19
-    auto* entrypoint = symbol->getAddress().toPtr<int (*)()>();
+// LLVM 15+ LLJIT::lookup returns ExecutorAddr; LLVM 14 returns
+// JITEvaluatedSymbol. The pointer conversion API differs accordingly.
+#if LLVM_VERSION_MAJOR >= 15
+    auto* entrypoint = symbol->toPtr<int()>();
 #else
     auto* entrypoint = reinterpret_cast<int (*)()>(
         static_cast<std::uintptr_t>(symbol->getAddress()));
