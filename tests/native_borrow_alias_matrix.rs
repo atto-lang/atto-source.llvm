@@ -1,6 +1,7 @@
 //! Exhaust the alias partitions and loan modes of two/three argument calls.
 //! This is a bounded invocation contract, not a proof of the entire language.
 use std::{
+    collections::HashSet,
     env, fs,
     path::PathBuf,
     process::{Command, Output},
@@ -111,6 +112,7 @@ fn main() {
     let mut java = None;
     let mut sanitize = false;
     let mut corpus = None;
+    let mut input_corpus = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -119,6 +121,7 @@ fn main() {
             "--java-command" => java = Some(args.next().expect("--java-command PATH required")),
             "--sanitize" => sanitize = true,
             "--emit-corpus" => corpus = Some(args.next().expect("--emit-corpus PATH required")),
+            "--corpus" => input_corpus = Some(args.next().expect("--corpus PATH required")),
             _ => panic!("unknown argument: {arg}"),
         }
     }
@@ -156,92 +159,134 @@ fn main() {
         Scratch(env::temp_dir().join(format!("ores-loans-{}-{suffix}", std::process::id())));
     fs::create_dir(&scratch.0).unwrap();
     let (mut accepted, mut rejected, mut compared) = (0, 0, 0);
-    for kind in ["int", "bool", "class"] {
-        for n in [2, 3] {
-            let layouts = partitions(n);
-            assert_eq!(layouts.len(), if n == 2 { 2 } else { 5 });
-            for modes in 0..(1 << n) {
-                for owners in &layouts {
-                    let name = format!("{kind}-{n}-{modes}-{owners:?}");
-                    let path = scratch.0.join("case.ores");
-                    fs::write(&path, source(kind, owners, modes)).unwrap();
-                    let invalid = conflicts(owners, modes);
-                    let native = run(Command::new(&compiler).arg(&path));
-                    let diagnostic = String::from_utf8_lossy(&native.stderr);
-                    if invalid {
-                        assert_eq!(native.status.code(), Some(1), "{name}: {diagnostic}");
-                        assert!(
-                            native.stdout.is_empty(),
-                            "{name}: invalid loan emitted LLVM IR"
-                        );
-                        assert!(
-                            diagnostic.contains("conflicting active native borrow"),
-                            "{name}: {diagnostic}"
-                        );
-                        rejected += 1;
-                    } else {
-                        assert!(
-                            native.status.success() && !native.stdout.is_empty(),
-                            "{name}: {diagnostic}"
-                        );
-                        let ir = scratch.0.join("case.ll");
-                        let binary = scratch.0.join("case-native");
-                        fs::write(&ir, &native.stdout).unwrap();
-                        if binary.exists() {
-                            fs::remove_file(&binary).unwrap();
-                        }
-                        let mut link = Command::new(&clang);
-                        link.arg("-O1");
-                        if sanitize {
-                            link.args([
-                                "-fsanitize=address,undefined",
-                                "-fno-sanitize-recover=all",
-                                "-fno-omit-frame-pointer",
-                            ]);
-                        }
-                        let linked = run(link.arg(&ir).arg("-o").arg(&binary));
-                        assert!(
-                            linked.status.success(),
-                            "{name}: {}",
-                            String::from_utf8_lossy(&linked.stderr)
-                        );
-                        assert!(
-                            binary.is_file(),
-                            "{name}: linker reported success without an executable"
-                        );
-                        let executed = run(&mut Command::new(&binary));
-                        assert_eq!(
-                            executed.status.code(),
-                            Some(42),
-                            "{name}: {}",
-                            String::from_utf8_lossy(&executed.stderr)
-                        );
-                        accepted += 1;
-                    }
-                    if let Some(launcher) = &java {
-                        let mut command = Command::new(launcher);
-                        if invalid {
-                            command.arg("--check");
-                        }
-                        let reference = run(command.arg(&path));
-                        let message = String::from_utf8_lossy(&reference.stderr);
-                        if invalid {
-                            assert_eq!(reference.status.code(), Some(1), "Java {name}: {message}");
-                            assert!(
-                                message.contains("mutably borrowed")
-                                    || message.contains("another borrow is active")
-                                    || message.contains("overlapping mutable borrow arguments"),
-                                "Java {name}: wrong rejection: {message}"
-                            );
-                        } else {
-                            assert_eq!(reference.status.code(), Some(42), "Java {name}: {message}");
-                        }
-                        compared += 1;
+    let from_corpus = input_corpus.is_some();
+    let mut cases = Vec::new();
+    if let Some(path) = input_corpus {
+        let contents = fs::read_to_string(path).expect("cannot read borrow corpus");
+        let mut names = HashSet::new();
+        for line in contents.lines() {
+            let fields: Vec<_> = line.splitn(3, '\t').collect();
+            assert_eq!(fields.len(), 3, "malformed corpus row");
+            assert!(matches!(fields[0], "accept" | "reject"), "unknown verdict");
+            assert!(
+                !fields[1].is_empty() && names.insert(fields[1].to_owned()),
+                "duplicate/empty case name"
+            );
+            assert!(!fields[2].trim().is_empty(), "empty case source");
+            cases.push((
+                fields[1].to_owned(),
+                fields[2].to_owned(),
+                fields[0] == "reject",
+            ));
+        }
+        assert_eq!(
+            cases.len(),
+            162,
+            "shared corpus must contain all 162 vectors"
+        );
+    } else {
+        for kind in ["int", "bool", "class"] {
+            for n in [2, 3] {
+                let layouts = partitions(n);
+                assert_eq!(layouts.len(), if n == 2 { 2 } else { 5 });
+                for modes in 0..(1 << n) {
+                    for owners in &layouts {
+                        cases.push((
+                            format!("matrix-{kind}-{n}-{modes}-{owners:?}"),
+                            source(kind, owners, modes),
+                            conflicts(owners, modes),
+                        ));
                     }
                 }
             }
         }
     }
-    assert_eq!((accepted, rejected), (60, 84));
-    println!("PASS borrow alias matrix: accepted={accepted}, rejected={rejected}, Java={compared}, sanitized={sanitize}");
+    for (name, code, invalid) in cases {
+        let path = scratch.0.join("case.ores");
+        fs::write(&path, code).unwrap();
+        let native = run(Command::new(&compiler).arg(&path));
+        let diagnostic = String::from_utf8_lossy(&native.stderr);
+        if invalid {
+            assert_eq!(native.status.code(), Some(1), "{name}: {diagnostic}");
+            assert!(
+                native.stdout.is_empty(),
+                "{name}: invalid loan emitted LLVM IR"
+            );
+            assert!(
+                diagnostic.to_lowercase().contains("borrow")
+                    && !diagnostic.to_lowercase().contains("internal")
+                    && (!name.starts_with("matrix-")
+                        || diagnostic.contains("conflicting active native borrow")),
+                "{name}: {diagnostic}"
+            );
+            rejected += 1;
+        } else {
+            assert!(
+                native.status.success() && !native.stdout.is_empty(),
+                "{name}: {diagnostic}"
+            );
+            let ir = scratch.0.join("case.ll");
+            let binary = scratch.0.join("case-native");
+            fs::write(&ir, &native.stdout).unwrap();
+            if binary.exists() {
+                fs::remove_file(&binary).unwrap();
+            }
+            let mut link = Command::new(&clang);
+            link.arg("-O1");
+            if sanitize {
+                link.args([
+                    "-fsanitize=address,undefined",
+                    "-fno-sanitize-recover=all",
+                    "-fno-omit-frame-pointer",
+                ]);
+            }
+            let linked = run(link.arg(&ir).arg("-o").arg(&binary));
+            assert!(
+                linked.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&linked.stderr)
+            );
+            assert!(
+                binary.is_file(),
+                "{name}: linker reported success without an executable"
+            );
+            let executed = run(&mut Command::new(&binary));
+            assert_eq!(
+                executed.status.code(),
+                Some(42),
+                "{name}: {}",
+                String::from_utf8_lossy(&executed.stderr)
+            );
+            accepted += 1;
+        }
+        if let Some(launcher) = &java {
+            let mut command = Command::new(launcher);
+            if invalid {
+                command.arg("--check");
+            }
+            let reference = run(command.arg(&path));
+            let message = String::from_utf8_lossy(&reference.stderr);
+            if invalid {
+                assert_eq!(reference.status.code(), Some(1), "Java {name}: {message}");
+                assert!(
+                    (!name.starts_with("matrix-")
+                        && message.to_lowercase().contains("borrow")
+                        && !message.to_lowercase().contains("internal"))
+                        || message.contains("mutably borrowed")
+                        || message.contains("another borrow is active")
+                        || message.contains("overlapping mutable borrow arguments"),
+                    "Java {name}: wrong rejection: {message}"
+                );
+            } else {
+                assert_eq!(reference.status.code(), Some(42), "Java {name}: {message}");
+            }
+            compared += 1;
+        }
+    }
+    if from_corpus {
+        assert_eq!(accepted + rejected, 162);
+    } else {
+        assert_eq!((accepted, rejected), (60, 84));
+    }
+    println!("PASS borrow contract: accepted={accepted}, rejected={rejected}, Java={compared}, sanitized={sanitize}");
 }

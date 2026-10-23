@@ -62,7 +62,12 @@ Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
 
 ## Build and test
 
-Requires LLVM development libraries 14+, CMake 3.20+, C++17, Python3 and ideally Clang.
+Requires LLVM development libraries 14+, CMake 3.20+, C++17, Rust and ideally Clang.
+The remaining legacy test harnesses also require Python3 during migration.
+
+Use Rust for new and replacement test runners, benchmarks, build utilities and
+CI tooling. Keep shell scripts as thin entrypoints. Port existing Python tooling
+without losing its checks; invoking Python from Rust does not count as a port.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON

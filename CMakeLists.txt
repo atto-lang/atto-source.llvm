@@ -637,8 +637,9 @@ if(BUILD_TESTING)
     endforeach()
 
     add_test(NAME native_shared_borrow_contract
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/borrow_contract.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}")
+        COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
+            --corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/borrow-contract.tsv")
     set_tests_properties(native_shared_borrow_contract PROPERTIES TIMEOUT 120)
 
     add_test(NAME native_source_module_graph_execution
