@@ -149,25 +149,25 @@ int main() {
     // distinct IDs and fail closed instead of resurrecting a forgotten ID.
     using SmallBroker = oreslang::runtime::ActorBoundRequestTable<1, 1, 8, 2>;
     SmallBroker small;
-    assert(small.activate(Identity{41,1}));
-    assert(small.retire(Identity{41,1}).value() == 0);
-    assert(!small.activate(Identity{41,1})); // replay
-    assert(small.activate(Identity{41,2})); // strictly newer
-    assert(small.retire(Identity{41,2}).value() == 0);
-    assert(small.activate(Identity{42,1}));
-    assert(small.retire(Identity{42,1}).value() == 0);
-    assert(!small.activate(Identity{43,1})); // history budget consumed
-    assert(!small.activate(Identity{41,1}));
-    assert(!small.activate(Identity{42,1}));
-    assert(small.activate(Identity{41,3})); // existing ID still has authority
-    assert(small.retire(Identity{41,3}).value() == 0);
+    assert(small.activate(SmallBroker::ActorIncarnation{41,1}));
+    assert(small.retire(SmallBroker::ActorIncarnation{41,1}).value() == 0);
+    assert(!small.activate(SmallBroker::ActorIncarnation{41,1})); // replay
+    assert(small.activate(SmallBroker::ActorIncarnation{41,2})); // strictly newer
+    assert(small.retire(SmallBroker::ActorIncarnation{41,2}).value() == 0);
+    assert(small.activate(SmallBroker::ActorIncarnation{42,1}));
+    assert(small.retire(SmallBroker::ActorIncarnation{42,1}).value() == 0);
+    assert(!small.activate(SmallBroker::ActorIncarnation{43,1})); // history budget consumed
+    assert(!small.activate(SmallBroker::ActorIncarnation{41,1}));
+    assert(!small.activate(SmallBroker::ActorIncarnation{42,1}));
+    assert(small.activate(SmallBroker::ActorIncarnation{41,3})); // existing ID still has authority
+    assert(small.retire(SmallBroker::ActorIncarnation{41,3}).value() == 0);
     // Retire and borrow must linearize without recycling a buffer that a
     // concurrent reader already leased. Repeating fresh incarnations probes
     // races at several generations without expanding the authority budget.
     using RaceBroker = oreslang::runtime::ActorBoundRequestTable<1, 1, 32, 1>;
     RaceBroker raced;
     for (std::uint64_t generation = 1; generation <= 256; ++generation) {
-        Identity actor{77, generation};
+        RaceBroker::ActorIncarnation actor{77, generation};
         assert(raced.activate(actor));
         auto incoming = raced.begin(actor);
         assert(incoming);
