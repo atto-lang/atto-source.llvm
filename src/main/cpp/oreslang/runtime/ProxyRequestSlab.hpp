@@ -77,12 +77,14 @@ public:
         }
         std::copy(pages_.begin(), pages_.end(), owned_pages_.begin());
         pages_ = std::span<const OresArenaHandle>(owned_pages_.data(), pages_.size());
-        // Check every generation and page length against the *actual* arena
-        // before the first zeroing write. Syntactic handle checks cannot
-        // distinguish a stale or foreign live slot from a valid one.
-        if (!ores_actor_arena_validate_pages(arena_, turn_, pages_.data(),
-                pages_.size(), page_words_ * sizeof(std::uint32_t))) {
-            throw std::invalid_argument("proxy pages do not belong to arena");
+        // Atomic all-pages reservation: two logical slabs cannot initialize
+        // overlapping live arena slots. A failed attempt makes no writes.
+        // Close releases only after all request receipts settle and pages
+        // are physically scrubbed; host destruction cannot skip this receipt.
+        page_claim_ = ores_actor_arena_claim_pages(arena_, turn_, pages_.data(),
+                pages_.size(), page_words_ * sizeof(std::uint32_t));
+        if (!page_claim_) {
+            throw std::invalid_argument("proxy pages invalid or already claimed");
         }
         rows_ = layout_ == Layout::AoSoA
             ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
@@ -203,6 +205,13 @@ public:
         check_open();
         if (live_ != 0) throw std::logic_error("unretired native requests");
         zero_words(required_words(layout_, capacity_, lanes_));
+        if (arena_) {
+            if (!page_claim_ || !ores_actor_arena_unclaim_pages(
+                    arena_, turn_, pages_.data(), pages_.size(), page_claim_)) {
+                throw std::logic_error("proxy slab page claim release failed");
+            }
+            page_claim_ = 0;
+        }
         closed_ = true;
         free_head_ = kNoSlot;
     }
@@ -314,6 +323,7 @@ private:
     std::span<const OresArenaHandle> pages_{};
     std::array<OresArenaHandle, 16> owned_pages_{};
     std::size_t page_words_ = 0;
+    std::uint64_t page_claim_ = 0;
     std::uint32_t free_head_ = kNoSlot;
     std::uint32_t live_ = 0;
     bool closed_ = false;
