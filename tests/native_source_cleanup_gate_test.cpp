@@ -6,6 +6,9 @@
 
 namespace oreslang::runtime {
 struct NativeSourceCleanupGateTestPeer {
+    static bool normal(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return g.complete_normally(t);
+    }
     static bool claim(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
         return g.try_claim_cleanup(t);
     }
@@ -27,11 +30,11 @@ int main() {
     NativeSourceCleanupGate gate(token);
     CHECK(!gate.ready_for_reclaim());
     CHECK(!gate.request_cancel({7,9,12}));
-    CHECK(!gate.complete_normally({7,8,11}));
+    CHECK(!NativeSourceCleanupGateTestPeer::normal(gate, {7,8,11}));
     CHECK(!NativeSourceCleanupGateTestPeer::claim(gate, token));
     CHECK(gate.request_cancel(token));
     CHECK(!gate.request_cancel(token));
-    CHECK(!gate.complete_normally(token));
+    CHECK(!NativeSourceCleanupGateTestPeer::normal(gate, token));
     CHECK(!NativeSourceCleanupGateTestPeer::complete(gate, token));
     CHECK(NativeSourceCleanupGateTestPeer::claim(gate, token));
     CHECK(!NativeSourceCleanupGateTestPeer::claim(gate, token));
@@ -57,7 +60,7 @@ int main() {
         NativeSourceCleanupTicket t{17, i, i};
         NativeSourceCleanupGate race(t);
         std::atomic<int> wins{0};
-        std::thread one([&]{if (race.complete_normally(t)) ++wins;});
+        std::thread one([&]{if (NativeSourceCleanupGateTestPeer::normal(race, t)) ++wins;});
         std::thread two([&]{if (race.request_cancel(t)) ++wins;});
         one.join(); two.join();
         CHECK(wins==1);

@@ -41,6 +41,14 @@ public:
             record.source_token == source_token_;
     }
 
+    // A normal terminal result is also a positive physical reclamation
+    // claim, and must not be minted from a caller-forgeable naked ticket.
+    // The scheduler must first prove normal frame and FFI-loan teardown.
+    bool complete_normally(NativeSourceCleanupGate& gate) const noexcept {
+        return gate.belongs_to(ticket_.actor_id, ticket_.actor_generation) &&
+            claimed() && gate.complete_normally(ticket_);
+    }
+
     bool claim_cleanup(NativeSourceCleanupGate& gate) const noexcept {
         return gate.belongs_to(ticket_.actor_id, ticket_.actor_generation) &&
             claimed() && gate.try_claim_cleanup(ticket_);

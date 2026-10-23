@@ -28,8 +28,14 @@ public:
     NativeSourceCleanupGate(const NativeSourceCleanupGate&) = delete;
     NativeSourceCleanupGate& operator=(const NativeSourceCleanupGate&) = delete;
 
-    // Completion vs cancellation is a one-winner CAS. The issuer must call
-    // complete_normally only AFTER normal frame/loan teardown is verified.
+    // Completion vs cancellation is a one-winner CAS. Positive physical
+    // release must be asserted by a store-checked scheduler binding only.
+    // A naked actor/generation/continuation tuple is not completion authority.
+private:
+    friend class NativeSourceCleanupBinding;
+#ifdef ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER
+    friend struct NativeSourceCleanupGateTestPeer;
+#endif
     bool complete_normally(NativeSourceCleanupTicket ticket) noexcept {
         if (!valid(ticket)) return false;
         Phase expected = Phase::pending;
@@ -37,6 +43,7 @@ public:
                 std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
+public:
     // A cancel REQUEST never publishes a physical-completion receipt.
     bool request_cancel(NativeSourceCleanupTicket ticket) noexcept {
         if (!valid(ticket)) return false;

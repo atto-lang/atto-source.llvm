@@ -58,6 +58,33 @@ int main() {
     CHECK(!binding.claimed()); // COMPLETED no longer grants a cleanup turn.
     CHECK(!binding.complete_cleanup(gate));
 
+    // Normal success is also a positive arena-reclaim receipt. It must be
+    // bound to the claimed source continuation, not a forgeable ticket.
+    OresNativeContinuationHandle normalContinuation{};
+    CHECK(ores_native_continuation_store_publish(
+        store, execution, OresNativeContinuationHandle{},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 7, 1002, &normalContinuation));
+    const NativeSourceCleanupTicket normalTicket{
+        77, 9, ores_native_store_handle_pack(normalContinuation)
+    };
+    NativeSourceCleanupGate normalGate(normalTicket);
+    NativeSourceCleanupBinding normalBinding(
+        store, normalContinuation, normalTicket, 7, 1002);
+    CHECK(!normalBinding.complete_normally(normalGate));
+    OresNativeContinuationRecord normalClaimed{};
+    CHECK(ores_native_continuation_store_try_claim_resume(
+        store, normalContinuation, &normalClaimed));
+    CHECK(!NativeSourceCleanupBinding(
+        store, normalContinuation, normalTicket, 7, 1003)
+        .complete_normally(normalGate));
+    CHECK(normalBinding.complete_normally(normalGate));
+    CHECK(normalGate.ready_for_reclaim());
+    CHECK(!normalBinding.complete_normally(normalGate));
+    CHECK(ores_native_continuation_store_finish_resume(
+        store, normalContinuation));
+    CHECK(!normalBinding.claimed());
+    CHECK(ores_native_continuation_store_release(store, normalContinuation));
+
     CHECK(ores_native_continuation_store_release(store, continuation));
     CHECK(!binding.claimed()); // Freed/stale handle cannot revive.
     CHECK(ores_native_continuation_store_close(store));
