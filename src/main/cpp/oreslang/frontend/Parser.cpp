@@ -466,6 +466,9 @@ private:
                 target = identifier();
             else fail("native type aliases currently require a declared int/bool scalar target");
         }
+        if (token_.text == "with" || token_.text == "as")
+            fail("native refined aliases require checked Zorde exact-int constraint ABI "
+                 "and proof-preserving lowering; cannot erase with/as to int");
         require(";");
         if (defined_type_aliases_.count(name))
             fail("duplicate native type alias definition '" + name + "'");
