@@ -106,6 +106,7 @@ int main() {
         LocalBinding field;
         field.name = "total";
         field.field_mutable = true;
+        field.initializer = integer(0);
         actor.fields.push_back(std::move(field));
 
         Parameter message;
@@ -115,6 +116,30 @@ int main() {
         program.actors.push_back(std::move(actor));
 
         validate_target_admission(program, NativeTargetKind::Wasm32);
+    }
+
+    {
+        Program program;
+        program.functions.push_back(fn("helper"));
+
+        ActorDecl actor;
+        actor.name = "Worker";
+        LocalBinding field;
+        field.name = "total";
+        field.field_mutable = true;
+        field.initializer = integer(0);
+        actor.fields.push_back(std::move(field));
+
+        Parameter message;
+        message.name = "message";
+        actor.on_message.parameters.push_back(std::move(message));
+        actor.on_message.result = std::make_unique<Expression>();
+        actor.on_message.result->kind = Expression::Kind::Call;
+        actor.on_message.result->name = "helper";
+        program.actors.push_back(std::move(actor));
+
+        validate_target_admission(program, NativeTargetKind::Host);
+        assert(rejects(program, NativeTargetKind::Wasm32));
     }
 
     {
