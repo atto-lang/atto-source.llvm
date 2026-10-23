@@ -131,6 +131,17 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
         } else if (step == 4) {
             assert(state.slab->live() == 0);
             state.slab->close();
+            // A successful close invalidates the complete host API, not
+            // only mutating operations: no stale metadata reads after close.
+            bool closed_read_denied = false;
+            try { (void) state.slab->capacity(); }
+            catch (const std::logic_error&) { closed_read_denied = true; }
+            assert(closed_read_denied);
+            bool closed_admission_denied = false;
+            try { (void) state.slab->admit(8, 2, 3); }
+            catch (const std::logic_error&) { closed_admission_denied = true; }
+            assert(closed_admission_denied);
+            state.slab->close(); // idempotent owner cleanup
             // Deliberately omit other_slab.close() even though all its
             // requests are settled: after the exact scheduler-done fence,
             // trusted host retirement must scrub/free it safely instead of
