@@ -260,6 +260,15 @@ public:
         return state_->used_bytes;
     }
 
+    // Terminal retirement must not claim it drained this inbox while a
+    // previously admitted producer is still preparing a publish. In
+    // particular, close() seals admission but does NOT cancel in-flight
+    // preparation or prevent the reserved envelope from being committed.
+    std::size_t pending_prepares() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->pending_prepares;
+    }
+
     void close() {
         std::lock_guard<std::mutex> guard(state_->mutex);
         state_->closed = true;
