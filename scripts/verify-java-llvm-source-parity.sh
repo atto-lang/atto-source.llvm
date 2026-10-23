@@ -45,10 +45,18 @@ fi
 
 llvm_sha="$(git -C "$source_root" rev-parse --verify HEAD)"
 java_sha="$(git -C "$java_root" rev-parse --verify HEAD)"
-for tree in "$source_root" "$java_root"; do
-  git -C "$tree" diff --quiet --exit-code
-  git -C "$tree" diff --cached --quiet --exit-code
-done
+require_clean_checkout() {
+  local tree
+  for tree in "$source_root" "$java_root"; do
+    # Includes untracked files: a new .ores import could otherwise change
+    # execution without changing the pinned Git SHA or tracked diffs.
+    if [[ -n "$(git -C "$tree" status --porcelain --untracked-files=all)" ]]; then
+      echo "source checkout has tracked or untracked changes: $tree" >&2
+      exit 65
+    fi
+  done
+}
+require_clean_checkout
 
 # Both repositories must carry the same committed source corpus. Comparing
 # outputs alone is insufficient if one repo silently changes its fixtures.
@@ -110,10 +118,7 @@ trap 'rm -f "$staging"' EXIT
 # Reject a checkout that moved or became dirty during the run.
 [[ "$llvm_sha" == "$(git -C "$source_root" rev-parse --verify HEAD)" ]]
 [[ "$java_sha" == "$(git -C "$java_root" rev-parse --verify HEAD)" ]]
-for tree in "$source_root" "$java_root"; do
-  git -C "$tree" diff --quiet --exit-code
-  git -C "$tree" diff --cached --quiet --exit-code
-done
+require_clean_checkout
 test -s "$staging"
 # Atomic no-clobber publish only after Java/LLVM source integrity is rechecked.
 ln "$staging" "$report"
