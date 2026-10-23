@@ -475,6 +475,10 @@ private:
             fail("native declare supports only scalar type aliases; class/actor/enum/model unsupported");
         }
         const std::string name = identifier();
+        if (name == "String" || name == "string" || name == "int" ||
+                name == "bool" || reserved(name) || callable_nominal_name(name) ||
+                entry_builtin_name(name))
+            fail("native forward type cannot shadow builtin or reserved types");
         if (token_.text == "<")
             fail("native generic type alias forward requires a verified monomorphization ABI");
         require(";");
@@ -494,14 +498,15 @@ private:
         const std::string name = identifier();
         if (token_.text == "<")
             fail("native generic type alias requires a verified monomorphization ABI");
-        if (name == "int" || name == "bool" || reserved(name)
-                || callable_nominal_name(name) || entry_builtin_name(name))
+        if (name == "int" || name == "bool" || name == "string" ||
+                name == "String" || reserved(name) ||
+                callable_nominal_name(name) || entry_builtin_name(name))
             fail("native type alias cannot shadow a builtin or reserved language name");
         require("=");
         std::string target;
         if (accept("int")) target = "int";
         else if (accept("bool")) target = "bool";
-        else if (accept("string")) {
+        else if (accept("string") || accept("String")) {
             if (token_.text == "with" || token_.text == "as")
                 fail("native refined string aliases require Zorde UTF-8/charset checks "
                      "and proof-preserving LLVM lowering; unsupported");
@@ -2717,6 +2722,13 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            // Reject hand-constructed or incorrectly deserialized programs:
+            // parser-only pending aliases never enter ownership or LLVM ABI.
+            if (!fn.pending_return_type_alias.empty())
+                throw std::runtime_error("unresolved native scalar return type before ABI admission");
+            for (const auto& parameter : fn.parameters)
+                if (!parameter.pending_type_alias.empty())
+                    throw std::runtime_error("unresolved native scalar parameter type before ABI admission");
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
             // inserted before source function definitions. LLVM silently
