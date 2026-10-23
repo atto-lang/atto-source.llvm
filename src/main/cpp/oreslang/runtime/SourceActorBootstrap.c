@@ -82,13 +82,26 @@ static int same_allocation(
         && a.generation == b.generation;
 }
 
-/* Never dereference an untrusted/stale opaque ActorRef before validating
- * membership under group.mutex. Pointer-only ABI still lacks incarnation
- * fencing against allocator address reuse (tracked separately). */
+/* Source ABI's void* is an opaque *monotonic ID*, not a heap address.
+ * Under the group mutex, only currently live actor IDs are admitted.
+ * No stable actor struct pointer escapes: malloc reuse after physical
+ * reclamation therefore cannot revive an old ActorRef (ABA).
+ *
+ * This is a trusted native-host token, NOT a cryptographic capability:
+ * the source compiler must keep it opaque to guest code. Integer-to-pointer
+ * conversion is intentionally confined to this native C ABI; WASM will
+ * need its own integer handle representation. */
+static void* actor_handle(const SourceActor* actor) {
+    ensure(actor && actor->id > 0 && actor->id <= UINTPTR_MAX);
+    return (void*)(uintptr_t)actor->id;
+}
+
 static SourceActor* find_actor_locked(const void* opaque) {
     if (!opaque || !group.vm) return NULL;
+    const uintptr_t token = (uintptr_t)opaque;
     for (size_t i = 0; i < group.next_slot; ++i) {
-        if (group.actors[i] == opaque) return group.actors[i];
+        SourceActor* actor = group.actors[i];
+        if (actor && actor->id == token) return actor;
     }
     return NULL;
 }
@@ -190,7 +203,7 @@ static void root_resume_turn(void) {
     ensure(same_allocation(logical.allocation, physical.allocation));
     ensure(!ores_native_store_handle_valid(current_source_execution));
     current_source_execution = resumed;
-    const int64_t result = continuation(actor);
+    const int64_t result = continuation(actor_handle(actor));
     current_source_execution = (OresNativeExecutionHandle){0, 0};
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
@@ -339,7 +352,8 @@ void* oreslang_source_actor_spawn(
     instance->magic = SOURCE_ACTOR_MAGIC;
     instance->id =
         atomic_fetch_add_explicit(&next_actor_id, 1, memory_order_relaxed);
-    ensure(instance->id != 0 && instance->id != UINT64_MAX);
+    ensure(instance->id != 0 && instance->id != UINT64_MAX
+        && instance->id <= UINTPTR_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->lifetime_parent = parent;
@@ -356,7 +370,7 @@ void* oreslang_source_actor_spawn(
     ensure(ores_native_vm_publish_control(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
     group_unlock();
-    return instance;
+    return actor_handle(instance);
 }
 
 int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
@@ -481,18 +495,10 @@ int oreslang_source_actor_snapshot_current_trace(
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 int oreslang_source_actor_test_stopping(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
     group_lock();
-    int stopped = 0;
-    if (group.vm && instance) {
-        /* Test-only: caller must hold this actor alive with a gated carrier. */
-        for (size_t i = 0; i < group.next_slot; ++i) {
-            if (group.actors[i] == instance) {
-                stopped = instance->stopping;
-                break;
-            }
-        }
-    }
+    /* Deliberately do not dereference the opaque handle. */
+    SourceActor* instance = find_actor_locked(opaque);
+    int stopped = instance ? instance->stopping : 0;
     group_unlock();
     return stopped;
 }
