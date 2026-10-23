@@ -359,6 +359,40 @@ static void closed_group_never_reclaims_saturated_inbox_with_active_user_turn() 
     CHECK(user_turns.load() == 1);
 }
 
+static void physically_checked_out_receipt_blocks_finalization_after_stop() {
+    NativeActorGroup group(8893, 1);
+    auto actor = group.adopt(8893, 21, 1, [] {});
+    auto finalizer = group.runtime_finalizer(actor);
+    CHECK(group.mark_ready(actor));
+    Inbox inbox({2, 16}, {2, 16}, {2, 16}, 3);
+    inbox.bind_target(actor);
+    CHECK(inbox.offer_to(actor, Lane::Normal, 81, 8));
+    CHECK(actor.outstanding_resource_loans() == 1);
+    auto checked_out = inbox.try_receive();
+    CHECK(checked_out && checked_out->sequence() == 1);
+    CHECK(inbox.used_frames(Lane::Normal) == 1);
+    CHECK(!group.finalized(actor)); // handler exited, receipt has not
+    group.close();
+    CHECK(finalizer.ready_for_actor_turn_quiescence());
+    CHECK(!finalizer.ready_for_resource_reclamation());
+    CHECK(!finalizer.finalized("unreleased checked-out receipt"));
+    CHECK(inbox.retire_queued_after_quiescence(finalizer, actor) == 0);
+    CHECK(actor.outstanding_resource_loans() == 1);
+    CHECK(checked_out->acknowledge_released());
+    CHECK(!checked_out->acknowledge_released());
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(inbox.completed_through(1));
+    CHECK(finalizer.ready_for_resource_reclamation());
+    CHECK(finalizer.finalized());
+    CHECK(!finalizer.finalized());
+    actor.get_done().get();
+    bool rejected = false;
+    try { actor.retain_resource_loan(); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+    inbox.close();
+}
+
 static void terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success() {
     Inbox inbox({2, 16}, {2, 16}, {2, 16});
     CHECK(inbox.offer(Lane::Normal, 101, 8));  // global sequence 1
@@ -784,6 +818,7 @@ int main() {
     actual_native_dispatch_obeys_control_and_logical_actor_turn();
     native_dispatch_does_not_steal_mail_from_active_carrier();
     closed_group_never_reclaims_saturated_inbox_with_active_user_turn();
+    physically_checked_out_receipt_blocks_finalization_after_stop();
     terminal_stop_fails_drain_instead_of_reporting_dropped_mail_success();
     terminal_retirement_waits_for_inflight_owner_to_ack();
     stale_generation_cannot_reuse_a_live_native_actor_inbox();
