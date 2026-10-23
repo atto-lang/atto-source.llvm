@@ -84,6 +84,17 @@ pub fnc main(): int {
 }
 """
 
+PUBLIC_OVERLOAD_SURFACE = """pub fnc api(int value): int {
+  return value;
+}
+fnc api(int left, int right): int {
+  return left + right;
+}
+pub fnc main(): int {
+  return api(42);
+}
+"""
+
 def compile_ir(compiler, source, shaken, roots=(), compiler_args=()):
     with tempfile.TemporaryDirectory(prefix="oreslang-tree-shake-source-") as td:
         path=Path(td)/"case.ores"
@@ -153,6 +164,16 @@ def main():
             "call reachable only from ternary arm was removed")
     require(b"@dead(" not in ternary.stdout,
             "unreachable function survived ternary tree shaking")
+
+    overload_control=compile_ir(args.compiler,PUBLIC_OVERLOAD_SURFACE,False)
+    overload_shaken=compile_ir(args.compiler,PUBLIC_OVERLOAD_SURFACE,True)
+    require(overload_control.returncode==0 and overload_shaken.returncode==0,
+            "public overload compile failed")
+    for symbol in (b"@api$arity1", b"@api$arity2"):
+        require(symbol in overload_control.stdout,
+                "control IR missing overload ABI symbol "+repr(symbol))
+        require(symbol in overload_shaken.stdout,
+                "conservative tree shaking changed public overload ABI "+repr(symbol))
 
     class_control=compile_ir(args.compiler,CLASS_SURFACE,False)
     class_shaken=compile_ir(args.compiler,CLASS_SURFACE,True)
