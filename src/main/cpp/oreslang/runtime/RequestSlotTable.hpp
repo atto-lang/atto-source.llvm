@@ -27,7 +27,7 @@ public:
     struct Handle { std::uint64_t value = 0; };
     static_assert(sizeof(Handle) == 8, "request handles must remain compact");
 private:
-    enum class Phase : std::uint8_t { free, writing, ready, closing, retired };
+    enum class Phase : std::uint8_t { free, writing, aborting, ready, closing, retired };
     struct Slot {
         std::array<char, MaxBytes> bytes{};
         std::uint32_t generation = 0;
@@ -71,7 +71,8 @@ private:
     void abandon(std::size_t i, std::uint32_t generation) noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
         auto& slot = slots_[i];
-        if (slot.generation == generation && slot.phase == Phase::writing)
+        if (slot.generation == generation &&
+            (slot.phase == Phase::writing || slot.phase == Phase::aborting))
             recycle(i);
     }
     void drop_read(std::size_t i) noexcept {
@@ -228,6 +229,28 @@ public:
         slot->phase = Phase::closing;
         if (slot->readers == 0) recycle(index(h));
         return true;
+    }
+    // Terminate a trusted actor incarnation. Already-published handles become
+    // unreadable immediately. An in-progress ingress remains pinned until its
+    // own move-only writer is dropped; publish fails once its owner is revoked.
+    // Outstanding read leases may finish without risking recycled storage.
+    std::size_t revoke_owner(std::uint64_t owner) noexcept {
+        if (owner == 0) return 0;
+        std::lock_guard<std::mutex> guard(mutex_);
+        std::size_t revoked = 0;
+        for (std::size_t i = 0; i < Slots; ++i) {
+            auto& slot = slots_[i];
+            if (slot.owner != owner) continue;
+            if (slot.phase == Phase::writing) {
+                slot.phase = Phase::aborting;
+                ++revoked;
+            } else if (slot.phase == Phase::ready) {
+                slot.phase = Phase::closing;
+                ++revoked;
+                if (slot.readers == 0) recycle(i);
+            }
+        }
+        return revoked;
     }
     std::size_t available() const noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
