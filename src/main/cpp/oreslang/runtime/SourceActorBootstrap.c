@@ -82,6 +82,17 @@ static int same_allocation(
         && a.generation == b.generation;
 }
 
+/* Never dereference an untrusted/stale opaque ActorRef before validating
+ * membership under group.mutex. Pointer-only ABI still lacks incarnation
+ * fencing against allocator address reuse (tracked separately). */
+static SourceActor* find_actor_locked(const void* opaque) {
+    if (!opaque || !group.vm) return NULL;
+    for (size_t i = 0; i < group.next_slot; ++i) {
+        if (group.actors[i] == opaque) return group.actors[i];
+    }
+    return NULL;
+}
+
 static SourceActor* lookup(size_t index) {
     ensure(index < SOURCE_GROUP_ROOT_SLOT);
     SourceActor* actor = group.actors[index];
@@ -349,40 +360,45 @@ void* oreslang_source_actor_spawn(
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
-    SourceActor* instance = (SourceActor*)opaque;
+    /* Validate under the SAME lock as subtree STOP and heap reclamation.
+     * Previously a stale pointer was read before the group admission lock. */
+    group_lock();
+    SourceActor* instance = find_actor_locked(opaque);
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
-    ensure(ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
-        == ORES_NATIVE_SEND_ACCEPTED);
+        && instance->on_message && !instance->stopping);
+    const OresNativeSendStatus admitted = ores_native_vm_try_send(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload);
+    group_unlock();
+    ensure(admitted == ORES_NATIVE_SEND_ACCEPTED);
 }
 
 int64_t oreslang_source_actor_await_ready(
         void* opaque,
         OresSourceActorContinuation continuation,
         uint64_t source_token) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     ensure(continuation != NULL);
-
-    /*
-     * This outer wait is trusted top-level ABI glue, never guest-carrier
-     * blocking. A carrier call would be a deadlock/semantic violation.
-     */
-    OresNativeExecutionContext carrier = {0};
-    ensure(!ores_native_vm_current_execution_context(
-        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
-
     ReadyAwaitFrame frame = {
         .continuation = continuation,
-        .actor = instance,
         .source_token = source_token
     };
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
 
     group_lock();
+    SourceActor* instance = find_actor_locked(opaque);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
+        && !instance->stopping);
+    /*
+     * This outer wait is trusted top-level ABI glue, never guest-carrier
+     * blocking. The probe, pointer admission and VM lifetime now share the
+     * group lock, preventing a racing last-actor stop from freeing the VM
+     * between a thread-local authorization check and future registration.
+     */
+    OresNativeExecutionContext carrier = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
     ensure(group.vm && group.root_ref.scheduler_domain
         && group.pending_ready == NULL);
+    frame.actor = instance;
     frame.ready_future = ores_native_vm_actor_future_open(
         group.vm,
         ORES_NATIVE_VM_MAIN,
@@ -482,18 +498,17 @@ int oreslang_source_actor_test_stopping(void* opaque) {
  * This restricted source ABI has no per-actor get_done() yet.
  */
 void oreslang_source_actor_stop(void* opaque) {
-    SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     /* A blocking stop from a carrier would deadlock its own scheduler. */
     ensure(current_source_actor == NULL);
 
     SourceActor* descendants[SOURCE_GROUP_ROOT_SLOT] = {0};
     size_t count = 0;
     group_lock();
-    ensure(group.vm);
-    const size_t slot = (size_t)instance->ref.actor_slot;
-    ensure(slot < group.next_slot && group.actors[slot] == instance
+    SourceActor* instance = find_actor_locked(opaque);
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
         && !instance->stopping);
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    ensure(slot < group.next_slot && group.actors[slot] == instance);
 
     for (size_t i = 0; i < group.next_slot; ++i) {
         SourceActor* candidate = group.actors[i];
