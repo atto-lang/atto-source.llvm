@@ -1269,6 +1269,18 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
+    set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
+
+    # Host-runtime QoS admission primitive only. Supervisor CONTROL scheduling
+    # and actor-turn exclusivity are explicitly exercised by the test.
+    add_executable(oreslang-priority-actor-inbox-test tests/priority_actor_inbox_test.cpp)
+    target_include_directories(oreslang-priority-actor-inbox-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-priority-actor-inbox-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-priority-actor-inbox-test PRIVATE Threads::Threads)
+    add_test(NAME native_priority_user_inbox_control_isolation
+        COMMAND oreslang-priority-actor-inbox-test)
+    set_tests_properties(native_priority_user_inbox_control_isolation PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
