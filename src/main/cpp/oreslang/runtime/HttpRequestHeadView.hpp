@@ -16,6 +16,7 @@ class HttpRequestHeadView final {
     std::size_t headers_offset_ = 0;
     std::size_t header_end_ = 0;
     std::size_t header_count_ = 0;
+    std::size_t supplied_bytes_ = 0;
     static bool name_char(unsigned char c) noexcept {
         // Strict supported subset of RFC tchar; reject unsupported spellings.
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -53,6 +54,7 @@ public:
         for (unsigned char c : target) if (c <= 0x20 || c == 0x7f) return std::nullopt;
         HttpRequestHeadView result;
         result.raw_ = head;
+        result.supplied_bytes_ = bytes.size();
         result.method_ = method;
         result.target_ = target;
         result.version_ = version;
@@ -85,6 +87,46 @@ public:
     std::string_view version() const noexcept { return version_; }
     std::size_t header_count() const noexcept { return header_count_; }
     std::size_t head_bytes() const noexcept { return header_end_; }
+    // Fail-closed fast-path admission for a COMPLETE, unframed GET/HEAD
+    // request. Does not interpret transfer codings or streaming bodies.
+    // Rejecting those cases here avoids accidentally treating first_header()
+    // as a body-framing decision. A production proxy must still implement
+    // full RFC 9112 validation, connection state and timeout budgets.
+    bool safe_unframed_request() const noexcept {
+        if (head_end_ == 0 || head_end_ != supplied_bytes_) return false;
+        if (method_ != "GET" && method_ != "HEAD") return false;
+        std::size_t host_count = 0;
+        std::size_t length_count = 0;
+        auto pos = headers_offset_;
+        while (pos < header_end_ - 2) {
+            const auto end = raw_.find("\r\n", pos);
+            if (end == std::string_view::npos) return false;
+            const auto line = raw_.substr(pos, end - pos);
+            const auto colon = line.find(':');
+            if (colon == std::string_view::npos) return false;
+            const auto name = line.substr(0, colon);
+            auto value = line.substr(colon + 1);
+            while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+                value.remove_prefix(1);
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+                value.remove_suffix(1);
+            if (eql_ci(name, "Host")) {
+                if (++host_count != 1 || value.empty()) return false;
+                for (unsigned char c : value)
+                    if (c <= 0x20 || c >= 0x7f) return false;
+            } else if (eql_ci(name, "Content-Length")) {
+                // Deliberately stricter than RFC: only canonical zero and no
+                // duplicates, never a length list or partial request body.
+                if (++length_count != 1 || value != "0") return false;
+            } else if (eql_ci(name, "Transfer-Encoding")
+                    || eql_ci(name, "Expect")
+                    || eql_ci(name, "Upgrade")) {
+                return false;
+            }
+            pos = end + 2;
+        }
+        return version_ == "HTTP/1.0" || host_count == 1;
+    }
     // NOT a framing resolver for duplicate CL/TE or HTTP request smuggling.
     std::optional<std::string_view> first_header(std::string_view key) const noexcept {
         auto pos = headers_offset_;
