@@ -1295,6 +1295,8 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-actor-retirement-barrier-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-native-actor-retirement-barrier-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-actor-retirement-barrier-test PRIVATE
+        ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1)
     add_test(NAME native_actor_done_resource_quiescence
         COMMAND oreslang-native-actor-retirement-barrier-test)
     set_tests_properties(native_actor_done_resource_quiescence PROPERTIES TIMEOUT 15)
@@ -1307,6 +1309,8 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-source-cleanup-gate-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-native-source-cleanup-gate-test PRIVATE Threads::Threads)
+    target_compile_definitions(oreslang-native-source-cleanup-gate-test PRIVATE
+        ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER=1)
     add_test(NAME native_source_cleanup_deferred_physical_receipt
         COMMAND oreslang-native-source-cleanup-gate-test)
     set_tests_properties(native_source_cleanup_deferred_physical_receipt PROPERTIES TIMEOUT 30)

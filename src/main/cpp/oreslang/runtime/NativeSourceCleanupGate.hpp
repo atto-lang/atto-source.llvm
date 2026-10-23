@@ -8,6 +8,8 @@ namespace oreslang::runtime {
 // Host-only, pointer-free cancellation/unwind receipt. Caller MUST keep this
 // object alive until all scheduler/CONTROL users are quiescent. It neither
 // dispatches guest cleanup nor proves correct source lowering by itself.
+class NativeSourceCleanupBinding;
+
 struct NativeSourceCleanupTicket {
     std::uint64_t actor_id;
     std::uint64_t actor_generation;
@@ -43,6 +45,15 @@ public:
                 std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
+private:
+    // Only the store-checked runtime binding may mint positive cleanup
+    // progress in production builds. The direct test peer is compiled
+    // exclusively into focused native CTests.
+    friend class NativeSourceCleanupBinding;
+#ifdef ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER
+    friend struct NativeSourceCleanupGateTestPeer;
+#endif
+
     // Trusted actor scheduler only; never called directly by a broker thread.
     // A cleanup continuation may yield/await and be claimed again later.
     bool try_claim_cleanup(NativeSourceCleanupTicket ticket) noexcept {
@@ -72,6 +83,9 @@ public:
                 std::memory_order_acq_rel, std::memory_order_acquire);
     }
 
+public:
+    // Supervisor failure/quarantine is always fail-closed, never a positive
+    // physical release. Only the binding may mint a successful cleanup turn.
     // Scheduler close, timeout, cleanup panic or missing owner execution lane
     // must never be mistaken for a positive physical cleanup receipt.
     bool fail_cleanup(NativeSourceCleanupTicket ticket) noexcept {

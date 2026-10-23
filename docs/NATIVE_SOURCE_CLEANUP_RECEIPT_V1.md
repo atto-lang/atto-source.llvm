@@ -1,3 +1,22 @@
+## Positive cleanup transition access hardened (October 23)
+
+Normal production translation units can no longer call
+`NativeSourceCleanupGate::try_claim_cleanup`, `yield_cleanup` or
+`complete_cleanup` directly: these methods are private, with access
+restricted to the `NativeSourceCleanupBinding` implementation that validates
+a live, claimed continuation record. Existing focused gate/retirement tests
+use a build-target-only `ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER` friend
+(never defined for the production runtime or binding CTest).
+
+This is **C++ API exposure hardening**, not a complete authority boundary.
+A trusted host still constructs bindings, and the store snapshot-to-CAS
+transition does not yet own an indivisible actor carrier lease. Normal
+completion and fail-closed cancellation/reporting remain host-level APIs.
+Do not allow guest code or untrusted FFI to define the test-peer macro,
+construct host bindings or manipulate the native continuation store. Actual
+scheduler-owned exclusive admission and source-to-native lowering remain
+mandatory release gates.
+
 # Native source-cleanup receipt v1 (host prerequisite; not guest lowering)
 
 Java/Graal PR [#1887](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1887)

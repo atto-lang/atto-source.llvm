@@ -11,6 +11,20 @@
 #include <stdexcept>
 #include <thread>
 
+namespace oreslang::runtime {
+struct NativeSourceCleanupGateTestPeer {
+    static bool claim(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::claim(g, t);
+    }
+    static bool yield(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::yield(g, t);
+    }
+    static bool complete(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::complete(g, t);
+    }
+};
+} // namespace oreslang::runtime
+
 using namespace oreslang::runtime;
 using Poll = NativeActorRetirementBarrier::Poll;
 using Kind = ActorResourceRegistry::Kind;
@@ -238,13 +252,13 @@ static void deferred_source_cleanup_physically_fences_actor_done() {
             "scheduler close without cleanup proof freed arena");
     require(receipt->request_cancel(ticket), "cancel request");
     require(owned.poll() == Poll::pending, "cancel request faked physical done");
-    require(receipt->try_claim_cleanup(ticket), "cleanup turn claim");
-    require(!receipt->try_claim_cleanup(ticket), "duplicate cleanup turn claim");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "cleanup turn claim");
+    require(!NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "duplicate cleanup turn claim");
     require(owned.poll() == Poll::pending, "incomplete cleanup turn freed arena");
-    require(receipt->yield_cleanup(ticket), "cleanup await yield");
+    require(NativeSourceCleanupGateTestPeer::yield(*receipt, ticket), "cleanup await yield");
     require(owned.poll() == Poll::pending, "yielded cleanup freed arena");
-    require(receipt->try_claim_cleanup(ticket), "cleanup resume on owner lane");
-    require(receipt->complete_cleanup(ticket), "cleanup completion");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "cleanup resume on owner lane");
+    require(NativeSourceCleanupGateTestPeer::complete(*receipt, ticket), "cleanup completion");
     require(owned.poll() == Poll::pending && freed == 0,
             "another suspended continuation lost its physical lifetime pin");
     registry->release_loan(outstanding_child);
@@ -272,9 +286,9 @@ static void failed_source_cleanup_keeps_actor_arena_retained() {
     require(group.mark_ready(ref), "failed cleanup actor ready");
     group.close();
     require(receipt->request_cancel(ticket), "failed cleanup cancel request");
-    require(receipt->try_claim_cleanup(ticket), "failed cleanup claim");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "failed cleanup claim");
     require(receipt->fail_cleanup(ticket), "failed cleanup marker");
-    require(!receipt->complete_cleanup(ticket), "failed cleanup claimed completion");
+    require(!NativeSourceCleanupGateTestPeer::complete(*receipt, ticket), "failed cleanup claimed completion");
     require(owned.poll() == Poll::cleanup_incomplete
                 && registry->phase() == ActorResourceRegistry::Phase::retiring,
             "failed cleanup reclaimed actor resources");

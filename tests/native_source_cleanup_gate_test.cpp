@@ -4,6 +4,20 @@
 #include <stdexcept>
 #include <thread>
 
+namespace oreslang::runtime {
+struct NativeSourceCleanupGateTestPeer {
+    static bool claim(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::claim(g, t);
+    }
+    static bool yield(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::yield(g, t);
+    }
+    static bool complete(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return NativeSourceCleanupGateTestPeer::complete(g, t);
+    }
+};
+} // namespace oreslang::runtime
+
 using namespace oreslang::runtime;
 #define CHECK(e) do { if (!(e)) throw std::runtime_error(#e); } while (false)
 
@@ -14,29 +28,29 @@ int main() {
     CHECK(!gate.ready_for_reclaim());
     CHECK(!gate.request_cancel({7,9,12}));
     CHECK(!gate.complete_normally({7,8,11}));
-    CHECK(!gate.try_claim_cleanup(token));
+    CHECK(!NativeSourceCleanupGateTestPeer::claim(gate, token));
     CHECK(gate.request_cancel(token));
     CHECK(!gate.request_cancel(token));
     CHECK(!gate.complete_normally(token));
-    CHECK(!gate.complete_cleanup(token));
-    CHECK(gate.try_claim_cleanup(token));
-    CHECK(!gate.try_claim_cleanup(token));
+    CHECK(!NativeSourceCleanupGateTestPeer::complete(gate, token));
+    CHECK(NativeSourceCleanupGateTestPeer::claim(gate, token));
+    CHECK(!NativeSourceCleanupGateTestPeer::claim(gate, token));
     for (int i=0; i<3; ++i) {
-        CHECK(gate.yield_cleanup(token));
+        CHECK(NativeSourceCleanupGateTestPeer::yield(gate, token));
         CHECK(!gate.ready_for_reclaim());
-        CHECK(gate.try_claim_cleanup(token));
+        CHECK(NativeSourceCleanupGateTestPeer::claim(gate, token));
     }
-    CHECK(gate.complete_cleanup(token));
+    CHECK(NativeSourceCleanupGateTestPeer::complete(gate, token));
     CHECK(gate.ready_for_reclaim());
-    CHECK(!gate.complete_cleanup(token));
+    CHECK(!NativeSourceCleanupGateTestPeer::complete(gate, token));
     CHECK(!gate.fail_cleanup(token));
 
     NativeSourceCleanupGate failed({7,9,12});
     CHECK(failed.request_cancel({7,9,12}));
-    CHECK(failed.try_claim_cleanup({7,9,12}));
+    CHECK(NativeSourceCleanupGateTestPeer::claim(failed, {7,9,12}));
     CHECK(failed.fail_cleanup({7,9,12}));
     CHECK(failed.incomplete());
-    CHECK(!failed.complete_cleanup({7,9,12}));
+    CHECK(!NativeSourceCleanupGateTestPeer::complete(failed, {7,9,12}));
     CHECK(!failed.ready_for_reclaim());
 
     for (std::uint64_t i=1;i<=800;++i) {
@@ -49,8 +63,8 @@ int main() {
         CHECK(wins==1);
         if (race.phase()==Phase::cancel_requested) {
             CHECK(!race.ready_for_reclaim());
-            CHECK(race.try_claim_cleanup(t));
-            CHECK(race.complete_cleanup(t));
+            CHECK(NativeSourceCleanupGateTestPeer::claim(race, t));
+            CHECK(NativeSourceCleanupGateTestPeer::complete(race, t));
         }
         CHECK(race.ready_for_reclaim());
     }
@@ -61,14 +75,14 @@ int main() {
         NativeSourceCleanupTicket t{37, i, i + 2000};
         NativeSourceCleanupGate race(t);
         CHECK(race.request_cancel(t));
-        CHECK(race.try_claim_cleanup(t));
+        CHECK(NativeSourceCleanupGateTestPeer::claim(race, t));
         std::atomic<int> wins{0};
-        std::thread complete([&]{ if (race.complete_cleanup(t)) ++wins; });
+        std::thread complete([&]{ if (NativeSourceCleanupGateTestPeer::complete(race, t)) ++wins; });
         std::thread incomplete([&]{ if (race.fail_cleanup(t)) ++wins; });
         complete.join(); incomplete.join();
         CHECK(wins == 1);
         CHECK(race.ready_for_reclaim() != race.incomplete());
-        CHECK(!race.complete_cleanup(t) && !race.fail_cleanup(t));
+        CHECK(!NativeSourceCleanupGateTestPeer::complete(race, t) && !race.fail_cleanup(t));
         CHECK(!race.request_cancel({37, i + 1, i + 2000}));
     }
 }
