@@ -907,6 +907,8 @@ private:
         require("mtd");
         extension_method_name_ = identifier();
         require("on");
+        if (token_.text == "int" || token_.text == "bool")
+            fail("EXTENSION_RECEIVER_REQUIRES_NAMED_ALIAS: primitive receivers are not extension identities");
         extension_receiver_alias_ = identifier();
         if (!scalar_alias_targets_.count(extension_receiver_alias_)) {
             if (type_only_nominals_.count(extension_receiver_alias_))
