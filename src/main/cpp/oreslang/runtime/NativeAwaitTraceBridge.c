@@ -139,7 +139,21 @@ int ores_native_await_trace_ready_resume_begin(
 int ores_native_await_trace_resume_finish(
         OresNativeContinuationStore* continuations,
         OresNativeSuspensionLink link) {
-    if (!continuations || !ores_native_store_handle_valid(link.continuation))
+    if (!continuations || !ores_native_store_handle_valid(link.continuation)
+            || !ores_native_store_handle_valid(link.parent))
+        return 0;
+
+    /*
+     * The physical-completion hook must carry the same generation-fenced
+     * parent and execution identity that claimed the suspension. A bare
+     * continuation handle must not let a forged/stale link finish a guest
+     * turn belonging to a different actor or parent execution.
+     */
+    OresNativeContinuationRecord record;
+    if (!ores_native_continuation_store_get(
+            continuations, link.continuation, &record)
+            || !same_handle(record.execution, link.parent)
+            || !same_execution_id(record.execution_id, link.execution_id))
         return 0;
     return ores_native_continuation_store_finish_resume(
         continuations, link.continuation);
