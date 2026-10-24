@@ -134,9 +134,41 @@ static void stop_during_constructor(void) {
     oreslang_source_actor_join_done(actor);
 }
 
+static void successful_readiness(void) {
+    reset_constructor();
+    oreslang_source_actor_test_hold_initialization(0);
+    atomic_store_explicit(
+        &constructor_release, 1, memory_order_release);
+
+    void* actor =
+        oreslang_source_actor_spawn(constructor, on_message, 1);
+    check(actor != NULL);
+
+    while (oreslang_source_actor_ready_status(actor)
+            != ORES_SOURCE_ACTOR_STARTUP_READY)
+        sched_yield();
+
+    int64_t result = 0;
+    const int outcome = oreslang_source_actor_await_ready_checked(
+        actor,
+        readiness_continuation,
+        UINT64_C(0x5151),
+        &result);
+    check(outcome == ORES_SOURCE_ACTOR_STARTUP_READY);
+    check(result == 77);
+    check(atomic_load_explicit(
+        &readiness_continuation_calls, memory_order_acquire) == 1);
+    check(atomic_load_explicit(
+        &constructor_calls, memory_order_acquire) == 1);
+
+    oreslang_source_actor_request_stop(actor);
+    oreslang_source_actor_join_done(actor);
+}
+
 int main(void) {
     stop_before_constructor();
     stop_during_constructor();
+    successful_readiness();
     puts("SOURCE_ACTOR_STOP_BEFORE_READY_PASS");
     return 0;
 }
