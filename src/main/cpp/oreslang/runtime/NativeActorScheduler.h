@@ -147,6 +147,13 @@ int ores_native_actor_scheduler_is_current_actor(
  * authenticated current turn. */
 int ores_native_actor_scheduler_current_execution_context(
     OresNativeActorScheduler* scheduler, OresNativeExecutionContext* out);
+/* Continuation gate for the currently executing actor. Suspending blocks DATA
+ * dispatch only; bounded DATA admission continues and reserved CONTROL remains
+ * runnable. Resume is valid only from a CONTROL turn for the same actor. */
+int ores_native_actor_scheduler_suspend_current_user_mailbox(
+    OresNativeActorScheduler* scheduler);
+int ores_native_actor_scheduler_resume_current_user_mailbox(
+    OresNativeActorScheduler* scheduler);
 /* Host CONTROL-plane wake only: signals an existing scheduler condition.
  * Does not admit actor mail, start workers, invoke guest code, or count as
  * a supervisor delivery receipt. Returns zero once retired.
