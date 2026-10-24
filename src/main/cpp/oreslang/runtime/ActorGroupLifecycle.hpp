@@ -52,6 +52,15 @@ public:
     }
 
     /**
+     * Generation-fenced no-new-delivery barrier. Once detached, this exact
+     * actor generation can never admit another user/CONTROL turn through its
+     * NativeActorGroup, regardless of whether a CONTROL item was pending.
+     */
+    bool delivery_closed() const noexcept {
+        return ticket_->detached_from_group.load(std::memory_order_acquire);
+    }
+
+    /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
      * code inline from the acknowledging or subscribing host thread.
