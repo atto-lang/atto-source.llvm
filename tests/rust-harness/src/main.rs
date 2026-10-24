@@ -513,6 +513,12 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
              pub fnc main():int {let Counter c=new Counter();return c.read()+c.read(2);}\n",
         ),
         (
+            "mtd-optional-receiver-arity",
+            "define class X as\n  pub mtd read(self):int{return 42;}\n\
+             pub read(self,int n):int{return n;}\nend\n\
+             pub fnc main():int {let X x=new X();return x.read()+x.read(0);}\n",
+        ),
+        (
             "mutable-inline-self",
             "define class Counter as\n  let int value=40;\n\
              pub bump(mut self, int n):void{self.value=self.value+n;return;}\n\
@@ -578,6 +584,18 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "unknown method or wrong explicit call arity 'foo'",
         ),
         (
+            "mtd-duplicate-zero-slot",
+            "define class X as mtd foo():void {} foo(self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "mtd-without-method-signature",
+            "define class X as mtd int x=3; end\n\
+             pub fnc main():int{return 42;}\n",
+            "native mtd marker must precede a method signature",
+        ),
+        (
             "trailing-receiver-comma",
             "define class X as foo(self,):void {} end\n\
              pub fnc main():int{return 42;}\n",
@@ -607,7 +625,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
                 out.status.code(), stdout(&out), stderr(&out)),
         )?;
     }
-    println!("native inline self: 4 compiled/AOT-executed positive cases, 6 fail-closed negatives");
+    println!("native inline self: 5 compiled/AOT-executed positive cases, 8 fail-closed negatives");
     Ok(())
 }
 
