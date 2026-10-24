@@ -501,10 +501,10 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
         ),
         (
             "mixed-method-arities",
-            "define class Counter as\n  let int value=40;\n\
+            "define class Counter as\n  let int value=20;\n\
              pub read():int{return self.value;}\n\
              pub read(self, int n):int{return self.value+n;}\nend\n\
-             pub fnc main():int {let Counter c=new Counter();return c.read(0)+c.read();}\n",
+             pub fnc main():int {let Counter c=new Counter();return c.read()+c.read(2);}\n",
         ),
         (
             "mutable-inline-self",
