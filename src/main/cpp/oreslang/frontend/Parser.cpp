@@ -1090,6 +1090,8 @@ private:
         value.method_owner = owner;
         value.offset = token_.offset;
         value.exported = owner.empty() ? accept("pub") : visible;
+        if (owner.empty() && value.exported && accept("async"))
+            value.async_actor_root = true;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -1218,6 +1220,12 @@ private:
         }
         if (token_.text == "?")
             fail("native optional return type '?' requires versioned Option/default ABI lowering");
+        if (value.async_actor_root) {
+            if (value.name != "main" || !value.parameters.empty() || !value.returns_void)
+                fail("native async root slice requires pub async routine main(): void");
+            if (!value.generic_parameters.empty())
+                fail("native async root main cannot be generic");
+        }
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
