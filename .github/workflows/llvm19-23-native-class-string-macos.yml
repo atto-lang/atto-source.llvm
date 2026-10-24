@@ -41,7 +41,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "commit=$(git rev-parse HEAD)"
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$expected" ]] || { echo "Wrong source commit: $actual != $expected" >&2; exit 65; }
+          echo "commit=$actual"
           echo "tree=$(git rev-parse 'HEAD^{tree}')"
           echo "run=${{ github.run_id }}"
       - name: Install requested LLVM
