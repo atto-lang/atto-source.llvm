@@ -17,7 +17,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, String, Symbol, End };
+enum class Kind { Identifier, Integer, String, Template, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -35,6 +35,102 @@ bool identifier_start(char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
 }
 bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
+
+inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
+inline constexpr std::size_t kMaxNativeTemplateBraceNesting = 256;
+inline constexpr std::size_t kMaxNativeTemplateInterpolations = 1024;
+
+[[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
+    throw std::runtime_error("native template " + std::string(detail) +
+                             " at byte " + std::to_string(offset));
+}
+
+std::size_t skip_template_quoted(std::string_view source, std::size_t at,
+                                 char quote, std::size_t origin) {
+    while (at < source.size()) {
+        const char ch = source[at++];
+        if (ch == '\\') {
+            if (at == source.size()) template_error("has unterminated quoted escape", origin);
+            ++at;
+        } else if (ch == quote) {
+            return at;
+        }
+    }
+    template_error("has unterminated quoted string", origin);
+}
+
+std::size_t skip_template_block_comment(std::string_view source, std::size_t at,
+                                        std::size_t origin) {
+    std::size_t depth = 1;
+    while (at < source.size()) {
+        if (source.substr(at, 2) == "/*") {
+            ++depth;
+            at += 2;
+        } else if (source.substr(at, 2) == "*/") {
+            at += 2;
+            if (--depth == 0) return at;
+        } else {
+            ++at;
+        }
+    }
+    template_error("has unterminated block comment", origin);
+}
+
+std::size_t template_close(std::string_view source, std::size_t from,
+                           std::size_t nesting, std::size_t origin);
+
+std::size_t template_interpolation_close(std::string_view source, std::size_t from,
+                                         std::size_t nesting, std::size_t origin) {
+    if (nesting > kMaxNativeTemplateNesting)
+        template_error("interpolation nesting limit exceeded (32)", origin);
+    std::size_t braces = 1;
+    std::size_t at = from;
+    while (at < source.size()) {
+        const char ch = source[at];
+        if (ch == '"' || ch == '\'') {
+            at = skip_template_quoted(source, at + 1, ch, origin);
+        } else if (static_cast<unsigned char>(ch) == 0x60) {
+            at = template_close(source, at + 1, nesting + 1, origin) + 1;
+        } else if (source.substr(at, 2) == "//") {
+            at += 2;
+            while (at < source.size() && source[at] != '\n') ++at;
+        } else if (source.substr(at, 2) == "/*") {
+            at = skip_template_block_comment(source, at + 2, origin);
+        } else if (ch == '{') {
+            if (++braces > kMaxNativeTemplateBraceNesting)
+                template_error("interpolation brace nesting limit exceeded (256)", origin);
+            ++at;
+        } else if (ch == '}') {
+            if (--braces == 0) return at;
+            ++at;
+        } else {
+            ++at;
+        }
+    }
+    template_error("has unterminated interpolation", origin);
+}
+
+std::size_t template_close(std::string_view source, std::size_t from,
+                           std::size_t nesting, std::size_t origin) {
+    if (nesting > kMaxNativeTemplateNesting)
+        template_error("interpolation nesting limit exceeded (32)", origin);
+    std::size_t at = from;
+    while (at < source.size()) {
+        const char ch = source[at];
+        if (ch == '\\') {
+            if (at + 1 >= source.size()) template_error("has unterminated escape", origin);
+            at += 2;
+        } else if (static_cast<unsigned char>(ch) == 0x24 &&
+                   at + 1 < source.size() && source[at + 1] == '{') {
+            at = template_interpolation_close(source, at + 2, nesting + 1, origin) + 1;
+        } else if (static_cast<unsigned char>(ch) == 0x60) {
+            return at;
+        } else {
+            ++at;
+        }
+    }
+    template_error("literal is unterminated", origin);
+}
 
 bool reserved(std::string_view name) {
     // Keep these reserved even while their grammar is unsupported.
@@ -126,6 +222,12 @@ public:
             const auto text = source_.substr(content, at_ - content);
             ++at_;
             return {Kind::String, text, start};
+        }
+        if (static_cast<unsigned char>(ch) == 0x60) {
+            const auto close = template_close(source_, at_ + 1, 0, start);
+            const auto text = source_.substr(at_ + 1, close - at_ - 1);
+            at_ = close + 1;
+            return {Kind::Template, text, start};
         }
         if (digit(ch)) {
             ++at_;
@@ -1946,6 +2048,11 @@ private:
             advance();
             return expr;
         }
+        if (token_.kind == Kind::Template) {
+            const std::string_view raw = token_.text;
+            advance();
+            return template_literal(raw, offset);
+        }
         if (accept("stdio")) {
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
@@ -2239,6 +2346,100 @@ private:
                     result += static_cast<char>(0x80 | ((code >> 6) & 63)); result += static_cast<char>(0x80 | (code & 63));
                 }
             }
+        }
+        return result;
+    }
+
+    static bool blank_template_expression(std::string_view source) {
+        return std::all_of(source.begin(), source.end(), [](unsigned char ch) {
+            return std::isspace(ch) != 0;
+        });
+    }
+
+    static void validate_template_escape(std::string_view raw, std::size_t& at,
+                                         std::size_t origin) {
+        if (at == raw.size()) template_error("has unterminated escape", origin);
+        const char escaped = raw[at++];
+        if (escaped == 'n' || escaped == 'r' || escaped == 't' ||
+                escaped == '\\' || escaped == '"' || escaped == '\'' ||
+                escaped == '$' || static_cast<unsigned char>(escaped) == 0x60) return;
+        if (escaped != 'u') template_error("contains invalid escape", origin);
+        if (raw.size() - at < 4) template_error("has incomplete Unicode escape", origin);
+        for (unsigned n = 0; n != 4; ++n) {
+            const char ch = raw[at++];
+            if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+                  (ch >= 'A' && ch <= 'F')))
+                template_error("contains invalid Unicode escape", origin);
+        }
+    }
+
+    std::unique_ptr<Expression> template_expression(std::string_view source,
+                                                    std::size_t base_offset) {
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        auto expr = nested.expression();
+        if (nested.token_.kind != Kind::End)
+            nested.fail("expected end of template interpolation expression");
+        std::function<void(Expression&)> rebase = [&](Expression& node) {
+            node.offset += base_offset;
+            if (node.left) rebase(*node.left);
+            if (node.right) rebase(*node.right);
+            if (node.condition) rebase(*node.condition);
+            if (node.condition_lhs) rebase(*node.condition_lhs);
+            if (node.condition_rhs) rebase(*node.condition_rhs);
+            if (node.when_true) rebase(*node.when_true);
+            if (node.when_false) rebase(*node.when_false);
+            for (auto& arg : node.arguments) rebase(*arg);
+        };
+        rebase(*expr);
+        return expr;
+    }
+
+    std::unique_ptr<Expression> template_literal(std::string_view raw,
+                                                 std::size_t origin) {
+        std::vector<std::unique_ptr<Expression>> pieces;
+        std::string literal;
+        std::size_t interpolations = 0;
+        std::size_t at = 0;
+        auto flush_literal = [&] {
+            auto part = make_expression(Expression::Kind::String, origin);
+            part->name = string_literal(literal);
+            pieces.push_back(std::move(part));
+            literal.clear();
+        };
+
+        while (at < raw.size()) {
+            const char ch = raw[at++];
+            if (ch == '\\') {
+                const std::size_t escape = at;
+                validate_template_escape(raw, at, origin);
+                literal.append(raw.substr(escape - 1, at - escape + 1));
+                continue;
+            }
+            if (static_cast<unsigned char>(ch) == 0x24 &&
+                    at < raw.size() && raw[at] == '{') {
+                if (++interpolations > kMaxNativeTemplateInterpolations)
+                    template_error("interpolation count limit exceeded (1024)", origin);
+                flush_literal();
+                const std::size_t expression_start = at + 1;
+                const std::size_t close = template_interpolation_close(
+                    raw, expression_start, 0, origin);
+                const auto source = raw.substr(expression_start, close - expression_start);
+                if (source.empty() || blank_template_expression(source))
+                    template_error("contains empty interpolation", origin + 1 + expression_start);
+                pieces.push_back(template_expression(source, origin + 1 + expression_start));
+                at = close + 1;
+                continue;
+            }
+            literal += ch;
+        }
+        flush_literal();
+
+        auto result = std::move(pieces.front());
+        for (std::size_t i = 1; i < pieces.size(); ++i) {
+            auto concat = make_expression(Expression::Kind::Add, pieces[i]->offset);
+            concat->left = std::move(result);
+            concat->right = std::move(pieces[i]);
+            result = std::move(concat);
         }
         return result;
     }
