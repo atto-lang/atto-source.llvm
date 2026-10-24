@@ -514,6 +514,12 @@ static void open_group_locked(void) {
     }
     group.vm = ores_native_vm_open(&cfg);
     ensure(group.vm != NULL);
+    /*
+     * VM CONTROL must exist before root actor admission. This service only
+     * signals scheduler conditions; guest constructors and continuations still
+     * execute exclusively on bounded actor/root CONTROL lanes.
+     */
+    ensure(ores_native_vm_start_main_control_loop(group.vm));
 
     /*
      * The compiler-generated top-level continuation owns one reserved logical
