@@ -95,6 +95,10 @@ int main(void) {
     check(ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, &record));
     check(record.state == ORES_CONTINUATION_CLAIMED);
+    /* Final release may not erase an actively executing guest continuation. */
+    check(!ores_native_continuation_store_release(continuations, pending));
+    check(ores_native_continuation_store_get(continuations, pending, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
     check(!ores_native_continuation_store_cancel(continuations, pending));
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, NULL));
