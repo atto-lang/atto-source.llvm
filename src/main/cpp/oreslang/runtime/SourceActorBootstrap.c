@@ -45,6 +45,7 @@ typedef struct {
     uint64_t source_token;
     int suspend_recorded;
     int done;
+    int outcome;
     int64_t result;
 } ReadyAwaitFrame;
 
@@ -131,18 +132,26 @@ int oreslang_source_actor_ready_status(void* opaque) {
         &instance->startup_state, memory_order_acquire);
 }
 
-static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
+static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
-    if (!frame->suspend_recorded
-            || atomic_load_explicit(
-                &frame->actor->startup_state, memory_order_acquire)
-                != ORES_SOURCE_ACTOR_STARTUP_READY)
+    if (!frame->suspend_recorded) return;
+
+    const int startup_state = atomic_load_explicit(
+        &frame->actor->startup_state, memory_order_acquire);
+    int future_status = ORES_NATIVE_FUTURE_PENDING;
+    if (startup_state == ORES_SOURCE_ACTOR_STARTUP_READY)
+        future_status = ORES_NATIVE_FUTURE_READY;
+    else if (startup_state
+            == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY)
+        future_status = ORES_NATIVE_FUTURE_FAILED;
+    else
         return;
+
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_PENDING) {
         ensure(ores_native_actor_future_complete(
-            frame->ready_future, ORES_NATIVE_FUTURE_READY));
+            frame->ready_future, future_status));
     }
 }
 
@@ -178,7 +187,7 @@ static void root_suspend_turn(void) {
     ensure(ores_native_execution_context_store_release(
         group.executions, origin));
     frame->suspend_recorded = 1;
-    complete_ready_if_admitted_locked(frame);
+    settle_ready_if_admitted_locked(frame);
     group_unlock();
 }
 
@@ -187,13 +196,15 @@ static void root_resume_turn(void) {
     OresSourceActorContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
+    int future_status;
 
     group_lock();
     frame = group.pending_ready;
     ensure(frame && frame->suspend_recorded && !frame->done);
     ensure(frame->ready_future != NULL);
-    ensure(ores_native_actor_future_status(frame->ready_future)
-        == ORES_NATIVE_FUTURE_READY);
+    future_status = ores_native_actor_future_status(frame->ready_future);
+    ensure(future_status == ORES_NATIVE_FUTURE_READY
+        || future_status == ORES_NATIVE_FUTURE_FAILED);
     continuation = frame->continuation;
     actor = frame->actor;
     link = frame->link;
@@ -216,14 +227,20 @@ static void root_resume_turn(void) {
         &logical));
 
     /*
-     * The logical resumed context must describe the physical root actor turn,
-     * not the child whose readiness happened to complete the Future.
+     * Even failed readiness resumes once on the root CONTROL lane so the
+     * persisted logical suspension can be retired without leaking trace state.
+     * Guest continuation code runs only for successful readiness.
      */
     ensure(same_allocation(logical.allocation, physical.allocation));
-    ensure(!ores_native_store_handle_valid(current_source_execution));
-    current_source_execution = resumed;
-    const int64_t result = continuation(actor);
-    current_source_execution = (OresNativeExecutionHandle){0, 0};
+    int64_t result = 0;
+    int outcome = ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY;
+    if (future_status == ORES_NATIVE_FUTURE_READY) {
+        ensure(!ores_native_store_handle_valid(current_source_execution));
+        current_source_execution = resumed;
+        result = continuation(actor);
+        current_source_execution = (OresNativeExecutionHandle){0, 0};
+        outcome = ORES_SOURCE_ACTOR_STARTUP_READY;
+    }
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
     ensure(ores_native_execution_context_store_release(
@@ -231,6 +248,7 @@ static void root_resume_turn(void) {
 
     group_lock();
     ensure(frame == group.pending_ready && !frame->done);
+    frame->outcome = outcome;
     frame->result = result;
     frame->done = 1;
     ensure(pthread_cond_signal(&frame->completed) == 0);
@@ -401,7 +419,7 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     group_lock();
     ReadyAwaitFrame* frame = group.pending_ready;
     if (frame && frame->actor == instance)
-        complete_ready_if_admitted_locked(frame);
+        settle_ready_if_admitted_locked(frame);
     group_unlock();
 }
 
@@ -515,13 +533,14 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
         == ORES_NATIVE_SEND_ACCEPTED);
 }
 
-int64_t oreslang_source_actor_await_ready(
+int oreslang_source_actor_await_ready_checked(
         void* opaque,
         OresSourceActorContinuation continuation,
-        uint64_t source_token) {
+        uint64_t source_token,
+        int64_t* result_out) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(continuation != NULL);
+    ensure(continuation != NULL && result_out != NULL);
 
     /*
      * This outer wait is trusted top-level ABI glue, never guest-carrier
@@ -551,7 +570,7 @@ int64_t oreslang_source_actor_await_ready(
 
     /*
      * First root turn captures/suspends its scheduler-minted ExecutionId.
-     * Future completion cannot resume until this CONTROL turn has published
+     * Future settlement cannot resume until this CONTROL turn has published
      * the OresNativeSuspensionLink.
      */
     ensure(ores_native_vm_publish_control(
@@ -565,7 +584,9 @@ int64_t oreslang_source_actor_await_ready(
 
     ensure(group.pending_ready == &frame);
     group.pending_ready = NULL;
-    const int64_t result = frame.result;
+    const int outcome = frame.outcome;
+    if (outcome == ORES_SOURCE_ACTOR_STARTUP_READY)
+        *result_out = frame.result;
 
     ores_native_actor_future_destroy(frame.ready_future);
     ensure(ores_native_continuation_store_release(
@@ -577,10 +598,27 @@ int64_t oreslang_source_actor_await_ready(
     ensure(pthread_cond_destroy(&frame.completed) == 0);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_AWAIT_READY_TRACE_PASS execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
+        "SOURCE_AWAIT_READY_TRACE_PASS outcome=%d execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
+        outcome,
         SOURCE_GROUP_ROOT_SLOT,
         (unsigned long long)source_token);
 #endif
+    return outcome;
+}
+
+int64_t oreslang_source_actor_await_ready(
+        void* opaque,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    const int outcome = oreslang_source_actor_await_ready_checked(
+        opaque, continuation, source_token, &result);
+    /*
+     * Existing source lowering has no typed ActorTerminated projection yet.
+     * Fail closed instead of hanging or running the continuation after failed
+     * readiness; checked host/runtime callers can observe the failure exactly.
+     */
+    ensure(outcome == ORES_SOURCE_ACTOR_STARTUP_READY);
     return result;
 }
 
