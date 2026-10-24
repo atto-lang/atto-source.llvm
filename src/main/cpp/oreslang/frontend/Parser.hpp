@@ -238,6 +238,11 @@ struct ModuleContract {
 // without claiming full generic/typeclass or cross-unit linker support.
 struct TypeOnlyDecl {
     enum class Kind { Alias, Trait, Interface };
+    struct Constraint {
+        enum class Kind { MinInclusive, MaxInclusive };
+        Kind kind = Kind::MinInclusive;
+        std::int64_t value = 0;
+    };
     struct Method {
         std::string name;
         std::vector<std::string> parameter_types;
@@ -246,7 +251,8 @@ struct TypeOnlyDecl {
     Kind kind = Kind::Alias;
     std::string name;
     bool exported = false;
-    std::string alias_target; // native v1 accepts only int/bool, not nominal types
+    std::string alias_target; // native v1 accepts int/bool or another alias
+    std::vector<Constraint> constraints; // canonical min then max, compiler-only
     std::vector<std::string> parents;
     std::vector<Method> methods;
 };
@@ -261,14 +267,25 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+struct TypeConstraintDescriptor {
+    std::string schema_id;
+    std::string qualified_type_name;
+    std::string representation;
+    std::string canonical;
+    std::string fingerprint;
+    bool validation_required = true;
+};
+
 struct Program {
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<TypeOnlyDecl> type_only_declarations;
+    std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
 };
 
