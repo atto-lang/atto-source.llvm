@@ -36,7 +36,11 @@ typedef struct {
 
 typedef struct OresNativeContinuationStore OresNativeContinuationStore;
 
-/* Runs under the continuation-store lock; must not re-enter this store. */
+/*
+ * Runs under the continuation-store lock. The callback must be bounded and
+ * must not wait for work that can depend on this store. Same-store API
+ * re-entry fails closed rather than self-deadlocking.
+ */
 typedef int (*OresNativeContinuationReadyCommit)(void* context);
 
 /*
@@ -81,7 +85,7 @@ int ores_native_continuation_store_release(
  * Atomically relative to cancellation: require PENDING, run the fallible
  * producer commit while holding the store lock, then publish READY with a
  * non-failing in-memory state transition. If commit returns false, the
- * continuation remains PENDING. The callback must not re-enter this store.
+ * continuation remains PENDING. Same-store callback re-entry is rejected.
  */
 int ores_native_continuation_store_commit_ready(
     OresNativeContinuationStore* store,
