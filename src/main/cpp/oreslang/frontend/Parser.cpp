@@ -627,6 +627,8 @@ private:
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
+            if (token_.text == "<")
+                fail("TYPE_ONLY_GENERIC_UNSUPPORTED: native aliases are non-generic in descriptor v1");
             // 'declare type' and 'define type' share this exact grammar.
             // Incomplete 'declare type Code;' never creates an alias.
             if (token_.text != "=")
