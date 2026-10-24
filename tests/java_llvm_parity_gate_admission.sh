@@ -89,4 +89,27 @@ for kind in llvm java; do
 done
 expect_rejected "committed external fixture symlinks" 65 "expected regular tracked guest source fixture" "$launcher"
 
+# git status can report a clean checkout when assume-unchanged hides a
+# modified tracked fixture. The gate must reject that index state regardless.
+make_repos
+git -C "$temp/java" update-index --assume-unchanged tests/fixtures/native-class-string/main.ores
+printf 'tampered source\\n' > "$temp/java/tests/fixtures/native-class-string/main.ores"
+if [[ -n "$(git -C "$temp/java" status --porcelain --untracked-files=all)" ]]; then
+  echo "FAIL setup: hidden tracked mutation unexpectedly visible to git status" >&2
+  exit 1
+fi
+expect_rejected "hidden tracked Java fixture mutation" 65 "unverified Git index flags" "$launcher"
+
+# --untracked-files=all still omits Git-ignored sources; imported ignored
+# Oreslang code may not be credited to the pinned source revision.
+make_repos
+printf 'injected.ores\\n' >> "$temp/java/.git/info/exclude"
+printf 'pub fnc main():int{return 1;}\\n' > "$temp/java/injected.ores"
+expect_rejected "ignored untracked Java source" 65 "ignored untracked input" "$launcher"
+
+make_repos
+printf 'injected.ores\\n' >> "$temp/llvm/.git/info/exclude"
+printf 'pub fnc main():int{return 1;}\\n' > "$temp/llvm/injected.ores"
+expect_rejected "ignored untracked LLVM source" 65 "ignored untracked input" "$launcher"
+
 echo "PASS: synthetic fail-closed parity gate admissions; no runtime parity inferred"
