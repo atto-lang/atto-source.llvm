@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <dirent.h>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -29,7 +30,21 @@ static std::optional<Bridge::CompletionLease> pop(Bridge& b) {
     }
     return {};
 }
+static std::size_t open_fd_count() {
+    DIR* directory = ::opendir("/proc/self/fd");
+    assert(directory);
+    std::size_t count = 0;
+    while (const auto* entry = ::readdir(directory)) {
+        if (entry->d_name[0] == '.' &&
+            (entry->d_name[1] == '\0' ||
+             (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) continue;
+        ++count;
+    }
+    assert(::closedir(directory) == 0);
+    return count;
+}
 int main() {
+    const auto initial_fds = open_fd_count();
     for (int iteration = 0; iteration < 12; ++iteration) {
         NativeTransportCallbackGate gate(1,1,1,static_cast<uint64_t>(iteration+1));
         std::array<std::array<int,2>,Bridge::Reactor::capacity+1> fds{};
@@ -159,5 +174,6 @@ int main() {
         }
         ::close(pair[0]);::close(pair[1]);
     }
+    assert(open_fd_count() == initial_fds); // no epoll/eventfd/socket leaks
     std::puts("NATIVE_EPOLL_CAPACITY_AND_REPLAY_OK");
 }

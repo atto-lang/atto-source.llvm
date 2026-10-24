@@ -198,7 +198,9 @@ blob SHAs matched their PR-tree SHA values. The real socketpair/epoll bridge
 test passed strict GCC 14.2 and Clang 17 builds, both ASan+UBSan variants,
 GCC TSan and 80 repeated optimized runs per compiler. The additional
 capacity/reuse/shutdown stress source blob was likewise compiled with
-GCC/Clang strict C++20, ASan+UBSan and GCC TSan. This is real execution of
+GCC/Clang strict C++20, ASan+UBSan and GCC TSan. The test now also
+compares /proc/self/fd counts before and after all readiness and shutdown
+iterations, verifying epoll/eventfd/socket handles are reclaimed. This is real execution of
 the focused native source in a local subset, **not an exact full LLVM source
 tree CMake/CTest or production guest actor runtime test**. Full CI,
 independent review and protected-source provenance remain blocking gates.
