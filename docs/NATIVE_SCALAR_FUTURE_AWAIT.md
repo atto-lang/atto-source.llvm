@@ -10,8 +10,11 @@ A scheduled callback transitions to an explicit `running` phase at CONTROL
 entry; cancellation is rejected from that point onward, and the frame becomes
 `completed` only after the callback exits (including exceptional exit).
 A producer thread may settle the frame but may **never execute a guest
-continuation**. Only the owning `NativeActorGroup` parent CONTROL lane may
-consume the terminal outcome. When CONTROL is full, the outcome remains ready
+continuation**. Scheduling and teardown authenticate the exact shared
+`ActorRef` ticket capability in addition to numeric runtime/actor/generation
+identity, so even accidental same-generation reuse cannot let a stale ref
+schedule or revoke a newer Future. Only the owning `NativeActorGroup` parent
+CONTROL lane may consume the terminal outcome. When CONTROL is full, the outcome remains ready
 for retry. An explicit cancellation after enqueue suppresses the queued guest
 callback. Group close publishes the generation-fenced
 `NativeActorRef::delivery_closed()` barrier before detached shutdown work.
