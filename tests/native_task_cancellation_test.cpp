@@ -291,6 +291,41 @@ static void deep_tree_cancels_iteratively() {
     assert(keep_alive.back()->is_cancelled());
 }
 
+static void retirement_revokes_waiters_without_firing_cancel_observers() {
+    auto task = TaskCancellation::root();
+    int revocations = 0;
+    int cancellations = 0;
+    task->on_revoke([&] { ++revocations; });
+    task->on_cancel([&] { ++cancellations; });
+    task->retire();
+    assert(revocations == 1);
+    assert(cancellations == 0);
+    task->on_revoke([&] { ++revocations; });
+    task->on_cancel([&] { ++cancellations; });
+    assert(revocations == 2);
+    assert(cancellations == 0);
+}
+
+static void retirement_drains_throwing_revoker_before_observer_cleanup() {
+    auto task = TaskCancellation::root();
+    int revocations = 0;
+    task->on_revoke([&] {
+        ++revocations;
+        throw std::runtime_error("host tear-down failure");
+    });
+    task->on_revoke([&] { ++revocations; });
+    bool threw = false;
+    try {
+        task->retire();
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    assert(threw);
+    assert(revocations == 2);
+    // Idempotent, despite the recorded hook failure.
+    task->retire();
+}
+
 static void invalid_reasons_fail_without_cancelling() {
     auto root = TaskCancellation::root();
     for (const std::string& invalid :
@@ -326,5 +361,7 @@ int main() {
     throwing_revoker_does_not_strand_siblings_or_observers();
     concurrent_first_reason_wins();
     deep_tree_cancels_iteratively();
+    retirement_revokes_waiters_without_firing_cancel_observers();
+    retirement_drains_throwing_revoker_before_observer_cleanup();
     invalid_reasons_fail_without_cancelling();
 }
