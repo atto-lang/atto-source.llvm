@@ -1236,11 +1236,42 @@ private:
         // if/else arms containing field writes or direct function calls.
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
-        auto branch_arm = [&](bool finally_scope = false) {
+        std::function<std::vector<Statement>(bool)> branch_arm;
+        std::function<Statement()> foreach_statement;
+        std::size_t statement_depth = 0;
+        foreach_statement = [&]() {
+            Lexer look = lexer_;
+            const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
+            if (open.text != "(" || (mode.text != "const" && mode.text != "val") ||
+                    name.kind != Kind::Identifier || of.text != "of")
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            Statement loop;
+            loop.kind = Statement::Kind::ForEach;
+            loop.offset = token_.offset;
+            require("for"); require("(");
+            if (!accept("const")) require("val");
+            loop.branch_local = std::make_unique<LocalBinding>();
+            loop.branch_local->offset = token_.offset;
+            loop.branch_local->name = identifier();
+            require("of"); loop.expression = expression(); require(")"); require("{");
+            const auto receivers = class_receivers_;
+            class_receivers_.insert(loop.branch_local->name);
+            loop.then_statements = branch_arm(false);
+            class_receivers_ = receivers;
+            require("}"); return loop;
+        };
+        branch_arm = [&](bool finally_scope) {
+            if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
+            struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
+            struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
+                ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
             while (token_.text != "}") {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "for" && !finally_scope) {
+                    actions.push_back(foreach_statement()); continue;
+                }
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
                     fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -1256,6 +1287,13 @@ private:
                 }
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "if" && !finally_scope) {
+                    advance(); require("("); statement.kind = Statement::Kind::Conditional;
+                    statement.condition = expression(); require(")"); require("{");
+                    statement.then_statements = branch_arm(false); require("}");
+                    require("else"); require("{"); statement.else_statements = branch_arm(false);
+                    require("}"); require("fi"); actions.push_back(std::move(statement)); continue;
+                }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
@@ -1267,13 +1305,23 @@ private:
                     statement.kind = Statement::Kind::ScopedLocal;
                     statement.branch_local = std::make_unique<LocalBinding>();
                     statement.branch_local->offset = statement.offset;
-                    statement.branch_local->name = identifier();
-                    require(":");
-                    if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
-                    else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
-                    else fail("native branch-local scalar requires int or bool");
+                    auto scoped_type_name = [&]() -> std::string {
+                        for (const auto* scalar : {"int", "bool", "string", "String"})
+                            if (accept(scalar)) return scalar;
+                        return type_identifier();
+                    };
+                    const std::string first = scoped_type_name();
+                    std::string type;
+                    if (accept(":")) { statement.branch_local->name = first; type = scoped_type_name(); }
+                    else { type = first; statement.branch_local->name = identifier(); }
+                    if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
+                    if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
+                    else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
+                    else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
+                    else { statement.branch_local->class_name = type; statement.branch_local->record_view = true; }
                     require("=");
                     statement.branch_local->initializer = expression();
+                    if (!statement.branch_local->class_name.empty()) class_receivers_.insert(statement.branch_local->name);
                     require(";");
                     actions.push_back(std::move(statement));
                     continue;
@@ -1287,7 +1335,7 @@ private:
                     statement.field = target->name;
                     statement.expression = expression();
                 } else if (target->kind == Expression::Kind::Call ||
-                           target->kind == Expression::Kind::ArrayCall) {
+                           target->kind == Expression::Kind::ArrayCall || target->kind == Expression::Kind::Console) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -1342,6 +1390,11 @@ private:
                 if (token_.text != "return")
                     fail("experimental scalar loop must be followed by a single return");
                 continue;
+            }
+            if (token_.text == "for") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native for-of cannot enter protected/return-guard scope");
+                value.statements.push_back(foreach_statement()); continue;
             }
             if (token_.text == "while" || token_.text == "for" ||
                     token_.text == "loop") {
@@ -1477,11 +1530,11 @@ private:
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
                     conditional.condition = std::move(condition);
-                    conditional.then_statements = branch_arm();
+                    conditional.then_statements = branch_arm(false);
                     require("}");
                     require("else");
                     require("{");
-                    conditional.else_statements = branch_arm();
+                    conditional.else_statements = branch_arm(false);
                     require("}");
                     require("fi");
                     value.statements.push_back(std::move(conditional));
@@ -2867,6 +2920,14 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::ForEach) {
+                    validate_expression(*stmt.expression, names, functions);
+                    NameSet body = names;
+                    if (!body.insert(stmt.branch_local->name).second)
+                        throw std::runtime_error("native for-of element shadows a live owner");
+                    for (const auto& action : stmt.then_statements) check_statement_names(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::Conditional) {
                     if (stmt.condition) validate_expression(*stmt.condition, names, functions);
                     else {
@@ -2996,6 +3057,18 @@ private:
 
             std::function<void(const Statement&, TypeMap&)> check_statement_types;
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
+                auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
+                    scope.emplace(local.name, local.scalar_type);
+                    if (!local.class_name.empty()) for (const auto& cls : program.classes)
+                        if (cls.name == local.class_name) for (const auto& field : cls.fields)
+                            scope.emplace(local.name + "." + field.name, field.scalar_type);
+                };
+                if (stmt.kind == Statement::Kind::ForEach) {
+                    (void)validate_scalar_expression(*stmt.expression, env, functions);
+                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::Conditional) {
                     if (stmt.condition) {
                         require_scalar(*stmt.condition, ScalarType::Bool,
@@ -3026,7 +3099,7 @@ private:
                     const LocalBinding& local = *stmt.branch_local;
                     require_scalar(*local.initializer, local.scalar_type,
                         "native branch-local initializer", env);
-                    env.emplace(local.name, local.scalar_type);
+                    scoped_type(local, env);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::FieldWrite ||

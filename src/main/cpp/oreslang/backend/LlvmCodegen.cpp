@@ -567,7 +567,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
-    bool string_runtime = false, console_runtime = false, record_runtime = false;
+    bool string_runtime = false, console_runtime = false, record_runtime = false, iteration_runtime = false;
     auto class_owns_arrays = [&](const std::string& name) {
         for (const auto& cls : source.classes) if (cls.name == name)
             return std::any_of(cls.fields.begin(), cls.fields.end(), [](const ClassField& f) { return f.int_array; });
@@ -586,6 +586,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
+        if (s.kind == Statement::Kind::ForEach) iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
         if (s.branch_local) scan_string(s.branch_local->initializer.get());
@@ -623,7 +624,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& field : actor.fields) scan_string(field.initializer.get());
         scan_function(actor.on_message);
     }
-    if (string_runtime || record_runtime || owning_result_runtime) {
+    if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) { return !f.ready_await_actor.empty() || f.caught_throw_value || f.scalar_while; }))
             throw std::runtime_error(string_runtime
@@ -1363,9 +1364,45 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         // Branch-local trivial i64 owners are initialized only along their
         // reached predecessor and end their lifetime before the join. They
         // never enter the enclosing lexical_slots or deferred cleanup list.
-        auto lower_arm = [&](const std::vector<Statement>& arm) {
-            std::vector<std::string> scoped_names;
+        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; };
+        auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
+            const bool record = !local.class_name.empty();
+            llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
+            const std::size_t bytes = record ? record_classes.at(local.class_name)->fields.size() * 8 : 8;
+            // Allocate once per native invocation, never on every back-edge.
+            llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
+            auto* slot = entry_slots.CreateAlloca(shape, nullptr, local.name + ".arm.stack");
+            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+            ScopedSlot result{local.name, slot, bytes, {}};
+            if (record) {
+                const auto& cls = *record_classes.at(local.class_name);
+                auto* schema = llvm::ConstantInt::get(i64, record_schemas.at(cls.name));
+                builder.CreateCall(record_check, {init, schema});
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateCall(record_get, {init, schema, llvm::ConstantInt::get(i64, i)});
+                    auto* address = builder.CreateStructGEP(class_types.at(local.class_name), slot, static_cast<unsigned>(i));
+                    builder.CreateStore(value, address);
+                    const auto key = field_key(local.name, cls.fields[i].name);
+                    if (!field_storage.emplace(key, address).second) throw std::runtime_error("scoped record field collision");
+                    result.fields.push_back(key);
+                }
+            } else builder.CreateStore(init, slot);
+            if (!storage.emplace(local.name, slot).second) throw std::runtime_error("scoped value shadows existing storage");
+            return result;
+        };
+        auto end_scope = [&](const ScopedSlot& slot) {
+            builder.CreateLifetimeEnd(slot.address, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), slot.bytes));
+            for (const auto& key : slot.fields) field_storage.erase(key);
+            storage.erase(slot.name);
+        };
+        std::function<void(const std::vector<Statement>&)> lower_arm;
+        std::function<void(const Statement&)> lower_control;
+        lower_arm = [&](const std::vector<Statement>& arm) {
+            std::vector<ScopedSlot> scoped_names;
             for (const auto& action : arm) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::Conditional) {
+                    lower_control(action); continue;
+                }
                 if (action.kind != Statement::Kind::ScopedLocal) {
                     lower_effect(action);
                     continue;
@@ -1373,20 +1410,45 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 const LocalBinding& local = *action.branch_local;
                 llvm::Value* init = lower(*local.initializer, builder, i64,
                     storage, field_storage, declarations, &region_moves);
-                llvm::Value* slot = builder.CreateAlloca(i64, nullptr,
-                    local.name + ".arm.stack");
-                builder.CreateLifetimeStart(slot,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-                builder.CreateStore(init, slot);
-                if (!storage.emplace(local.name, slot).second)
-                    throw std::runtime_error("branch-local shadows existing LLVM storage");
-                scoped_names.push_back(local.name);
+                scoped_names.push_back(scoped_value(local, init));
             }
-            for (auto it = scoped_names.rbegin(); it != scoped_names.rend(); ++it) {
-                builder.CreateLifetimeEnd(storage.at(*it),
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
-                storage.erase(*it);
+            for (auto it = scoped_names.rbegin(); it != scoped_names.rend(); ++it) end_scope(*it);
+        };
+        lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::ForEach) {
+                auto* selected = receiver_array_region(*stmt.expression, &region_moves);
+                auto* handle = builder.CreateLoad(i64, array_handle_address(*stmt.expression, storage, field_storage, &region_moves));
+                auto* length = builder.CreateCall(arrayLength, {selected, handle});
+                auto* entrance = builder.GetInsertBlock();
+                auto* header = llvm::BasicBlock::Create(context, "foreach.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "foreach.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "foreach.exit", function);
+                builder.CreateBr(header); builder.SetInsertPoint(header);
+                auto* index = builder.CreatePHI(i64, 2, "foreach.index");
+                index->addIncoming(llvm::ConstantInt::get(i64, 0), entrance);
+                builder.CreateCondBr(builder.CreateICmpULT(index, length), body, exit);
+                builder.SetInsertPoint(body);
+                auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
+                auto scope = scoped_value(*stmt.branch_local, element);
+                lower_arm(stmt.then_statements); end_scope(scope);
+                auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
+                auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
+                builder.SetInsertPoint(exit); return;
             }
+            llvm::Value* condition = nullptr;
+            if (stmt.condition) condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
+            else {
+                auto* a = lower(*stmt.condition_lhs, builder, i64, storage, field_storage, declarations, &region_moves);
+                auto* b = lower(*stmt.condition_rhs, builder, i64, storage, field_storage, declarations, &region_moves);
+                condition = builder.CreateZExt(builder.CreateICmpEQ(a, b), i64);
+            }
+            auto* yes = llvm::BasicBlock::Create(context, "if.then", function);
+            auto* no = llvm::BasicBlock::Create(context, "if.else", function);
+            auto* join = llvm::BasicBlock::Create(context, "if.merge", function);
+            builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
+            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); builder.CreateBr(join);
+            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); builder.CreateBr(join);
+            builder.SetInsertPoint(join);
         };
         if (fn.caught_throw_value) {
             // Real native CFG edges. Evaluate payload once, run scoped LIFO
@@ -1417,6 +1479,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (stmt.kind == Statement::Kind::Defer) {
                 deferred_effects.push_back(&stmt);
                 continue;
+            }
+            if (stmt.kind == Statement::Kind::ForEach) {
+                lower_control(stmt); continue;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
                 llvm::Value* conditionValue = nullptr;

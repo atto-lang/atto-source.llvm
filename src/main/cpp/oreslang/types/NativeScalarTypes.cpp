@@ -239,8 +239,18 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals)> statements;
         statements = [&](const std::vector<Statement>& items, Locals scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ScopedLocal) {
+                if (item.kind == Statement::Kind::ForEach) {
+                    const auto source = expression(*item.expression, scope);
+                    if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
+                    const auto& iterator = *item.branch_local;
+                    const Type element = source.name == "String" ? scalar(ScalarType::String) : source.name == "int" ? scalar(false)
+                        : Type{Kind::Class, immutable_record(source.name).name};
+                    require(local_type(iterator), element, item.offset, "for-of element annotation");
+                    Locals body = scope; body.emplace(iterator.name, element);
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
+                    if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
                     require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {

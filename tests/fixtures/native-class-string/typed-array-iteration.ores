@@ -1,0 +1,40 @@
+define class PathSegment as
+  pub val int kind;
+  pub val String value;
+end
+define class PathPattern as
+  val String template_value;
+  val Array<PathSegment> segments_value;
+  pub size() -> int { return self.segments_value.size; }
+  pub segment_at(int index) -> PathSegment { return self.segments_value.get(index); }
+  pub copy() -> PathPattern {
+    let mut Array<PathSegment> copied = new Array<PathSegment>();
+    for (const segment of self.segments_value) {
+      copied.add(new PathSegment(segment.kind, segment.value));
+    }
+    return new PathPattern(self.template_value, copied);
+  }
+  pub concat(String combined_template, borrow PathPattern suffix) -> PathPattern {
+    let mut Array<PathSegment> combined = new Array<PathSegment>();
+    for (const segment of self.segments_value) {
+      combined.add(new PathSegment(segment.kind, segment.value));
+    }
+    for (const segment of suffix.segments_value) {
+      combined.add(new PathSegment(segment.kind, segment.value));
+    }
+    return new PathPattern(combined_template, combined);
+  }
+end
+pub routine main(): int {
+  val Array<PathSegment> segments = new Array<PathSegment>();
+  segments.add(new PathSegment(0, "foo"));
+  segments.add(new PathSegment(1, "id"));
+  val PathPattern path = new PathPattern("/foo/:id", segments);
+  val PathPattern copied = path.copy();
+  val PathPattern joined = path.concat("/foo/:id/foo/:id", rt borrow copied);
+  val PathSegment first = joined.segment_at(0);
+  val PathSegment last = joined.segment_at(3);
+  stdio.println(first.value);
+  stdio.println(last.value);
+  return path.size() == 2 && copied.size() == 2 && joined.size() == 4 ? 0 : 1;
+}
