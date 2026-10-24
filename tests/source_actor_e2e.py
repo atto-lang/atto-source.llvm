@@ -27,6 +27,7 @@ def main():
         ("source-actor-spawn-stop.ores", 1, 0, None),
         ("source-actor-zero-field.ores", 1, 1, 42),
         ("source-actor-receive-mail.ores", 1, 1, 0),
+        ("source-actor-receive-output-end.ores", 1, 1, 0),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
@@ -90,7 +91,7 @@ def main():
         "source-actor-child-capability-footprint-reject.ores":
             "native actor capability spawn tree exceeds 63 guest actor slots",
         "shared-actorref-child-capability-v1.ores":
-            "native receive self output/end requires actor output and lifecycle lowering",
+            "native receive await child output requires continuation lowering",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -132,6 +133,9 @@ def main():
                 assert "oreslang_source_actor_send_capability" in guest.stdout, name
                 assert "ptrtoint" not in guest.stdout, (
                     name, "ActorRef capability must not lower through guest integer state")
+            if name == "source-actor-receive-output-end.ores":
+                assert "oreslang_source_actor_emit_output" in guest.stdout, name
+                assert "oreslang_source_actor_request_end" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -184,6 +188,9 @@ def main():
                     expected = [(1, 42), (1, 41)][i]
                     assert f"processed={expected[0]}" in line, line
                     assert f"last={expected[1]}" in line, line
+                elif name == "source-actor-receive-output-end.ores":
+                    assert "processed=1" in line and "last=0" in line, line
+                    assert "outputs=1" in line, line
                 else:
                     assert f"processed={count}" in line, line
                     if last is not None:
