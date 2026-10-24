@@ -35,6 +35,7 @@ def main():
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
+        ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -88,8 +89,10 @@ def main():
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
-            flags = ["--experimental-owned-int"] if name.startswith(
-                "source-actor-scoped-owned-") else []
+            flags = ["--experimental-owned-int"] if name in {
+                "source-actor-scoped-owned-i64.ores",
+                "source-actor-two-owned-heaps.ores",
+            } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
@@ -99,7 +102,10 @@ def main():
                 "source-actor-spawn-stop.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
-            if name == "source-actor-scoped-owned-i64.ores":
+            if name in {
+                "source-actor-scoped-owned-i64.ores",
+                "source-actor-two-owned-heaps.ores",
+            }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
                 assert guest.stdout.count(
@@ -164,6 +170,16 @@ def main():
                     assert f"processed={count}" in line, line
                     if last is not None:
                         assert f"last={last}" in line, line
+            if name == "source-actor-two-owned-heaps.ores":
+                # Two independent heap owners must report different results.
+                # This is an executed-native-runtime assertion, not IR grep.
+                values = []
+                for line in lines:
+                    fields = [word[5:] for word in line.split()
+                              if word.startswith("last=")]
+                    assert len(fields) == 1, (name, line)
+                    values.append(int(fields[0]))
+                assert sorted(values) == [52, 172], (name, lines)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
