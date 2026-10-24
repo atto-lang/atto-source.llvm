@@ -3586,3 +3586,57 @@ if(BUILD_TESTING)
             native_continuation_ready_cancel_resume_race_tsan PROPERTIES TIMEOUT 60)
     endif()
 endif()
+
+
+# Reconciled #923/#920 prerequisites for the guest readiness integration.
+# The VM CONTROL thread is wake-only; the scalar Future remains host-only.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-vm-main-control-loop-test
+        tests/native_vm_main_control_loop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-main-control-loop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-main-control-loop-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-main-control-loop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_main_control_bootstrap_and_shutdown
+        COMMAND oreslang-native-vm-main-control-loop-test)
+    set_tests_properties(native_vm_main_control_bootstrap_and_shutdown
+        PROPERTIES TIMEOUT 25)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+            AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-vm-main-control-create-failure-test
+            tests/native_vm_main_control_create_failure_test.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-vm-main-control-create-failure-test
+            PRIVATE Threads::Threads)
+        target_link_options(oreslang-native-vm-main-control-create-failure-test
+            PRIVATE "LINKER:--wrap=pthread_create")
+        target_compile_options(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_vm_main_control_pthread_failure_retry
+            COMMAND oreslang-native-vm-main-control-create-failure-test)
+        set_tests_properties(native_vm_main_control_pthread_failure_retry
+            PROPERTIES TIMEOUT 25)
+    endif()
+
+    add_executable(oreslang-native-scalar-future-await-test
+        tests/native_scalar_future_await_test.cpp)
+    target_include_directories(oreslang-native-scalar-future-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-future-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-scalar-future-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_scalar_future_single_winner_control
+        COMMAND oreslang-native-scalar-future-await-test)
+    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 30)
+endif()
