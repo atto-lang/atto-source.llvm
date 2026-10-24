@@ -37,6 +37,22 @@ static int ready_commit_probe(void* raw) {
 
 
 typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    int calls;
+} ReentryProbe;
+
+static int reentry_probe(void* raw) {
+    ReentryProbe* probe = (ReentryProbe*)raw;
+    OresNativeContinuationRecord ignored = {0};
+    ++probe->calls;
+    /* Must fail immediately rather than deadlock on the held store lock. */
+    return !ores_native_continuation_store_get(
+        probe->store, probe->handle, &ignored);
+}
+
+
+typedef struct {
     atomic_int entered;
     atomic_int release;
 } BlockingCommitProbe;
@@ -165,6 +181,18 @@ int main(void) {
     check(record.state == ORES_CONTINUATION_PENDING);
     check(ores_native_continuation_store_cancel(continuations, failed_commit));
     check(ores_native_continuation_store_release(continuations, failed_commit));
+
+
+    OresNativeContinuationHandle reentry =
+        publish(continuations, execution);
+    ReentryProbe reentry_probe_state = {continuations, reentry, 0};
+    check(ores_native_continuation_store_commit_ready(
+        continuations, reentry, reentry_probe, &reentry_probe_state));
+    check(reentry_probe_state.calls == 1);
+    check(ores_native_continuation_store_get(continuations, reentry, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(continuations, reentry));
+    check(ores_native_continuation_store_release(continuations, reentry));
 
 
     /*
