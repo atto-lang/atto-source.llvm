@@ -63,6 +63,7 @@ public:
                 binding_name(unit, cls.name);
                 for (const auto& name : cls.constructor_parameters) binding_name(unit, name);
                 for (auto& field : cls.fields) {
+                    if (!field.class_name.empty()) field.class_name = class_type(unit, field.class_name);
                     if (!field.array_record_class.empty()) field.array_record_class = class_type(unit, field.array_record_class);
                     expression(unit, field.initializer_expression.get());
                 }
