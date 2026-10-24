@@ -317,6 +317,42 @@ fn main() {
             "{name}: internal compiler failure"
         );
     }
+    // Native module admission must bind to the opened regular-file inode.
+    // FIFOs must not block compilation; a hard-link alias must not bypass
+    // self-import detection. Ordinary regular symlinks remain supported.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let entry = scratch.0.join("main.ores");
+        let imported = scratch.0.join("main-1.ores");
+        let library = scratch.0.join("library.ores");
+        fs::write(&entry, exact).unwrap();
+        fs::remove_file(&imported).unwrap();
+
+        let made_fifo = Command::new("mkfifo").arg(&imported).status().unwrap();
+        assert!(made_fifo.success(), "could not prepare FIFO import test");
+        let rejected = run(Command::new(&compiler).arg(&entry));
+        assert_eq!(rejected.status.code(), Some(1), "FIFO import admitted");
+        assert!(rejected.stdout.is_empty(), "FIFO import emitted partial IR");
+        fs::remove_file(&imported).unwrap();
+
+        fs::hard_link(&entry, &imported).unwrap();
+        let rejected = run(Command::new(&compiler).arg(&entry));
+        assert_eq!(rejected.status.code(), Some(1), "self hard-link import admitted");
+        assert!(rejected.stdout.is_empty(), "self hard-link import emitted partial IR");
+        fs::remove_file(&imported).unwrap();
+
+        fs::write(&library, foo).unwrap();
+        symlink("library.ores", &imported).unwrap();
+        let allowed = run(Command::new(&compiler).arg(&entry));
+        assert!(
+            allowed.status.success() && !allowed.stdout.is_empty(),
+            "regular symlink import should remain supported: {}",
+            String::from_utf8_lossy(&allowed.stderr)
+        );
+        fs::remove_file(&imported).unwrap();
+        fs::remove_file(&library).unwrap();
+    }
     fs::write(
         scratch.0.join("main.ores"),
         r#"pub fnc main():int{stdio.print("host only");return 0;}"#,
@@ -343,5 +379,5 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
-    println!("PASS class/string parity: {} positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, sanitized={sanitize}", positives.len(), negatives.len());
+    println!("PASS class/string parity: {} positives (five native executions each), {} no-IR rejections plus two target boundaries and two Unix filesystem boundary rejections, Java={comparisons}, sanitized={sanitize}", positives.len(), negatives.len());
 }
