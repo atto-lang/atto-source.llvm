@@ -23,6 +23,20 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  * host error; a typed guest overload result still needs compiler lowering.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+
+/*
+ * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
+ * scheduler to terminate the actor. join_done is trusted host glue: it waits
+ * for physical VM completion, retires/destroys the actor heap, releases the
+ * opaque SourceActor allocation, and closes an idle source-actor VM.
+ *
+ * Source lowering continues to call oreslang_source_actor_stop(), which keeps
+ * its existing synchronous request+join behavior. The split APIs are the
+ * prerequisite for a future real await ActorRef.get_done() lowering; they are
+ * not guest-callable capabilities.
+ */
+void oreslang_source_actor_request_stop(void* actor);
+void oreslang_source_actor_join_done(void* actor);
 void oreslang_source_actor_stop(void* actor);
 
 /*
