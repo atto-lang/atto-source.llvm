@@ -11,7 +11,9 @@ stop worker;
 return 43;
 ```
 
-All three readiness spellings require the containing function to declare `throws ActorTerminated`; this composes with the stop-before-ready failure contract from the lifecycle stack.\n\nThree admitted spellings have identical readiness semantics:
+All three readiness spellings require the containing function to declare `throws ActorTerminated`; this composes with the stop-before-ready failure contract from the lifecycle stack.
+
+Three admitted spellings have identical readiness semantics:
 `await worker;`, `await worker.get_ready();`, and
 `const Future<void> ready = worker.get_ready(); await ready;`.
 The direct operand must resolve to a **live ActorRef<T>** with HasFuture
@@ -30,6 +32,12 @@ scheduler-generated CONTROL turn; the actor carrier does not spin or block.
 The surrounding actor API remains the restricted one-actor, zero-suspended-
 local, scalar-return slice. The token may not be copied, shadowed, reassigned,
 passed as a parameter, returned, or sent between actors.
+
+The source `Future<void>` token does **not** use `NativeScalarFutureAwait`.
+That #920 frame is a host-only pinned i64 result prerequisite with its own
+ticket and CONTROL scheduling tests. Readiness continues through the
+SourceActorBootstrap/NativeActorFuture path and the strict continuation
+READY/CLAIMED arbitration; sharing an invariant does not imply ABI identity.
 
 This is **not** general `Future<T>` or `async fnc` lowering. In particular,
 there is no compiler-owned scalar result Future, suspendable local scalar,
