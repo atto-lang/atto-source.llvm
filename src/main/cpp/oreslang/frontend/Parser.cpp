@@ -1037,7 +1037,7 @@ private:
                 binding.initializer = primary();
                 if (binding.initializer->kind != Expression::Kind::ArrayCall ||
                         (binding.initializer->name != "add" && binding.initializer->name != "set"))
-                    fail("native array effect requires add or set");
+                    fail("native array effect supports only add(value) or set(index,value)");
             } else if (token_.text == "stdio") {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
