@@ -3355,4 +3355,41 @@ if(BUILD_TESTING)
     add_test(NAME source_actor_stop_before_ready
         COMMAND oreslang-source-actor-stop-before-ready-test)
     set_tests_properties(source_actor_stop_before_ready PROPERTIES TIMEOUT 30)
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-source-actor-stop-before-ready-sanitizer-test
+            tests/source_actor_stop_before_ready_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        target_include_directories(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            Threads::Threads)
+        target_compile_features(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            c_std_11)
+        target_compile_definitions(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING=1)
+        target_compile_options(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME source_actor_stop_before_ready_asan_ubsan
+            COMMAND oreslang-source-actor-stop-before-ready-sanitizer-test)
+        set_tests_properties(source_actor_stop_before_ready_asan_ubsan
+            PROPERTIES TIMEOUT 60)
+    endif()
 endif()
