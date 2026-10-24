@@ -263,6 +263,10 @@ static void open_group_locked(void) {
     }
     group.vm = ores_native_vm_open(&cfg);
     ensure(group.vm != NULL);
+    /* Match the Java VM CONTROL bootstrap barrier: one native master loop is
+     * running before the root actor can admit work. It only signals scheduler
+     * conditions; constructor/guest execution stays on bounded carriers. */
+    ensure(ores_native_vm_start_main_control_loop(group.vm));
 
     /*
      * The compiler-generated top-level continuation owns one reserved logical
