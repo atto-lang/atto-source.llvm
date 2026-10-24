@@ -35,6 +35,48 @@ static int ready_commit_probe(void* raw) {
     return probe->result;
 }
 
+
+typedef struct {
+    atomic_int entered;
+    atomic_int release;
+} BlockingCommitProbe;
+
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    BlockingCommitProbe* probe;
+    int won;
+} CommitRaceArgs;
+
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    int won;
+} CancelRaceArgs;
+
+static int blocking_ready_commit(void* raw) {
+    BlockingCommitProbe* probe = (BlockingCommitProbe*)raw;
+    atomic_store_explicit(&probe->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&probe->release, memory_order_acquire)) {
+        /* Hold the producer commit open while cancellation contends. */
+    }
+    return 1;
+}
+
+static void* commit_ready_contender(void* raw) {
+    CommitRaceArgs* race = (CommitRaceArgs*)raw;
+    race->won = ores_native_continuation_store_commit_ready(
+        race->store, race->handle, blocking_ready_commit, race->probe);
+    return NULL;
+}
+
+static void* cancel_ready_contender(void* raw) {
+    CancelRaceArgs* race = (CancelRaceArgs*)raw;
+    race->won = ores_native_continuation_store_cancel(
+        race->store, race->handle);
+    return NULL;
+}
+
 static void* contender(void* raw) {
     RaceArgs* race = (RaceArgs*)raw;
     while (!atomic_load_explicit(race->go, memory_order_acquire)) {
@@ -123,6 +165,45 @@ int main(void) {
     check(record.state == ORES_CONTINUATION_PENDING);
     check(ores_native_continuation_store_cancel(continuations, failed_commit));
     check(ores_native_continuation_store_release(continuations, failed_commit));
+
+
+    /*
+     * Deterministic commit-vs-cancel contention. The producer callback blocks
+     * while commit_ready owns the continuation-store lock. Cancellation may
+     * only proceed after READY is published, so both calls may succeed but
+     * the final state must be CANCELLED rather than READY being written over
+     * an intervening cancellation.
+     */
+    OresNativeContinuationHandle serialized_commit =
+        publish(continuations, execution);
+    BlockingCommitProbe blocking_probe = {
+        .entered = ATOMIC_VAR_INIT(0),
+        .release = ATOMIC_VAR_INIT(0)
+    };
+    CommitRaceArgs commit_race = {
+        continuations, serialized_commit, &blocking_probe, 0
+    };
+    pthread_t commit_thread;
+    check(pthread_create(
+        &commit_thread, NULL, commit_ready_contender, &commit_race) == 0);
+    while (!atomic_load_explicit(
+            &blocking_probe.entered, memory_order_acquire)) {
+        /* Wait until the fallible producer commit runs under the store lock. */
+    }
+    CancelRaceArgs cancel_race = {continuations, serialized_commit, 0};
+    pthread_t cancel_thread;
+    check(pthread_create(
+        &cancel_thread, NULL, cancel_ready_contender, &cancel_race) == 0);
+    atomic_store_explicit(&blocking_probe.release, 1, memory_order_release);
+    check(pthread_join(commit_thread, NULL) == 0);
+    check(pthread_join(cancel_thread, NULL) == 0);
+    check(commit_race.won);
+    check(cancel_race.won);
+    check(ores_native_continuation_store_get(
+        continuations, serialized_commit, &record));
+    check(record.state == ORES_CONTINUATION_CANCELLED);
+    check(ores_native_continuation_store_release(
+        continuations, serialized_commit));
 
     /* A not-yet-ready Future must not claim the source continuation. */
     OresNativeContinuationHandle pending = publish(continuations, execution);
