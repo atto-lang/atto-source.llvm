@@ -22,17 +22,24 @@ void resolve_native_methods(Program& program) {
         for (const auto& binding : fn.locals)
             if (!binding.class_name.empty()) owners.emplace(binding.name, binding.class_name);
         for (const auto& binding : fn.locals) if (binding.int_array) arrays.emplace(binding.name, &binding);
+        std::function<std::string(const Expression&)> nominal = [&](const Expression& expr) -> std::string {
+            if (expr.kind == Expression::Kind::Variable) return owners.count(expr.name) ? owners.at(expr.name) : std::string{};
+            if (expr.kind != Expression::Kind::Field || !expr.left) return {};
+            const auto parent = nominal(*expr.left);
+            if (parent.empty() || !classes.count(parent)) return {};
+            for (const auto& field : classes.at(parent)->fields) if (field.name == expr.name) return field.class_name;
+            return {};
+        };
         std::function<void(Expression*)> expression = [&](Expression* expr) {
             if (!expr) return;
             expression(expr->left.get()); expression(expr->right.get());
             expression(expr->condition.get()); expression(expr->condition_lhs.get()); expression(expr->condition_rhs.get());
             expression(expr->when_true.get()); expression(expr->when_false.get());
             for (auto& arg : expr->arguments) expression(arg.get());
-            if (expr->kind != Expression::Kind::ArrayCall || !expr->left
-                    || expr->left->kind != Expression::Kind::Variable) return;
-            auto owner = owners.find(expr->left->name);
-            if (owner == owners.end()) return; // existing Array<int> path validates separately
-            auto cls = classes.find(owner->second);
+            if (expr->kind != Expression::Kind::ArrayCall || !expr->left) return;
+            const auto owner = nominal(*expr->left);
+            if (owner.empty()) return; // array receiver validates separately
+            auto cls = classes.find(owner);
             if (cls == classes.end()) throw std::runtime_error("unknown instance method class");
             const ClassMethod* method = nullptr;
             for (const auto& candidate : cls->second->methods)
@@ -57,8 +64,8 @@ void resolve_native_methods(Program& program) {
                     iterator.class_name = array.array_record_class;
                     iterator.scalar_type = array.array_element_type;
                 } else if (source.kind == Expression::Kind::Field && source.left &&
-                        source.left->kind == Expression::Kind::Variable && owners.count(source.left->name)) {
-                    const auto& cls = *classes.at(owners.at(source.left->name));
+                        !nominal(*source.left).empty()) {
+                    const auto& cls = *classes.at(nominal(*source.left));
                     const ClassField* array = nullptr;
                     for (const auto& field : cls.fields) if (field.name == source.name && field.int_array) array = &field;
                     if (!array) throw std::runtime_error("native for-of requires a typed array field");

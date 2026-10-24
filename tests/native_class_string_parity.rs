@@ -49,6 +49,31 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("nested-multiple-children-offsets-and-return-regions", r#"define class Data as pub val Array<int> values;pub val String label;pub read():int{return self.values.get(0);}end
+          define class Pair as pub val int leading;pub val Data left;pub val int gap;pub val Data right;end
+          fnc make_data(int n,String label):Data{val Array<int> values=new Array<int>();values.add(n);return new Data(values,label);}
+          fnc make_pair():Pair{val Data left=make_data(13,"left");val Data right=make_data(29,"right");return new Pair(7,left,11,right);}
+          fnc add_data(borrow Data a,borrow Data b):int{return a.read()+b.read();}
+          pub fnc main():int{val Pair pair=make_pair();return pair.leading==7&&pair.gap==11&&pair.left.label=="left"&&pair.right.label=="right"&&add_data(rt borrow pair.left,rt borrow pair.right)==42?0:1;}"#, ""),
+        ("imported-nested-owned-capture", r#"import module captures from './captures.ores';pub routine main():int{return captures.verify_capture();}"#, "id\n"),
+        ("nested-immutable-record-array-iteration", r#"define class Leaf as pub val int code;pub read():int{return self.code;}end define class Outer as pub val Leaf leaf;end
+          define class Counter as pub let int sum=0;end
+          pub fnc main():int{val Array<Outer> values=new Array<Outer>();values.add(new Outer(new Leaf(7)));values.add(new Outer(new Leaf(11)));let mut Counter count=new Counter();for(const item of values){count.sum=count.sum+item.leaf.read();}return count.sum==18?0:1;}"#, ""),
+        ("nested-owned-capture-return-and-move", include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
+        ("nested-constructor-result-and-grandchild", r#"define class Data as pub val Array<int> values;pub val String label;pub read():int{return self.values.get(0);}end
+          define class Envelope as pub val Data data;pub val int tag;pub read():int{return self.data.read();}end
+          define class Root as pub val Envelope envelope;pub read():int{return self.envelope.read();}end
+          fnc make_envelope():Envelope{val Array<int> values=new Array<int>();values.add(42);val Data data=new Data(values,"nested");return new Envelope(data,7);}
+          fnc make_root():Root{val Envelope envelope=make_envelope();return new Root(envelope);}
+          fnc read_data(borrow Data data):int{return data.read();}
+          pub routine main():int{val Root root=make_root();return root.read()==42&&read_data(rt borrow root.envelope.data)==42&&root.envelope.tag==7&&root.envelope.data.label=="nested"?0:1;}"#, ""),
+        ("nested-projection-exclusively-mutates-array", r#"define class Data as pub val Array<int> values;pub edit(mut self)(int value):void{self.values.set(0,value);return;}end
+          define class Outer as pub val Data data;end
+          pub routine main():int{val Array<int> values=new Array<int>();values.add(1);val Data data=new Data(values);val Outer outer=new Outer(data);outer.data.edit(42);return outer.data.values.get(0)==42?0:1;}"#, ""),
+        ("nested-immutable-scalar-result", r#"define class Leaf as pub val String name;pub read():String{return self.name;}end
+          define class Outer as pub val Leaf leaf;pub read():String{return self.leaf.read();}end
+          fnc make_outer():Outer{val Leaf leaf=new Leaf("value");return new Outer(leaf);}
+          pub routine main():int{val Outer outer=make_outer();return outer.read()=="value"&&outer.leaf.name=="value"?0:1;}"#, ""),
         ("imported-module-routing-validation", r#"import module paths from './paths.ores';pub routine main():int{return paths.verify_paths();}"#, ""),
         ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
           fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
@@ -303,12 +328,21 @@ fn main() {
         "sum(rt borrow parent,rt borrow child)",
         "sum(right:rt borrow child,left:rt borrow parent)",
     );
-    let native_only = [("named-borrows-distinguish-array-regions", named_source.as_str(), "")];
+    // The pinned Java parser still requires an initializer for final class fields.
+    let native_only = [
+        ("named-borrows-distinguish-array-regions", named_source.as_str(), ""),
+        ("readonly-nested-child-retains-read-access", r#"define class Data as pub val Array<int> values;pub read():int{return self.values.get(0);}end define class Outer as pub final Data child;end
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(42);val Data child=new Data(values);val Outer outer=new Outer(child);return outer.child.read()==42&&outer.child.values.size==1?0:1;}"#, ""),
+    ];
     let mut comparisons = 0;
+    let mut guest_address_checks = false;
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
+        let captures_fixture = include_str!("fixtures/native-class-string/nested-owned-capture.ores")
+            .replace("pub routine main():int", "pub fnc verify_capture():int");
+        fs::write(scratch.0.join("captures.ores"), format!("define module captures as\n{captures_fixture}\nend\n")).unwrap();
         let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
             .replace("pub routine main(): int", "pub fnc verify_paths(): int");
         fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
@@ -326,13 +360,34 @@ fn main() {
             if let Some((label, _)) = line.split_once(':') {
                 if !line.starts_with(' ') { block = label; }
             }
-            if line.contains(".arm.stack") && line.contains("alloca ") {
+            if [".arm.stack", "record.fields", "record.argument"].iter().any(|name| line.contains(name)) && line.contains("alloca ") {
                 assert_eq!(block, "entry", "{name}: scope slot allocated on a control-flow edge");
             }
         }
         let ir = scratch.0.join("program.ll");
         let binary = scratch.0.join("program");
-        fs::write(&ir, generated.stdout).unwrap();
+        let raw_ir = std::str::from_utf8(&generated.stdout).unwrap();
+        // Clang's -fsanitize flag alone does not mark imported LLVM IR
+        // functions for ASan. Mark every definition, then verify that actual
+        // guest-memory check calls are emitted (not just runtime linking).
+        let checked_ir = if sanitize {
+            raw_ir.lines().map(|line| {
+                if line.starts_with("define ") {
+                    format!("{} sanitize_address {{\n", line.strip_suffix('{').expect("function definition"))
+                } else { format!("{line}\n") }
+            }).collect::<String>()
+        } else { raw_ir.to_owned() };
+        fs::write(&ir, checked_ir).unwrap();
+        if sanitize && *name == "nested-constructor-result-and-grandchild" {
+            let checked = run(Command::new(&clang).args(["-O1", "-S", "-emit-llvm", "-fsanitize=address", "-x", "ir"])
+                .arg(&ir).args(["-o", "-"]));
+            assert!(checked.status.success(), "guest ASan: {}", String::from_utf8_lossy(&checked.stderr));
+            let instrumented = String::from_utf8_lossy(&checked.stdout);
+            assert!(["call void @__asan_report_load8", "call void @__asan_report_store8",
+                "call void @__asan_report_load_n", "call void @__asan_report_store_n"].iter().any(|call| instrumented.contains(call)),
+                "guest LLVM memory accesses were not instrumented");
+            guest_address_checks = true;
+        }
         if binary.exists() {
             fs::remove_file(&binary).unwrap();
         }
@@ -422,6 +477,7 @@ fn main() {
           fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
           pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
+            (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
             (include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
             (include_str!("fixtures/native-class-string/typed-array-iteration.ores"), "foo\nid\n"),
             (scalar_record, ""),
@@ -445,6 +501,30 @@ fn main() {
         }
     }
     let negatives = [
+        ("nested-explicit-constructor-cannot-reinterpret-scalar", r#"define class Child as pub val int value;end define class Outer as val Child child;constructor(int child){self.child=child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-depth-forward-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
+        ("nested-depth-reverse-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).rev().map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
+        ("nested-expanded-layout-bound", format!("define class Child as {}end define class Outer as val Child child;val int extra;end pub fnc main():int{{return 0;}}", (0..16).map(|i| format!("val int field_{i};")).collect::<String>()), foo.to_owned()),
+        ("final-primitive-projection-cannot-borrow-mut", r#"define class Counter as pub val int value;end fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val Counter counter=new Counter(1);return observe(rt borrow mut counter.value);}"#.to_owned(), foo.to_owned()),
+        ("readonly-child-edge-cannot-borrow-mut", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);edit(rt borrow mut outer.child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("readonly-child-edge-cannot-mutate-array", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);outer.child.values.add(1);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-duplicate-child-owner", r#"define class Child as pub val Array<int> values;end define class Pair as val Child first;val Child second;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Pair pair=new Pair(child,child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-child-use-after-move", r#"define class Child as pub val Array<int> values;end define class Outer as val Child child;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Outer outer=new Outer(child);return child.values.size;}"#.to_owned(), foo.to_owned()),
+        ("nested-borrowed-child-consumption", r#"define class Child as pub val Array<int> values;end define class Outer as val Child child;end fnc bad(borrow Child child):int{val Outer outer=new Outer(child);return 0;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-wrong-nominal-child", r#"define class A as pub val int value;end define class B as pub val int value;end define class Outer as val A child;end pub fnc main():int{val B child=new B(1);val Outer outer=new Outer(child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-integer-forged-child", r#"define class Child as pub val int value;end define class Outer as val Child child;end pub fnc main():int{val Outer outer=new Outer(1);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-parent-private-edge", r#"define class Child as pub val int value;end define class Outer as val Child child;end pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return outer.child.value;}"#.to_owned(), foo.to_owned()),
+        ("nested-child-private-edge", r#"define class Child as val int value;end define class Outer as pub val Child child;pub leak():int{return self.child.value;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-private-child-loan", r#"define class Child as pub val int value;end define class Outer as val Child child;end fnc read(borrow Child child):int{return child.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return read(rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
+        ("nested-shared-to-exclusive-escalation", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}fnc bad(borrow Outer outer):void{edit(rt borrow mut outer.child);return;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-projection-alias-conflict", r#"define class Child as pub val int value;end define class Outer as pub val Child child;end fnc pair(borrow mut Child a,borrow Child b):int{return b.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return pair(rt borrow mut outer.child,rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
+        ("nested-owning-field-cannot-escape-by-value", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;pub leak():Child{return self.child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-cycle", r#"define class Node as val Node child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-indirect-cycle", r#"define class A as val B child;end define class B as val A child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-mutable-child-slot", r#"define class Child as pub let int value=1;end define class Outer as val Child child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-fieldless-identity", r#"define class Empty as end define class Outer as val Empty child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-unknown-child-type", r#"define class Outer as val Missing child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+
         ("index-loop-shadows-live-local", r#"pub fnc main():int{val index:int=0;for(let int index=0;index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
         ("index-counter-escape", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){}return index;}"#.to_owned(), foo.to_owned()),
         ("index-initializer-wrong-type", r#"pub fnc main():int{for(let int index="bad";index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
@@ -661,5 +741,7 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
+    assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
+    if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
     println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
 }
