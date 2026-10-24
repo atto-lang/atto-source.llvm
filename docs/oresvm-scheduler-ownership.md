@@ -28,9 +28,12 @@ not a dedicated pthread. Scheduler/cooperate and await continuations are
 not equivalent to `sched_yield()`.
 
 Created workers remain resident until domain retirement; idle worker
-reclamation and dynamic pool rebalancing are future work. OresVM coordinates
-domain lifetimes without a dedicated master OS thread; worker dispatch is local
-to each NativeActorScheduler, not centralized through OresVM.
+reclamation and dynamic pool rebalancing are future work. OresVM coordinates domain lifetimes. Legacy host users may keep the
+metadata-only manually pumped CONTROL coordinator without a master pthread.
+The compiled source-actor bootstrap now opts into one eagerly started native
+main CONTROL event loop; it only coalesces and signals pool wakeups and never
+runs actor callbacks. Worker dispatch remains local to each NativeActorScheduler,
+not centralized through OresVM.
 
 The VM closes domains only after producer/API callers are fenced; it first
 retires admission, then drains accepted DATA/CONTROL work, then joins only
