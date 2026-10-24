@@ -3306,8 +3306,8 @@ if(BUILD_TESTING)
     target_compile_features(oreslang-native-task-continuation-gate-test PRIVATE cxx_std_17)
     target_link_libraries(oreslang-native-task-continuation-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-task-continuation-gate-test PRIVATE
-        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
     add_test(NAME native_task_continuation_cancel_ready_races
         COMMAND oreslang-native-task-continuation-gate-test)
     set_tests_properties(native_task_continuation_cancel_ready_races
