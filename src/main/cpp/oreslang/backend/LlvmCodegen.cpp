@@ -706,6 +706,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         for (const auto& s : fn.caught_throw_defers) scan_statement(s);
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        for (const auto& s : fn.actor_capability_sends) scan_string(s.payload.get());
+        for (const auto& output : fn.actor_outputs) scan_string(output.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
         scan_string(fn.result.get());
