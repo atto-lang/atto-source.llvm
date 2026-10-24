@@ -626,6 +626,8 @@ void validate_i64_ownership(const Program& program) {
         }
         for (const auto& send : method.actor_capability_sends)
             pure(*send.payload);
+        for (const auto& output : method.actor_outputs)
+            pure(*output);
         for (const auto& write : method.actor_field_writes)
             pure(*write.expression);
         if (method.result) pure(*method.result);
