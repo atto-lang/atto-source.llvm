@@ -148,7 +148,10 @@ int ores_native_vm_current_execution_context(
 
 /* VM-owned CONTROL wake coordinator. Legacy hosts can explicitly pump it
  * with zero additional threads; a trusted source bootstrap can prestart
- * exactly ONE dedicated blocking main CONTROL pthread before any actor spawn.
+ * exactly ONE dedicated blocking main CONTROL pthread before any actor spawn
+ * and before prepare_realtime(). A real-time prestart attempt permanently
+ * rejects late CONTROL-thread creation, even after failed preallocation.
+ * To use both services, start CONTROL first and then prestart RT carriers.
  * Its only job is to coalesce signals to domain scheduler conditions:
  * it never executes guest code, delivers actor mailbox messages or becomes
  * a fourth actor worker pool. The three actor pools stay lazy.
