@@ -867,6 +867,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee sourceSpawnChildCapability, sourceSendCapability;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
+    const auto nativeActorHeapCapacity = [](const ActorDecl& actor) -> std::size_t {
+        const std::size_t required =
+            actor.fields.size() + actor.on_message.locals.size();
+        return std::max<std::size_t>(1, required);
+    };
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
@@ -1062,8 +1067,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
+                llvm::ConstantInt::get(i64, nativeActorHeapCapacity(*actor))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2219,7 +2223,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::ConstantInt::get(i64, i),
                 childInit,
                 childHandler,
-                llvm::ConstantInt::get(i64, target->fields.size())
+                llvm::ConstantInt::get(i64, nativeActorHeapCapacity(*target))
             });
         }
         init.CreateRetVoid();
