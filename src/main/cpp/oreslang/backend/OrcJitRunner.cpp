@@ -11,6 +11,8 @@
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/LLVMContext.h>
@@ -21,6 +23,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/Casting.h>
 
 namespace oreslang {
 
@@ -53,6 +56,18 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
         module->getNamedGlobal("llvm.global_dtors"))
         throw std::runtime_error("ORC JIT: global constructors/destructors are not admitted");
 
+    // Module-level asm is not the only inline assembly form: call/callbr
+    // instructions can invoke llvm::InlineAsm directly or through a pointer
+    // cast. Reject both before any ORC materialization or execution.
+    for (const auto& function : *module)
+        for (const auto& block : function)
+            for (const auto& instruction : block)
+                if (const auto* call = llvm::dyn_cast<llvm::CallBase>(&instruction))
+                    if (llvm::isa<llvm::InlineAsm>(
+                            call->getCalledOperand()->stripPointerCasts()))
+                        throw std::runtime_error(
+                            "ORC JIT: function inline assembly is not admitted");
+
     // The native compiler's wrapper defines the guest process-exit contract.
     // Calling the guest i64 entry directly would bypass its 0..255 validation.
     const auto* entry = module->getFunction("main");
@@ -74,6 +89,28 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
     if (!jit_result)
         throw std::runtime_error("ORC JIT: " + llvm::toString(jit_result.takeError()));
     auto jit = std::move(*jit_result);
+
+    // A source module without a target is native-host IR, not proof that an
+    // explicitly foreign target can be executed safely. LLJIT has historically
+    // differed in whether it rejects a non-host triple on module addition.
+#if LLVM_VERSION_MAJOR >= 19
+    const std::string module_triple = module->getTargetTriple().str();
+#else
+    const std::string module_triple = module->getTargetTriple();
+#endif
+    const std::string host_triple = jit->getTargetTriple().str();
+    if (!module_triple.empty() && module_triple != host_triple)
+        throw std::runtime_error("ORC JIT: incompatible host target triple");
+    if (!module->getDataLayout().isDefault() &&
+            module->getDataLayout() != jit->getDataLayout())
+        throw std::runtime_error("ORC JIT: incompatible host data layout");
+#if LLVM_VERSION_MAJOR >= 19
+    module->setTargetTriple(jit->getTargetTriple());
+#else
+    module->setTargetTriple(host_triple);
+#endif
+    module->setDataLayout(jit->getDataLayout());
+
     if (auto error = jit->addIRModule(
             llvm::orc::ThreadSafeModule(std::move(module), std::move(context))))
         throw std::runtime_error("ORC JIT: " + llvm::toString(std::move(error)));
