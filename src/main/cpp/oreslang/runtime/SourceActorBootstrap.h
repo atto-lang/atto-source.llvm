@@ -16,6 +16,25 @@ typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
+enum {
+    ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
+    ORES_SOURCE_ACTOR_STARTUP_INITIALIZING = 1,
+    ORES_SOURCE_ACTOR_STARTUP_READY = 2,
+    ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY = 3
+};
+
+/* Read-only host lifecycle observation. TERMINATED_BEFORE_READY corresponds
+ * to a failed get_ready observer while get_done still completes normally. */
+int oreslang_source_actor_ready_status(void* actor);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Deterministic startup-race proof hooks. They pause only the reserved
+ * initialization CONTROL callback before it decides whether construction may
+ * begin; they are not linked into ordinary source programs. */
+void oreslang_source_actor_test_hold_initialization(int hold);
+int oreslang_source_actor_test_initialization_entered(void);
+#endif
+
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
