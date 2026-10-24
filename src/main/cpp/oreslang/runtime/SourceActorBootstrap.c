@@ -490,6 +490,17 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_native_vm_poll_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
+    OresNativeActorTerminalState terminal = {0};
+    ensure(ores_native_vm_actor_terminal_state(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, &terminal));
+    ensure(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+    ensure(terminal.processed_user_messages
+        + terminal.abandoned_user_messages
+        == terminal.accepted_user_messages);
+    ensure(terminal.processed_user_messages
+        == atomic_load_explicit(&instance->processed, memory_order_acquire));
+    ensure(terminal.abandoned_control_messages == 0);
+
     /*
      * get_done parity requires physical quiescence, not a logical stop bit.
      * Reclaim the actor-owned heap only after the VM terminal acknowledgement.
@@ -498,9 +509,10 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
-        (unsigned long long)atomic_load_explicit(
-            &instance->processed, memory_order_acquire),
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        (unsigned long long)terminal.accepted_user_messages,
+        (unsigned long long)terminal.processed_user_messages,
+        (unsigned long long)terminal.abandoned_user_messages,
         (long long)atomic_load_explicit(
             &instance->last_result, memory_order_relaxed));
 #endif
