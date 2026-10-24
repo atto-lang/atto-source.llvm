@@ -18,9 +18,19 @@ command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
+runtime_sources=()
 if grep -Eq 'declare .*@ores_string_' "$work/program.ll"; then
+  runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c")
+fi
+if grep -Eq 'declare .*@ores_record_' "$work/program.ll"; then
+  runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeRecordRegion.c")
+fi
+if grep -Eq 'declare .*@oreslang_int_array_' "$work/program.ll"; then
+  runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
+fi
+if (( ${#runtime_sources[@]} )); then
   "$clang" -O2 -x ir "$work/program.ll" -x c -std=c11 \
-    "$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c" -pthread -o "$work/program"
+    -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
   "$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
 fi

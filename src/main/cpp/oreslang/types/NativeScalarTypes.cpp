@@ -28,6 +28,10 @@ Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
 Type parameter_type(const Parameter& p) {
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
+Type result_type(const Function& fn) {
+    return fn.returns_void ? Type{Kind::Void, {}} : fn.return_class.empty()
+        ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
+}
 Type local_type(const LocalBinding& local) {
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
@@ -130,6 +134,7 @@ void validate_native_scalar_types(const Program& program) {
                     const bool index = (e.name == "get" || e.name == "set") && i == 0;
                     if (!index && element.kind == Kind::Class &&
                             e.arguments[i]->kind != E::RecordConstruct &&
+                            e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
                             !(e.arguments[i]->kind == E::ArrayCall && e.arguments[i]->name == "get"))
                         fail(e.offset, "record arrays require a new immutable record or existing array element");
                     require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
@@ -157,7 +162,7 @@ void validate_native_scalar_types(const Program& program) {
                     require(expression(*e.arguments[i], locals), parameter_type(fn.parameters.at(slot)),
                             e.arguments[i]->offset, "argument bool/int/nominal type differs from parameter");
                 }
-                return fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type);
+                return result_type(fn);
             }
         }
         fail(e.offset, "unsupported expression");
@@ -194,8 +199,10 @@ void validate_native_scalar_types(const Program& program) {
     }
     std::function<void(const Function&, Locals)> function;
     function = [&](const Function& fn, Locals locals) {
+        if (!fn.return_class.empty()) (void)immutable_record(fn.return_class);
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
+            if (binding.record_view) (void)immutable_record(binding.class_name);
             if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
@@ -236,7 +243,7 @@ void validate_native_scalar_types(const Program& program) {
         if (fn.caught_throw_value)
             require(expression(*fn.caught_throw_value, locals), scalar(false), fn.offset, "throw payload requires int");
         if (!fn.catch_binding.empty()) locals.emplace(fn.catch_binding, scalar(false));
-        const Type result = fn.returns_void ? Type{Kind::Void, {}} : scalar(fn.return_type);
+        const Type result = result_type(fn);
         for (const auto& guard : fn.early_returns) {
             if (guard.condition) require(expression(*guard.condition, locals), scalar(true), guard.offset, "guard requires bool");
             else compare(*guard.lhs, *guard.rhs, locals);
@@ -249,7 +256,7 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };
     for (const auto& fn : program.functions) {
-        if (fn.name == "main" && fn.return_type != ScalarType::I64) fail(fn.offset, "OS entrypoint requires int or void");
+        if (fn.name == "main" && (fn.return_type != ScalarType::I64 || !fn.return_class.empty())) fail(fn.offset, "OS entrypoint requires int or void");
         function(fn, {});
     }
     for (const auto& actor : program.actors) {

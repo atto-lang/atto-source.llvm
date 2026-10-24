@@ -33,9 +33,10 @@ Straight-line array effects can precede later local declarations. They are
 lowered to compiler-owned discarded effect slots in source order; `set`'s void
 host ABI never becomes a void scalar store. No extra channel or future is used.
 
-Still required for the full router/Spin server: record-array class fields,
-array parameters and returns, mutable objects/nested owners, general class
-returns, iteration and actor/continuation-owned lifetimes. All actors, await,
+Record-array class fields now support constructor transfer and borrowed calls;
+immutable leaf returns use the [record-return ABI](NATIVE_RECORD_RETURNS.md).
+Still required for the full router/Spin server: array parameters and owning
+returns, mutable objects/nested owners, iteration and actor/continuation-owned lifetimes. All actors, await,
 exceptions and unsupported targets continue to reject record-region lowering.
 Do not use a server-main invocation arena as an unlimited request heap. The full
 [Spin execution gate](SPIN_NATIVE_EXECUTION_GATES.md) remains unmet.

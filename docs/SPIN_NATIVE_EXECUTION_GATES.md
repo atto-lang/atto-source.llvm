@@ -23,6 +23,9 @@ The execution path requires these compiler/runtime changes, in dependency order:
    array parameter and return ownership still need lowering. Declaration-only int/bool/String records
    such as PathSegment now construct and copy natively. Native stack records and local
    scalar/String arrays alone cannot represent the router.
+   Immutable leaf class returns such as `segment_at() -> PathSegment` now use
+   checked root handles; returning an array-owning class still needs a region
+   ownership/result ABI (see `NATIVE_RECORD_RETURNS.md`).
 2. Typed `Result`/`Option` values, collection iteration and the remaining control
    flow used by the actual router. String content equality is now available.
 3. Source actor mailbox signatures and typed HTTP exchange capabilities. Every

@@ -136,6 +136,19 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Boolean:
             return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
+            if (!expr.resolved_class.empty()) {
+                if (!moves || !moves->record_classes || !moves->record_schemas)
+                    throw std::runtime_error("record value lacks root-region provenance");
+                const auto& cls = *moves->record_classes->at(expr.resolved_class);
+                auto* values = builder.CreateAlloca(i64, llvm::ConstantInt::get(i64, cls.fields.size()), "return.record.fields");
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateLoad(i64, field_storage.at(field_key(expr.name, cls.fields[i].name)));
+                    builder.CreateStore(value, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+                }
+                return builder.CreateCall(moves->record_new, {
+                    llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
+                    llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
+            }
             llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
                 expr.name + ".read");
             if (moves && moves->live_flags &&
@@ -562,6 +575,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& child : s.else_statements) scan_statement(child);
     };
     auto scan_function = [&](const Function& fn) {
+        if (!fn.return_class.empty()) record_runtime = true;
         if (fn.return_type == ScalarType::String) string_runtime = true;
         for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
         for (const auto& local : fn.locals) {

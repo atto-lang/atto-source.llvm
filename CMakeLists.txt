@@ -1789,6 +1789,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/path-segment.ores
                 tests/fixtures/native-class-string/record-array.ores
                 tests/fixtures/native-class-string/owned-path-pattern.ores
+                tests/fixtures/native-class-string/record-return.ores
             VERBATIM)
         add_custom_target(oreslang-native-class-string-parity-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")
@@ -1803,6 +1804,7 @@ if(BUILD_TESTING)
                 COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity"
                     --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"
                     --runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeStringRegion.c"
+                    --aot-driver "${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
                     ${string_parity_extra})
         else()
             add_test(NAME native_class_string_parity_${mode} COMMAND "${CMAKE_COMMAND}" -E false)
