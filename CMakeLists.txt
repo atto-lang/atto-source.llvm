@@ -321,15 +321,6 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
-    # Source-to-LLVM-to-Clang execution: bare self is the hidden receiver,
-    # not part of caller-visible method overload arity. Rust harness only.
-    find_program(ORES_CLANG_EXECUTABLE NAMES clang REQUIRED)
-    add_test(NAME native_inline_self_receiver_arity_aot
-        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
-            native-inline-self-arity
-            "$<TARGET_FILE:oreslang-llvmc>"
-            "${ORES_CLANG_EXECUTABLE}")
-    set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
@@ -566,6 +557,15 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Executable Oreslang method fixtures, using Rust-only tooling.
+    if(ORE_CLANG)
+        add_test(NAME native_inline_self_receiver_arity_aot
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+                native-inline-self-arity
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}")
+        set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
