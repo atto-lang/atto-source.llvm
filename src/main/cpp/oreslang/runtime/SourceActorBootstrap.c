@@ -682,11 +682,12 @@ void oreslang_source_actor_stop(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld outputs=%u\n",
         (unsigned long long)atomic_load_explicit(
             &instance->processed, memory_order_acquire),
         (long long)atomic_load_explicit(
-            &instance->last_result, memory_order_relaxed));
+            &instance->last_result, memory_order_relaxed),
+        (unsigned)instance->output_count);
 #endif
     group.actors[slot] = NULL;
     scrub_bytes(instance,sizeof(*instance));
