@@ -303,12 +303,21 @@ void* oreslang_source_actor_spawn_with_capabilities(
 
     OresNativeActorRef copied[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
     for (uint64_t i = 0; i < actor_count; ++i) {
-        SourceActor* target = (SourceActor*)actors[i];
+        SourceActor* target = NULL;
+        size_t target_slot = 0;
+        /* Opaque refs are trusted compiler handles, but validation must not
+         * dereference a stale/arbitrary pointer. Find identity in the live
+         * group table first, then inspect the matched object. */
+        for (size_t candidate = 0; candidate < group.next_slot; ++candidate) {
+            if (group.actors[candidate] == actors[i]) {
+                target = group.actors[candidate];
+                target_slot = candidate;
+                break;
+            }
+        }
         ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
-        const size_t target_slot = (size_t)target->ref.actor_slot;
         ensure(target->ref.scheduler_domain
-            && target_slot < group.next_slot
-            && group.actors[target_slot] == target);
+            && target->ref.actor_slot == target_slot);
         copied[i] = target->ref;
     }
 
