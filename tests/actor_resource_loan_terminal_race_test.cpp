@@ -1,11 +1,34 @@
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <new>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 using oreslang::runtime::NativeActorGroup;
+
+static std::atomic<bool> fail_allocations{false};
+
+void* operator new(std::size_t size) {
+    if (fail_allocations.load(std::memory_order_acquire))
+        throw std::bad_alloc();
+    if (void* p = std::malloc(size)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void* operator new[](std::size_t size) {
+    if (fail_allocations.load(std::memory_order_acquire))
+        throw std::bad_alloc();
+    if (void* p = std::malloc(size)) return p;
+    throw std::bad_alloc();
+}
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("actor resource loan race: " #x); } while (false)
 
@@ -106,8 +129,70 @@ static void concurrent_registration_and_finalization_have_one_winner() {
     CHECK(registration_wins + finalization_wins == 2000);
 }
 
+static void settlement_failure_rolls_back_terminal_resource_seal() {
+    {
+        NativeActorGroup group(191004, 1);
+        auto actor = group.adopt(191004, 201, 1, [] {});
+        CHECK(group.mark_ready(actor));
+
+        std::string injected_failure(512, 'x');
+        bool threw = false;
+        fail_allocations.store(true, std::memory_order_release);
+        try {
+            (void)group.finalized(actor, std::move(injected_failure));
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        fail_allocations.store(false, std::memory_order_release);
+        CHECK(threw);
+
+        // A failed settlement must not leave the terminal bit permanently set.
+        actor.retain_resource_loan();
+        CHECK(actor.outstanding_resource_loans() == 1);
+        actor.release_resource_loan();
+
+        std::string retry_failure(512, 'y');
+        CHECK(group.finalized(actor, std::move(retry_failure)));
+        bool done_failed = false;
+        try { actor.get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        CHECK(done_failed);
+    }
+
+    {
+        NativeActorGroup group(191005, 1);
+        auto actor = group.adopt(191005, 202, 1, [] {});
+        CHECK(group.mark_ready(actor));
+        auto finalizer = group.runtime_finalizer(actor);
+        group.close();
+
+        std::string injected_failure(512, 'z');
+        bool threw = false;
+        fail_allocations.store(true, std::memory_order_release);
+        try {
+            (void)finalizer.finalized(std::move(injected_failure));
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        fail_allocations.store(false, std::memory_order_release);
+        CHECK(threw);
+
+        actor.retain_resource_loan();
+        CHECK(actor.outstanding_resource_loans() == 1);
+        actor.release_resource_loan();
+
+        std::string retry_failure(512, 'q');
+        CHECK(finalizer.finalized(std::move(retry_failure)));
+        bool done_failed = false;
+        try { actor.get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        CHECK(done_failed);
+    }
+}
+
 int main() {
     live_group_rejects_outstanding_loan();
     recycled_numeric_ref_cannot_inspect_next_control_slot();
     concurrent_registration_and_finalization_have_one_winner();
+    settlement_failure_rolls_back_terminal_resource_seal();
 }
