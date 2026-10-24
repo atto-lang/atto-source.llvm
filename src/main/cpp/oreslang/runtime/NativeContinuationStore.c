@@ -330,6 +330,36 @@ int ores_native_continuation_store_release(
     return released_any;
 }
 
+int ores_native_continuation_store_notify_ready(
+        OresNativeContinuationStore* store,
+        OresNativeContinuationHandle handle) {
+    if (!store || !lock_store(store)) return 0;
+    uint32_t lane = 0, index = 0;
+    ContinuationBlock* block = NULL;
+    int ok = resolve_locked(store, handle, &block, &lane, &index)
+        && block->state[lane] == ORES_CONTINUATION_PENDING;
+    if (ok) block->state[lane] = (unsigned char)ORES_CONTINUATION_READY;
+    unlock_store(store);
+    return ok;
+}
+
+int ores_native_continuation_store_try_claim_ready_resume(
+        OresNativeContinuationStore* store,
+        OresNativeContinuationHandle handle,
+        OresNativeContinuationRecord* out) {
+    if (!store || !lock_store(store)) return 0;
+    uint32_t lane = 0, index = 0;
+    ContinuationBlock* block = NULL;
+    int ok = resolve_locked(store, handle, &block, &lane, &index)
+        && block->state[lane] == ORES_CONTINUATION_READY;
+    if (ok) {
+        block->state[lane] = (unsigned char)ORES_CONTINUATION_CLAIMED;
+        if (out) *out = load_record(block, lane);
+    }
+    unlock_store(store);
+    return ok;
+}
+
 int ores_native_continuation_store_try_claim_resume(
         OresNativeContinuationStore* store,
         OresNativeContinuationHandle handle,
@@ -367,7 +397,8 @@ int ores_native_continuation_store_cancel(
     uint32_t lane = 0, index = 0;
     ContinuationBlock* block = NULL;
     int ok = resolve_locked(store, handle, &block, &lane, &index)
-        && block->state[lane] == ORES_CONTINUATION_PENDING;
+        && (block->state[lane] == ORES_CONTINUATION_PENDING
+            || block->state[lane] == ORES_CONTINUATION_READY);
     if (ok) block->state[lane] = (unsigned char)ORES_CONTINUATION_CANCELLED;
     unlock_store(store);
     return ok;
