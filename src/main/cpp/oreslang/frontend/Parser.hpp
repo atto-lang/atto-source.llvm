@@ -250,6 +250,7 @@ struct TypeOnlyDecl {
     };
     Kind kind = Kind::Alias;
     std::string name;
+    std::string module_name; // empty for root; captured at declaration site
     bool exported = false;
     std::string alias_target; // native v1 accepts int/bool or another alias
     std::vector<Constraint> constraints; // canonical min then max, compiler-only
