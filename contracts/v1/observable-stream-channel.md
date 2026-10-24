@@ -193,7 +193,10 @@ atomic winner semantics, but it should retain a larger finite process emergency
 ceiling only as defense in depth. Ordinary domain A saturation must not deny
 domain B merely because both share a JVM/process coordinator. A multi-Channel
 atomic select is same-domain by default; crossing domains requires an explicit
-verified bridge or fails closed. Future-only select must still be charged to
+verified bridge or fails closed. Raw host/interop Channel handles must prove
+they belong to the receiving source context's domain (or traverse such a
+bridge) before guest read/write/select/close authority is exposed.
+Future-only select must still be charged to
 the caller's domain rather than escaping accounting because it has no Channel
 arm. Domain teardown atomically detaches/fails its pending selections and
 refunds both domain and process accounting exactly once.
