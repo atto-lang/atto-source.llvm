@@ -1047,7 +1047,8 @@ private:
         }
         for (const auto& parameter : value.parameters)
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
-        if (!accept(":")) require("->");
+        const bool arrow_return_type = !accept(":");
+        if (arrow_return_type) require("->");
         value.returns_void = accept("void");
         if (!value.returns_void) {
             if (accept("int")) {
@@ -1091,6 +1092,32 @@ private:
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
+        }
+        // End-delimited class methods use the same Function / hidden-receiver
+        // representation as braced methods. Until general structured-body
+        // lowering is shared, permit only an empty/return-only void body or
+        // one scalar terminal return; reject every other statement.
+        // This is not an alternate arity or method ABI.
+        if (token_.text == "::") {
+            if (owner.empty()) fail("native '::' body requires a class method");
+            if (!arrow_return_type)
+                fail("native '::' method requires '->' return syntax");
+            require("::");
+            if (value.returns_void) {
+                if (accept("return")) {
+                    if (!accept(";") && token_.text != "end")
+                        fail("native end-delimited void method requires terminal return");
+                }
+            } else {
+                require("return");
+                value.result = expression();
+                if (!accept(";") && token_.text != "end")
+                    fail("native end-delimited method requires terminal return");
+            }
+            if (token_.text != "end")
+                fail("native end-delimited method supports only one terminal return");
+            require("end");
+            return value;
         }
         require("{");
         auto array_effect_ahead = [&] {
