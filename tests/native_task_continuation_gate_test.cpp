@@ -331,6 +331,34 @@ static void retirement_and_ready_resume_claim_are_linearized() {
     }
 }
 
+static void only_claiming_gate_can_finish_execution() {
+    Stores stores;
+    auto task = TaskCancellation::root();
+    const auto link = stores.suspend(14321);
+    TaskContinuationGate winner(task, stores.executions,
+                                stores.continuations, link, 11,
+                                {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+    TaskContinuationGate other(task, stores.executions,
+                               stores.continuations, link, 11,
+                               {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+    assert(winner.notify_ready());
+    OresNativeExecutionHandle admitted{};
+    assert(winner.try_resume(physical(14322), &admitted));
+    assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    // The second binding cannot steal the physical completion authority.
+    assert(!other.finish_resume());
+    assert(!other.try_resume(physical(14323), &admitted));
+    assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    other.close();
+    winner.close();
+    assert(winner.finish_resume());
+    assert(!winner.finish_resume());
+    assert(ores_native_execution_context_store_release(
+        stores.executions, admitted));
+    stores.release(link);
+    task->retire();
+}
+
 static void completion_cancel_and_resume_cancel_races() {
     Stores stores;
     for (std::uint64_t i = 0; i < 256; ++i) {
@@ -435,6 +463,7 @@ int main() {
     rejects_non_await_control_and_spawn_boundaries();
     retirement_is_a_strict_waiter_revocation_barrier();
     retirement_and_ready_resume_claim_are_linearized();
+    only_claiming_gate_can_finish_execution();
     completion_cancel_and_resume_cancel_races();
     close_disarms_concurrent_revocation();
     std::puts("NATIVE_TASK_CONTINUATION_GATE_PASS");
