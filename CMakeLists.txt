@@ -1848,6 +1848,7 @@ if(BUILD_TESTING)
         add_executable(oreslang-worker-reuseport-accept-test
             tests/native_worker_reuseport_accept_test.cpp)
         target_include_directories(oreslang-worker-reuseport-accept-test PRIVATE src/main/cpp)
+        target_link_libraries(oreslang-worker-reuseport-accept-test PRIVATE Threads::Threads)
         target_compile_options(oreslang-worker-reuseport-accept-test PRIVATE
             -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_linux_worker_reuseport_accept
