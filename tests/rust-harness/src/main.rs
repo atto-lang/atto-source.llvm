@@ -610,6 +610,18 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "native '::' method requires '->' return syntax",
         ),
         (
+            "end-delimited-missing-double-colon",
+            "define class X as mtd foo(self) -> int return 42; end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected '{'",
+        ),
+        (
+            "end-delimited-as-is-not-double-colon",
+            "define class X as mtd foo(self) -> int as return 42; end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected '{'",
+        ),
+        (
             "end-delimited-nontrivial-void-body",
             "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
              pub fnc main():int{return 42;}\n",
@@ -651,7 +663,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
                 out.status.code(), stdout(&out), stderr(&out)),
         )?;
     }
-    println!("native inline self: 6 compiled/AOT-executed positive cases, 11 fail-closed negatives");
+    println!("native inline self: 6 compiled/AOT-executed positive cases, 13 fail-closed negatives");
     Ok(())
 }
 
