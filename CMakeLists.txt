@@ -315,6 +315,14 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Exact source alias-extension proof: compiler-owned static receiver dispatch,
+    # LLVM IR emission, Clang link and native process execution.
+    add_test(NAME native_alias_extension_method_aot
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_alias_extension_methods.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_alias_extension_method_aot PROPERTIES TIMEOUT 120)
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
     add_test(NAME native_tree_shaking_direct_calls
