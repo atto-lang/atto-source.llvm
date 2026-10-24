@@ -691,14 +691,20 @@ private:
 
     static std::vector<NativeActorRef::DoneContinuation> settle_done(
             const NativeActorRef& ref, const std::string& error) {
-        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
-        if (ref.ticket_->done_settled) return {};
+        // Stage every allocating object before publishing the one-shot promise.
+        // If allocation/copy fails, callers may retry physical finalization
+        // without encountering an already-satisfied promise paired with an
+        // unset done_settled/result state.
+        ActorDoneResult staged{error.empty(), error};
         std::exception_ptr failure;
         if (!error.empty())
             failure = std::make_exception_ptr(std::runtime_error(error));
+
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (ref.ticket_->done_settled) return {};
+        ref.ticket_->done_result = std::move(staged);
         if (failure) ref.ticket_->done_promise.set_exception(failure);
         else ref.ticket_->done_promise.set_value();
-        ref.ticket_->done_result = ActorDoneResult{error.empty(), error};
         ref.ticket_->done_settled = true;
         std::vector<NativeActorRef::DoneContinuation> callbacks;
         callbacks.swap(ref.ticket_->done_waiters);
