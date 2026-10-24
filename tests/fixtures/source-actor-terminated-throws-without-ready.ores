@@ -1,0 +1,3 @@
+pub fnc main(): int throws ActorTerminated {
+  return 43;
+}
