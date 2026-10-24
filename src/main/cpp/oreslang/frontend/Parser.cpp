@@ -809,6 +809,12 @@ private:
         }
         require(";");
         require("}");
+        if (method.actor_output_await) {
+            if (!method.locals.empty())
+                fail("native actor output await cannot retain owned temporaries in this slice");
+            if (!method.actor_field_writes.empty())
+                fail("native actor output await field writes require persisted continuation frame state");
+        }
         actor.on_message = std::move(method);
         if (braced) require("}");
         else require("end");
