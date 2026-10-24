@@ -1236,12 +1236,24 @@ private:
         // if/else arms containing field writes or direct function calls.
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
-        std::function<std::vector<Statement>(bool)> branch_arm;
+        std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> foreach_statement;
         std::size_t statement_depth = 0;
         foreach_statement = [&]() {
             Lexer look = lexer_;
             const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
+            if (open.text == "(" && mode.text == "let" && name.text == "int") {
+                Statement loop; loop.kind = Statement::Kind::ForIndex; loop.offset = token_.offset;
+                require("for"); require("("); require("let"); require("int");
+                loop.branch_local = std::make_unique<LocalBinding>();
+                loop.branch_local->name = identifier(); loop.branch_local->offset = loop.offset;
+                loop.branch_local->owner_mutable = true;
+                require("="); loop.branch_local->initializer = expression(); require(";");
+                loop.condition = expression(); require(";");
+                if (identifier() != loop.branch_local->name) fail("native index loop must update its own counter");
+                require("="); loop.loop_step = expression(); require(")"); require("{");
+                loop.then_statements = branch_arm(false, false); require("}"); return loop;
+            }
             if (open.text != "(" || (mode.text != "const" && mode.text != "val") ||
                     name.kind != Kind::Identifier || of.text != "of")
                 fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -1256,17 +1268,17 @@ private:
             require("of"); loop.expression = expression(); require(")"); require("{");
             const auto receivers = class_receivers_;
             class_receivers_.insert(loop.branch_local->name);
-            loop.then_statements = branch_arm(false);
+            loop.then_statements = branch_arm(false, false);
             class_receivers_ = receivers;
             require("}"); return loop;
         };
-        branch_arm = [&](bool finally_scope) {
+        branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
             struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
-            while (token_.text != "}") {
+            while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "for" && !finally_scope) {
@@ -1288,17 +1300,31 @@ private:
                 Statement statement;
                 statement.offset = token_.offset;
                 if (token_.text == "if" && !finally_scope) {
-                    advance(); require("("); statement.kind = Statement::Kind::Conditional;
-                    statement.condition = expression(); require(")"); require("{");
-                    statement.then_statements = branch_arm(false); require("}");
-                    require("else"); require("{"); statement.else_statements = branch_arm(false);
-                    require("}"); require("fi"); actions.push_back(std::move(statement)); continue;
+                    advance(); statement.kind = Statement::Kind::Conditional;
+                    statement.condition = expression();
+                    if (accept(";")) {
+                        require("then"); statement.then_statements = branch_arm(false, true);
+                        if (accept("else")) statement.else_statements = branch_arm(false, true);
+                    } else {
+                        require("{"); statement.then_statements = branch_arm(false, false); require("}");
+                        if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
+                    }
+                    require("fi"); actions.push_back(std::move(statement)); continue;
                 }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
                 if (finally_scope && (token_.text == "defer" || token_.text == "try"))
                     fail("native finally nested defer/try requires scoped cleanup lowering");
+                if (accept("return")) {
+                    if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
+                    statement.kind = Statement::Kind::Return;
+                    if (!value.returns_void) statement.expression = expression();
+                    require(";"); actions.push_back(std::move(statement));
+                    if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                        fail("native statement follows terminal return");
+                    continue;
+                }
                 if (token_.text == "let")
                     fail("native branch-local class owner requires destructor/drop lowering");
                 if (accept("const") || accept("val")) {
@@ -1464,7 +1490,7 @@ private:
                     require("}");
                     require("finally");
                     require("{");
-                    auto cleanup = branch_arm(true);
+                    auto cleanup = branch_arm(true, false);
                     require("}");
                     for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
                         if (it->kind != Statement::Kind::FieldWrite ||
@@ -1530,11 +1556,11 @@ private:
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
                     conditional.condition = std::move(condition);
-                    conditional.then_statements = branch_arm(false);
+                    conditional.then_statements = branch_arm(false, false);
                     require("}");
                     require("else");
                     require("{");
-                    conditional.else_statements = branch_arm(false);
+                    conditional.else_statements = branch_arm(false, false);
                     require("}");
                     require("fi");
                     value.statements.push_back(std::move(conditional));
@@ -1694,7 +1720,7 @@ private:
             require("}");
             require("finally");
             require("{");
-            auto cleanup = branch_arm(true);
+            auto cleanup = branch_arm(true, false);
             require("}");
             // The protected region always exits via an evaluated scalar
             // return. Lower its finally effects as scope-exit actions
@@ -2920,6 +2946,18 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::ForIndex) {
+                    validate_expression(*stmt.branch_local->initializer, names, functions);
+                    NameSet body = names;
+                    if (!body.insert(stmt.branch_local->name).second) throw std::runtime_error("native index loop shadows live owner");
+                    validate_expression(*stmt.condition, body, functions); validate_expression(*stmt.loop_step, body, functions);
+                    for (const auto& action : stmt.then_statements) check_statement_names(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Return) {
+                    if (stmt.expression) validate_expression(*stmt.expression, names, functions);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ForEach) {
                     validate_expression(*stmt.expression, names, functions);
                     NameSet body = names;
@@ -3063,6 +3101,18 @@ private:
                         if (cls.name == local.class_name) for (const auto& field : cls.fields)
                             scope.emplace(local.name + "." + field.name, field.scalar_type);
                 };
+                if (stmt.kind == Statement::Kind::ForIndex) {
+                    require_scalar(*stmt.branch_local->initializer, ScalarType::I64, "index initializer", env);
+                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    require_scalar(*stmt.condition, ScalarType::Bool, "index condition", body);
+                    require_scalar(*stmt.loop_step, ScalarType::I64, "index update", body);
+                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Return) {
+                    if (stmt.expression) require_scalar(*stmt.expression, fn.return_type, "structured return", env);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::ForEach) {
                     (void)validate_scalar_expression(*stmt.expression, env, functions);
                     TypeMap body = env; scoped_type(*stmt.branch_local, body);

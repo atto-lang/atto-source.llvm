@@ -226,6 +226,7 @@ private:
         if (stmt.branch_local) local(unit, *stmt.branch_local);
         expression(unit, stmt.expression.get());
         expression(unit, stmt.condition.get()); expression(unit, stmt.condition_lhs.get()); expression(unit, stmt.condition_rhs.get());
+        expression(unit, stmt.loop_step.get());
         expression(unit, stmt.array_commit_length.get());
         for (auto& value : stmt.array_commit_values) expression(unit, value.get());
         for (auto& arm : stmt.then_statements) statement(unit, arm);
