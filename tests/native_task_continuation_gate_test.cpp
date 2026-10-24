@@ -186,6 +186,59 @@ static void rejects_forged_and_recycled_await_links() {
     task->retire();
 }
 
+static void retirement_is_a_strict_waiter_revocation_barrier() {
+    Stores stores;
+    {
+        auto task = TaskCancellation::root();
+        const auto link = stores.suspend(500);
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link);
+        assert(gate.notify_ready());
+        task->retire(); // Without Task.cancel(), still revoke READY!
+        assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+        OresNativeExecutionHandle resumed{};
+        assert(!gate.try_resume(physical(501), &resumed));
+        gate.close();
+        stores.release(link);
+    }
+    {
+        auto task = TaskCancellation::root();
+        task->retire();
+        const auto link = stores.suspend(502);
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link);
+        assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+        assert(!gate.notify_ready());
+        gate.close();
+        stores.release(link);
+    }
+    for (std::uint64_t i = 0; i < 128; ++i) {
+        auto task = TaskCancellation::root();
+        const auto link = stores.suspend(8000 + i);
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link);
+        std::atomic<bool> go{false};
+        std::thread producer([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            (void)gate.notify_ready();
+        });
+        std::thread retire([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            task->retire();
+        });
+        go.store(true, std::memory_order_release);
+        producer.join();
+        retire.join();
+        assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+        OresNativeExecutionHandle resumed{};
+        assert(!gate.try_resume(physical(9000 + i), &resumed));
+        gate.close();
+        stores.release(link);
+    }
+}
+
 static void completion_cancel_and_resume_cancel_races() {
     Stores stores;
     for (std::uint64_t i = 0; i < 256; ++i) {
@@ -287,6 +340,7 @@ int main() {
     late_task_cancel_cannot_reenter_claimed_guest();
     already_cancelled_authority_closes_registration_race();
     rejects_forged_and_recycled_await_links();
+    retirement_is_a_strict_waiter_revocation_barrier();
     completion_cancel_and_resume_cancel_races();
     close_disarms_concurrent_revocation();
     std::puts("NATIVE_TASK_CONTINUATION_GATE_PASS");
