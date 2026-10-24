@@ -48,7 +48,13 @@ int ores_native_await_trace_ready_resume_begin(
     OresNativeExecutionHandle* out_execution,
     OresNativeExecutionContext* out_context);
 
-/* Finish after the resumed guest turn/cleanup has left its native stack. */
+/*
+ * Finish only after the resumed guest turn and cleanup have left their native
+ * stack. Reject forged or recycled parent/execution identities: the supplied
+ * SuspensionLink must match the exact generation-fenced record still CLAIMED.
+ * This is a trusted scheduler-side operation, not guest permission to finish
+ * an arbitrary continuation.
+ */
 int ores_native_await_trace_resume_finish(
     OresNativeContinuationStore* continuations,
     OresNativeSuspensionLink link);
