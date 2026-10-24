@@ -4,9 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/llvm19-23-native-class-string-macos.yml'
-      - 'src/main/cpp/oreslang/backend/**'
-      - 'src/main/cpp/oreslang/frontend/**'
-      - 'src/main/cpp/oreslang/runtime/Native*Region.*'
+      # Covers frontend, backend, types, compiler entry point, and runtime.
+      # A typechecker-only change must not silently skip native execution.
+      - 'src/main/cpp/oreslang/**'
       - 'tests/native_class_string_parity.rs'
       - 'tests/native_source_input_admission.cpp'
       - 'tests/fixtures/native-class-string/**'
