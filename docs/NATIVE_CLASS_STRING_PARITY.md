@@ -40,6 +40,21 @@ compiler-owned anonymous slots. This preserves effects in initializers rather
 than hoisting declarations above prints. Import visibility, private instance
 methods, receiver borrowing and fieldless object liveness remain checked.
 
+## Multi-argument console parity (bounded native source slice)
+
+The native compiler admits 1–32 String arguments in `stdio.print` and
+`stdio.println`. It evaluates each expression once, left to right,
+concatenates with no inserted separator, and emits one console operation
+(one final newline only for `println`). It uses checked String-Add AST
+lowering and the existing invocation-owned String region, not libc `printf`.
+Mixed scalar types and 33+ arguments fail before emitting LLVM IR.
+
+The Rust CTest class/String runner contains imported Foo source, expression
+side-effect ordering, embedded NUL and UTF-8, the exact 32-argument boundary,
+and type/arity rejections. Both LLVM and Java executable source runs must
+pass on pinned revisions before cross-backend parity can be certified.
+This does not imply general native stdlib, async or Spin support.
+
 ## Nonblocking console transport
 
 Guest print calls enqueue immutable views in a bounded 1,024-record SPSC queue.

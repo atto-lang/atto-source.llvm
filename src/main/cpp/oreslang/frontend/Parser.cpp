@@ -1898,7 +1898,19 @@ private:
             auto expr = make_expression(Expression::Kind::Console, offset);
             expr->name = identifier();
             if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
-            require("("); expr->left = expression(); require(")");
+            // Match Java's console argument order by folding strings into
+            // checked String Add nodes, then publishing one console effect.
+            require("(");
+            expr->left = expression();
+            std::size_t argc = 1;
+            while (accept(",")) {
+                if (++argc > 32) fail("native stdio argument count exceeds 32");
+                auto joined = make_expression(Expression::Kind::Add, offset);
+                joined->left = std::move(expr->left);
+                joined->right = expression();
+                expr->left = std::move(joined);
+            }
+            require(")");
             return expr;
         }
         if (accept("(")) {

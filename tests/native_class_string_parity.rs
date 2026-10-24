@@ -50,6 +50,26 @@ fn main() {
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
+        ("java-two-argument-println",
+            r#"import class Foo from './main-1.ores';
+               pub routine main():int {
+                 stdio.println("hello world");
+                 val Foo f = new Foo();
+                 val string x = f.bar();
+                 stdio.println("x", x);
+                 return 0;
+               }"#,
+            "hello world\nxhiiii 2hiiii\n"),
+        ("stdio-effect-order",
+            r#"fnc mark(string s):string{stdio.print(s);return s;}
+               pub routine main():int{stdio.println(mark("a"), mark("b"), "c");return 0;}"#,
+            "ababc\n"),
+        ("stdio-utf8-and-nul",
+            r#"pub routine main():int{stdio.print("A", "\u0000", "é");return 0;}"#,
+            "A\0é"),
+        ("stdio-32-args",
+            r#"pub fnc main():int{stdio.println("x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x","x");return 0;}"#,
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"),
         (
             "imported-class-return-and-borrowed-method",
             r#"import class Foo from './main-1.ores';
@@ -362,6 +382,11 @@ fn main() {
         }
     }
     let negatives = [
+        ("stdio-mixed-int-string",
+            r#"pub fnc main():int{stdio.println("a",2);return 0;}"#.to_owned(), foo.to_owned()),
+        ("stdio-33-args",
+            format!("pub fnc main():int{{stdio.println({});return 0;}}",
+                    vec!["\"x\""; 33].join(",")), foo.to_owned()),
         ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
