@@ -309,21 +309,50 @@ public:
 
     Program parse() {
         Program program;
+        while (token_.text == "import") {
+            advance();
+            if (token_.text == "contract")
+                fail("native contract imports require a validated cross-unit linker");
+            ModuleImport imported;
+            imported.offset = token_.offset;
+            imported.selected_class = accept("class");
+            if (!imported.selected_class) require("module");
+            imported.selected_module = identifier();
+            imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            if (!module_names_.insert(imported.local_name).second)
+                fail("duplicate imported module binding '" + imported.local_name + "'");
+            require("from");
+            if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
+            imported.path = std::string(token_.text);
+            if (imported.path.empty() || imported.path.size() > 4096)
+                fail("native import path must contain 1..4096 bytes");
+            for (unsigned char ch : imported.path)
+                if (ch < 32 || ch == 127 || ch == '\\')
+                    fail("native import path escapes/control characters unsupported");
+            advance();
+            require(";");
+            program.imports.push_back(std::move(imported));
+        }
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
         while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
-            const bool exported = accept("pub");
+            bool exported = accept("pub");
             require("define");
+            if (accept("pub")) {
+                if (exported) fail("duplicate pub modifier");
+                exported = true;
+            }
+            if (accept("enum")) {
+                if (exported) fail("built-in MaxActorThreads enum cannot be public in the native subset");
+                built_in_actor_threads_enum();
+                continue;
+            }
             if (accept("contract")) {
                 program.contracts.push_back(contract());
                 continue;
             }
-            if (exported) fail("native public module wrapper is not supported in the i64 subset");
-            if (accept("enum")) {
-                built_in_actor_threads_enum();
-                continue;
-            }
+            if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
@@ -336,9 +365,7 @@ public:
                 accept("as");
                 wrapped_module = true;
             } else {
-                if (accept("enum")) {
-                    built_in_actor_threads_enum();
-                } else if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("class")) { auto cls = class_declaration(); cls.exported = exported; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -351,6 +378,8 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            bool public_class = token_.text == "pub" && peek_next().text == "define";
+            if (public_class) advance();
             if (accept("@")) {
                 const MaxActorThreads cap = actor_max_threads_attribute();
                 require("define");
@@ -359,11 +388,17 @@ public:
                 actor.max_actor_threads = cap;
                 program.actors.push_back(std::move(actor));
             } else if (accept("define")) {
+                if (accept("pub")) {
+                    if (public_class) fail("duplicate pub modifier");
+                    public_class = true;
+                }
+                if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("class")) program.classes.push_back(class_declaration());
+                if (accept("enum")) built_in_actor_threads_enum();
+                else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
                     require("actor");
@@ -375,9 +410,10 @@ public:
                 program.functions.push_back(function());
             }
         }
+        for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        if (program.functions.empty() && program.actors.empty() &&
+        if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty())
             fail("expected at least one function or actor");
         if (!program.cooperative_loops.empty() &&
@@ -385,19 +421,63 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
-        validate(program);
+        program.sum_types = std::move(sum_types_);
         return program;
     }
 
+    static void validate_complete(const Program& program) { validate(program); }
+
 private:
+    std::vector<NativeSumType> sum_types_;
+    bool is_sum_name(const std::string& name) const {
+        return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
+    }
+    static bool sum_variant(std::string_view name) { return name == "Some" || name == "None" || name == "Ok" || name == "Err"; }
+
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
     }
 
+    void built_in_actor_threads_enum() {
+        if (actor_threads_enum_seen_)
+            fail("duplicate MaxActorThreads enum definition");
+        require("MaxActorThreads");
+        require("as");
+        constexpr std::string_view tiers[] = {"LOW", "MEDIUM", "HIGH"};
+        constexpr std::string_view numbers[] = {"1", "2", "3"};
+        for (std::size_t i = 0; i < 3; ++i) {
+            require(tiers[i]);
+            require("int");
+            require("=");
+            if (token_.kind != Kind::Integer || token_.text != numbers[i])
+                fail("MaxActorThreads backing value must be the canonical integer");
+            advance();
+            accept(";");
+        }
+        require("end");
+        actor_threads_enum_seen_ = true;
+    }
+
+    MaxActorThreads actor_max_threads_attribute() {
+        require("ActorMaxThreads");
+        require("(");
+        require("MaxActorThreads");
+        require(".");
+        MaxActorThreads level = MaxActorThreads::LOW;
+        if (accept("LOW")) level = MaxActorThreads::LOW;
+        else if (accept("MEDIUM")) level = MaxActorThreads::MEDIUM;
+        else if (accept("HIGH")) level = MaxActorThreads::HIGH;
+        else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
+        require(")");
+        if (level != MaxActorThreads::LOW)
+            fail("@ActorMaxThreads(MEDIUM/HIGH) requires compiler-proven per-turn actor state isolation; source parallel actors are not enabled");
+        return level;
+    }
+
     ModuleContract contract() {
         ModuleContract result;
-        result.name = identifier();
+        result.name = nominal_declaration_name();
         require("as");
         const bool braced = accept("{");
         std::unordered_set<std::string> seen;
@@ -442,47 +522,6 @@ private:
         return result;
     }
 
-    /** The Oreslang built-in enum is frozen, not a general native enum AST.
-     * A typo, numeric redefinition, or duplicate definition is rejected
-     * before LLVM IR; no user enum shadowing of scheduler admission is legal.
-     */
-    void built_in_actor_threads_enum() {
-        if (actor_threads_enum_seen_)
-            fail("duplicate MaxActorThreads enum definition");
-        require("MaxActorThreads");
-        require("as");
-        constexpr std::string_view tiers[] = {"LOW", "MEDIUM", "HIGH"};
-        constexpr std::string_view numbers[] = {"1", "2", "3"};
-        for (std::size_t i = 0; i < 3; ++i) {
-            require(tiers[i]);
-            require("int");
-            require("=");
-            if (token_.kind != Kind::Integer || token_.text != numbers[i])
-                fail("MaxActorThreads backing value must be the canonical integer");
-            advance();
-            accept(";");
-        }
-        require("end");
-        actor_threads_enum_seen_ = true;
-    }
-
-    MaxActorThreads actor_max_threads_attribute() {
-        require("ActorMaxThreads");
-        require("(");
-        require("MaxActorThreads");
-        require(".");
-        MaxActorThreads level = MaxActorThreads::LOW;
-        if (accept("LOW")) level = MaxActorThreads::LOW;
-        else if (accept("MEDIUM")) level = MaxActorThreads::MEDIUM;
-        else if (accept("HIGH")) level = MaxActorThreads::HIGH;
-        else fail("@ActorMaxThreads requires MaxActorThreads.LOW/MEDIUM/HIGH");
-        require(")");
-        if (level != MaxActorThreads::LOW) {
-            fail("@ActorMaxThreads(MEDIUM/HIGH) requires compiler-proven per-turn"
-                 " actor state isolation; source parallel actors are not enabled");
-        }
-        return level;
-    }
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -3281,6 +3320,10 @@ private:
     std::string_view source_;
     Lexer lexer_;
     Token token_;
+    std::unordered_set<std::string> module_names_;
+    std::string method_scope_;
+    std::unordered_set<std::string> class_receivers_;
+    std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
     bool actor_threads_enum_seen_ = false;
@@ -3290,7 +3333,7 @@ private:
 
 } // namespace
 
-Program parse_program(std::string_view source, bool experimental_owned_int,
+Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
