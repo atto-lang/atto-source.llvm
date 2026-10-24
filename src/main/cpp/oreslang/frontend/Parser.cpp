@@ -2528,7 +2528,9 @@ private:
 
         const std::size_t explicit_arity = expr.arguments.size();
         const auto receiver_binding = aliases.find(expr.left->name);
-        if (receiver_binding != aliases.end() &&
+        const bool receiver_is_named_alias =
+                receiver_binding != aliases.end() && receiver_binding->second != "$raw$";
+        if (receiver_is_named_alias &&
                 extension_slot_exists(receiver_binding->second, expr.name,
                                       explicit_arity)) {
             auto call = make_expression(Expression::Kind::Call, expr.offset);
@@ -2550,9 +2552,10 @@ private:
             return;
         }
 
-        if (extension_name_arity_exists(expr.name, explicit_arity)) {
-            const std::string actual = receiver_binding == aliases.end()
-                ? "<non-alias>" : receiver_binding->second;
+        if (extension_name_arity_exists(expr.name, explicit_arity) &&
+                receiver_binding != aliases.end()) {
+            const std::string actual = receiver_binding->second == "$raw$"
+                ? "<raw-scalar>" : receiver_binding->second;
             throw std::runtime_error(
                 "EXTENSION_RECEIVER_MISMATCH: method '" + expr.name +
                 "' is not defined for receiver alias '" + actual +
@@ -2572,9 +2575,13 @@ private:
                 lower_extension_expression(item, aliases);
             if (statement.branch_local) {
                 lower_extension_expression(statement.branch_local->initializer, aliases);
-                if (!statement.branch_local->pending_scalar_alias.empty())
+                if (!statement.branch_local->pending_scalar_alias.empty()) {
                     aliases[statement.branch_local->name] =
                         statement.branch_local->pending_scalar_alias;
+                } else if (!statement.branch_local->int_array &&
+                           statement.branch_local->class_name.empty()) {
+                    aliases[statement.branch_local->name] = "$raw$";
+                }
             }
             if (!statement.then_statements.empty())
                 lower_extension_statements(statement.then_statements, aliases);
@@ -2587,15 +2594,22 @@ private:
         for (auto& fn : program.functions) {
             AliasBindings aliases;
             for (const auto& parameter : fn.parameters) {
-                if (!parameter.pending_scalar_alias.empty())
+                if (!parameter.pending_scalar_alias.empty()) {
                     aliases[parameter.name] = parameter.pending_scalar_alias;
+                } else if (parameter.class_name.empty()) {
+                    // Generic/scalar parameters have no named alias identity.
+                    aliases[parameter.name] = "$raw$";
+                }
             }
             for (auto& local : fn.locals) {
                 for (auto& ctor : local.constructor_arguments)
                     lower_extension_expression(ctor, aliases);
                 lower_extension_expression(local.initializer, aliases);
-                if (!local.pending_scalar_alias.empty())
+                if (!local.pending_scalar_alias.empty()) {
                     aliases[local.name] = local.pending_scalar_alias;
+                } else if (!local.int_array && local.class_name.empty()) {
+                    aliases[local.name] = "$raw$";
+                }
             }
             lower_extension_statements(fn.statements, aliases);
             for (auto& guard : fn.early_returns) {
