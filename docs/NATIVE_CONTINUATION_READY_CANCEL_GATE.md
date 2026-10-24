@@ -180,3 +180,27 @@ capability: the scheduler must derive its expected code/allocation identity
 from the trusted suspended execution, never from arbitrary guest input.
 
 The hosted adapter and these tests remain unverified by executed CI.
+
+
+## Standalone host verification command
+
+An exact checkout can run the three native host test executables without
+requiring a complete LLVM/compiler build:
+
+```bash
+CC=gcc CXX=g++ bash scripts/test-native-task-continuation-gate.sh normal
+CC=gcc CXX=g++ bash scripts/test-native-task-continuation-gate.sh sanitize
+```
+
+This compiles the real C11 runtime stores and C++17 Task authority/bridge
+test under strict warnings and executes all three host regressions. It does
+not substitute for the compiled Oreslang source actor or Java/GraalVM
+parity tests. The script's Bash grammar and the corresponding CMake
+language-specific compiler flags have been checked locally, but the native
+production sources and test executables have **not** been compiled/executed
+in this session because the exact Git checkout is unavailable in the
+isolated local container and Actions jobs are not admitted.
+
+Use an actual private exact-tree mirror only after verifying the source and
+destination `git rev-parse HEAD^{tree}` match. No success receipt may cite a
+partial source mirror or any run with zero executed steps.
