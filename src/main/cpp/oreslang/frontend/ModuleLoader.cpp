@@ -170,6 +170,10 @@ private:
         expression(unit, expr->condition.get()); expression(unit, expr->condition_lhs.get()); expression(unit, expr->condition_rhs.get());
         expression(unit, expr->when_true.get()); expression(unit, expr->when_false.get());
         for (auto& arg : expr->arguments) expression(unit, arg.get());
+        if (expr->kind == Expression::Kind::RecordConstruct) {
+            expr->name = class_type(unit, expr->name, true);
+            return;
+        }
         if (expr->kind != Expression::Kind::Call) return;
         const auto dot = expr->name.find('.');
         const Unit* target = &unit;
@@ -211,6 +215,7 @@ private:
     void local(const Unit& unit, LocalBinding& binding) {
         binding_name(unit, binding.name);
         if (!binding.class_name.empty()) binding.class_name = class_type(unit, binding.class_name, binding.new_class);
+        if (!binding.array_record_class.empty()) binding.array_record_class = class_type(unit, binding.array_record_class);
         expression(unit, binding.initializer.get());
         for (auto& arg : binding.constructor_arguments) expression(unit, arg.get());
     }

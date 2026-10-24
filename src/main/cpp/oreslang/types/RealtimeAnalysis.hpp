@@ -146,6 +146,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             facts.calls.push_back(function_key(expr->name, expr->arguments.size()));
             break;
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::RecordConstruct:
             // Current native Array<int> runtime may allocate/resize. It is not
             // admitted until lowered onto the fixed-capacity RT arena.
             add_effect(facts, FunctionEffect::Alloc);

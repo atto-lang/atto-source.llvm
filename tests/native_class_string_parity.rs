@@ -49,6 +49,23 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "immutable-record-array-replacement",
+            include_str!("fixtures/native-class-string/record-array.ores"),
+            "foo\ntail\n",
+        ),
+        (
+            "imported-record-array-borrowed-method",
+            r#"import class Foo from './main-1.ores';
+              pub routine main():int {
+                val Array<Foo> values=new Array<Foo>();
+                values.add(new Foo());
+                val Foo first=values.get(0);
+                stdio.println(first.bar());
+                return 0;
+              }"#,
+            "hiiii 2hiiii\n",
+        ),
+        (
             "routing-path-segment-record",
             include_str!("fixtures/native-class-string/path-segment.ores"),
             "foo\n",
@@ -186,6 +203,7 @@ fn main() {
             .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeRecordRegion.c"))
             .arg("-pthread")
             .arg("-o")
             .arg(&binary));
@@ -222,6 +240,14 @@ fn main() {
         }
     }
     let negatives = [
+        ("mutable-record-array", "define class Item as pub let int value=1; end pub fnc main():int{val Array<Item> a=new Array<Item>();return 0;}".to_owned(), foo.to_owned()),
+        ("record-array-integer-forgery", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
+        ("record-array-handle-return", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));return a.get(0);}".to_owned(), foo.to_owned()),
+        ("record-view-move", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);let mut Item moved=rt take item;return 0;}".to_owned(), foo.to_owned()),
+        ("record-view-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut Item item):int{return item.value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt borrow mut item);}".to_owned(), foo.to_owned()),
+        ("record-view-projected-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut int value):int{return value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt borrow mut item.value);}".to_owned(), foo.to_owned()),
+        ("record-runtime-symbol-collision", "pub fnc ores_record_region_begin():int{return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("string-record-integer-argument", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(1);return 0;}".to_owned(), foo.to_owned()),
         ("integer-record-string-argument", "define class Segment as pub val int kind; end pub fnc main():int{val Segment s=new Segment(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-record-missing-argument", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment();return 0;}".to_owned(), foo.to_owned()),
