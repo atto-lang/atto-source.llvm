@@ -123,7 +123,7 @@ int main() {
     check(!teardown_owner.control_delivery_lost(), "CONTROL lost before close");
     teardown_group.close();
     check(teardown_owner.control_delivery_lost(), "dropped CONTROL not published");
-    check(dropped->cancel_if_control_lost(dropped->id(), teardown_owner),
+    check(dropped->cancel_if_owner_detached(dropped->id(), teardown_owner),
           "dropped CONTROL did not revoke Future");
     check(dropped->phase() == NativeScalarFutureAwait::Phase::cancelled,
           "revoked Future did not become cancelled");
@@ -131,6 +131,35 @@ int main() {
     check(finalizer.ready_for_resource_reclamation(),
           "dropped CONTROL still pins finalization");
     check(finalizer.finalized(), "detached actor not finalized");
+
+    // Detachment must also revoke frames that were READY or still PENDING
+    // without relying on an unrelated sticky "CONTROL dropped" bit.
+    NativeActorGroup detached_group(9802, 1);
+    auto detached_owner = detached_group.adopt(9802, 1, 1, [] {});
+    check(detached_group.mark_ready(detached_owner), "detached owner not ready");
+    auto detached_finalizer = detached_group.runtime_finalizer(detached_owner);
+    auto ready_only = NativeScalarFutureAwait::open(detached_owner, 78);
+    auto pending_only = NativeScalarFutureAwait::open(detached_owner, 79);
+    check(ready_only->complete(ready_only->id(), 7), "ready-only settle failed");
+    check(!detached_owner.control_delivery_lost(),
+          "unexpected CONTROL loss before detach");
+    detached_group.close();
+    check(detached_owner.delivery_closed(), "detach barrier not published");
+    check(!detached_owner.control_delivery_lost(),
+          "detach without queued CONTROL reported false drop");
+    check(ready_only->cancel_if_owner_detached(
+              ready_only->id(), detached_owner),
+          "detached READY Future not cancelled");
+    check(pending_only->cancel_if_owner_detached(
+              pending_only->id(), detached_owner),
+          "detached PENDING Future not cancelled");
+    check(ready_only->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "detached READY phase");
+    check(pending_only->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "detached PENDING phase");
+    check(detached_finalizer.ready_for_resource_reclamation(),
+          "detached owner still pinned");
+    check(detached_finalizer.finalized(), "detached owner finalization failed");
 
     return 0;
 }
