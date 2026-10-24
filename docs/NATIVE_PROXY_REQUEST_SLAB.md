@@ -180,3 +180,25 @@ Consumers must use this bridge rather than raw reactor methods for actor arena
 traffic and retain leases through cross-thread mailbox handoff. Real guest
 Oreslang compilation/execution and full actor suite are separate acceptance
 gates. All native tests require exact-head CI or direct trusted execution.
+
+## October 24 bounded epoll capacity and shutdown stress evidence
+
+The additional `native_epoll_transport_capacity_stale_shutdown_stress`
+CTest covers 64 simultaneous one-shot epoll watches at the preallocated
+limit, rejection of a 65th watch, exact terminal `stopped` delivery and
+permit retention for every outstanding completion, and generation changes
+when a completed watch slot is reused. It also races transport stop against
+watch admission 96 times and stop against concurrent cancellation 96 times.
+No attempt to reconstruct a terminal record from a naked request ID is
+accepted; the consumer must retain the entire move-only lease.
+
+For the initial audit, the exact source blobs of the checked-in reactor,
+transport gate, bridge and bridge test were reconstructed locally and Git
+blob SHAs matched their PR-tree SHA values. The real socketpair/epoll bridge
+test passed strict GCC 14.2 and Clang 17 builds, both ASan+UBSan variants,
+GCC TSan and 80 repeated optimized runs per compiler. The additional
+capacity/reuse/shutdown stress source blob was likewise compiled with
+GCC/Clang strict C++20, ASan+UBSan and GCC TSan. This is real execution of
+the focused native source in a local subset, **not an exact full LLVM source
+tree CMake/CTest or production guest actor runtime test**. Full CI,
+independent review and protected-source provenance remain blocking gates.

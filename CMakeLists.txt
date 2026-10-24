@@ -54,6 +54,9 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         oreslang_proxy_host_ctest(oreslang-native-epoll-transport-bridge-test
             native_epoll_transport_callback_retirement 20
             tests/native_epoll_transport_bridge_test.cpp)
+        oreslang_proxy_host_ctest(oreslang-native-epoll-transport-stress-test
+            native_epoll_transport_capacity_stale_shutdown_stress 30
+            tests/native_epoll_transport_capacity_stress_test.cpp)
     endif()
     return()
 endif()
@@ -3359,4 +3362,20 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-transport-bridge-test)
     set_tests_properties(native_epoll_transport_callback_retirement
         PROPERTIES TIMEOUT 20)
+
+    add_executable(oreslang-native-epoll-transport-stress-test
+        tests/native_epoll_transport_capacity_stress_test.cpp)
+    target_include_directories(oreslang-native-epoll-transport-stress-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-transport-stress-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-epoll-transport-stress-test
+        PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-epoll-transport-stress-test
+        PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_epoll_transport_capacity_stale_shutdown_stress
+        COMMAND oreslang-native-epoll-transport-stress-test)
+    set_tests_properties(native_epoll_transport_capacity_stale_shutdown_stress
+        PROPERTIES TIMEOUT 30)
 endif()

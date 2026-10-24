@@ -14,6 +14,7 @@ on:
       - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
       - 'tests/native_proxy_transport_gate_test.cpp'
       - 'tests/native_epoll_transport_bridge_test.cpp'
+      - 'tests/native_epoll_transport_capacity_stress_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
   workflow_dispatch:
@@ -106,9 +107,10 @@ jobs:
                      oreslang-native-proxy-arena-pages-test \
                      oreslang-native-actor-proxy-slab-owner-test \
                      oreslang-native-proxy-transport-gate-test \
-                     oreslang-native-epoll-transport-bridge-test
+                     oreslang-native-epoll-transport-bridge-test \
+                     oreslang-native-epoll-transport-stress-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement)$'
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress)$'
       - name: Exercise counted transport callback gate under ASan/UBSan
         shell: bash
         run: |
@@ -129,6 +131,16 @@ jobs:
             -o /tmp/proxy-epoll-transport-sanitized
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/proxy-epoll-transport-sanitized
+      - name: Stress real epoll capacity, stale tickets and shutdown under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_transport_capacity_stress_test.cpp \
+            -o /tmp/proxy-epoll-stress-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-stress-sanitized
       - name: Exercise exact native actor and arena under ASan/UBSan
         shell: bash
         run: |
