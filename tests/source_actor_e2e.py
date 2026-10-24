@@ -40,6 +40,7 @@ def main():
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-child-capability.ores", 2, None, None),
+        ("source-actor-receive-await-child-output.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -91,7 +92,7 @@ def main():
         "source-actor-child-capability-footprint-reject.ores":
             "native actor capability spawn tree exceeds 63 guest actor slots",
         "shared-actorref-child-capability-v1.ores":
-            "native receive await child output requires continuation lowering",
+            "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -136,6 +137,13 @@ def main():
             if name == "source-actor-receive-output-end.ores":
                 assert "oreslang_source_actor_emit_output" in guest.stdout, name
                 assert "oreslang_source_actor_request_end" in guest.stdout, name
+            if name == "source-actor-receive-await-child-output.ores":
+                assert "oreslang_source_actor_await_child_output" in guest.stdout, name
+                assert "output_continuation" in guest.stdout, name
+                assert "oreslang_source_actor_send_capability" in guest.stdout, name
+                assert "oreslang_source_actor_emit_output" in guest.stdout, name
+                assert "ptrtoint" not in guest.stdout, (
+                    name, "suspended ActorRef capability must not lower through guest integer state")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -175,6 +183,11 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-receive-await-child-output.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_ACTOR_OUTPUT_AWAIT_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "fresh_resume=1" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
@@ -191,6 +204,10 @@ def main():
                 elif name == "source-actor-receive-output-end.ores":
                     assert "processed=1" in line and "last=0" in line, line
                     assert "outputs=1" in line, line
+                elif name == "source-actor-receive-await-child-output.ores":
+                    expected_outputs = [0, 1][i]
+                    assert "processed=1" in line and "last=0" in line, line
+                    assert f"outputs={expected_outputs}" in line, line
                 else:
                     assert f"processed={count}" in line, line
                     if last is not None:
