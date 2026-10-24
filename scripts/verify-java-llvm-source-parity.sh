@@ -126,7 +126,12 @@ fi
 # An exit-zero subprocess, a nonempty file or a self-reported PASS are not
 # enough. Independently check provenance, corpus completeness and binary
 # parity before publishing a durable receipt.
-if ! jq -e -s --arg llvm "$llvm_sha" --arg java "$java_sha" '
+# Independently pin the expected bytes, rather than trusting equal-looking
+# stdout in a subprocess-authored receipt. In particular two identical but
+# incorrect outputs must not be release-qualified.
+expected_stdout_hex_by_case='{"exact-user-program":"68656c6c6f20776f726c640a686969696920326869696969","string-content-equality":"657175616c0a646966666572656e740a656d7074790a","string-equality-embedded-nul-and-unicode":"6e756c0a6c656e6774680a756e69636f64650a","http-string-routing-primitives":"6865616c74680a6d697373696e670a6d6574686f640a","source-effect-order":"6265666f72653b6d6574686f643b61667465723b6d6574686f643b6161","parameters-and-return":"6c65667472696768740a","lazy-conditional":"796573","escaped-unicode":"c3a9f09f98800a09225c","empty-and-embedded-nul":"610062"}'
+if ! jq -e -s --arg llvm "$llvm_sha" --arg java "$java_sha" \
+  --argjson expected "$expected_stdout_hex_by_case" '
   (length == 1) and (.[0] |
   .schema == "oreslang.java-llvm.source-parity.v1" and
   .status == "passed" and
@@ -152,6 +157,7 @@ if ! jq -e -s --arg llvm "$llvm_sha" --arg java "$java_sha" '
     ((.native_stdout_hex | type) == "string") and
     ((.java_stdout_hex | type) == "string") and
     (.native_stdout_hex == .java_stdout_hex) and
+    (.native_stdout_hex == $expected[.name]) and
     (.native_stdout_hex | test("^([0-9a-f]{2})*$"))
   ))
 ' "$staging" >/dev/null; then
