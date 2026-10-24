@@ -326,6 +326,38 @@ static void retirement_drains_throwing_revoker_before_observer_cleanup() {
     task->retire();
 }
 
+static void admission_and_retirement_have_one_linearization_point() {
+    auto task = TaskCancellation::root();
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> retired{false};
+    std::thread admitted([&] {
+        assert(task->with_active_authority([&] {
+            entered.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            return true;
+        }));
+    });
+    while (!entered.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    std::thread retire([&] {
+        task->retire();
+        retired.store(true, std::memory_order_release);
+    });
+    assert(!retired.load(std::memory_order_acquire));
+    release.store(true, std::memory_order_release);
+    admitted.join();
+    retire.join();
+    assert(retired.load(std::memory_order_acquire));
+    bool invoked = false;
+    assert(!task->with_active_authority([&] {
+        invoked = true;
+        return true;
+    }));
+    assert(!invoked);
+}
+
 static void invalid_reasons_fail_without_cancelling() {
     auto root = TaskCancellation::root();
     for (const std::string& invalid :
@@ -363,5 +395,6 @@ int main() {
     deep_tree_cancels_iteratively();
     retirement_revokes_waiters_without_firing_cancel_observers();
     retirement_drains_throwing_revoker_before_observer_cleanup();
+    admission_and_retirement_have_one_linearization_point();
     invalid_reasons_fail_without_cancelling();
 }
