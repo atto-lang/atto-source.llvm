@@ -64,11 +64,15 @@ end
   implicit trait evidence/dictionaries and cross-unit import/link resolution.
 - Arbitrary nominal, owned, borrowed, floating, string or generic members,
   trait/interface transport, dynamic dispatch or typeclass instance selection.
-- `define mtd name on Alias(...): Result { ... }` extension methods require
-  name-preserving static receiver dispatch. Native LLVM compilation currently
-  fails closed with `EXTENSION_BACKEND_UNSUPPORTED`; it must not treat a
-  Code-specific extension as an arbitrary primitive int call or generate
-  unspecified runtime dictionary dispatch.
+- `define mtd name on Alias(...): Result { ... }` lowers to a
+  compiler-owned static function `$mtd$Alias$name` with the named receiver
+  inserted as argument zero. Dispatch is selected from lexical alias identity
+  before aliases erase to the i64/bool transport ABI. Raw primitives and
+  unrelated aliases do not inherit the method merely because they share the
+  same scalar representation. Root/module declarations, forward declarations,
+  explicit-arity slots and named arguments are covered by source tests plus a
+  compiler -> LLVM IR -> Clang -> native-process gate. Those tests remain
+  authored rather than executed while hosted Actions creates zero jobs.
 - `define model` general computational graphs, model constructor values,
   digests, composition and execution. The frontend explicitly emits
   `MODEL_BACKEND_UNSUPPORTED` until shared-model, checked operation-provenance,
