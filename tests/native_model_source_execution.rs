@@ -233,7 +233,7 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
                 "{}: clang rc={}, stderr={:?}",
                 case.id, clang_rc, String::from_utf8_lossy(&clang_err)));
         }
-        let (exit, _, runtime_err) = run(Command::new(&executable), &scratch.0)
+        let (exit, _, runtime_err) = run(&mut Command::new(&executable), &scratch.0)
             .map_err(|e| format!("{}: guest: {e}", case.id))?;
         if i64::from(exit) != expected {
             return Err(format!(
