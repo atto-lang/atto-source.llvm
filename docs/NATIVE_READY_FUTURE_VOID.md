@@ -20,7 +20,9 @@ HasFuture trait/interface dispatch for arbitrary objects. Awaiting a worker
 is not awaiting its `get_done()` lifecycle completion.
 
 The compiler represents the typed lexical Future as a non-Copy, actor-affine
-capability, not an int or heap pointer.
+capability, not an int or heap pointer. The binding must be `const`; mutable
+`val Future<void>` and `let Future<void>` forms fail closed so reassignment
+cannot create a second producer/consumer edge.
 The ready Future is consumed once, before all post-await sends and stops,
 into the existing compiled root CONTROL continuation. The execution uses
 `oreslang_source_actor_await_ready` with its continuation provenance and
