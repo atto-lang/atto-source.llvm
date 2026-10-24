@@ -83,6 +83,10 @@ def main():
             "ActorRef<T> actor field requires spawn T()",
         "source-actor-child-capability-unknown-reject.ores":
             "unknown actor capability target 'Missing'",
+        "source-actor-child-capability-cycle-reject.ores":
+            "native actor capability spawn graph contains a cycle",
+        "source-actor-child-capability-footprint-reject.ores":
+            "native actor capability spawn tree exceeds 63 guest actor slots",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
