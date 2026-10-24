@@ -42,7 +42,7 @@ static void* contender(void* raw) {
     return NULL;
 }
 
-static void race_pair(RaceArgs* first, RaceArgs* second) {
+static void race_pair(RaceArgs* first, RaceArgs* second, int exclusive_winner) {
     atomic_int go = ATOMIC_VAR_INIT(0);
     first->go = &go;
     second->go = &go;
@@ -52,7 +52,11 @@ static void race_pair(RaceArgs* first, RaceArgs* second) {
     atomic_store_explicit(&go, 1, memory_order_release);
     check(pthread_join(one, NULL) == 0);
     check(pthread_join(two, NULL) == 0);
-    check(first->won + second->won == 1);
+    /* Producer READY and cancellation are not exclusive: READY may commit
+     * first and cancellation may still win before the resume claim. Only
+     * cancellation vs READY->CLAIMED is an exclusive terminal race. */
+    check(first->won || second->won);
+    if (exclusive_winner) check(first->won + second->won == 1);
 }
 
 static OresNativeContinuationHandle publish(
@@ -125,7 +129,7 @@ int main(void) {
         OresNativeContinuationHandle handle = publish(continuations, execution);
         RaceArgs cancel = {continuations, handle, NULL, 1, 0, 0};
         RaceArgs complete = {continuations, handle, NULL, 0, 0, 0};
-        race_pair(&cancel, &complete);
+        race_pair(&cancel, &complete, 0);
         check(ores_native_continuation_store_get(continuations, handle, &record));
         if (cancel.won) {
             check(record.state == ORES_CONTINUATION_CANCELLED);
@@ -146,7 +150,7 @@ int main(void) {
         check(ores_native_continuation_store_notify_ready(continuations, ready));
         RaceArgs canceller = {continuations, ready, NULL, 1, 0, 0};
         RaceArgs claimer = {continuations, ready, NULL, 0, 1, 0};
-        race_pair(&canceller, &claimer);
+        race_pair(&canceller, &claimer, 1);
         check(ores_native_continuation_store_get(continuations, ready, &record));
         if (claimer.won) {
             check(record.state == ORES_CONTINUATION_CLAIMED);
