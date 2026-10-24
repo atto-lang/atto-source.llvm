@@ -1,0 +1,26 @@
+define actor Consumer as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 1);
+    self.end();
+    return;
+  }
+end
+
+define actor Producer as
+  val ActorRef<Consumer> child = spawn Consumer();
+
+  receive(ActorMail<int> mail): void {
+    self.child.send(mail.value);
+    val forwarded = (await self.child.outputs.next()).value.unwrap();
+    self.send(forwarded.value);
+    self.end();
+    return;
+  }
+end
+
+pub fnc main(): int {
+  const producer = spawn Producer();
+  producer.send(41);
+  stop producer;
+  return 43;
+}
