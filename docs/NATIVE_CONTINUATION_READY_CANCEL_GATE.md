@@ -242,3 +242,45 @@ Before any merge, require a running private CI environment, a complete
 exact-tree mirror (including full source-tree SHA equality, not only 14
 matching input blobs) for a **full-tree** parity claim, and explicit,
 executed regression and sanitizer logs on the final source head.
+
+
+## Native component test evidence and claimed-ancestor release audit
+
+Executed external component test evidence predates the current claimed-ancestor
+fix. GitHub Actions run
+[40136151601](https://github.com/StreemPilot/streempilot-e2e/actions/runs/40136151601)
+passed both normal and ASan/UBSan jobs against **14 Git-blob-identical source
+inputs** at source commit
+`3f15978f383896771a3a8c1764871fc4964734ee`, using Ubuntu 24.04
+with GCC/G++ 13.3.0. Its output includes
+`NATIVE_TASK_CONTINUATION_GATE_PASS`,
+`NATIVE_CONTINUATION_READY_CANCEL_RESUME_PASS`, and
+`NATIVE_TASK_GATE_TESTS_PASS`. This is not a full-tree checkout or
+compiled-language conformance proof.
+
+Subsequent audit discovered a subtle ownership-status bug: releasing a nested
+continuation could successfully free the child, then encounter a CLAIMED
+ancestor's protected final pin and incorrectly return failure. A caller might
+retry the already-released child or misdiagnose the cleanup as incomplete.
+The corrected release contract treats the completed child release as success
+while retaining the ancestor's protected final execution pin. A new C11
+regression verifies the full nested CLAIMED sequence and explicit
+finish/release. **The new commit and regression have not yet executed** on
+a runner and must not inherit the old green receipt.
+
+### Private-source export governance
+
+Source-main policy currently names **no** approved private CI destinations in
+`.github/private-ci-approved-repositories.txt`. Live source `main`
+reported `protected=false`, and branch-protection API reads were unavailable.
+The policy `docs/security/CI_PRIVATE_SOURCE_MIRRORING.md` expressly says
+that direct GitHub connector blob/tree transfers are not an authorization
+bypass. No further export is permitted without security/maintainer-reviewed,
+protected-main destination approval, pinned carrier contract, and trusted
+publisher checks. Prior temporary source-bearing carrier branch refs have
+been reset to their clean base; retained Git objects, caches, and Actions
+logs may still exist and require security-owner review.
+
+A source-free canary can establish runner capacity but **cannot** authorize
+source export. A source-org exact-head runner is the alternative to a fully
+authorized private exact-tree transfer.
