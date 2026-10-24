@@ -19,6 +19,7 @@ on:
       - 'tests/native_proxy_transport_gate_test.cpp'
       - 'tests/native_epoll_transport_bridge_test.cpp'
       - 'tests/native_epoll_transport_capacity_stress_test.cpp'
+      - 'tests/native_epoll_bridge_lifetime_test.cpp'
       - 'tests/native_vm_actor_nio_owned_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
@@ -114,9 +115,10 @@ jobs:
                      oreslang-native-proxy-transport-gate-test \
                      oreslang-native-epoll-transport-bridge-test \
                      oreslang-native-epoll-transport-stress-test \
+                     oreslang-native-epoll-bridge-lifetime-test \
                      oreslang-native-vm-actor-nio-owned-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_vm_actor_nio_owned_callbacks)$'
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_epoll_bridge_external_handoff_failstop|native_vm_actor_nio_owned_callbacks)$'
       - name: Exercise VM actor-owned NIO backend under ASan/UBSan
         shell: bash
         run: |
@@ -153,6 +155,16 @@ jobs:
             -o /tmp/proxy-epoll-transport-sanitized
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/proxy-epoll-transport-sanitized
+      - name: Enforce external completion lifetime before epoll bridge destruction
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_bridge_lifetime_test.cpp \
+            -o /tmp/proxy-epoll-lifetime-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-lifetime-sanitized
       - name: Stress real epoll capacity, stale tickets and shutdown under ASan/UBSan
         shell: bash
         run: |

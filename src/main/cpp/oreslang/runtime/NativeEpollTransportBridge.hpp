@@ -55,6 +55,11 @@ public:
         for (const auto& item : slots_) {
             if (item.token != 0 || item.permit) std::abort();
         }
+        // try_pop() moves the permit out of the preallocated slot: an empty
+        // slot table does not establish that the downstream actor carrier is
+        // done touching arena memory. Prevent bridge destruction until ALL
+        // registered callback permits have been released and shutdown won.
+        if (!gate_.try_drain()) std::abort();
     }
 
     // Only trusted host bootstrap/teardown may block for thread creation.

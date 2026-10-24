@@ -251,3 +251,31 @@ and Linux pipe readiness, foreign/forged/duplicate lease rejection,
 cross-carrier acknowledgement, cancellation, STOPPED completion and
 fail-closed legacy mode mixing. Register it in the opt-in host-only and
 ordinary Linux native CMake test matrix, GCC and Clang, plus ASan/UBSan.
+
+
+## Bridge destruction versus externally held completion envelopes
+
+An audit found that `NativeEpollTransportBridge::try_pop()` moves the
+`NativeTransportCallbackGate::Permit` into a downstream completion envelope
+and clears its internal slot. The prior destructor checked only the now-empty
+slot table; it could therefore return while another carrier still possessed an
+external callback permit. The bridge destructor now additionally requires the
+entire associated transport gate to be terminally stopped **and drained**
+(`try_drain()`), failing closed if any callback ownership is still in flight.
+This applies to all registered users of that gate, not just the bridge's own
+slot table. The host must retire all completion envelopes before destroying
+the bridge and must keep the gate alive until the final release.
+
+The focused `native_epoll_bridge_external_handoff_failstop` CTest verifies
+ordinary drained shutdown and uses a separate process with real Linux
+socketpair/epoll readiness to prove that destroying a bridge with a moved-out
+completion envelope terminates with SIGABRT rather than silently succeeding.
+A parent process verifies the expected failure and reports success. The
+regression is registered in the source host-only and normal Linux CMake CTest
+configurations and the exact-head GCC/Clang ASan+UBSan workflow.
+
+**Evidence boundary:** The exact header and test sources were checked against
+Git blob identity and compiled and executed locally with GCC/Clang strict
+C++20, optimized repetition, ASan and UBSan. This is focused host-runtime
+proof only; an executing source CI runner is still required for the complete
+LLVM actor and VM integration suite. No private compiler tree was mirrored.

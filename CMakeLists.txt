@@ -57,6 +57,9 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         oreslang_proxy_host_ctest(oreslang-native-epoll-transport-stress-test
             native_epoll_transport_capacity_stale_shutdown_stress 30
             tests/native_epoll_transport_capacity_stress_test.cpp)
+        oreslang_proxy_host_ctest(oreslang-native-epoll-bridge-lifetime-test
+            native_epoll_bridge_external_handoff_failstop 20
+            tests/native_epoll_bridge_lifetime_test.cpp)
         oreslang_proxy_host_ctest(oreslang-native-vm-actor-nio-owned-test
             native_vm_actor_nio_owned_callbacks 40
             tests/native_vm_actor_nio_owned_test.cpp
@@ -3415,4 +3418,19 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-epoll-transport-stress-test)
     set_tests_properties(native_epoll_transport_capacity_stale_shutdown_stress
         PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-epoll-bridge-lifetime-test
+        tests/native_epoll_bridge_lifetime_test.cpp)
+    target_include_directories(oreslang-native-epoll-bridge-lifetime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-bridge-lifetime-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-epoll-bridge-lifetime-test PRIVATE
+        cxx_std_20)
+    target_compile_options(oreslang-native-epoll-bridge-lifetime-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_epoll_bridge_external_handoff_failstop
+        COMMAND oreslang-native-epoll-bridge-lifetime-test)
+    set_tests_properties(native_epoll_bridge_external_handoff_failstop
+        PROPERTIES TIMEOUT 20)
 endif()
