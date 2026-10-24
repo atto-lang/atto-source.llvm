@@ -40,7 +40,7 @@ typedef struct {
     unsigned carrier_owner_valid;
     unsigned has_control;
     WakeCredit* wakes; /* preallocated producer-local escrow credits */
-    size_t wake_live, wake_ready;
+    size_t wake_live, wake_ready, wake_cursor;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
@@ -291,9 +291,13 @@ static void* carrier(void* raw) {
             lane->control_is_failure = 0;
             lane->has_control = 0;
         } else if (kind == 1) {
-            for (size_t w = 0; w < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++w) {
+            for (size_t offset = 0; offset < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++offset) {
+                size_t w = (lane->wake_cursor + offset)
+                    % ORES_NATIVE_WAKE_CREDITS_PER_ACTOR;
                 if (lane->wakes[w].state == WAKE_READY) {
                     active_wake = &lane->wakes[w];
+                    lane->wake_cursor = (w + 1)
+                        % ORES_NATIVE_WAKE_CREDITS_PER_ACTOR;
                     break;
                 }
             }
@@ -752,6 +756,8 @@ int ores_native_actor_scheduler_reserve_wake(
         return 0;
     lock(s);
     int ok = !s->retired && s->wake_callback && matching(s, producer)
+        && (target.scheduler_domain != s->domain
+            || (matching(s, target) && !s->actors[target.actor_slot].retired))
         && !s->actors[producer.actor_slot].retired
         && s->reserved_wakes < UINT64_MAX
         && s->accepted < UINT64_MAX - s->reserved_wakes
