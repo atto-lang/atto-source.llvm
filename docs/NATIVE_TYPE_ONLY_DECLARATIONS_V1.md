@@ -38,6 +38,19 @@ end
   `int` and `bool` value parameters, and `int`, `bool` or `void` results;
   arity-disambiguated method declarations, source-order method metadata and
   same-kind intra-unit `extends` are retained.
+- Constrained aliases now support descriptor-v1 metadata such as
+  `declare type Code = int with min 0 and max 5;`. Only direct `int`
+  aliases may carry v1 constraints. `min` / `max` are canonicalized to
+  inclusive signed-i64 predicates, including exact i64 endpoints. The
+  frontend computes the same `ores.type-constraint.v1` canonical string and
+  SHA-256 fingerprint as Java/GraalVM. `--constraint-descriptors` is a
+  metadata-only compiler mode that emits the descriptor identity, fingerprint,
+  and canonical form without enabling value construction.
+- Constrained aliases remain **fail closed as values**. Parameters, returns,
+  locals, branch locals, extension receivers, and aliases that transitively
+  target a constrained alias reject with
+  `CONSTRAINT_VALIDATION_BRIDGE_REQUIRED` before LLVM IR. Descriptor metadata
+  is not validation provenance.
 - Declarations are **not values**: the AST stores `TypeOnlyDecl::Kind` identity
   for alias/trait/interface and emits no constructor, global, actor or IR
   representation. Separate class, actor and module-contract type identity
@@ -83,7 +96,8 @@ end
 ## Merge and verification gates
 
 1. Build exact commit on an approved same-repository native Actions runner and
-   run `ctest -R native_type_only_declaration_boundaries --output-on-failure`.
+   run `ctest -R 'native_(type_only_declaration_boundaries|type_constraint_descriptor_v1)'`
+   with `--output-on-failure`.
 2. Run the complete LLVM CTest regression suite and the existing ownership /
    hard-RT / scalar compiler source matrices. Actual job steps and compiler output
    are required; an Actions job showing zero steps is not compiler evidence.
