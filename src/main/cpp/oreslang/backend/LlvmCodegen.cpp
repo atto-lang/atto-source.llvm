@@ -76,7 +76,7 @@ llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveL
     return moves->array_region;
 }
 
-// Only a lexical named array or a direct class-owned array field is legal.
+// Only a lexical named array or a checked descendant array place is legal.
 // The type/ownership pass must already have certified this receiver.
 llvm::Value* array_handle_address(const Expression& receiver,
                                    const std::unordered_map<std::string, llvm::Value*>& storage,
@@ -251,7 +251,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut: {
-            // The ownership pass admits only direct primitive projections.
+            // The ownership pass admits checked scalar and class projections.
             // field_storage contains the actual in-place i64 address, not a
             // temporary copy: a mutable loan can write the field back.
             // Its conservatively whole-object lifetime ends with this call.

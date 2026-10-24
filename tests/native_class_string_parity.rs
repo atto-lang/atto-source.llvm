@@ -335,6 +335,7 @@ fn main() {
           pub fnc main():int{val Array<int> values=new Array<int>();values.add(42);val Data child=new Data(values);val Outer outer=new Outer(child);return outer.child.read()==42&&outer.child.values.size==1?0:1;}"#, ""),
     ];
     let mut comparisons = 0;
+    let mut guest_address_checks = false;
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
@@ -365,7 +366,28 @@ fn main() {
         }
         let ir = scratch.0.join("program.ll");
         let binary = scratch.0.join("program");
-        fs::write(&ir, generated.stdout).unwrap();
+        let raw_ir = std::str::from_utf8(&generated.stdout).unwrap();
+        // Clang's -fsanitize flag alone does not mark imported LLVM IR
+        // functions for ASan. Mark every definition, then verify that actual
+        // guest-memory check calls are emitted (not just runtime linking).
+        let checked_ir = if sanitize {
+            raw_ir.lines().map(|line| {
+                if line.starts_with("define ") {
+                    format!("{} sanitize_address {{\n", line.strip_suffix('{').expect("function definition"))
+                } else { format!("{line}\n") }
+            }).collect::<String>()
+        } else { raw_ir.to_owned() };
+        fs::write(&ir, checked_ir).unwrap();
+        if sanitize && *name == "nested-constructor-result-and-grandchild" {
+            let checked = run(Command::new(&clang).args(["-O1", "-S", "-emit-llvm", "-fsanitize=address", "-x", "ir"])
+                .arg(&ir).args(["-o", "-"]));
+            assert!(checked.status.success(), "guest ASan: {}", String::from_utf8_lossy(&checked.stderr));
+            let instrumented = String::from_utf8_lossy(&checked.stdout);
+            assert!(["call void @__asan_report_load8", "call void @__asan_report_store8",
+                "call void @__asan_report_load_n", "call void @__asan_report_store_n"].iter().any(|call| instrumented.contains(call)),
+                "guest LLVM memory accesses were not instrumented");
+            guest_address_checks = true;
+        }
         if binary.exists() {
             fs::remove_file(&binary).unwrap();
         }
@@ -719,5 +741,7 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
+    assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
+    if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
     println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
 }

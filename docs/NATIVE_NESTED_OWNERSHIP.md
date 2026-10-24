@@ -40,7 +40,9 @@ The fixture nested-owned-capture.ores models routing PathCapture owning
 RequestPath, including its String array, callee return and whole-object move.
 Rust tests compare native output/status with Java, exercise imported modules and
 multiple child regions, reject invalid ownership/privacy/permission/layout cases,
-and run the public AOT binary after entry-source removal. The fixed-field
+and run the public AOT binary after entry-source removal. Sanitized tests mark
+generated LLVM definitions for ASan and verify emitted guest-memory check
+calls; passing the linker flag alone is insufficient for imported LLVM IR. The fixed-field
 declaration without an initializer has a separate native-only test because the
 pinned Java parser does not yet admit that syntax. Sanitizers cover the
 executed generated native code.
