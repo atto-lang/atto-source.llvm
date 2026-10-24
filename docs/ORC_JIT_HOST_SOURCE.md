@@ -9,7 +9,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --target oreslang-llvmc oreslang-orc-jit-host-admission-test --parallel 2
 ./build/oreslang-llvmc --jit tests/fixtures/forward-call-main.ores
 echo $?   # expected 42, pending execution on a real builder
-ctest --test-dir build -R '^native_orc_jit_(host_admission|compiled_source)
+ctest --test-dir build -R '^native_orc_jit_(host_admission|compiled_source)$' --output-on-failure
 ```
 
 ## Architecture
@@ -22,9 +22,10 @@ ctest --test-dir build -R '^native_orc_jit_(host_admission|compiled_source)
 3. Admit only a generated, defined `i32 main()` native process wrapper; this
    retains the compiler's documented guest `int` to OS-exit-code conversion,
    including rejection/status conversion of values outside `0..255`.
-4. Reject unresolved external functions/globals, module-level inline asm,
-   aliases, ifuncs, native ctor/dtor hooks, and main() with an incompatible
-   calling convention.
+4. Reject unresolved external functions/globals, module and function
+   inline assembly, aliases/ifuncs, native ctor/dtor hooks, and main() with an
+   incompatible calling convention. Reject explicit foreign target triples or
+   data layouts and bind unspecified ones to the detected host LLVM JIT.
    Do not install LLVM's unrestricted current-process symbol resolver.
    Host library bindings require a future explicit allowlisted capability ABI.
 5. Load the module into LLVM ORC **LLJIT** using ThreadSafeModule, resolve the
@@ -53,11 +54,12 @@ The complete cross-backend conformance ledger remains open.
 
 The separate `native_orc_jit_host_admission` CTest invokes the
 **production** LLJIT runner directly with two minimal LLVM IR entrypoints
-and ten LLVM 14 (eleven LLVM 15+) fail-closed cases including startup
-hooks, aliases, indirect functions, unresolved externals and signature
-mismatches. This isolated gate does **not** prove Oreslang source compilation.
-Its LLVM 15+ IR cases were independently syntax-checked with the local
-LLVM 20 IR parser/verifier; no production C++ JIT execution is claimed.
+and thirteen LLVM 14 (fourteen LLVM 15+) fail-closed cases including
+startup hooks, aliases/ifuncs, inline assembly, nonhost target/data layout,
+unresolved externals and signature mismatches. This isolated gate does **not** prove Oreslang source compilation.
+The new regression IR cases passed local LLVM 20 parse-and-verify checks;
+two synthetic LLVM 20 MCJIT programs returned 0 and 42. Neither exercise
+builds or runs the production Oreslang ORC C++ runner.
 
 **Private CI governance:** the source's
 `docs/security/CI_PRIVATE_SOURCE_MIRRORING.md` requires independently
@@ -67,66 +69,6 @@ carrier test plan before any private source mirror. As checked on
 destination allowlist was empty. An executable source-free runner canary
 does not authorize a source transfer. Approval is tracked in
 [security issue #475](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/475).
-
-## Parity milestones after the initial JIT runner
-
-| Milestone | Requirement |
-| --- | --- |
-| Typed IR | Single validated typed lowering for String, float, ADTs, classes, errors, function effects; no guessing on dynamic types |
-| Shared observable semantics | Same Java/LLVM source fixtures with typed outcomes, diagnostics and lifecycle traces |
-| Runtime ABI | Explicit native intrinsics and capability-checked symbol bindings; continuation and actor runtime ownership |
-| Hot reload | Versioned function/actor code images, atomic generation swap, call/continuation pinning, rollback, code retirement receipt |
-| Tiered JIT | Collect low-overhead execution counters, determine compilation threshold, background compile safely, cache machine code; test deterministic AOT fallback |
-| Untrusted JIT | Strong separate process/isolate memory boundary, bounded resources and termination; never claim that LLJIT itself supplies one |
-
-LLJIT eagerly compiles required functions on lookup. LLVM's LLLazyJIT,
-profiling-guided recompilation, or MLIR dialects are optional implementation
-directions, not features delivered by this slice. MLIR should be introduced
-only when its typed dialect and lowering tests reduce real compiler complexity;
-the existing AST-to-IR lowering is already a valid production foundation.
-
-**Release gate:** native CTest + fresh Java/GraalVM differential execution and
-actor/ownership/supervision source-level safety evidence. Parser acceptance,
-standalone C++ host tests and JIT smoke tests alone are insufficient.
- --output-on-failure
-```
-
-## Architecture
-
-1. Use the **same** source parser, name/arity/ownership admission and LLVM IR
-   codegen as the existing Clang AOT path. Never implement a second, looser
-   source grammar just for the JIT.
-2. The existing codegen verifies the LLVM module. The ORC path reparses that
-   emitted IR into a private LLVMContext and verifies it again.
-3. Admit only a generated, defined `i32 main()` native process wrapper; this
-   retains the compiler's documented guest `int` to OS-exit-code conversion,
-   including rejection/status conversion of values outside `0..255`.
-4. Reject imported functions, unresolved externals and external globals.
-   Do not install LLVM's unrestricted current-process symbol resolver.
-   Host library bindings require a future explicit allowlisted capability ABI.
-5. Load the module into LLVM ORC **LLJIT** using ThreadSafeModule, resolve the
-   unmangled source-visible native wrapper via LLJIT, execute it, and return
-   its status. With `--jit`, stdout is guest output, **never LLVM IR**.
-6. This is a **trusted developer tool**, not a sandbox. Compiled native
-   machine code runs in the compiler process. Never admit untrusted actor
-   code into this shared address space or conflate ORC JIT with the GraalVM
-   pooled untrusted isolate.
-
-`--jit` deliberately rejects wasm32, Cortex-M, experimental owned-int or
-scalar-loop modes, hard-real-time reporting/check modes, and source programs
-without a native entry wrapper. Standard IR output and Clang AOT are unaffected.
-
-The proposed source/ORC CTest gate executes seven synthetic source
-programs twice each, six existing Oreslang source fixtures (function calls,
-borrow/reborrow, overload resolution, named arguments, class field access),
-and four SHA-pinned portable i64 corpus cases. This makes **24 proposed JIT
-executions, 17 Clang-linked AOT comparisons, one tree-shaken JIT execution,
-and eight fail-closed negatives**. The other three i64 corpus cases cannot
-be observed losslessly through the OS exit status; a typed-result ABI is
-still required. All counts are test **definitions**, not executed results.
-The gate must pass on a real LLVM builder before any claims of verified
-ORC execution. It does **not** test equivalent execution by Java/GraalVM.
-The complete cross-backend conformance ledger remains open.
 
 ## Parity milestones after the initial JIT runner
 
