@@ -63,6 +63,26 @@ int main() {
           "cancelled CONTROL not drained");
     check(resumed == 1, "cancelled guest callback executed");
 
+    // A failed value must be delivered (not treated as cancellation), and
+    // a future ID from the same actor must not authorize an unrelated frame.
+    auto failed = NativeScalarFutureAwait::open(owner, 19);
+    auto other_ticket = failed->id();
+    other_ticket.future_id += 1;
+    check(!failed->fail(other_ticket, 17), "wrong future ID settled failure");
+    check(failed->fail(failed->id(), 17), "failure not settled");
+    int reported_failure = 0;
+    check(failed->try_schedule(failed->id(), group, owner,
+        [&](const NativeScalarFutureAwait::Result& outcome) {
+            check(!outcome.success && outcome.value == 0 &&
+                  outcome.error_code == 17, "failure result was mangled");
+            ++reported_failure;
+        }), "failure CONTROL rejected");
+    check(reported_failure == 0, "failure callback executed inline");
+    check(group.run_control_turn(owner) == NativeActorGroup::ControlTurn::executed,
+          "failure CONTROL did not run");
+    check(reported_failure == 1, "failure result not delivered once");
+    check(!failed->complete(failed->id(), 42), "failed future resurrected");
+
     // Three terminal contenders race. Exactly one wins and no duplicate
     // resumption is accepted, regardless of scheduling order.
     for (std::uint64_t n = 1; n <= 256; ++n) {
