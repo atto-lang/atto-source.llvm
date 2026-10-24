@@ -3,6 +3,7 @@
 # No LLVM, Java, Maven or Oreslang compiler executes in this test.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
+bash -n "$root/scripts/verify-java-llvm-source-parity.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/llvm/scripts" "$tmp/java/scripts" "$tmp/mockbin" "$tmp/build"
@@ -115,10 +116,10 @@ expect_bad_receipt 'identically incorrect guest output'
 # A fully correct synthetic receipt must be accepted by schema validation;
 # this does NOT mean the synthetic compilers executed any Oreslang source.
 make_receipt
-bash "$tmp/llvm/scripts/verify-java-llvm-source-parity.sh" \\
-  "$tmp/build" "$tmp/java" "$tmp/java/scripts/run-source-parity.sh" clang \\
+bash "$tmp/llvm/scripts/verify-java-llvm-source-parity.sh" \
+  "$tmp/build" "$tmp/java" "$tmp/java/scripts/run-source-parity.sh" clang \
   > "$tmp/run.stdout" 2> "$tmp/run.stderr"
-if ! jq -e '.status == "passed" and (.cases | length) == 9' \\
+if ! jq -e '.status == "passed" and (.cases | length) == 9' \
   "$tmp/build/java-llvm-source-parity.json" >/dev/null; then
   echo 'FAIL complete synthetic receipt was not admitted' >&2
   exit 1
