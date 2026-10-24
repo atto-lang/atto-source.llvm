@@ -146,3 +146,37 @@ cannot overflow into the stop bit, and a racing CAS cannot admit an uncounted
 callback after freeze. The focused test includes 128 two-thread producer vs
 freeze races in addition to a separately blocked in-flight callback. The
 full native actor/repository test matrix remains gated on executing CI.
+
+## Linux epoll callback ownership bridge
+
+`NativeEpollTransportBridge` now wraps the checked-in bounded
+`NativeEpollReactor` and an actor's `NativeTransportCallbackGate`. Each
+accepted nonblocking one-shot `try_watch` acquires a move-only callback permit
+**before** registering with epoll, stores it in a preallocated 64-slot table,
+and transfers it to the terminal `CompletionLease` returned by `try_pop`.
+Readiness, explicit cancellation, and reactor stop all generate terminal
+records; **none releases an arena permit merely on event publication**.
+A caller that forwards completion work to another carrier must move the
+entire lease and keep it until the last actor memory access.
+
+`stop()` closes the transport gate to new callback permits and joins the
+epoll worker. Remaining `stopped` events still require consumption, and
+`try_drain()` cannot succeed until every outstanding watch/completion lease
+has released its permit. Destruction aborts if unconsumed terminal records
+retain permits. No allocation occurs on the bridge's watch/pop/cancel path;
+the Linux reactor's existing startup may create one native worker thread.
+
+`native_epoll_transport_callback_retirement` exercises real Linux
+nonblocking socketpair/epoll readiness, stop with an active watch, cancellation
+with exact terminal delivery, and the drain barrier remaining closed while a
+completion envelope is held. The actor wrapper also exercises request/pin
+rejection as soon as the transport gate is frozen, eliminating a sampled
+`accepting()` check-then-act race: the temporary permit itself is the
+operation's admission linearization point, counted through the native write.
+
+**Not yet complete:** The bridge is a new trusted host adapter, not automatic
+retrofitting of every existing NIO consumer or production HTTP/TCP server.
+Consumers must use this bridge rather than raw reactor methods for actor arena
+traffic and retain leases through cross-thread mailbox handoff. Real guest
+Oreslang compilation/execution and full actor suite are separate acceptance
+gates. All native tests require exact-head CI or direct trusted execution.

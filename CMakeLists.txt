@@ -50,6 +50,11 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
     oreslang_proxy_host_ctest(oreslang-native-proxy-transport-gate-test
         native_proxy_transport_callback_gate_races 20
         tests/native_proxy_transport_gate_test.cpp)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        oreslang_proxy_host_ctest(oreslang-native-epoll-transport-bridge-test
+            native_epoll_transport_callback_retirement 20
+            tests/native_epoll_transport_bridge_test.cpp)
+    endif()
     return()
 endif()
 
@@ -3332,5 +3337,26 @@ if(BUILD_TESTING)
     add_test(NAME native_proxy_transport_callback_gate_races
         COMMAND oreslang-native-proxy-transport-gate-test)
     set_tests_properties(native_proxy_transport_callback_gate_races
+        PROPERTIES TIMEOUT 20)
+endif()
+
+# Linux-only host epoll callback ownership proof with a real socketpair.
+# The bridge wraps the checked-in native epoll reactor rather than mocking it.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-epoll-transport-bridge-test
+        tests/native_epoll_transport_bridge_test.cpp)
+    target_include_directories(oreslang-native-epoll-transport-bridge-test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-epoll-transport-bridge-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-epoll-transport-bridge-test
+        PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-epoll-transport-bridge-test
+        PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_epoll_transport_callback_retirement
+        COMMAND oreslang-native-epoll-transport-bridge-test)
+    set_tests_properties(native_epoll_transport_callback_retirement
         PROPERTIES TIMEOUT 20)
 endif()

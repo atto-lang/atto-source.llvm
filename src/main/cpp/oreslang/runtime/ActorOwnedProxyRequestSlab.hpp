@@ -167,7 +167,11 @@ public:
     std::uint64_t admit(std::uint32_t epoch, std::uint32_t connection,
                         std::uint32_t route) {
         return in_turn([&] {
-            if (transport_quiescent_ || !callback_gate_.accepting()) {
+            // This permit is the admission linearization point. A concurrent
+            // freeze either wins first (reject) or must count this operation
+            // until it returns, including the underlying native slab write.
+            auto admission = callback_gate_.try_admit();
+            if (!admission || transport_quiescent_) {
                 throw std::logic_error("proxy slab transport is closing");
             }
             return slab_->admit(epoch, connection, route);
@@ -190,7 +194,10 @@ public:
     // The claim alone is NOT enough to prove the destination slab/actor.
     Receipt pin(std::uint64_t ticket) {
         return in_turn([&] {
-            if (transport_quiescent_ || !callback_gate_.accepting()) {
+            // Never check a separate accepting() flag then perform an
+            // uncounted callback pin: shutdown can race in between.
+            auto admission = callback_gate_.try_admit();
+            if (!admission || transport_quiescent_) {
                 throw std::logic_error("proxy slab transport is closing");
             }
             auto claim = slab_->pin(ticket);

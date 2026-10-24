@@ -5,12 +5,15 @@ on:
       - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeTransportCallbackGate.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollTransportBridge.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorArena.h'
       - 'src/main/cpp/oreslang/runtime/ActorArena.c'
       - 'tests/native_proxy_request_slab_test.cpp'
       - 'tests/native_proxy_request_slab_arena_pages_test.cpp'
       - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
       - 'tests/native_proxy_transport_gate_test.cpp'
+      - 'tests/native_epoll_transport_bridge_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
   workflow_dispatch:
@@ -102,9 +105,10 @@ jobs:
             --target oreslang-native-proxy-request-slab-test \
                      oreslang-native-proxy-arena-pages-test \
                      oreslang-native-actor-proxy-slab-owner-test \
-                     oreslang-native-proxy-transport-gate-test
+                     oreslang-native-proxy-transport-gate-test \
+                     oreslang-native-epoll-transport-bridge-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races)$'
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement)$'
       - name: Exercise counted transport callback gate under ASan/UBSan
         shell: bash
         run: |
@@ -115,6 +119,16 @@ jobs:
             -o /tmp/proxy-transport-gate-sanitized
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/proxy-transport-gate-sanitized
+      - name: Exercise real epoll transport bridge under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_epoll_transport_bridge_test.cpp \
+            -o /tmp/proxy-epoll-transport-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-epoll-transport-sanitized
       - name: Exercise exact native actor and arena under ASan/UBSan
         shell: bash
         run: |

@@ -195,6 +195,18 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(late); // an admitted callback can outlive its logical request
             callbacks.stop_admission();
             assert(!callbacks.try_admit());
+            // Close is not the only race: neither a new request nor a new
+            // callback receipt can be admitted after the freeze linearizes.
+            const auto charged_on_freeze = state.actor_budget->used_bytes();
+            bool frozen_request_denied = false;
+            try { (void)state.slab->admit(9, 9, 9); }
+            catch (const std::logic_error&) { frozen_request_denied = true; }
+            assert(frozen_request_denied && state.slab->live() == 0);
+            bool frozen_pin_denied = false;
+            try { (void)state.slab->pin(state.ticket); }
+            catch (const std::logic_error&) { frozen_pin_denied = true; }
+            assert(frozen_pin_denied);
+            assert(state.actor_budget->used_bytes() == charged_on_freeze);
             assert(!callbacks.try_drain());
             // Logical quiescence (live==0) must NOT permit page reclamation
             // until the trusted transport has explicitly acknowledged that
