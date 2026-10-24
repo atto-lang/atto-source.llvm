@@ -54,6 +54,19 @@ for toolchain in gcc clang; do
       timeout 60s "$dest/lifecycle"
   done
   printf 'PASS: %s C VM + C++ epoll lifecycle / close races (ASan+UBSan)\n' "$toolchain"
+  # The exact-head main CONTROL startup test shares the actual VM, actor
+  # scheduler and future C objects, not a standalone model.
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c \
+    tests/native_vm_main_control_loop_test.c -o "$dest/main_control_test.o"
+  "$cc" "${shared[@]}" "$dest/main_control_test.o" \
+    "$dest/NativeOresVM.o" "$dest/NativeActorScheduler.o" \
+    "$dest/NativeActorFuture.o" -o "$dest/main-control"
+  for attempt in {1..10}; do
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 30s "$dest/main-control"
+  done
+  printf 'PASS: %s VM main CONTROL thread startup and retirement (ASan+UBSan)\n' "$toolchain"
   # Include the byte-identical standalone epoll and bootstrap-failure
   # fixtures in the source-local native sanitizer gate.
   for fixture in native_epoll_reactor_test native_epoll_reactor_bootstrap_failure_test; do
