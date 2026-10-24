@@ -78,6 +78,16 @@ def main():
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
+        "source-actor-await-ready-missing-throws.ores":
+            "await get_ready requires throws ActorTerminated",
+        "source-actor-await-ready-wrong-throws.ores":
+            "native typed throws supports only ActorTerminated for ActorRef.get_ready",
+        "source-actor-await-ready-extra-throws.ores":
+            "native typed throws supports only one ActorTerminated type",
+        "source-actor-terminated-throws-without-ready.ores":
+            "throws ActorTerminated requires direct await ActorRef.get_ready",
+        "source-actor-await-done-terminated-throws.ores":
+            "throws ActorTerminated requires direct await ActorRef.get_ready",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
