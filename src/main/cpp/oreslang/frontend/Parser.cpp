@@ -2022,6 +2022,10 @@ private:
                 if (!digits.empty() && digits.back() != '_' &&
                     digits.find("__") == std::string::npos) {
                     digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                    // Zero-padded decimal spellings denote the same magnitude.
+                    // Removing the padding only inside the direct-negation
+                    // exception preserves all positive i64 overflow checks.
+                    digits.erase(0, digits.find_first_not_of('0'));
                     if (digits == "9223372036854775808") {
                         auto expr = make_expression(Expression::Kind::Integer, offset);
                         expr->integer = std::numeric_limits<std::int64_t>::min();
