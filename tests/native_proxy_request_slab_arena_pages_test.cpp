@@ -92,6 +92,43 @@ int main() {
     ++forged_alias.generation;
     rejects_before_mutation(forged_alias);
 
+    // Borrowed pages cannot enter a new slab claim. All-or-none failure
+    // must keep the first page free and preserve precontaminated bytes.
+    const auto loan = ores_actor_arena_borrow(arena, turn, pages[1]);
+    bool borrowed_page_denied = false;
+    try {
+        ProxyRequestSlab bad(ProxyRequestSlab::Layout::SoA, kCapacity, 1,
+            arena, turn, pages, kPageWords);
+    } catch (const std::invalid_argument&) { borrowed_page_denied = true; }
+    assert(borrowed_page_denied);
+    assert(ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), pages.size(), kPageBytes) == 0);
+    std::uint32_t borrowed_first = 0;
+    ores_actor_arena_read(arena, turn, pages[0], 0,
+                          &borrowed_first, sizeof(borrowed_first));
+    assert(borrowed_first == secret);
+    const auto independent_first = ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), 1, kPageBytes);
+    assert(independent_first != 0);
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), 1, independent_first));
+    ores_actor_arena_release(arena, loan);
+
+    // A competing claim on the final page must also leave earlier pages
+    // independently claimable, even when failure occurs late in the vector.
+    const auto independent_second = ores_actor_arena_claim_pages(
+        arena, turn, pages.data() + 1, 1, kPageBytes);
+    assert(independent_second != 0);
+    assert(ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), pages.size(), kPageBytes) == 0);
+    const auto unclaimed_first = ores_actor_arena_claim_pages(
+        arena, turn, pages.data(), 1, kPageBytes);
+    assert(unclaimed_first != 0);
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data(), 1, unclaimed_first));
+    assert(ores_actor_arena_unclaim_pages(
+        arena, turn, pages.data() + 1, 1, independent_second));
+
     std::uint32_t unchanged = 0;
     ores_actor_arena_read(arena, turn, pages[1], kPageBytes - 4,
                           &unchanged, sizeof(unchanged));

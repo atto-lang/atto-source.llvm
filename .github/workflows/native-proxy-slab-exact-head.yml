@@ -17,7 +17,18 @@ permissions:
 jobs:
   standalone-host-sanitizers:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -35,14 +46,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
+          "$CC" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
             -o /tmp/proxy-actor-arena.o
-          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
             /tmp/proxy-actor-arena.o -o /tmp/proxy-slab-host
           test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
-          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
             /tmp/proxy-actor-arena.o -o /tmp/proxy-arena-pages
           test "$(/tmp/proxy-arena-pages)" = "NATIVE_PROXY_ARENA_PAGES_OK"
@@ -50,16 +61,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cc -std=c11 -g -O1 -fno-omit-frame-pointer \
+          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
             -o /tmp/proxy-actor-arena-sanitized.o
-          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
             /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-slab-sanitized
           ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
-          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -Isrc/main/cpp tests/native_proxy_request_slab_arena_pages_test.cpp \
             /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-arena-pages-sanitized
@@ -68,23 +79,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+          "$CC" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o /tmp/proxy-native-actor-scheduler.o
-          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+          "$CXX" -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
             -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
             /tmp/proxy-native-actor-scheduler.o /tmp/proxy-actor-arena.o \
             -o /tmp/proxy-native-owner-test
           test "$(/tmp/proxy-native-owner-test)" = "NATIVE_ACTOR_PROXY_REQUEST_SLAB_OWNER_OK"
+      - name: Verify registered C11/C++20 native CTests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/ores-proxy-ctest \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+            -DBUILD_TESTING=ON
+          cmake --build /tmp/ores-proxy-ctest --parallel 2 \
+            --target oreslang-native-proxy-request-slab-test \
+                     oreslang-native-proxy-arena-pages-test \
+                     oreslang-native-actor-proxy-slab-owner-test
+          ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota)        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/proxy-scheduler-sanitized.o
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
+            /tmp/proxy-scheduler-sanitized.o /tmp/proxy-actor-arena-sanitized.o \
+            -o /tmp/proxy-native-owner-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-native-owner-sanitized
+
       - name: Exercise exact native actor and arena under ASan/UBSan
         shell: bash
         run: |
           set -euo pipefail
-          cc -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
+          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
             -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
             -o /tmp/proxy-scheduler-sanitized.o
-          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
             -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
             -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
             /tmp/proxy-scheduler-sanitized.o /tmp/proxy-actor-arena-sanitized.o \
