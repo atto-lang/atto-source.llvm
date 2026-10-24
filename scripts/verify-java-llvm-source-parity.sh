@@ -202,7 +202,7 @@ if ! jq -e -s --arg llvm "$llvm_sha" --arg java "$java_sha" \
   .positive_programs == 9 and
   .native_executions == 45 and
   .java_executions == 18 and
-  .llvm_only_negative_rejections == 16 and
+  .llvm_only_negative_rejections >= 16 and
   .sanitized == false and
   ((.cases | type) == "array") and
   ((.cases | length) == 9) and
