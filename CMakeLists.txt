@@ -1249,6 +1249,9 @@ if(BUILD_TESTING)
         source-actor-await-worker.ores --ir "ready_continuation")
     oreslang_contract_test(source_actor_hasfuture_direct_await_runtime_ir
         source-actor-await-worker.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_hasfuture_missing_throws
+        source-actor-await-worker-missing-throws.ores
+        --diagnostic "await get_ready requires throws ActorTerminated")
     oreslang_contract_test(reject_source_actor_hasfuture_unknown_receiver
         source-actor-await-unknown.ores
         --diagnostic "await get_ready requires a live direct ActorRef receiver")
@@ -1262,6 +1265,9 @@ if(BUILD_TESTING)
         source-actor-future-void-ready.ores --ir "ready_continuation")
     oreslang_contract_test(source_actor_typed_ready_future_runtime_ir
         source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_typed_ready_future_missing_throws
+        source-actor-future-void-missing-throws.ores
+        --diagnostic "await get_ready requires throws ActorTerminated")
     oreslang_contract_test(reject_source_actor_unused_ready_future
         source-actor-future-void-unused.ores
         --diagnostic "Future<void> readiness token must be awaited exactly once")
