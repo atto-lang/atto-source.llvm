@@ -70,6 +70,15 @@ static int64_t nested_parent_handler(
     return next;
 }
 
+static int64_t output_end_handler(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)domain;
+    (void)epoch;
+    oreslang_source_actor_emit_output(heap,payload+1);
+    oreslang_source_actor_request_end(heap);
+    return 0;
+}
+
 int main(void) {
     void* target=oreslang_source_actor_spawn(init_zero,target_handler,1);
     assert(target!=0);
@@ -105,5 +114,14 @@ int main(void) {
         &nested_child_messages,memory_order_relaxed)==1);
     assert(atomic_load_explicit(
         &nested_child_last,memory_order_relaxed)==42);
+
+    /* Third session: self.send is an output stream, not self-mailbox recursion,
+     * and self.end is a nonblocking lifecycle request from the active turn. */
+    void* output_actor=oreslang_source_actor_spawn(
+        init_zero,output_end_handler,1);
+    assert(output_actor!=0);
+    assert(oreslang_source_actor_try_send(output_actor,41)==1);
+    assert(oreslang_source_actor_take_output(output_actor)==42);
+    oreslang_source_actor_stop(output_actor);
     return 0;
 }
