@@ -51,6 +51,33 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "imported-owning-class-return",
+            r#"import class Box from './owned-box.ores';
+              fnc make_box():Box{val Array<int> values=new Array<int>();values.add(42);return new Box(values);}
+              pub routine main():int{val Box value=make_box();val Box copied=value.copy();return value.values.get(0)==42&&copied.values.get(0)==42?0:1;}"#,
+            "",
+        ),
+        (
+            "owning-mutable-aggregate-call-result-and-move",
+            r#"define class Shelf as pub let int tag=1;pub let mut Array<int> first=new Array<int>();pub let mut Array<int> second=new Array<int>();end
+              fnc make_shelf():Shelf{let mut Shelf value=new Shelf();value.first.add(13);value.second.add(29);return value;}
+              fnc edit(borrow mut Shelf value):void{value.first.set(0,14);return;}
+              pub routine main():int{val Shelf value=true?make_shelf():make_shelf();let mut Shelf moved=rt take value;edit(rt borrow mut moved);return moved.tag+moved.first.get(0)+moved.second.get(0)==44?0:1;}"#,
+            "",
+        ),
+        (
+            "owning-string-array-constructor-conditional-return",
+            r#"define class Names as pub val Array<String> values;end
+              fnc make_names(bool first):Names{val Array<String> values=new Array<String>();values.add("native");return first?new Names(values):new Names(rt take values);}
+              pub routine main():int{val Names a=make_names(true);val Names b=make_names(false);stdio.println(a.values.get(0));return b.values.get(0)=="native"?0:1;}"#,
+            "native\n",
+        ),
+        (
+            "owned-aggregate-return-and-forwarding",
+            include_str!("fixtures/native-class-string/owned-aggregate-return.ores"),
+            "/foo/:id\nid\n",
+        ),
+        (
             "imported-class-return-and-borrowed-method",
             r#"import class Foo from './main-1.ores';
               fnc create():Foo{return new Foo();}
@@ -247,6 +274,7 @@ fn main() {
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
         let path = scratch.0.join("main.ores");
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
@@ -342,9 +370,14 @@ fn main() {
         let scalar_record = r#"define class Number as pub val int code;end
           fnc create():Number{return new Number(42);}
           pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
+        let owning_int = r#"define class Box as pub val Array<int> values;end
+          fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
+          pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
             (scalar_record, ""),
+            (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
+            (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
         ] {
             let path = scratch.0.join("standalone.ores");
             let binary = scratch.0.join("standalone");
@@ -362,11 +395,16 @@ fn main() {
         }
     }
     let negatives = [
+        ("owning-return-duplicate-array", "define class Pair as val Array<int> a;val Array<int> b;end fnc bad():Pair{val Array<int> values=new Array<int>();return new Pair(values,values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-return-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box value):Box{return new Box(value.values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-return-deferred-source-reuse", "define class Box as pub val Array<int> values;end fnc observe_owner(borrow Box value):void{return;}fnc bad():Box{val Array<int> a=new Array<int>();val Box value=new Box(a);defer observe_owner(rt borrow value);return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-result-use-after-class-move", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}pub fnc main():int{val Box a=make();let mut Box b=rt take a;return a.values.size;}".to_owned(), foo.to_owned()),
+        ("owning-result-by-value-call", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}fnc observe_owner(Box value):int{return value.values.size;}pub fnc main():int{val Box b=make();return observe_owner(b);}".to_owned(), foo.to_owned()),
         ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-mutable-identity", "define class Item as pub let int code=42;end fnc bad():Item{return new Item();}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("record-return-owned-array", "define class Box as val Array<int> values;end fnc bad():Box{val Array<int> a=new Array<int>();val Box b=new Box(a);return b;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-borrowed-array-owner", "define class Box as val Array<int> values;end fnc bad(borrow Box value):Box{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-incoming-borrow", "define class Item as pub val int code;end fnc bad(borrow Item value):Item{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-moved-local", "define class Item as pub val int code;end fnc bad():Item{let mut Item value=new Item(1);let mut Item moved=rt take value;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-not-os-status", "define class Item as pub val int code;end pub fnc main():Item{return new Item(42);}".to_owned(), foo.to_owned()),
@@ -485,10 +523,15 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
+            "owning-return-duplicate-array" => Some("live unique array"),
+            "owning-return-borrowed-field" => Some("named lexical array"),
+            "owning-return-deferred-source-reuse" => Some("borrow of moved class"),
+            "owning-result-use-after-class-move" => Some("use-after-move"),
+            "owning-result-by-value-call" => Some("by-value class parameter"),
             "record-return-integer-forgery" | "record-return-wrong-nominal" |
             "record-return-handle-as-int" => Some("return type"),
             "record-return-mutable-identity" => Some("immutable scalar/String fields"),
-            "record-return-owned-array" | "record-return-incoming-borrow" |
+            "record-return-borrowed-array-owner" | "record-return-incoming-borrow" |
             "record-return-moved-local" => Some("record return requires"),
             "record-return-not-os-status" => Some("OS entrypoint requires"),
             "record-return-unknown-type" => Some("unknown record class"),

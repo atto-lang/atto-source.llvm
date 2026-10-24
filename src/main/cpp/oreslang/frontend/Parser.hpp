@@ -76,7 +76,7 @@ struct LocalBinding {
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
-    bool record_view = false; // readonly view of an invocation-owned immutable record
+    bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.

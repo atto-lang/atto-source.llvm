@@ -86,6 +86,19 @@ void oreslang_int_array_commit_many(OresNativeIntArrayRegion* region, uint64_t n
     OresNativeIntArrayHandle* const destinations[],
     OresNativeIntArrayHandle* const sources[]);
 
+/* Transfer n unique owners between distinct serialized regions without copying
+ * or allocating backing storage. Destination owner places must be zero. Every
+ * invariant/quota is checked before publication; LIMIT leaves both regions and
+ * all owner places unchanged. Success disarms sources and preserves each token
+ * in its new region; the old region rejects that token thereafter. This trusted
+ * compiler ABI does not authorize concurrent access or expose raw guest pointers.
+ */
+OresNativeIntArrayStatus oreslang_int_array_try_transfer_many(
+    OresNativeIntArrayRegion* source_region,
+    OresNativeIntArrayRegion* destination_region, uint64_t n,
+    OresNativeIntArrayHandle* const destinations[],
+    OresNativeIntArrayHandle* const sources[]);
+
 OresNativeIntArrayRegion* oreslang_int_array_region_open(void);
 OresNativeIntArrayHandle oreslang_int_array_new(OresNativeIntArrayRegion* region);
 void oreslang_int_array_reserve(OresNativeIntArrayRegion* region, OresNativeIntArrayHandle handle, uint64_t capacity);

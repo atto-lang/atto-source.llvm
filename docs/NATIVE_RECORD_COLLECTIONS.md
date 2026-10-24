@@ -35,7 +35,8 @@ host ABI never becomes a void scalar store. No extra channel or future is used.
 
 Record-array class fields now support constructor transfer and borrowed calls;
 immutable leaf returns use the [record-return ABI](NATIVE_RECORD_RETURNS.md).
-Still required for the full router/Spin server: array parameters and owning
+Array-containing classes now have a separate [owning result ABI](NATIVE_OWNING_AGGREGATE_RETURNS.md).
+Still required for the full router/Spin server: standalone array parameters and
 returns, mutable objects/nested owners, iteration and actor/continuation-owned lifetimes. All actors, await,
 exceptions and unsupported targets continue to reject record-region lowering.
 Do not use a server-main invocation arena as an unlimited request heap. The full
