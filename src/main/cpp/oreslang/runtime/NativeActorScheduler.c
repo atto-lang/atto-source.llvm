@@ -853,7 +853,7 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     }
     /* Admission/execution identifiers were reserved before the Future could
      * suspend. Publication is an allocation-free in-memory state change. */
-    if (!s->reserved_wakes || s->accepted >= UINT64_MAX - s->reserved_wakes) abort();
+    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
     const int new_lane = !lane->active && !lane_has_work(lane);
     --s->reserved_wakes;
     w->outcome = outcome;
