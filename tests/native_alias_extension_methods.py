@@ -113,6 +113,19 @@ pub fnc main(): int {
             1,
             "$mtd$Flag$invert",
         ),
+        (
+            "arity_overload",
+            """declare type Code = int;
+define mtd choose on Code(): int { return self; }
+define mtd choose on Code(int delta): int { return self + delta; }
+pub fnc main(): int {
+  val code: Code = 21;
+  return code.choose() + code.choose(0);
+}
+""",
+            42,
+            "$mtd$Code$choose$arity1",
+        ),
     ]
 
     negatives = [
@@ -162,6 +175,33 @@ pub fnc main(): int { return 0; }
 """,
             "EXTENSION_DUPLICATE_SLOT",
         ),
+        (
+            "correct_alias_wrong_arity_rejected",
+            """declare type Code = int;
+define mtd plus on Code(int x): int { return self + x; }
+pub fnc main(): int {
+  val code: Code = 40;
+  return code.plus();
+}
+""",
+            "EXTENSION_ARITY_MISMATCH",
+        ),
+        (
+            "reserved_main_rejected",
+            """declare type Code = int;
+define mtd main on Code(): int { return self; }
+pub fnc entry(): int { return 0; }
+""",
+            "EXTENSION_RESERVED_NAME",
+        ),
+        (
+            "reserved_init_rejected",
+            """declare type Code = int;
+define mtd init on Code(): int { return self; }
+pub fnc main(): int { return 0; }
+""",
+            "EXTENSION_RESERVED_NAME",
+        ),
     ]
 
     with tempfile.TemporaryDirectory(prefix="ores-native-extension-") as td:
@@ -200,8 +240,8 @@ pub fnc main(): int {
                     label + " wrong diagnostic: " + repr(rejected.stderr[:1200]))
 
     print(
-        "PASS 4 executable alias-extension cases, 1 array-collision case, "
-        "and 5 fail-closed receiver/slot cases"
+        "PASS 5 executable alias-extension cases, 1 array-collision case, "
+        "and 8 fail-closed receiver/slot/name/arity cases"
     )
     return 0
 
