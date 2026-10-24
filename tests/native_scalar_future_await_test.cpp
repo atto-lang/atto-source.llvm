@@ -1,0 +1,91 @@
+#include "oreslang/runtime/NativeScalarFutureAwait.hpp"
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+
+using oreslang::runtime::NativeActorGroup;
+using oreslang::runtime::NativeScalarFutureAwait;
+
+static void check(bool ok, const char* message) {
+    if (!ok) throw std::runtime_error(message);
+}
+
+int main() {
+    NativeActorGroup group(9701, 2);
+    auto owner = group.adopt(9701, 1, 1, [] {});
+    auto foreign = group.adopt(9701, 2, 1, [] {});
+    check(group.mark_ready(owner) && group.mark_ready(foreign), "admission failed");
+    auto future = NativeScalarFutureAwait::open(owner, 17);
+    const auto id = future->id();
+    auto stale = id;
+    stale.generation += 1;
+    check(!future->complete(stale, 1), "stale generation settled value");
+    check(!future->fail(id, 0), "invalid failure status admitted");
+    check(!future->try_schedule(id, group, owner, [] (const auto&) {}),
+          "pending future scheduled");
+    check(group.enqueue_control(owner, [] {}), "unable to fill CONTROL");
+    std::thread producer([future, id] {
+        check(future->complete(id, 42), "completion lost");
+        check(!future->complete(id, 43), "duplicate completion admitted");
+    });
+    producer.join();
+    int resumed = 0;
+    auto resume = [&](const NativeScalarFutureAwait::Result& value) {
+        check(value.success && value.value == 42 && value.error_code == 0,
+              "corrupt scalar future result");
+        ++resumed;
+    };
+    check(!future->try_schedule(id, group, foreign, resume), "foreign CONTROL owner");
+    check(!future->try_schedule(id, group, owner, resume), "full CONTROL accepted");
+    check(future->phase() == NativeScalarFutureAwait::Phase::ready,
+          "backpressure erased terminal value");
+    check(group.run_control_turn(owner) == NativeActorGroup::ControlTurn::executed,
+          "failed to drain CONTROL");
+    check(future->try_schedule(id, group, owner, resume), "retry lost value");
+    check(resumed == 0, "guest resumed inline on scheduling thread");
+    check(group.run_control_turn(owner) == NativeActorGroup::ControlTurn::executed,
+          "CONTROL did not resume");
+    check(resumed == 1, "not exactly one resumption");
+    check(future->phase() == NativeScalarFutureAwait::Phase::completed,
+          "frame not completed");
+    check(!future->try_schedule(id, group, owner, resume), "repeated resume accepted");
+    check(!future->cancel(id), "completed resume cancelled");
+
+    // Cancellation after CONTROL admission revokes queued guest invocation.
+    auto queued = NativeScalarFutureAwait::open(owner, 18);
+    check(queued->fail(queued->id(), 7), "failure not recorded");
+    check(queued->try_schedule(queued->id(), group, owner,
+          [&](const auto&) { ++resumed; }), "could not enqueue failed result");
+    check(queued->cancel(queued->id()), "queued cancel rejected");
+    check(group.run_control_turn(owner) == NativeActorGroup::ControlTurn::executed,
+          "cancelled CONTROL not drained");
+    check(resumed == 1, "cancelled guest callback executed");
+
+    // Three terminal contenders race. Exactly one wins and no duplicate
+    // resumption is accepted, regardless of scheduling order.
+    for (std::uint64_t n = 1; n <= 256; ++n) {
+        auto raced = NativeScalarFutureAwait::open(owner, 100 + n);
+        const auto ticket = raced->id();
+        std::atomic<int> wins{0};
+        std::thread a([&] { if (raced->complete(ticket, 5)) ++wins; });
+        std::thread b([&] { if (raced->fail(ticket, 9)) ++wins; });
+        std::thread c([&] { if (raced->cancel(ticket)) ++wins; });
+        a.join(); b.join(); c.join();
+        check(wins == 1, "terminal transition did not have one winner");
+        if (raced->phase() == NativeScalarFutureAwait::Phase::ready) {
+            int callbacks = 0;
+            check(raced->try_schedule(ticket, group, owner,
+                [&](const auto&) { ++callbacks; }), "settled race not scheduled");
+            check(group.run_control_turn(owner)
+                  == NativeActorGroup::ControlTurn::executed, "CONTROL race lost");
+            check(callbacks == 1, "raced future callback count");
+        } else {
+            check(raced->phase() == NativeScalarFutureAwait::Phase::cancelled,
+                  "race ended in invalid state");
+        }
+    }
+    check(group.finalized(owner) && group.finalized(foreign), "group not quiescent");
+    return 0;
+}

@@ -1396,6 +1396,18 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_actor_future_control_continuation
         COMMAND oreslang-actor-lifecycle-await-test)
     set_tests_properties(native_pinned_actor_future_control_continuation PROPERTIES TIMEOUT 15)
+    # Host-only typed i64 Future completion frame. Source-level Future<T>
+    # remains fail-closed until compiler-generated suspension is implemented.
+    add_executable(oreslang-native-scalar-future-await-test
+        tests/native_scalar_future_await_test.cpp)
+    target_include_directories(oreslang-native-scalar-future-await-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-scalar-future-await-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-scalar-future-await-test PRIVATE Threads::Threads)
+    add_test(NAME native_scalar_future_single_winner_control
+        COMMAND oreslang-native-scalar-future-await-test)
+    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 30)
     add_executable(oreslang-bounded-actor-port-test tests/bounded_actor_port_test.cpp)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
