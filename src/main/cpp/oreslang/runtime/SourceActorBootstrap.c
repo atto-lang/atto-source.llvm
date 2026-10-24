@@ -17,6 +17,7 @@
 #define SOURCE_TRACE_CONTINUATIONS 128u
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
+#define SOURCE_ACTOR_CONTROL_OUTPUT_RESUME UINT64_C(3)
 
 typedef struct SourceActor SourceActor;
 struct SourceActor {
@@ -35,6 +36,15 @@ struct SourceActor {
     uint8_t output_head;
     uint8_t output_tail;
     uint8_t output_count;
+    OresSourceActorOutputContinuation output_continuation;
+    struct SourceActor* output_waiter;
+    struct SourceActor* output_wait_child;
+    OresNativeSuspensionLink output_wait_link;
+    int64_t output_wait_mail;
+    int64_t output_wait_value;
+    uint64_t output_wait_source_token;
+    uint8_t output_waiting;
+    uint8_t output_wait_ready;
     atomic_int initialized;
     atomic_int end_requested;
     atomic_uint_fast64_t processed;
@@ -102,6 +112,31 @@ static SourceActor* lookup(size_t index) {
     SourceActor* actor = group.actors[index];
     ensure(actor && actor->magic == SOURCE_ACTOR_MAGIC);
     return actor;
+}
+static int pop_output_locked(SourceActor* actor, int64_t* out) {
+    ensure(actor && out);
+    if (actor->output_count == 0) return 0;
+    *out = actor->outputs[actor->output_head];
+    actor->outputs[actor->output_head] = 0;
+    actor->output_head = (uint8_t)(
+        (actor->output_head + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
+    actor->output_count--;
+    return 1;
+}
+static void publish_output_resume_locked(
+        SourceActor* waiter, SourceActor* child, int64_t value) {
+    ensure(waiter && child);
+    ensure(waiter->output_waiting && !waiter->output_wait_ready);
+    ensure(waiter->output_wait_child == child);
+    ensure(child->output_waiter == waiter);
+    child->output_waiter = NULL;
+    waiter->output_wait_value = value;
+    waiter->output_wait_ready = 1;
+    ensure(ores_native_vm_publish_control(
+        group.vm,
+        ORES_NATIVE_VM_MAIN,
+        waiter->ref,
+        SOURCE_ACTOR_CONTROL_OUTPUT_RESUME));
 }
 
 static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
