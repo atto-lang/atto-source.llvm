@@ -446,7 +446,12 @@ void oreslang_source_actor_request_stop(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    ensure(ores_native_vm_stop(
+    /*
+     * Source stop matches Java ActorRef.stop(), not gracefulStop(): reject
+     * future DATA and abandon queued DATA, while an already-active turn is
+     * allowed to cross its physical execution boundary.
+     */
+    ensure(ores_native_vm_stop_sealed(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
 }
