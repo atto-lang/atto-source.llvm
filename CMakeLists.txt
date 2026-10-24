@@ -3197,3 +3197,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_max_threads_source_admission
         PROPERTIES TIMEOUT 20)
 endif()
+
+# Dependency-free, executable import/source admission boundary. This test
+# compiles the production SourceInput.hpp with the host C++ compiler.
+if(BUILD_TESTING AND UNIX)
+    add_executable(oreslang-native-source-input-admission-test
+        tests/native_source_input_admission.cpp)
+    target_include_directories(oreslang-native-source-input-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-source-input-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-input-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_source_input_admission
+        COMMAND oreslang-native-source-input-admission-test)
+    set_tests_properties(native_source_input_admission PROPERTIES TIMEOUT 10)
+endif()
