@@ -2774,11 +2774,25 @@ private:
         }
     }
 
+    bool alias_requires_constraint_validation(const std::string& name) const {
+        std::unordered_set<std::string> seen;
+        std::string current = name;
+        for (std::size_t depth = 0; depth < 129; ++depth) {
+            if (constrained_aliases_.count(current)) return true;
+            if (!seen.insert(current).second) return false;
+            const auto target = scalar_alias_targets_.find(current);
+            if (target == scalar_alias_targets_.end()) return false;
+            current = target->second;
+            if (current == "int" || current == "bool") return false;
+        }
+        return false;
+    }
+
     void resolve_alias_uses(Program& program) const {
         auto reject_unvalidated_runtime_alias = [&](const std::string& name) {
-            if (constrained_aliases_.count(name)) {
+            if (alias_requires_constraint_validation(name)) {
                 throw std::runtime_error(
-                    "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED: constrained alias '" +
+                    "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED: constrained alias chain from '" +
                     name + "' cannot enter a runtime value path before checked provenance");
             }
         };
