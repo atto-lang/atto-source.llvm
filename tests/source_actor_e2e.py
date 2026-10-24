@@ -13,22 +13,43 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
 
+def parse_native_decimal(value, *, signed=False):
+    """Only canonical, bounded ASCII integers printed by the native C runtime."""
+    assert isinstance(value, str) and value, ("empty native integer", value)
+    negative = signed and value.startswith("-")
+    digits = value[1:] if negative else value
+    # C prints uint64_t/int64_t. Reject giant strings before int conversion.
+    assert digits and len(digits) <= 20 and digits.isascii() and digits.isdecimal(), (
+        "non-decimal or oversized native integer", value)
+    assert (len(digits) == 1 or digits[0] != "0") and (
+        not negative or digits != "0"), ("noncanonical native integer", value)
+    result = int(value)
+    if signed:
+        assert -(1 << 63) <= result <= (1 << 63) - 1, (
+            "signed native integer overflow", value)
+    else:
+        assert 0 <= result <= (1 << 64) - 1, (
+            "unsigned native integer overflow", value)
+    return result
+
+
 def parse_actor_receipt(line):
     """Strictly parse a complete native stop receipt, without prefix matches."""
+    assert line.isascii(), ("non-ASCII native actor receipt", line)
     parts = line.split()
     marker = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED"
-    assert parts and parts[0] == marker, ("missing actor receipt marker", line)
-    expected = {"constructor_on_worker", "released", "processed", "last"}
+    assert parts and parts[0] == marker and line == " ".join(parts), (
+        "noncanonical actor receipt framing", line)
+    expected_order = ("constructor_on_worker", "released", "processed", "last")
+    expected = set(expected_order)
     fields = {}
     for field in parts[1:]:
         key, sep, value = field.partition("=")
         assert sep and key in expected and key not in fields, (
             "invalid actor receipt field", field)
-        assert value and value.isascii() and (value.isdecimal() or (
-            key == "last" and value.startswith("-") and value[1:].isdecimal()
-        )), ("invalid integer actor receipt", field)
-        fields[key] = int(value)
-    assert set(fields) == expected, ("missing actor receipt fields", fields)
+        fields[key] = parse_native_decimal(value, signed=(key == "last"))
+    assert tuple(fields) == expected_order, (
+        "missing or reordered actor receipt fields", fields)
     assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
         "native actor constructor/release not verified", fields)
     return fields
@@ -36,18 +57,20 @@ def parse_actor_receipt(line):
 
 def parse_native_control_receipt(line, marker, expected, dynamic=()):
     """Require exact native VM/continuation evidence, never substring evidence."""
+    assert line.isascii(), ("non-ASCII native control receipt", line)
     parts = line.split()
-    assert parts and parts[0] == marker, ("wrong native control receipt marker", line)
-    required = set(expected) | set(dynamic)
+    assert parts and parts[0] == marker and line == " ".join(parts), (
+        "noncanonical native control receipt framing", line)
+    required_order = tuple(expected) + tuple(dynamic)
+    required = set(required_order)
     fields = {}
     for part in parts[1:]:
         key, sep, value = part.partition("=")
         assert sep and key in required and key not in fields, (
             "duplicate or unexpected control receipt field", part)
-        assert value and value.isascii() and value.isdecimal(), (
-            "invalid unsigned native control receipt", part)
-        fields[key] = int(value)
-    assert set(fields) == required, ("missing native control receipt fields", fields)
+        fields[key] = parse_native_decimal(value)
+    assert tuple(fields) == required_order, (
+        "missing or reordered native control receipt fields", fields)
     for key, value in expected.items():
         assert fields[key] == value, ("wrong native control receipt value", key, fields)
     return fields
