@@ -164,6 +164,18 @@ struct ActorSend {
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
 };
+
+struct ActorCapabilityField {
+    std::string name;
+    std::string actor_type;
+    std::size_t offset = 0;
+};
+
+struct ActorCapabilitySend {
+    std::string field;
+    std::unique_ptr<Expression> payload;
+    std::size_t offset = 0;
+};
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
@@ -241,6 +253,7 @@ struct Function {
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
+    std::vector<ActorCapabilitySend> actor_capability_sends;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
     std::string return_class; // immutable leaf record handle; never a stack pointer
@@ -264,6 +277,7 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 struct ActorDecl {
     std::string name;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    std::vector<ActorCapabilityField> capability_fields; // immutable ActorRef<T> child capabilities
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
