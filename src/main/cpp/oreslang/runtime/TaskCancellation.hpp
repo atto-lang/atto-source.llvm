@@ -72,6 +72,19 @@ public:
         std::lock_guard<std::mutex> guard(graph_mutex());
         return cancellation_reason_;
     }
+    /*
+     * Native scheduler admission shares the same linearization point with
+     * cancellation AND retirement. Only bounded, non-reentrant C store
+     * operations may be supplied: never run guest code, call a Task method,
+     * suspend, or retain this lock across a scheduler callback.
+     */
+    template <typename Operation>
+    bool with_active_authority(Operation&& operation) const {
+        std::lock_guard<std::mutex> guard(graph_mutex());
+        if (retired_ || cancelled_) return false;
+        return static_cast<bool>(std::forward<Operation>(operation)());
+    }
+
 
     std::size_t owned_child_count() const {
         std::lock_guard<std::mutex> guard(graph_mutex());
