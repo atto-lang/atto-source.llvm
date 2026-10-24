@@ -54,7 +54,7 @@ fn main() {
             "imported-owning-class-return",
             r#"import class Box from './owned-box.ores';
               fnc make_box():Box{val Array<int> values=new Array<int>();values.add(42);return new Box(values);}
-              pub routine main():int{val Box value=make_box();return value.values.get(0)==42?0:1;}"#,
+              pub routine main():int{val Box value=make_box();val Box copied=value.copy();return value.values.get(0)==42&&copied.values.get(0)==42?0:1;}"#,
             "",
         ),
         (
@@ -274,7 +274,7 @@ fn main() {
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
-        fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;end").unwrap();
+        fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
         let path = scratch.0.join("main.ores");
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
@@ -370,8 +370,12 @@ fn main() {
         let scalar_record = r#"define class Number as pub val int code;end
           fnc create():Number{return new Number(42);}
           pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
+        let owning_int = r#"define class Box as pub val Array<int> values;end
+          fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
+          pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
             (scalar_record, ""),
+            (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
             (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
         ] {
