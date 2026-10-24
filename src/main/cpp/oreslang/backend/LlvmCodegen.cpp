@@ -865,6 +865,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
     llvm::FunctionCallee sourceSpawnChildCapability, sourceSendCapability;
+    llvm::FunctionCallee sourceEmitOutput, sourceRequestEnd;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     const auto nativeActorHeapCapacity = [](const ActorDecl& actor) -> std::size_t {
@@ -895,6 +896,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceSendCapability = module.getOrInsertFunction(
             "oreslang_source_actor_send_capability",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
+        sourceEmitOutput = module.getOrInsertFunction(
+            "oreslang_source_actor_emit_output",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceRequestEnd = module.getOrInsertFunction(
+            "oreslang_source_actor_request_end",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceSpawnChildCapability = module.getOrInsertFunction(
             "oreslang_source_actor_spawn_child_capability",
             llvm::FunctionType::get(
@@ -2272,23 +2279,44 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             values.emplace(local.name, slot);
             actor_owned_tokens.push_back(token);
         }
-        for (const auto& send : actor.on_message.actor_capability_sends) {
-            const auto capability=std::find_if(
-                actor.capability_fields.begin(), actor.capability_fields.end(),
-                [&](const ActorCapabilityField& field) {
-                    return field.name == send.field;
+        for (const auto& action : actor.on_message.actor_handler_actions) {
+            if (action.kind == ActorHandlerAction::Kind::CapabilitySend) {
+                if (action.index >= actor.on_message.actor_capability_sends.size())
+                    throw std::runtime_error("invalid actor capability action index");
+                const auto& send=
+                    actor.on_message.actor_capability_sends[action.index];
+                const auto capability=std::find_if(
+                    actor.capability_fields.begin(), actor.capability_fields.end(),
+                    [&](const ActorCapabilityField& field) {
+                        return field.name == send.field;
+                    });
+                if (capability == actor.capability_fields.end())
+                    throw std::runtime_error("invalid actor capability send lowering");
+                llvm::Value* payload = lower(
+                    *send.payload, builder, i64, values, emptyFields, declarations);
+                const std::size_t capability_index =
+                    std::distance(actor.capability_fields.begin(), capability);
+                builder.CreateCall(sourceSendCapability, {
+                    actorHeap,
+                    llvm::ConstantInt::get(i64, capability_index),
+                    payload
                 });
-            if (capability == actor.capability_fields.end())
-                throw std::runtime_error("invalid actor capability send lowering");
-            llvm::Value* payload = lower(
-                *send.payload, builder, i64, values, emptyFields, declarations);
-            const std::size_t capability_index =
-                std::distance(actor.capability_fields.begin(), capability);
-            builder.CreateCall(sourceSendCapability, {
-                actorHeap,
-                llvm::ConstantInt::get(i64, capability_index),
-                payload
-            });
+                continue;
+            }
+            if (action.kind == ActorHandlerAction::Kind::Output) {
+                if (action.index >= actor.on_message.actor_outputs.size())
+                    throw std::runtime_error("invalid actor output action index");
+                llvm::Value* payload=lower(
+                    *actor.on_message.actor_outputs[action.index],
+                    builder, i64, values, emptyFields, declarations);
+                builder.CreateCall(sourceEmitOutput,{actorHeap,payload});
+                continue;
+            }
+            if (action.kind == ActorHandlerAction::Kind::End) {
+                builder.CreateCall(sourceRequestEnd,{actorHeap});
+                continue;
+            }
+            throw std::runtime_error("invalid actor handler action");
         }
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
