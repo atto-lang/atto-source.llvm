@@ -3268,3 +3268,17 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-continuation-ready-resume-test)
     set_tests_properties(native_continuation_ready_cancel_resume_race PROPERTIES TIMEOUT 45)
 endif()
+
+# Source-free continuation wake failure-boundary oracle. This verifies only
+# model invariants; production continuation-store tests remain separate.
+if(BUILD_TESTING)
+    add_executable(oreslang-continuation-wake-transaction-oracle
+        tests/continuation_wake_transaction_oracle.c)
+    set_target_properties(oreslang-continuation-wake-transaction-oracle PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-continuation-wake-transaction-oracle PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME continuation_wake_transaction_model
+        COMMAND oreslang-continuation-wake-transaction-oracle)
+    set_tests_properties(continuation_wake_transaction_model PROPERTIES TIMEOUT 10)
+endif()
