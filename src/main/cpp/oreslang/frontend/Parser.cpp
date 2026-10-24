@@ -1803,19 +1803,87 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+
+            if (value.async_actor_root && token_.text == "val") {
+                if (value.ready_await_actor.empty())
+                    fail("native async root output await requires prior get_ready");
+                if (value.root_output_await_actor.size())
+                    fail("native async root supports only one actor output await");
+                value.root_output_await_offset = token_.offset;
+                require("val");
+                value.root_output_await_local = identifier();
+                require("=");
+                require("(");
+                require("await");
+                value.root_output_await_actor = identifier();
+                require(".");
+                require("outputs");
+                require(".");
+                require("next");
+                require("(");
+                require(")");
+                require(")");
+                require(".");
+                require("value");
+                require(".");
+                require("unwrap");
+                require("(");
+                require(")");
+                require(";");
+                if (value.root_output_await_actor != value.ready_await_actor)
+                    fail("native async root output await must use the ready ActorRef");
+                continue;
+            }
+
+            if (value.async_actor_root && token_.text == "stdio") {
+                if (value.root_output_await_local.empty())
+                    fail("native async root stdout write requires prior actor output await");
+                if (value.root_stdout_write_output)
+                    fail("native async root supports one stdout write");
+                require("stdio");
+                require(".");
+                require("stdout");
+                require(".");
+                require("write");
+                require("(");
+                const std::string output = identifier();
+                if (output != value.root_output_await_local)
+                    fail("native async root stdout write must use awaited output");
+                require(".");
+                require("value");
+                require(")");
+                require(";");
+                value.root_stdout_write_output = true;
+                continue;
+            }
+
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty())
-                    fail("native source supports only one await get_ready continuation");
-                if (!value.actor_actions.empty() || !value.statements.empty())
-                    fail("await get_ready must precede post-await actor effects");
-                value.ready_await_actor = identifier();
+                const std::string actor = identifier();
                 if (token_.text != ".")
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready is lowered");
-                value.ready_await_offset = await_offset;
+                    fail("native async/channel/select boundary unsupported: ActorRef lifecycle await requires direct receiver");
                 require(".");
-                require("get_ready");
+                if (accept("get_ready")) {
+                    if (!value.ready_await_actor.empty())
+                        fail("native source supports only one await get_ready continuation");
+                    if (!value.actor_actions.empty() || !value.statements.empty()
+                            || !value.root_output_await_actor.empty())
+                        fail("await get_ready must precede post-await actor effects");
+                    value.ready_await_actor = actor;
+                    value.ready_await_offset = await_offset;
+                } else if (value.async_actor_root && accept("get_done")) {
+                    if (value.done_await_actor.size())
+                        fail("native async root supports only one await get_done");
+                    if (!value.root_stdout_write_output)
+                        fail("native async root get_done requires observed actor output first");
+                    if (actor != value.ready_await_actor)
+                        fail("native async root get_done must use the ready ActorRef");
+                    value.done_await_actor = actor;
+                    value.done_await_offset = await_offset;
+                } else {
+                    fail("native ActorRef await supports get_ready and pinned async-root get_done only");
+                }
                 require("(");
                 require(")");
                 require(";");
