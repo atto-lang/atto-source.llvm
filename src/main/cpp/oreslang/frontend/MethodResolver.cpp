@@ -16,10 +16,12 @@ void resolve_native_methods(Program& program) {
             fn.native_internal = true; // source visibility is not a raw FFI export
         }
         std::unordered_map<std::string, std::string> owners;
+        std::unordered_map<std::string, const LocalBinding*> arrays;
         for (const auto& parameter : fn.parameters)
             if (!parameter.class_name.empty()) owners.emplace(parameter.name, parameter.class_name);
         for (const auto& binding : fn.locals)
             if (!binding.class_name.empty()) owners.emplace(binding.name, binding.class_name);
+        for (const auto& binding : fn.locals) if (binding.int_array) arrays.emplace(binding.name, &binding);
         std::function<void(Expression*)> expression = [&](Expression* expr) {
             if (!expr) return;
             expression(expr->left.get()); expression(expr->right.get());
@@ -47,12 +49,43 @@ void resolve_native_methods(Program& program) {
             expr->arguments.insert(expr->arguments.begin(), std::move(loan));
         };
         std::function<void(Statement&)> statement = [&](Statement& stmt) {
+            if (stmt.kind == Statement::Kind::ForEach) {
+                auto& iterator = *stmt.branch_local;
+                const auto& source = *stmt.expression;
+                if (source.kind == Expression::Kind::Variable && arrays.count(source.name)) {
+                    const auto& array = *arrays.at(source.name);
+                    iterator.class_name = array.array_record_class;
+                    iterator.scalar_type = array.array_element_type;
+                } else if (source.kind == Expression::Kind::Field && source.left &&
+                        source.left->kind == Expression::Kind::Variable && owners.count(source.left->name)) {
+                    const auto& cls = *classes.at(owners.at(source.left->name));
+                    const ClassField* array = nullptr;
+                    for (const auto& field : cls.fields) if (field.name == source.name && field.int_array) array = &field;
+                    if (!array) throw std::runtime_error("native for-of requires a typed array field");
+                    iterator.class_name = array->array_record_class;
+                    iterator.scalar_type = array->array_element_type;
+                } else throw std::runtime_error("native for-of requires a named lexical array or class array field");
+                iterator.record_view = !iterator.class_name.empty();
+                expression(stmt.expression.get());
+                const auto saved = owners;
+                if (!iterator.class_name.empty()) owners.emplace(iterator.name, iterator.class_name);
+                for (auto& child : stmt.then_statements) statement(child);
+                owners = saved;
+                return;
+            }
             expression(stmt.expression.get()); expression(stmt.condition.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
+            expression(stmt.loop_step.get());
             expression(stmt.array_commit_length.get());
             for (auto& item : stmt.array_commit_values) expression(item.get());
-            if (stmt.branch_local) expression(stmt.branch_local->initializer.get());
+            if (stmt.branch_local) {
+                expression(stmt.branch_local->initializer.get());
+                if (!stmt.branch_local->class_name.empty()) owners.emplace(stmt.branch_local->name, stmt.branch_local->class_name);
+            }
+            const auto saved = owners;
             for (auto& arm : stmt.then_statements) statement(arm);
+            owners = saved;
             for (auto& arm : stmt.else_statements) statement(arm);
+            owners = saved;
         };
         for (auto& local : fn.locals) {
             expression(local.initializer.get());

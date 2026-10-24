@@ -152,7 +152,7 @@ pub fnc main(): int {
   } else { } fi
   return 42;
 }
-""", "native branch-local scalar requires int or bool"),
+""", "branch-local owned value requires destructor/drop lowering"),
 }
 
 

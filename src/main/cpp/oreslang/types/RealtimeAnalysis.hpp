@@ -146,6 +146,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             facts.calls.push_back(function_key(expr->name, expr->arguments.size()));
             break;
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::RecordConstruct:
             // Current native Array<int> runtime may allocate/resize. It is not
             // admitted until lowered onto the fixed-capacity RT arena.
             add_effect(facts, FunctionEffect::Alloc);
@@ -201,6 +202,7 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     scan_expression(statement.condition.get(), facts);
     scan_expression(statement.condition_lhs.get(), facts);
     scan_expression(statement.condition_rhs.get(), facts);
+    scan_expression(statement.loop_step.get(), facts);
     scan_expression(statement.array_commit_length.get(), facts);
     for (const auto& value : statement.array_commit_values) {
         scan_expression(value.get(), facts);
@@ -216,6 +218,12 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         add_effect(facts, FunctionEffect::Alloc);
     if (statement.kind == Statement::Kind::Defer)
         facts.bounded_cleanup = false;
+    if (statement.kind == Statement::Kind::ForEach || statement.kind == Statement::Kind::ForIndex) {
+        add_effect(facts, FunctionEffect::StateRead);
+        // Synchronous array iteration is not yet a certified scheduler/fuel
+        // loop. Do not admit it into strict realtime or pretend it can yield.
+        facts.unsupported_runtime = true;
+    }
 
     for (const auto& nested : statement.then_statements) {
         scan_statement(nested, facts);
@@ -230,6 +238,8 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
 inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Returning a named leaf record snapshots fields into native region storage.
+    if (!function.return_class.empty()) add_effect(facts, FunctionEffect::Alloc);
 
     for (const auto& local : function.locals) {
         scan_binding(local, facts);

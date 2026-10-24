@@ -24,6 +24,7 @@ struct LocalOwnership {
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
+    bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
@@ -112,11 +113,11 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
                 : "native Array<int> operation requires a live array owner");
         reject(receiver, "native Array<int> operation requires an owned Array<int> place");
     }
-    if (owner.mode != Mode::Value)
+    if (owner.mode == Mode::Borrow && write)
         reject(receiver, "ownership violation: Array<int> cannot be accessed through a borrowed class");
     if (owner.exclusive_loan || (write && owner.shared_loans))
         reject(receiver, "ownership violation: Array<int> conflicts with active class loan");
-    if (write && !owner.mutable_owner)
+    if (write && owner.mode == Mode::Value && !owner.mutable_owner)
         reject(receiver, "ownership violation: Array<int> mutation requires live let mut owner");
     return owner;
 }
@@ -401,6 +402,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
+        case Expression::Kind::RecordConstruct:
+            for (const auto& arg : expr.arguments) check_value(*arg, locals, functions);
+            return;
         case Expression::Kind::Call:
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
@@ -457,6 +461,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::RecordConstruct:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
@@ -632,8 +637,6 @@ void validate_i64_ownership(const Program& program) {
             if (!param.class_name.empty()) {
                 if (!class_fields.count(param.class_name))
                     throw std::runtime_error("unknown parameter class '" + param.class_name + "'");
-                if (!class_arrays.at(param.class_name).empty())
-                    throw std::runtime_error("ownership violation: Array<int> class cannot be borrowed or passed as a parameter");
                 if (param.mode == Mode::Value)
                     throw std::runtime_error("ownership violation: by-value class parameter '" +
                         param.name + "' requires exclusive borrow or proven move/drop lowering");
@@ -663,6 +666,24 @@ void validate_i64_ownership(const Program& program) {
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
+            } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
+                    binding.initializer->kind == Expression::Kind::ArrayCall) {
+                const auto& call = *binding.initializer;
+                array_owner(*call.left, locals, true);
+                for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
+            } else if (binding.record_view) {
+                check_value(*binding.initializer, locals, functions);
+                const bool owning = !class_arrays.at(binding.class_name).empty();
+                if (owning && !binding.owner_mutable)
+                    throw std::runtime_error("owning class result requires val or let mut owner");
+                entry.record_view = !owning;
+                entry.mode = owning ? Mode::Value : Mode::Borrow;
+                entry.mutable_owner = owning && binding.owner_mutable;
+                entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.final_fields = class_finals.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
             } else if (binding.new_class) {
                 // Pure syntax alone is insufficient: experimental owned-int
                 // operands carry fallible region reads. Do not let one unwind
@@ -670,7 +691,11 @@ void validate_i64_ownership(const Program& program) {
                 std::function<void(const Expression&)> validate_scalar;
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
-                    if (expr.kind == K::Integer || expr.kind == K::Boolean) return;
+                    if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::Field) {
+                        check_value(expr, locals, functions);
+                        return;
+                    }
                     if (expr.kind == K::Variable) {
                         const auto it = locals.find(expr.name);
                         if (it == locals.end() || it->second.heap_owned ||
@@ -704,8 +729,22 @@ void validate_i64_ownership(const Program& program) {
                     }
                     reject(expr, "native scalar constructor argument requires pure integer expression");
                 };
-                for (const auto& arg : binding.constructor_arguments)
-                    validate_scalar(*arg);
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                    const auto& arg = binding.constructor_arguments[i];
+                    const auto* field = constructor_field(*cls, i);
+                    if (!field || !field->int_array) { validate_scalar(*arg); continue; }
+                    const Expression* source = arg.get();
+                    if (source->kind == Expression::Kind::Take && source->left) source = source->left.get();
+                    if (source->kind != Expression::Kind::Variable)
+                        reject(*arg, "collection constructor requires a unique named lexical array");
+                    auto& owner = local(*source, locals);
+                    if (!owner.int_array || owner.mode != Mode::Value || owner.moved ||
+                            owner.exclusive_loan || owner.shared_loans)
+                        reject(*arg, "collection constructor requires a live unique array owner");
+                    owner.moved = true;
+                }
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
@@ -748,14 +787,97 @@ void validate_i64_ownership(const Program& program) {
             function.statements.end(), [](const Statement& stmt) {
                 return stmt.kind == Statement::Kind::Conditional;
             });
-        auto check_effect = [&](const Statement& stmt, Locals& state) {
+        std::vector<Locals> structured_exits;
+        std::unordered_set<std::string> root_names;
+        for (const auto& item : locals) root_names.insert(item.first);
+        std::unordered_map<std::string, unsigned> iteration_loans;
+        std::function<void(const Statement&, Locals&)> check_effect;
+        auto scoped_entry = [&](const LocalBinding& binding) {
+            LocalOwnership entry;
+            entry.class_name = binding.class_name;
+            if (!binding.class_name.empty()) {
+                if (!class_fields.count(binding.class_name))
+                    throw std::runtime_error("native scoped value has unknown class");
+                entry.mode = Mode::Borrow; entry.record_view = true;
+                entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.final_fields = class_finals.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
+            }
+            return entry;
+        };
+        auto scoped_effects = [&](const std::vector<Statement>& body, Locals& state) {
+            for (const auto& action : body) check_effect(action, state);
+            for (const auto& action : body) if (action.kind == Statement::Kind::ScopedLocal)
+                state.erase(action.branch_local->name);
+        };
+        check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::Conditional) {
+                if (stmt.condition) check_value(*stmt.condition, state, functions);
+                else { check_pure_guard(*stmt.condition_lhs, state, functions); check_pure_guard(*stmt.condition_rhs, state, functions); }
+                Locals yes = state, no = state;
+                scoped_effects(stmt.then_statements, yes); scoped_effects(stmt.else_statements, no);
+                if (!same_affine_state(yes, no))
+                    throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch");
+                state = std::move(yes); return;
+            }
+            if (stmt.kind == Statement::Kind::Return) {
+                const Locals before = state;
+                if (stmt.expression) check_value(*stmt.expression, state, functions);
+                if (!same_affine_state(before, state))
+                    throw std::runtime_error("structured return ownership transfer requires terminal-edge analysis");
+                Locals exit;
+                for (const auto& name : root_names) exit.emplace(name, state.at(name));
+                for (const auto& loan : iteration_loans) if (exit.count(loan.first)) {
+                    if (exit.at(loan.first).shared_loans < loan.second) throw std::runtime_error("internal loop loan accounting");
+                    exit.at(loan.first).shared_loans -= loan.second;
+                }
+                structured_exits.push_back(std::move(exit)); return;
+            }
+            if (stmt.kind == Statement::Kind::ForIndex) {
+                check_value(*stmt.branch_local->initializer, state, functions);
+                Locals entrance = state;
+                auto iterator = scoped_entry(*stmt.branch_local); iterator.mutable_owner = true;
+                if (!entrance.emplace(stmt.branch_local->name, iterator).second)
+                    throw std::runtime_error("native index loop shadows live owner");
+                Locals body = entrance;
+                check_value(*stmt.condition, body, functions);
+                if (!same_affine_state(entrance, body)) throw std::runtime_error("index condition must preserve ownership");
+                scoped_effects(stmt.then_statements, body);
+                check_value(*stmt.loop_step, body, functions);
+                if (!same_affine_state(entrance, body))
+                    throw std::runtime_error("ownership violation: index back-edge must preserve outer owners and loans");
+                return;
+            }
+            if (stmt.kind == Statement::Kind::ForEach) {
+                auto& owner = array_owner(*stmt.expression, state, false);
+                ++owner.shared_loans;
+                const auto& source = *stmt.expression;
+                const std::string source_name = source.kind == Expression::Kind::Variable ? source.name : source.left->name;
+                ++iteration_loans[source_name];
+                const Locals entrance = state;
+                Locals body = entrance;
+                const auto& iterator = *stmt.branch_local;
+                if (!body.emplace(iterator.name, scoped_entry(iterator)).second)
+                    throw std::runtime_error("native for-of element shadows live owner");
+                scoped_effects(stmt.then_statements, body);
+                body.erase(iterator.name);
+                if (!same_affine_state(entrance, body))
+                    throw std::runtime_error("ownership violation: for-of back-edge must preserve outer owners and loans");
+                // No mutation/move can retire this owner while the read loan is
+                // active. Repeated iterations start in the same affine state.
+                --owner.shared_loans;
+                --iteration_loans[source_name];
+                return;
+            }
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const LocalBinding& local = *stmt.branch_local;
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
                 check_value(*local.initializer, state, functions);
-                state.emplace(local.name, LocalOwnership{});
+                state.emplace(local.name, scoped_entry(local));
                 return;
             }
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
@@ -832,6 +954,8 @@ void validate_i64_ownership(const Program& program) {
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);
+                } else if (call.kind == Expression::Kind::Console) {
+                    check_value(call, state, functions);
                 } else {
                     throw std::runtime_error("invalid native call statement");
                 }
@@ -841,6 +965,7 @@ void validate_i64_ownership(const Program& program) {
         };
         for (const auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
+                if (!structured_exits.empty()) throw std::runtime_error("defer after structured return requires path-specific registration");
                 deferred_effects.push_back(&stmt);
                 continue;
             }
@@ -855,10 +980,8 @@ void validate_i64_ownership(const Program& program) {
                 }
                 Locals then_state = locals;
                 Locals else_state = locals;
-                for (const auto& arm : stmt.then_statements)
-                    check_effect(arm, then_state);
-                for (const auto& arm : stmt.else_statements)
-                    check_effect(arm, else_state);
+                scoped_effects(stmt.then_statements, then_state);
+                scoped_effects(stmt.else_statements, else_state);
                 // Scoped i64 locals have complete lexical lifetime in their
                 // own arm; they may not influence the predecessor join or
                 // be observable on later exit cleanup paths.
@@ -935,6 +1058,53 @@ void validate_i64_ownership(const Program& program) {
                 throw std::runtime_error("native caught throw binding shadows live local");
         }
         const Locals cfg_entry = locals;
+        const bool owning_return = class_arrays.count(function.return_class) &&
+            !class_arrays.at(function.return_class).empty();
+        // Leaf records snapshot into root storage. Owning aggregates instead
+        // move their array owners into a caller-provided region before cleanup.
+        std::function<void(const Expression&, Locals&)> check_return;
+        check_return = [&](const Expression& expr, Locals& state) {
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable) {
+                auto& owner = local(expr, state);
+                if (owner.class_name != function.return_class || owner.moved || owner.exclusive_loan ||
+                        (owner.mode != Mode::Value && (!owner.record_view || owning_return)) || owner.shared_loans ||
+                        !owner.moved_fields.empty() || (!owning_return && (!owner.class_array_fields.empty() ||
+                        owner.final_fields.size() != owner.class_fields.size())))
+                    reject(expr, "record return requires a live transferable owner or immutable leaf without active loans");
+                if (owner.mode == Mode::Value) owner.moved = true;
+                return;
+            }
+            if (owning_return && expr.kind == Expression::Kind::RecordConstruct) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& c) { return c.name == expr.name; });
+                if (cls == program.classes.end() || cls->name != function.return_class ||
+                        expr.arguments.size() != cls->constructor_parameters.size())
+                    reject(expr, "owning return constructor type/arity mismatch");
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto* field = constructor_field(*cls, i);
+                    const auto& arg = *expr.arguments[i];
+                    if (!field || !field->int_array) { check_value(arg, state, functions); continue; }
+                    const auto& source = arg.kind == Expression::Kind::Take && arg.left ? *arg.left : arg;
+                    if (source.kind != Expression::Kind::Variable)
+                        reject(arg, "owning return constructor requires a named lexical array");
+                    auto& owner = local(source, state);
+                    if (!owner.int_array || owner.mode != Mode::Value || owner.moved || owner.shared_loans || owner.exclusive_loan)
+                        reject(arg, "owning return constructor requires a live unique array");
+                    owner.moved = true;
+                }
+                return;
+            }
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Conditional) {
+                if (expr.condition) check_value(*expr.condition, state, functions);
+                else { check_value(*expr.condition_lhs, state, functions); check_value(*expr.condition_rhs, state, functions); }
+                Locals yes = state, no = state;
+                check_return(*expr.when_true, yes); check_return(*expr.when_false, no);
+                if (!same_affine_state(yes, no)) reject(expr, "record return ternary ownership mismatch");
+                state = std::move(yes);
+                return;
+            }
+            check_value(expr, state, functions);
+        };
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
         // fallthrough path, which has a different live ownership state.
@@ -946,15 +1116,16 @@ void validate_i64_ownership(const Program& program) {
                 check_pure_guard(*guard.rhs, locals, functions);
             }
             Locals taken = locals;
-            check_value(*guard.result, taken, functions);
+            check_return(*guard.result, taken);
             check_deferred_exit(taken);
         }
         if (function.result) {
             if (function.caught_throw_value)
                 check_caught_throw_scalar_read(*function.result, locals, functions);
             else
-                check_value(*function.result, locals, functions);
+                check_return(*function.result, locals);
         }
+        for (auto& exit : structured_exits) check_deferred_exit(exit);
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the
@@ -1047,8 +1218,46 @@ void validate_i64_ownership(const Program& program) {
                 operations.push_back({OpKind::Read, cleanup.receiver + "." + cleanup.field});
             add_effects(*cleanup.expression, operations);
         };
+        auto add_return_effects = [&](const Expression& expr, Ops& operations) {
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable &&
+                    cfg_entry.at(expr.name).mode == Mode::Value)
+                operations.push_back({OpKind::MoveObject, expr.name});
+            else if (owning_return && expr.kind == Expression::Kind::RecordConstruct) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& c) { return c.name == expr.name; });
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto* field = constructor_field(*cls, i);
+                    const auto& arg = *expr.arguments[i];
+                    if (field && field->int_array) {
+                        const auto& source = arg.kind == Expression::Kind::Take ? *arg.left : arg;
+                        operations.push_back({OpKind::Move, source.name});
+                    } else add_effects(arg, operations);
+                }
+            } else add_effects(expr, operations);
+        };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);
+        // Record returns can move an owner in either lazy arm. Preserve those
+        // terminal edges instead of flattening both arms into sequential reads.
+        std::function<void(const Expression*, std::size_t)> append_return_path;
+        append_return_path = [&](const Expression* expr, std::size_t block) {
+            if (expr && !function.return_class.empty() && expr->kind == Expression::Kind::Conditional) {
+                if (expr->condition) add_effects(*expr->condition, cfg.blocks[block].operations);
+                else {
+                    add_effects(*expr->condition_lhs, cfg.blocks[block].operations);
+                    add_effects(*expr->condition_rhs, cfg.blocks[block].operations);
+                }
+                const std::size_t yes = cfg.blocks.size(), no = yes + 1;
+                cfg.blocks.resize(no + 1);
+                cfg.blocks[block].successors = {yes, no};
+                append_return_path(expr->when_true.get(), yes);
+                append_return_path(expr->when_false.get(), no);
+                return;
+            }
+            if (expr) add_return_effects(*expr, cfg.blocks[block].operations);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
+                add_cleanup_effects(**it, cfg.blocks[block].operations);
+        };
         for (std::size_t i = 0; i < guard_count; ++i) {
             const auto& guard = function.early_returns[i];
             auto& condition = cfg.blocks[2 * i];
@@ -1059,15 +1268,9 @@ void validate_i64_ownership(const Program& program) {
                 add_effects(*guard.rhs, condition.operations);
             }
             condition.successors = {2 * i + 1, 2 * i + 2};
-            add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
-            // Preserve deferred call inputs after each early-return value.
-            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-                add_cleanup_effects(**it, cfg.blocks[2 * i + 1].operations);
+            append_return_path(guard.result.get(), 2 * i + 1);
         }
-        if (function.result)
-            add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
-        for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-            add_cleanup_effects(**it, cfg.blocks[guard_count * 2].operations);
+        append_return_path(function.result.get(), guard_count * 2);
         // Every reachable terminal CFG path must end with an explicit
         // conditional drop of the experimental heap-owned places. The
         // emitter backs each DropIfOwned with a runtime live flag; scalar
