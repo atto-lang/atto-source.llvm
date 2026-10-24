@@ -3249,3 +3249,22 @@ if(BUILD_TESTING)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()
+
+# Host-only structured Task cancellation authority. This mirrors the Java
+# stage-1 runtime primitive only: it is NOT source-level task lowering,
+# scheduler continuation integration, or proof that get_done is quiescent.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-cancellation-test
+        tests/native_task_cancellation_test.cpp)
+    target_include_directories(oreslang-native-task-cancellation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-cancellation-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-cancellation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-cancellation-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_cancellation_tree_host_only
+        COMMAND oreslang-native-task-cancellation-test)
+    set_tests_properties(native_task_cancellation_tree_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
