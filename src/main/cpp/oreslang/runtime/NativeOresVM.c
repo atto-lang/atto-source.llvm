@@ -71,6 +71,11 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
         free(vm);
         return NULL;
     }
+    if (pthread_cond_init(&vm->nio_idle, NULL) != 0) {
+        if (pthread_mutex_destroy(&vm->control_lock) != 0) abort();
+        free(vm);
+        return NULL;
+    }
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         const OresNativeVMDomainConfig* p = &config->domains[i];
         size_t workers = p->carrier_workers ? p->carrier_workers : 5;
