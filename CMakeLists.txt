@@ -2479,6 +2479,29 @@ if(BUILD_TESTING)
     set_tests_properties(native_vm_main_control_bootstrap_and_shutdown
         PROPERTIES TIMEOUT 25)
 
+    # Linux exact-runtime pthread-create failure injection, not a mock VM.
+    # GNU ld/lld --wrap makes the first CONTROL pthread creation return EAGAIN.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+            AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-vm-main-control-create-failure-test
+            tests/native_vm_main_control_create_failure_test.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-vm-main-control-create-failure-test
+            PRIVATE Threads::Threads)
+        target_link_options(oreslang-native-vm-main-control-create-failure-test
+            PRIVATE "LINKER:--wrap=pthread_create")
+        target_compile_options(oreslang-native-vm-main-control-create-failure-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_vm_main_control_pthread_failure_retry
+            COMMAND oreslang-native-vm-main-control-create-failure-test)
+        set_tests_properties(native_vm_main_control_pthread_failure_retry
+            PROPERTIES TIMEOUT 25)
+    endif()
+
     # VM-level ownership: four independent scheduler domains, five carriers
     # by default; cross-domain ActorRefs cannot be admitted by another pool.
     add_executable(oreslang-native-ores-vm-test
