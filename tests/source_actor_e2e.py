@@ -36,6 +36,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-interleaved-stop.ores", 2, None, None),
+        ("source-actor-child-capability.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -76,6 +77,12 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-child-capability-mutable-reject.ores":
+            "native actor ActorRef field must be val/const",
+        "source-actor-child-capability-mismatch-reject.ores":
+            "ActorRef<T> actor field requires spawn T()",
+        "source-actor-child-capability-unknown-reject.ores":
+            "unknown actor capability target 'Missing'",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -112,6 +119,11 @@ def main():
             if name == "source-actor-await-ready.ores":
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
+            if name == "source-actor-child-capability.ores":
+                assert "oreslang_source_actor_spawn_child_capability" in guest.stdout, name
+                assert "oreslang_source_actor_send_capability" in guest.stdout, name
+                assert "ptrtoint" not in guest.stdout, (
+                    name, "ActorRef capability must not lower through guest integer state")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -158,6 +170,10 @@ def main():
                 assert "constructor_on_worker=1 released=1" in line, line
                 if name == "source-actor-interleaved-stop.ores":
                     expected = [(1, 1), (2, 7)][i]
+                    assert f"processed={expected[0]}" in line, line
+                    assert f"last={expected[1]}" in line, line
+                elif name == "source-actor-child-capability.ores":
+                    expected = [(1, 42), (1, 41)][i]
                     assert f"processed={expected[0]}" in line, line
                     assert f"last={expected[1]}" in line, line
                 else:
