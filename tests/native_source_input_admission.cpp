@@ -76,7 +76,39 @@ int main() {
                 "overlong UTF-8 admitted");
         rejects([&] { require_valid_source_utf8(std::string("ab\0cd", 5)); },
                 "binary NUL admitted");
-        std::cout << "PASS native source admission: regular/links, FIFO, bounds, snapshot metadata, UTF-8\n";
+        // A regular-file size check must apply to both the exact buffer edge
+        // and growth past that edge, not merely small fixture files.
+        const auto large = dir / "buffer-boundary.ores";
+        const std::string block(8192, 'a');
+        { std::ofstream output(large, std::ios::binary); output.write(block.data(), block.size()); }
+        check(read_regular_source(large.c_str(), 8192, "source too large").size() == 8192,
+              "8 KiB exact boundary rejected");
+        rejects([&] { (void)read_regular_source(large.c_str(), 8191, "source too large"); },
+                "8 KiB over-budget source admitted");
+        { std::ofstream output(large, std::ios::binary); output << block << 'b'; }
+        check(read_regular_source(large.c_str(), 8193, "source too large").size() == 8193,
+              "8 KiB plus one byte rejected");
+        rejects([&] { (void)read_regular_source(large.c_str(), 8192, "source too large"); },
+                "growth past 8 KiB limit admitted");
+        { std::ofstream output(large, std::ios::binary); }
+        check(read_regular_source(large.c_str(), 0, "source too large").empty(),
+              "empty regular source rejected at zero-byte limit");
+        rejects([&] { (void)read_regular_source(dir.c_str(), 8192, "source too large"); },
+                "directory admitted as source");
+        rejects([&] { (void)read_regular_source((dir / "not-found.ores").c_str(),
+                                             8192, "source too large"); },
+                "nonexistent source admitted");
+        const std::string malformed[] = {
+            std::string("\x80", 1), std::string("\xC1\xBF", 2),
+            std::string("\xE0\x80\x80", 3), std::string("\xED\xA0\x80", 3),
+            std::string("\xF4\x90\x80\x80", 4), std::string("\xF5\x80\x80\x80", 4),
+            std::string("\xF0\x90", 2),
+        };
+        for (const auto& input : malformed)
+            rejects([&] { require_valid_source_utf8(input); }, "malformed Unicode admitted");
+        require_valid_source_utf8(std::string("\xE4\xB8\xAD", 3)); // CJK
+        require_valid_source_utf8(std::string("\xF0\x9F\x98\x80", 4)); // emoji
+        std::cout << "PASS native source admission: regular/links, FIFO, 8 KiB bounds, snapshot metadata, UTF-8\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL native source admission: " << error.what() << '\n';
