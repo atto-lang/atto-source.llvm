@@ -53,6 +53,10 @@ public:
                 fail(unit, "native linked suspend functions require module continuation lowering");
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
+            for (const auto& type : unit.program.sum_types) {
+                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
+                if (!found) linked.sum_types.push_back(type);
+            }
             for (auto& fn : unit.program.functions) {
                 qualify_function(unit, fn);
                 fn.name = unit.prefix + fn.name;
@@ -62,7 +66,11 @@ public:
             for (auto& cls : unit.program.classes) {
                 binding_name(unit, cls.name);
                 for (const auto& name : cls.constructor_parameters) binding_name(unit, name);
-                for (auto& field : cls.fields) expression(unit, field.initializer_expression.get());
+                for (auto& field : cls.fields) {
+                    if (!field.class_name.empty()) field.class_name = class_type(unit, field.class_name);
+                    if (!field.array_record_class.empty()) field.array_record_class = class_type(unit, field.array_record_class);
+                    expression(unit, field.initializer_expression.get());
+                }
                 cls.name = unit.prefix + cls.name;
                 linked.classes.push_back(std::move(cls));
             }
@@ -170,6 +178,10 @@ private:
         expression(unit, expr->condition.get()); expression(unit, expr->condition_lhs.get()); expression(unit, expr->condition_rhs.get());
         expression(unit, expr->when_true.get()); expression(unit, expr->when_false.get());
         for (auto& arg : expr->arguments) expression(unit, arg.get());
+        if (expr->kind == Expression::Kind::RecordConstruct) {
+            expr->name = class_type(unit, expr->name, true);
+            return;
+        }
         if (expr->kind != Expression::Kind::Call) return;
         const auto dot = expr->name.find('.');
         const Unit* target = &unit;
@@ -211,6 +223,7 @@ private:
     void local(const Unit& unit, LocalBinding& binding) {
         binding_name(unit, binding.name);
         if (!binding.class_name.empty()) binding.class_name = class_type(unit, binding.class_name, binding.new_class);
+        if (!binding.array_record_class.empty()) binding.array_record_class = class_type(unit, binding.array_record_class);
         expression(unit, binding.initializer.get());
         for (auto& arg : binding.constructor_arguments) expression(unit, arg.get());
     }
@@ -218,6 +231,7 @@ private:
         if (stmt.branch_local) local(unit, *stmt.branch_local);
         expression(unit, stmt.expression.get());
         expression(unit, stmt.condition.get()); expression(unit, stmt.condition_lhs.get()); expression(unit, stmt.condition_rhs.get());
+        expression(unit, stmt.loop_step.get());
         expression(unit, stmt.array_commit_length.get());
         for (auto& value : stmt.array_commit_values) expression(unit, value.get());
         for (auto& arm : stmt.then_statements) statement(unit, arm);
@@ -225,6 +239,7 @@ private:
     }
     void qualify_function(const Unit& unit, Function& fn) {
         binding_name(unit, fn.name);
+        if (!fn.return_class.empty()) fn.return_class = class_type(unit, fn.return_class);
         if (!fn.method_owner.empty()) fn.method_owner = class_type(unit, fn.method_owner);
         for (auto& parameter : fn.parameters) {
             binding_name(unit, parameter.name);

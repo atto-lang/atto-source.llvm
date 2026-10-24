@@ -15,7 +15,7 @@ not actor handle transfer. Separate actor heaps can occupy the same address spac
 | 4 | Fence exclusive request/response ownership | generation + actor identity; mailbox rejection rollback; completion release/acquire |
 | 5 | Verify reuse, malformed framing and deterministic retirement | real TCP tests in Release and ASan/UBSan, separately allocated actor heaps |
 | 6 | Establish 180-second native transport baseline | reproducible benchmark with artifact/source hashes; results published separately |
-| 7 | Resolve the actual Spin import/type graph ahead of time | **Partial**: relative modules and public scalar classes/direct methods and typed bool compile; String/Array/object returns and the actual route graph remain |
+| 7 | Resolve the actual Spin import/type graph ahead of time | **Partial**: relative modules, typed strings/arrays, owned nested aggregates, and scalar-payload Option/Result compile; real RequestPath/PathCapture fixtures run. Class-payload sums, borrowed subobject results, and the complete route graph remain |
 | 8 | Lower typed HTTP exchange/response capabilities into guest ABI | **Remaining**: today request parsing/response formatting is native adapter work |
 | 9 | Lower Future/await/cooperate/cancellation continuations | **Remaining**: native scalar handler does not exercise JVM suspend checkpoints |
 | 10 | Integrate shared/private source actor placement and capability policy | **Remaining**: separate native heaps are not hardware address-space isolation |
@@ -26,6 +26,7 @@ The initial adapter is an executable integration milestone, not a replacement
 Spin implementation or proof that all Spin source now compiles. Unsupported
 source remains rejected without fallback interpretation. See
 [build and boundaries](../examples/native-http/README.md).
+See [native sum storage and remaining lifetime work](NATIVE_SCALAR_SUMS.md).
 
 Only the dedicated I/O driver may block in a readiness wait. No actor carrier
 waits on socket readiness, performs synchronous filesystem I/O, or writes logs

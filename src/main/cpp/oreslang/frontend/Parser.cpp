@@ -1,7 +1,9 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -54,7 +56,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -246,8 +248,14 @@ bool native_constructor_scalar_tree(const Expression& expr,
                                     std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean ||
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
             expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::SumConstruct)
+        return std::all_of(expr.arguments.begin(), expr.arguments.end(), [&](const auto& arg) {
+            return native_constructor_scalar_tree(*arg, depth + 1);
+        });
+    if (expr.kind == Kind::Field)
+        return expr.left && expr.left->kind == Kind::Variable;
     if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
@@ -413,12 +421,19 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        program.sum_types = std::move(sum_types_);
         return program;
     }
 
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::vector<NativeSumType> sum_types_;
+    bool is_sum_name(const std::string& name) const {
+        return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
+    }
+    static bool sum_variant(std::string_view name) { return name == "Some" || name == "None" || name == "Ok" || name == "Err"; }
+
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
@@ -462,7 +477,7 @@ private:
 
     ModuleContract contract() {
         ModuleContract result;
-        result.name = identifier();
+        result.name = nominal_declaration_name();
         require("as");
         const bool braced = accept("{");
         std::unordered_set<std::string> seen;
@@ -510,7 +525,7 @@ private:
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
-        actor.name = identifier();
+        actor.name = nominal_declaration_name();
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
@@ -639,7 +654,8 @@ private:
 
     ClassDecl class_declaration() {
         ClassDecl result;
-        result.name = identifier();
+        result.name = nominal_declaration_name();
+        if (result.name == "Option" || result.name == "Result") fail("native sum type names are compiler-owned");
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
@@ -650,7 +666,7 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
-            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && !reserved(token_.text)
+            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
@@ -684,6 +700,7 @@ private:
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
                         result.constructor_parameters.push_back(std::move(name));
+                        result.constructor_parameter_types.push_back(ScalarType::I64);
                     } while (accept(","));
                     require(")");
                 }
@@ -716,26 +733,56 @@ private:
             if (mutable_referent && accept("Array")) {
                 // 'mut Array<int>' is canonical: mut is the referent
                 // capability, independent of whether the slot is final.
-                require("<"); require("int"); require(">");
+                require("<");
+                if (accept("String") || accept("string")) field.array_element_type = ScalarType::String;
+                else if (!accept("int")) field.array_record_class = type_identifier();
+                require(">");
                 field.int_array = true;
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
+                if (accept(";")) {
+                    if (!field.final_field) fail("declaration-only collection field requires val or final");
+                    field.constructor_argument = true;
+                    result.fields.push_back(std::move(field));
+                    continue;
+                }
                 if (!accept(":")) require("=");
                 require("new"); require("Array");
-                require("<"); require("int"); require(">");
+                require("<");
+                if (!field.array_record_class.empty()) {
+                    if (type_identifier() != field.array_record_class) fail("array field constructor type mismatch");
+                } else if (field.array_element_type == ScalarType::String) {
+                    if (!accept("String")) require("string");
+                } else require("int");
+                require(">");
                 require("(");
                 const std::size_t initializer_end = token_.offset + token_.text.size();
                 require(")");
                 class_field_terminator(initializer_end);
             } else {
-                if (mutable_referent && token_.text != "int" && token_.text != "bool")
-                    fail("native class field supports only scalar int/bool or mut Array<int>");
-                field.scalar_type = accept("bool") ? ScalarType::Bool : ScalarType::I64;
-                if (field.scalar_type != ScalarType::Bool) require("int");
+                if (token_.text == "Array") fail("native Array<int> field requires mut referent capability");
+                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
+                    if (!field.final_field || literal_const) fail("expected val or final for native nested class field");
+                    field.class_name = type_identifier(); field.name = identifier();
+                    if (!seen.insert(field.name).second) fail("duplicate class field '" + field.name + "'");
+                    require(";"); field.constructor_argument = true;
+                    result.fields.push_back(std::move(field)); continue;
+                }
+                if (token_.text == "Option" || token_.text == "Result") field.sum_type = type_identifier();
+                field.scalar_type = accept("bool") ? ScalarType::Bool :
+                    (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
+                if (accept(";")) {
+                    if (literal_const)
+                        fail("const native field requires a literal initializer");
+                    field.constructor_argument = true;
+                    result.fields.push_back(std::move(field));
+                    continue;
+                }
                 if (!accept(":") && !accept("="))
                     fail(field.final_field
                         ? "final class field requires declaration-site initializer"
@@ -745,6 +792,9 @@ private:
                         !(field.scalar_type == ScalarType::Bool && (token_.text == "true" || token_.text == "false")))
                     fail("class field requires i64 literal initializer");
                 auto initializer = expression();
+                if (initializer->kind == Expression::Kind::Negate && initializer->left && initializer->left->kind == Expression::Kind::Integer) {
+                    initializer->integer = -initializer->left->integer; initializer->left.reset(); initializer->kind = Expression::Kind::Integer;
+                }
                 if (literal_const && initializer->kind != Expression::Kind::Integer && initializer->kind != Expression::Kind::Boolean)
                     fail("class field requires i64 literal initializer");
                 if (initializer->kind == Expression::Kind::Integer || initializer->kind == Expression::Kind::Boolean) {
@@ -761,17 +811,38 @@ private:
             }
             result.fields.push_back(std::move(field));
         }
+        // Immutable declaration-only fields form a positional constructor.
+        // Initializers use parameter slots, never uninitialized field storage.
+        for (auto& field : result.fields) {
+            if (!field.constructor_argument) continue;
+            if (result.explicit_constructor)
+                fail("declaration-only fields with explicit constructor require checked field-assignment lowering");
+            result.constructor_parameters.push_back(field.name);
+            result.constructor_parameter_types.push_back(field.scalar_type);
+            field.initializer_expression = std::make_unique<Expression>();
+            field.initializer_expression->kind = Expression::Kind::Variable;
+            field.initializer_expression->name = field.name;
+        }
         // Fieldless classes still have nominal identity and checked receiver loans.
         for (const auto& method : result.methods)
             if (seen.count(method.name)) fail("native field/method name collision requires explicit callable member resolution");
         std::unordered_set<std::string> allowed(
             result.constructor_parameters.begin(), result.constructor_parameters.end());
         for (const auto& field : result.fields) {
+            if (!field.sum_type.empty() && result.explicit_constructor) fail("native sum field constructor requires checked nominal parameters");
+            if (!field.class_name.empty() && result.explicit_constructor)
+                fail("native nested owned class constructor requires checked parameter ownership");
             if (field.int_array && result.explicit_constructor)
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
-            if (!result.explicit_constructor &&
-                    field.initializer_expression->kind != Expression::Kind::Integer && field.initializer_expression->kind != Expression::Kind::Boolean)
+            const bool literal_sum = !field.sum_type.empty() && field.initializer_expression->kind == Expression::Kind::SumConstruct &&
+                std::all_of(field.initializer_expression->arguments.begin(), field.initializer_expression->arguments.end(), [](const auto& arg) {
+                    return arg->kind == Expression::Kind::String || arg->kind == Expression::Kind::Integer || arg->kind == Expression::Kind::Boolean;
+                });
+            if (!result.explicit_constructor && !field.constructor_argument &&
+                    !literal_sum && field.initializer_expression->kind != Expression::Kind::Integer &&
+                    field.initializer_expression->kind != Expression::Kind::Boolean &&
+                    field.initializer_expression->kind != Expression::Kind::String)
                 fail("native nonliteral class field initializer requires explicit scalar constructor");
             validate_expression(*field.initializer_expression, allowed, {});
         }
@@ -941,6 +1012,7 @@ private:
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
                     if (generic) parameter.generic_type = type;
+                    else if (is_sum_name(type)) parameter.sum_type = type;
                     else parameter.class_name = type;
                 }
                 if (token_.text == "?")
@@ -965,12 +1037,13 @@ private:
                 value.return_type = ScalarType::String;
             } else {
                 const std::size_t type_offset = token_.offset;
-                const std::string type = identifier();
+                const std::string type = type_identifier();
                 if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                 const bool generic = std::any_of(value.generic_parameters.begin(),
                     value.generic_parameters.end(),
                     [&](const GenericParameter& p) { return p.name == type; });
-                if (!generic) fail("native return type requires int, bool or scalar generic slot");
+                if (is_sum_name(type)) value.return_sum = type;
+                else if (!generic) value.return_class = type;
                 value.return_type = ScalarType::I64;
             }
         }
@@ -999,20 +1072,56 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio") {
+        auto array_effect_ahead = [&] {
+            return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
+                [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
+        };
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             LocalBinding binding;
             binding.offset = token_.offset;
-            if (token_.text == "stdio") {
+            Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
+            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
+                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
+                binding.owner_mutable = mode != "const";
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                if (binding.scalar_type == ScalarType::I64) require("int");
+                binding.name = identifier(); require("="); binding.initializer = expression();
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "Option" || sum_first.text == "Result")) {
+                const auto mode = token_.text; advance(); binding.owner_mutable = mode == "val" || (mode == "let" && accept("mut"));
+                binding.sum_type = type_identifier(); binding.name = identifier(); require("="); binding.initializer = expression();
+            } else if (array_effect_ahead()) {
+                binding.name = "$effect" + std::to_string(value.locals.size());
+                binding.initializer = primary();
+                if (binding.initializer->kind != Expression::Kind::ArrayCall ||
+                        (binding.initializer->name != "add" && binding.initializer->name != "set"))
+                    fail("native array effect supports only add(value) or set(index,value)");
+            } else if (token_.text == "stdio") {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
+            } else if (token_.text == "val" && peek_next().text == "Array") {
+                advance(); require("Array"); require("<");
+                array_element(binding);
+                require(">"); binding.name = identifier(); require("=");
+                require("new"); require("Array"); require("<");
+                if (!binding.array_record_class.empty()) {
+                    if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                } else if (binding.array_element_type == ScalarType::String) {
+                    if (!accept("String")) require("string");
+                } else require("int");
+                require(">"); require("("); require(")");
+                binding.int_array = binding.owner_mutable = true;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
                             (type.kind == Kind::Identifier && look.next().kind == Kind::Identifier); }()) {
                 const bool mutable_value = accept("val");
                 if (!mutable_value) require("const");
+                binding.owner_mutable = mutable_value;
                 const std::string type = type_identifier();
                 binding.name = identifier();
                 require("=");
@@ -1021,7 +1130,14 @@ private:
                     binding.initializer = expression();
                 } else {
                     binding.class_name = type;
-                    require("new");
+                    if (!accept("new")) {
+                        binding.initializer = expression();
+                        if (binding.initializer->kind != Expression::Kind::Call &&
+                                binding.initializer->kind != Expression::Kind::Conditional &&
+                                binding.initializer->kind != Expression::Kind::ArrayCall)
+                            fail("native class initializer requires new or immutable record value");
+                        binding.record_view = true;
+                    } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");
                     require("(");
                     if (!accept(")")) {
@@ -1029,6 +1145,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    }
                 }
             } else if (accept("let")) {
                 // Preserve the Java/Graal distinction between immutable
@@ -1048,14 +1165,18 @@ private:
                         fail("native Array<int> requires let mut owner");
                     require("Array");
                     require("<");
-                    require("int");
+                    array_element(binding);
                     require(">");
                     binding.name = identifier();
                     require("=");
                     require("new");
                     require("Array");
                     require("<");
-                    require("int");
+                    if (!binding.array_record_class.empty()) {
+                        if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                    } else if (binding.array_element_type == ScalarType::String) {
+                        if (!accept("String")) require("string");
+                    } else require("int");
                     require(">");
                     require("(");
                     require(")");
@@ -1160,11 +1281,54 @@ private:
         // if/else arms containing field writes or direct function calls.
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
-        auto branch_arm = [&](bool finally_scope = false) {
+        std::function<std::vector<Statement>(bool, bool)> branch_arm;
+        std::function<Statement()> foreach_statement;
+        std::size_t statement_depth = 0;
+        foreach_statement = [&]() {
+            Lexer look = lexer_;
+            const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
+            if (open.text == "(" && mode.text == "let" && name.text == "int") {
+                Statement loop; loop.kind = Statement::Kind::ForIndex; loop.offset = token_.offset;
+                require("for"); require("("); require("let"); require("int");
+                loop.branch_local = std::make_unique<LocalBinding>();
+                loop.branch_local->name = identifier(); loop.branch_local->offset = loop.offset;
+                loop.branch_local->owner_mutable = true;
+                require("="); loop.branch_local->initializer = expression(); require(";");
+                loop.condition = expression(); require(";");
+                if (identifier() != loop.branch_local->name) fail("native index loop must update its own counter");
+                require("="); loop.loop_step = expression(); require(")"); require("{");
+                loop.then_statements = branch_arm(false, false); require("}"); return loop;
+            }
+            if (open.text != "(" || (mode.text != "const" && mode.text != "val") ||
+                    name.kind != Kind::Identifier || of.text != "of")
+                fail("native realtime source loop requires verified LLVM continuation lowering");
+            Statement loop;
+            loop.kind = Statement::Kind::ForEach;
+            loop.offset = token_.offset;
+            require("for"); require("(");
+            if (!accept("const")) require("val");
+            loop.branch_local = std::make_unique<LocalBinding>();
+            loop.branch_local->offset = token_.offset;
+            loop.branch_local->name = identifier();
+            require("of"); loop.expression = expression(); require(")"); require("{");
+            const auto receivers = class_receivers_;
+            class_receivers_.insert(loop.branch_local->name);
+            loop.then_statements = branch_arm(false, false);
+            class_receivers_ = receivers;
+            require("}"); return loop;
+        };
+        branch_arm = [&](bool finally_scope, bool then_scope) {
+            if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
+            struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
+            struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
+                ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
-            while (token_.text != "}") {
+            while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
+                if (token_.text == "for" && !finally_scope) {
+                    actions.push_back(foreach_statement()); continue;
+                }
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
                     fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -1180,24 +1344,56 @@ private:
                 }
                 Statement statement;
                 statement.offset = token_.offset;
+                if (token_.text == "if" && !finally_scope) {
+                    advance(); statement.kind = Statement::Kind::Conditional;
+                    statement.condition = expression();
+                    if (accept(";")) {
+                        require("then"); statement.then_statements = branch_arm(false, true);
+                        if (accept("else")) statement.else_statements = branch_arm(false, true);
+                    } else {
+                        require("{"); statement.then_statements = branch_arm(false, false); require("}");
+                        if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
+                    }
+                    require("fi"); actions.push_back(std::move(statement)); continue;
+                }
                 if (finally_scope && (token_.text == "return" ||
                         token_.text == "break" || token_.text == "continue"))
                     fail("return/break/continue cannot escape finally; finally is cleanup-only");
                 if (finally_scope && (token_.text == "defer" || token_.text == "try"))
                     fail("native finally nested defer/try requires scoped cleanup lowering");
+                if (accept("return")) {
+                    if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
+                    statement.kind = Statement::Kind::Return;
+                    if (!value.returns_void) statement.expression = expression();
+                    require(";"); actions.push_back(std::move(statement));
+                    if (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
+                        fail("native statement follows terminal return");
+                    continue;
+                }
                 if (token_.text == "let")
                     fail("native branch-local class owner requires destructor/drop lowering");
                 if (accept("const") || accept("val")) {
                     statement.kind = Statement::Kind::ScopedLocal;
                     statement.branch_local = std::make_unique<LocalBinding>();
                     statement.branch_local->offset = statement.offset;
-                    statement.branch_local->name = identifier();
-                    require(":");
-                    if (accept("int")) statement.branch_local->scalar_type = ScalarType::I64;
-                    else if (accept("bool")) statement.branch_local->scalar_type = ScalarType::Bool;
-                    else fail("native branch-local scalar requires int or bool");
+                    auto scoped_type_name = [&]() -> std::string {
+                        for (const auto* scalar : {"int", "bool", "string", "String"})
+                            if (accept(scalar)) return scalar;
+                        return type_identifier();
+                    };
+                    const std::string first = scoped_type_name();
+                    std::string type;
+                    if (accept(":")) { statement.branch_local->name = first; type = scoped_type_name(); }
+                    else { type = first; statement.branch_local->name = identifier(); }
+                    if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
+                    if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
+                    else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
+                    else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
+                    else if (is_sum_name(type)) statement.branch_local->sum_type = type;
+                    else { statement.branch_local->class_name = type; statement.branch_local->record_view = true; }
                     require("=");
                     statement.branch_local->initializer = expression();
+                    if (!statement.branch_local->class_name.empty()) class_receivers_.insert(statement.branch_local->name);
                     require(";");
                     actions.push_back(std::move(statement));
                     continue;
@@ -1211,7 +1407,7 @@ private:
                     statement.field = target->name;
                     statement.expression = expression();
                 } else if (target->kind == Expression::Kind::Call ||
-                           target->kind == Expression::Kind::ArrayCall) {
+                           target->kind == Expression::Kind::ArrayCall || target->kind == Expression::Kind::Console) {
                     statement.kind = Statement::Kind::Call;
                     statement.expression = std::move(target);
                 } else {
@@ -1266,6 +1462,11 @@ private:
                 if (token_.text != "return")
                     fail("experimental scalar loop must be followed by a single return");
                 continue;
+            }
+            if (token_.text == "for") {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native for-of cannot enter protected/return-guard scope");
+                value.statements.push_back(foreach_statement()); continue;
             }
             if (token_.text == "while" || token_.text == "for" ||
                     token_.text == "loop") {
@@ -1335,7 +1536,7 @@ private:
                     require("}");
                     require("finally");
                     require("{");
-                    auto cleanup = branch_arm(true);
+                    auto cleanup = branch_arm(true, false);
                     require("}");
                     for (auto it = cleanup.rbegin(); it != cleanup.rend(); ++it) {
                         if (it->kind != Statement::Kind::FieldWrite ||
@@ -1368,12 +1569,11 @@ private:
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
-                require("(");
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                require(")");
-                require("{");
+                const bool then_form = accept(";");
+                if (then_form) require("then"); else require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -1386,10 +1586,21 @@ private:
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
-                    require("}");
+                    if (!then_form) require("}");
                     require("fi");
-                    value.early_returns.push_back(std::move(guard));
-                    return_guards_started = true;
+                    if (then_form && value.return_class.empty() && !terminal_try_finally) {
+                        if (return_guards_started)
+                            fail("native structured statements cannot follow guarded returns");
+                        if (++branch_count > 128) fail("native structured return branch limit exceeded (128)");
+                        Statement conditional; conditional.kind = Statement::Kind::Conditional; conditional.offset = offset;
+                        conditional.condition = std::move(guard.condition);
+                        Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
+                        terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
+                        value.statements.push_back(std::move(conditional));
+                    } else {
+                        value.early_returns.push_back(std::move(guard));
+                        return_guards_started = true;
+                    }
                 } else {
                     if (terminal_try_finally)
                         fail("native terminal try supports only guarded return branches");
@@ -1401,12 +1612,13 @@ private:
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
                     conditional.condition = std::move(condition);
-                    conditional.then_statements = branch_arm();
-                    require("}");
-                    require("else");
-                    require("{");
-                    conditional.else_statements = branch_arm();
-                    require("}");
+                    conditional.then_statements = branch_arm(false, then_form);
+                    if (!then_form) require("}");
+                    if (accept("else")) {
+                        if (!then_form) require("{");
+                        conditional.else_statements = branch_arm(false, then_form);
+                        if (!then_form) require("}");
+                    } else if (!then_form) require("else");
                     require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
@@ -1565,7 +1777,7 @@ private:
             require("}");
             require("finally");
             require("{");
-            auto cleanup = branch_arm(true);
+            auto cleanup = branch_arm(true, false);
             require("}");
             // The protected region always exits via an evaluated scalar
             // return. Lower its finally effects as scope-exit actions
@@ -1801,6 +2013,16 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (accept("new")) {
+            auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
+            expr->name = type_identifier();
+            require("(");
+            if (!accept(")")) {
+                do expr->arguments.push_back(expression()); while (accept(","));
+                require(")");
+            }
+            return expr;
+        }
         if (token_.kind == Kind::String) {
             auto expr = make_expression(Expression::Kind::String, offset);
             expr->name = string_literal(token_.text);
@@ -1870,11 +2092,12 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || (reserved(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" && !sum_variant(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         if (token_.text == "self" && !method_scope_.empty()) { expr->name = "self"; advance(); }
+        else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
         if (generic_call_type_arguments_ahead()) {
@@ -1927,6 +2150,13 @@ private:
                 require(")");
             }
         }
+        if (sum_variant(expr->name)) {
+            if (expr->type_arguments_present) fail("native sum explicit constructor type arguments unsupported; use a declared sum type");
+            const std::size_t arity = expr->name == "None" ? 0 : 1;
+            if (expr->arguments.size() != arity || (!expr->argument_names.empty() && std::any_of(expr->argument_names.begin(), expr->argument_names.end(), [](const std::string& s) { return !s.empty(); })))
+                fail("native sum constructor requires its exact positional payload arity");
+            expr->kind = Expression::Kind::SumConstruct;
+        }
         // Class-owned array expressions are intentionally limited to one
         // field selection followed by a native array method or .size.
         while (accept(".")) {
@@ -1952,7 +2182,6 @@ private:
                 }
             }
             expr = std::move(field);
-            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -2017,9 +2246,38 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    void array_element(LocalBinding& binding) {
+        if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+        else if (!accept("int")) binding.array_record_class = type_identifier();
+    }
+
     std::string type_identifier() {
         auto name = identifier();
+        if ((name == "Option" || name == "Result") && accept("<")) {
+            NativeSumType type; type.kind = name == "Option" ? NativeSumType::Kind::Option : NativeSumType::Kind::Result;
+            auto payload = [&]() -> ScalarType {
+                if (accept("int")) return ScalarType::I64;
+                if (accept("bool")) return ScalarType::Bool;
+                if (accept("String") || accept("string")) return ScalarType::String;
+                fail("native sum class/compound payload requires ownership and lifetime lowering");
+            };
+            auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+            type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
+            if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
+            require(">"); type.name = name + ">";
+            if (std::none_of(sum_types_.begin(), sum_types_.end(), [&](const NativeSumType& t) { return t.name == type.name; })) sum_types_.push_back(type);
+            return type.name;
+        }
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
+        return name;
+    }
+
+    std::string nominal_declaration_name() {
+        // '_' is reserved for wildcard/inference-hole use, never a
+        // stable runtime nominal identity or module contract name.
+        std::string name = identifier();
+        if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
+        if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
     }
 
@@ -2035,7 +2293,7 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern")) {
             fail("expected non-keyword identifier");
         }
         std::string result(token_.text);
@@ -2115,6 +2373,13 @@ private:
                 return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
+            case Expression::Kind::SumConstruct:
+            case Expression::Kind::SumAccess:
+            case Expression::Kind::RecordConstruct:
+                if (expr.left) validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
@@ -2261,6 +2526,12 @@ private:
                     " at byte " + std::to_string(expr.offset));
         };
         switch (expr.kind) {
+            case Expression::Kind::SumConstruct:
+            case Expression::Kind::SumAccess:
+                if (expr.left) (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                for (const auto& arg : expr.arguments) (void)validate_scalar_expression(*arg, variables, functions, depth + 1);
+                return expr.kind == Expression::Kind::SumAccess ? expr.resolved_type : ScalarType::I64;
+
             case Expression::Kind::Integer:
                 return ScalarType::I64;
             case Expression::Kind::Boolean:
@@ -2278,28 +2549,40 @@ private:
                 return found == variables.end() ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
-                if (expr.left && expr.left->kind == Expression::Kind::Variable) {
-                    auto found = variables.find(expr.left->name + "." + expr.name);
+                if (expr.left) {
+                    auto found = variables.find(native_place_key(expr));
                     if (found != variables.end()) return found->second;
                 }
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
+                std::string receiver;
+                if (expr.left) receiver = native_place_key(*expr.left);
+                const auto element_slot = variables.find(receiver + ".$element");
+                const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
                 const std::size_t expected = expr.name == "get" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
                         std::to_string(expr.offset));
-                for (const auto& argument : expr.arguments) {
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    if (actual != ScalarType::I64)
-                        throw std::runtime_error("native Array<int> arguments require int, got " +
+                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    if (actual != (index ? ScalarType::I64 : element))
+                        throw std::runtime_error(std::string(element == ScalarType::I64
+                            ? "native Array<int> arguments require int, got "
+                            : "native Array<String> argument type mismatch, got ") +
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
-                return ScalarType::I64;
+                return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
+            case Expression::Kind::RecordConstruct:
+                for (const auto& arg : expr.arguments)
+                    validate_scalar_expression(*arg, variables, functions, depth + 1);
+                return ScalarType::I64; // nominal record validation follows, never a guest integer
             case Expression::Kind::Call: {
                 const auto family = functions.find(expr.name);
                 if (family == functions.end() ||
@@ -2439,7 +2722,7 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
-        if (expr->kind == Expression::Kind::Call ||
+        if (expr->kind == Expression::Kind::SumConstruct || expr->kind == Expression::Kind::SumAccess || expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||
@@ -2515,6 +2798,7 @@ private:
     }
 
     static void validate(const Program& program) {
+        const NativeClassLayouts layouts(program);
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
@@ -2561,7 +2845,7 @@ private:
                 signature.parameter_generic_types.push_back(param.generic_type);
                 signature.parameter_scalar_types.push_back(param.scalar_type);
                 signature.parameter_is_scalar.push_back(
-                    param.class_name.empty() && param.generic_type.empty());
+                    param.class_name.empty() && param.generic_type.empty() && param.sum_type.empty());
             }
             signature.return_type = fn.return_type;
             signature.returns_void = fn.returns_void;
@@ -2647,7 +2931,7 @@ private:
                     throw std::runtime_error("missing public native module contract method '"
                             + ref + "." + required.name + "'");
                 }
-                if (fn->returns_void) {
+                if (fn->returns_void || !fn->return_sum.empty()) {
                     throw std::runtime_error("native module contract requires int return");
                 }
                 if (fn->parameters.size() != required.parameter_modes.size()) {
@@ -2655,7 +2939,8 @@ private:
                             + ref + "." + required.name + "'");
                 }
                 for (std::size_t n = 0; n < required.parameter_modes.size(); ++n) {
-                    if (!fn->parameters[n].class_name.empty() || fn->parameters[n].mode != required.parameter_modes[n]) {
+                    if (!fn->parameters[n].class_name.empty() || !fn->parameters[n].sum_type.empty() ||
+                            fn->parameters[n].mode != required.parameter_modes[n]) {
                         throw std::runtime_error("native module contract ownership mode mismatch '"
                                 + ref + "." + required.name + "'");
                     }
@@ -2723,7 +3008,14 @@ private:
                         if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
                             throw std::runtime_error("native class constructor argument arity mismatch for '" +
                                                      cls->name + "'");
-                        for (const auto& arg : binding.constructor_arguments) {
+                        for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                            const auto& arg = binding.constructor_arguments[i];
+                            const auto* field = constructor_field(*cls, i);
+                            if (field && field->int_array && arg->kind == Expression::Kind::Take &&
+                                    arg->left && arg->left->kind == Expression::Kind::Variable) {
+                                validate_expression(*arg, params, functions);
+                                continue;
+                            }
                             if (!native_constructor_scalar_tree(*arg))
                                 throw std::runtime_error("native scalar constructor argument requires pure integer expression");
                             validate_expression(*arg, params, functions);
@@ -2742,6 +3034,26 @@ private:
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
+                if (stmt.kind == Statement::Kind::ForIndex) {
+                    validate_expression(*stmt.branch_local->initializer, names, functions);
+                    NameSet body = names;
+                    if (!body.insert(stmt.branch_local->name).second) throw std::runtime_error("native index loop shadows live owner");
+                    validate_expression(*stmt.condition, body, functions); validate_expression(*stmt.loop_step, body, functions);
+                    for (const auto& action : stmt.then_statements) check_statement_names(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Return) {
+                    if (stmt.expression) validate_expression(*stmt.expression, names, functions);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ForEach) {
+                    validate_expression(*stmt.expression, names, functions);
+                    NameSet body = names;
+                    if (!body.insert(stmt.branch_local->name).second)
+                        throw std::runtime_error("native for-of element shadows a live owner");
+                    for (const auto& action : stmt.then_statements) check_statement_names(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::Conditional) {
                     if (stmt.condition) validate_expression(*stmt.condition, names, functions);
                     else {
@@ -2826,10 +3138,13 @@ private:
             // symbols or accidentally turns a typing failure into binding.
             using TypeMap = std::unordered_map<std::string, ScalarType>;
             TypeMap scalar_types;
+
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
-                for (const auto& cls : program.classes) if (cls.name == type)
-                    for (const auto& field : cls.fields)
-                        scalar_types.emplace(owner + "." + field.name, field.scalar_type);
+                if (type.empty()) return;
+                for (const auto& leaf : layouts.at(type).leaves) {
+                    scalar_types.emplace(owner + "." + leaf.path, leaf.field->scalar_type);
+                    if (leaf.field->int_array) scalar_types.emplace(owner + "." + leaf.path + ".$element", leaf.field->array_element_type);
+                }
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
@@ -2850,9 +3165,14 @@ private:
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
+                    if (binding.int_array)
+                        scalar_types.emplace(binding.name + ".$element", binding.array_element_type);
                     if (binding.new_class) {
-                        for (const auto& arg : binding.constructor_arguments)
-                            require_scalar(*arg, ScalarType::I64,
+                        const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                            [&](const ClassDecl& c) { return c.name == binding.class_name; });
+                        for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i)
+                            require_scalar(*binding.constructor_arguments[i],
+                                cls->constructor_parameter_types.empty() ? ScalarType::I64 : cls->constructor_parameter_types.at(i),
                                 "native class constructor argument", scalar_types);
                     }
                     continue;
@@ -2864,6 +3184,31 @@ private:
 
             std::function<void(const Statement&, TypeMap&)> check_statement_types;
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
+                auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
+                    scope.emplace(local.name, local.scalar_type);
+                    if (!local.class_name.empty()) for (const auto& leaf : layouts.at(local.class_name).leaves) {
+                        scope.emplace(local.name + "." + leaf.path, leaf.field->scalar_type);
+                        if (leaf.field->int_array) scope.emplace(local.name + "." + leaf.path + ".$element", leaf.field->array_element_type);
+                    }
+                };
+                if (stmt.kind == Statement::Kind::ForIndex) {
+                    require_scalar(*stmt.branch_local->initializer, ScalarType::I64, "index initializer", env);
+                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    require_scalar(*stmt.condition, ScalarType::Bool, "index condition", body);
+                    require_scalar(*stmt.loop_step, ScalarType::I64, "index update", body);
+                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::Return) {
+                    if (stmt.expression) require_scalar(*stmt.expression, fn.return_type, "structured return", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ForEach) {
+                    (void)validate_scalar_expression(*stmt.expression, env, functions);
+                    TypeMap body = env; scoped_type(*stmt.branch_local, body);
+                    for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::Conditional) {
                     if (stmt.condition) {
                         require_scalar(*stmt.condition, ScalarType::Bool,
@@ -2894,7 +3239,7 @@ private:
                     const LocalBinding& local = *stmt.branch_local;
                     require_scalar(*local.initializer, local.scalar_type,
                         "native branch-local initializer", env);
-                    env.emplace(local.name, local.scalar_type);
+                    scoped_type(local, env);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::FieldWrite ||
@@ -3004,6 +3349,7 @@ void resolve_and_validate_program(Program& program) {
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
+    resolve_native_sums(program);
     Parser::validate_complete(program);
     validate_i64_ownership(program);
     validate_native_scalar_types(program);

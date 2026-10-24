@@ -89,7 +89,7 @@ public:
         rows_ = layout_ == Layout::AoSoA
             ? ((capacity_ + lanes_ - 1) / lanes_) * lanes_ : capacity_;
         receipt_base_ = rows_ * kFields;
-        zero_words(count);
+        zero_words();
         free_head_ = 0;
         for (std::uint32_t row = 0; row < capacity_; ++row) {
             put(row, kNextFree, row + 1 == capacity_ ? kNoSlot : row + 1);
@@ -204,7 +204,7 @@ public:
     void close() {
         check_open();
         if (live_ != 0) throw std::logic_error("unretired native requests");
-        zero_words(required_words(layout_, capacity_, lanes_));
+        zero_words();
         if (arena_) {
             if (!page_claim_ || !ores_actor_arena_unclaim_pages(
                     arena_, turn_, pages_.data(), pages_.size(), page_claim_)) {
@@ -236,7 +236,7 @@ private:
     // owner-turn and carrier verification on every write, without taking
     // hundreds of thousands of spinlock acquisitions for individual words.
     // Arena pages may contain prior logical state, so never assume calloc.
-    void zero_words(std::size_t words) {
+    void zero_words() {
         if (!arena_) {
             std::fill(words_.begin(), words_.end(), 0);
             return;

@@ -15,6 +15,15 @@ namespace oreslang {
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
 enum class ScalarType { I64, Bool, String };
 
+// Sum payloads are values, never untyped integer handles or class pointers.
+struct NativeSumType {
+    enum class Kind { Option, Result };
+    Kind kind = Kind::Option;
+    std::string name;
+    ScalarType value_type = ScalarType::I64;
+    ScalarType error_type = ScalarType::I64;
+};
+
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -33,13 +42,14 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -56,6 +66,7 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    mutable std::string sum_type;
 };
 
 struct Parameter {
@@ -65,6 +76,7 @@ struct Parameter {
     std::string generic_type; // stage-one i64 generic slot
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
+    std::string sum_type;
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
@@ -72,7 +84,10 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
-    bool int_array = false; // non-Copy owned Array<int> local, no escape
+    bool int_array = false; // non-Copy owned i64-slot array local, no escape
+    ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
+    std::string array_record_class;
+    bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.
@@ -84,6 +99,7 @@ struct LocalBinding {
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
+    std::string sum_type;
 };
 
 struct ClassField {
@@ -92,9 +108,14 @@ struct ClassField {
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
     ScalarType scalar_type = ScalarType::I64;
+    std::string class_name; // unique inline nested class, never a raw handle
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
+    bool constructor_argument = false; // declaration-only field supplied by implicit positional constructor
+    ScalarType array_element_type = ScalarType::I64;
+    std::string array_record_class;
+    std::string sum_type;
 };
 
 struct ClassMethod {
@@ -114,7 +135,15 @@ struct ClassDecl {
     bool explicit_constructor = false;
     bool constructor_exported = false;
     std::vector<std::string> constructor_parameters;
+    std::vector<ScalarType> constructor_parameter_types;
 };
+
+inline const ClassField* constructor_field(const ClassDecl& cls, std::size_t parameter) {
+    if (parameter >= cls.constructor_parameters.size()) return nullptr;
+    for (const auto& field : cls.fields)
+        if (field.constructor_argument && field.name == cls.constructor_parameters[parameter]) return &field;
+    return nullptr;
+}
 
 // Native source value categories. Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.
@@ -150,14 +179,17 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
-    // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
-    // Non-Copy branch-local classes are still rejected until drop glue exists.
+    // Scoped scalar or readonly leaf record. ForEach uses an implicit element
+    // binding (no initializer); expression is its named array source and
+    // then_statements is the body. No owning scoped class drop is implied.
     std::unique_ptr<LocalBinding> branch_local;
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // ForIndex: branch_local initializer, condition and checked next value.
+    std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
     // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
     // Exactly four Array<int> fields in class declaration order.
@@ -211,6 +243,7 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -222,6 +255,7 @@ struct Function {
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    std::string return_sum;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
@@ -274,6 +308,7 @@ struct Program {
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<std::string> conforms;
+    std::vector<NativeSumType> sum_types;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

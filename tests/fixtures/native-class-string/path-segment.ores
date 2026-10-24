@@ -1,0 +1,12 @@
+// The declaration is the PathSegment record used by http-routing.
+define class PathSegment as
+    pub val int kind;
+    pub val String value;
+end
+fnc segment_value(borrow PathSegment segment): String { return segment.value; }
+pub routine main(): int {
+    val PathSegment segment = new PathSegment(1, "fo" + "o");
+    val PathSegment copied = new PathSegment(segment.kind, segment.value);
+    stdio.println(segment_value(rt borrow copied));
+    return segment.kind == copied.kind && copied.value == "foo" ? 0 : 1;
+}
