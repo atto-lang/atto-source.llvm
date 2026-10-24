@@ -111,6 +111,26 @@ int main(void) {
     check(!ores_native_continuation_store_get(continuations, cancelled, &record));
 
     /*
+     * READY is still cancellable until a resume claim linearizes. Both
+     * notify_ready() and cancel() may therefore report success in sequence;
+     * the observable terminal state must be CANCELLED and unclaimable.
+     */
+    OresNativeContinuationHandle ready_then_cancel =
+        publish(continuations, execution);
+    check(ores_native_continuation_store_notify_ready(
+        continuations, ready_then_cancel));
+    check(ores_native_continuation_store_cancel(
+        continuations, ready_then_cancel));
+    check(ores_native_continuation_store_get(
+        continuations, ready_then_cancel, &record));
+    check(record.state == ORES_CONTINUATION_CANCELLED);
+    check(!ores_native_continuation_store_try_claim_ready_resume(
+        continuations, ready_then_cancel, NULL));
+    check(ores_native_continuation_store_release(
+        continuations, ready_then_cancel));
+
+
+    /*
      * ABA regression: a released handle must never affect a reused slot.
      * Capacity two ensures repeated publication eventually reuses it.
      */
