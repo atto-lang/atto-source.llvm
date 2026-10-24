@@ -107,5 +107,30 @@ int main() {
         }
     }
     check(group.finalized(owner) && group.finalized(foreign), "group not quiescent");
+
+    // Group close may drop an already-reserved CONTROL callback. The Future
+    // must observe that generation-fenced loss and become cancellable rather
+    // than remaining permanently scheduled.
+    NativeActorGroup teardown_group(9801, 1);
+    auto teardown_owner = teardown_group.adopt(9801, 1, 1, [] {});
+    check(teardown_group.mark_ready(teardown_owner), "teardown owner not ready");
+    auto finalizer = teardown_group.runtime_finalizer(teardown_owner);
+    auto dropped = NativeScalarFutureAwait::open(teardown_owner, 77);
+    check(dropped->complete(dropped->id(), 99), "teardown future not settled");
+    int dropped_callbacks = 0;
+    check(dropped->try_schedule(dropped->id(), teardown_group, teardown_owner,
+        [&](const auto&) { ++dropped_callbacks; }), "teardown CONTROL not queued");
+    check(!teardown_owner.control_delivery_lost(), "CONTROL lost before close");
+    teardown_group.close();
+    check(teardown_owner.control_delivery_lost(), "dropped CONTROL not published");
+    check(dropped->cancel_if_control_lost(dropped->id(), teardown_owner),
+          "dropped CONTROL did not revoke Future");
+    check(dropped->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "revoked Future did not become cancelled");
+    check(dropped_callbacks == 0, "dropped callback executed");
+    check(finalizer.ready_for_resource_reclamation(),
+          "dropped CONTROL still pins finalization");
+    check(finalizer.finalized(), "detached actor not finalized");
+
     return 0;
 }
