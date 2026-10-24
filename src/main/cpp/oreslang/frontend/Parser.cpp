@@ -1672,10 +1672,15 @@ private:
                     require(";");
                     continue;
                 }
+                // ActorRef<T> implements HasFuture: `await actor;` is
+                // equivalent to `await actor.get_ready();`, never get_done().
+                // The validator below resolves the name against a live
+                // non-Copy ActorRef, not an arbitrary scalar or class value.
                 value.ready_await_actor = awaited;
-                if (token_.text != ".")
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready is lowered");
                 value.ready_await_offset = await_offset;
+                if (accept(";")) continue;
+                if (token_.text != ".")
+                    fail("native await requires HasFuture ActorRef or an explicit get_ready()");
                 require(".");
                 require("get_ready");
                 require("(");
