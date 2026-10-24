@@ -294,6 +294,37 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_case_ids_in_corpus_not_just_path_checks() {
+        let record = "case|duplicate-id|reject|reject|reject|BAD|-|-|-|-|-|61";
+        let fixture = format!(
+            "ORESLANG_MODEL_EXECUTABLE_CASES_V1\nrevision|{REVISION}\nprofile|{PROFILE}\n{record}\n{record}\n"
+        );
+        assert!(corpus_from_str(&fixture).unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
+    fn rejects_unsafe_case_paths_even_before_case_count_check() {
+        let fixture = format!(
+            "ORESLANG_MODEL_EXECUTABLE_CASES_V1\nrevision|{REVISION}\nprofile|{PROFILE}\n\
+            case|../escape|reject|reject|reject|BAD|-|-|-|-|-|61\n"
+        );
+        assert!(corpus_from_str(&fixture).unwrap_err().contains("unsafe"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captures_nonzero_process_exit_and_small_stderr() {
+        let scratch = Scratch::new().unwrap();
+        let (rc, out, err) = run(
+            Command::new("/bin/sh").args(["-c", "printf 'rejected' >&2; exit 7"]),
+            &scratch.0,
+        ).unwrap();
+        assert_eq!(rc, 7);
+        assert!(out.is_empty());
+        assert_eq!(err, b"rejected");
+    }
+
+    #[test]
     fn rejects_bad_revision_and_undersized_corpus() {
         assert!(corpus_from_str("wrong\nrevision|wrong\nprofile|wrong").is_err());
         let small = format!(
