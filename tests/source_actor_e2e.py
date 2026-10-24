@@ -2,6 +2,7 @@
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -11,6 +12,24 @@ if not __debug__:
 
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
+
+def expected_prefix_last(name, actor_index, processed):
+    if processed == 0:
+        return 0
+    if name == "source-actor-fifo-ten.ores":
+        value = 0
+        for n in range(1, processed + 1):
+            value = value * 11 + n
+        return value
+    if name == "source-actor-scoped-owned-i64.ores":
+        value = 0
+        for n in range(1, processed + 1):
+            value = 2 * (value + n)
+        return value
+    if name == "source-actor-interleaved-stop.ores":
+        sequences = ([1], [3, 4])
+        return sum(sequences[actor_index][:processed])
+    return sum([1, 2][:processed])
 
 def main():
     ap = argparse.ArgumentParser()
@@ -105,8 +124,9 @@ def main():
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
                 # One actor-native heap for the retained field plus two
-                # reusable temporary slots: the second mailbox delivery
-                # must fail if either compiler drop was omitted.
+                # reusable temporary slots. Immediate stop may abandon queued
+                # DATA, so runtime repeat-turn proof belongs to dedicated host
+                # tests; this source gate pins the generated bounded reserve.
                 assert "i64 3" in guest.stdout, (
                     name, "actor heap needs bounded local slot reserve")
             if name == "source-actor-await-ready.ores":
@@ -156,14 +176,24 @@ def main():
             assert len(lines) == actors, (name, lines)
             for i, line in enumerate(lines):
                 assert "constructor_on_worker=1 released=1" in line, line
-                if name == "source-actor-interleaved-stop.ores":
-                    expected = [(1, 1), (2, 7)][i]
-                    assert f"processed={expected[0]}" in line, line
-                    assert f"last={expected[1]}" in line, line
-                else:
-                    assert f"processed={count}" in line, line
-                    if last is not None:
-                        assert f"last={last}" in line, line
+                match = re.search(
+                    r"accepted=(\\d+) processed=(\\d+) abandoned=(\\d+) last=(-?\\d+)",
+                    line)
+                assert match is not None, (name, line)
+                accepted, processed, abandoned, observed_last = map(
+                    int, match.groups())
+                expected_accepted = (
+                    [1, 2][i]
+                    if name == "source-actor-interleaved-stop.ores"
+                    else count)
+                assert accepted == expected_accepted, (
+                    name, i, accepted, expected_accepted)
+                assert 0 <= processed <= accepted, (name, i, processed, accepted)
+                assert abandoned == accepted - processed, (
+                    name, i, accepted, processed, abandoned)
+                assert observed_last == expected_prefix_last(
+                    name, i, processed), (
+                    name, i, processed, observed_last)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
