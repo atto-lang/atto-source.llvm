@@ -11,15 +11,48 @@ command -v rustc >/dev/null || { echo "Requires Rust toolchain" >&2; exit 69; }
 prefix="$(brew --prefix "$formula")"
 found="$("$prefix/bin/llvm-config" --version)"
 [[ "$found" == "$version".* ]] || { echo "Expected LLVM $version, found $found" >&2; exit 65; }
-# The printed commit/tree receipt is only evidence for a clean source tree.
-# Ignore generated build directories but reject edits or untracked files in
-# source/build input paths. The compiler must not compile an unrecorded patch.
-if [[ -n "$(git status --porcelain --untracked-files=all -- \
-    CMakeLists.txt src/main/cpp/oreslang tests/native_class_string_parity.rs \
-    tests/fixtures/native-class-string scripts/compile-aot.sh)" ]]; then
-  echo "Refusing dirty build inputs: commit or discard changes before verification" >&2
-  exit 65
-fi
+# Keep the receipt tied to actual source bytes, not just git status:
+# --assume-unchanged and --skip-worktree can conceal modified tracked files.
+# Inputs must be ordinary tracked blobs at exactly this HEAD both before and
+# after execution. Generated build directories are intentionally excluded.
+input_paths=(
+  CMakeLists.txt
+  src/main/cpp/oreslang
+  tests/native_class_string_parity.rs
+  tests/native_source_input_admission.cpp
+  tests/fixtures/native-class-string
+  scripts/compile-aot.sh
+  scripts/verify-native-class-string-macos.sh
+  .github/workflows/llvm19-23-native-class-string-macos.yml
+)
+verify_clean_inputs() {
+  local phase="$1" indexed path expected actual count=0
+  if [[ -n "$(git status --porcelain --untracked-files=all -- "${input_paths[@]}")" ]]; then
+    echo "Refusing modified/untracked build inputs ($phase)" >&2
+    exit 65
+  fi
+  while IFS= read -r -d '' indexed; do
+    # -v prints H for ordinary index entries, h for assume-unchanged,
+    # and S for skip-worktree. Refuse any nonstandard index state.
+    if [[ "${indexed:0:1}" != H ]]; then
+      echo "Refusing hidden index state ($phase): ${indexed:2}" >&2
+      exit 65
+    fi
+    path="${indexed:2}"
+    expected="$(git rev-parse --verify "HEAD:$path")" || exit 65
+    actual="$(git hash-object -- "$path")" || exit 65
+    if [[ "$actual" != "$expected" ]]; then
+      echo "Refusing source blob mismatch ($phase): $path" >&2
+      exit 65
+    fi
+    count=$((count + 1))
+  done < <(git ls-files -z -v -- "${input_paths[@]}")
+  if (( count < 24 )); then
+    echo "Refusing incomplete tracked input inventory ($phase): $count" >&2
+    exit 65
+  fi
+}
+verify_clean_inputs preflight
 printf "Source commit: %s\nSource tree: %s\nLLVM: %s\n" "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$found"
 build="$root/build-class-string-llvm$version"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
@@ -48,4 +81,5 @@ ORESLANG_LLVMC="$build/oreslang-llvmc" CLANG="$prefix/bin/clang" \
 printf "hello world\nxhiiii 2hiiii\n" > "$work/expected"
 "$work/main-native" | cat > "$work/output"
 diff -u "$work/expected" "$work/output"
+verify_clean_inputs postflight
 echo "PASS: native Foo program through LLVM $found"
