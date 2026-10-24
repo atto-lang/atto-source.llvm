@@ -55,9 +55,11 @@ fn optional(value: &str) -> Option<String> {
 
 fn corpus_from_str(raw: &str) -> Result<Vec<Case>, String> {
     let mut lines = raw.lines();
+    let expected_revision = format!("revision|{REVISION}");
+    let expected_profile = format!("profile|{PROFILE}");
     if lines.next() != Some("ORESLANG_MODEL_EXECUTABLE_CASES_V1")
-        || lines.next() != Some(&format!("revision|{REVISION}"))
-        || lines.next() != Some(&format!("profile|{PROFILE}"))
+        || lines.next() != Some(expected_revision.as_str())
+        || lines.next() != Some(expected_profile.as_str())
     {
         return Err("invalid or unexpected shared model corpus header/revision/profile".into());
     }
