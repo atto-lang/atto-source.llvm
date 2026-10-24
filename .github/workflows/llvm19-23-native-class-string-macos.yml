@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/frontend/**'
       - 'src/main/cpp/oreslang/runtime/Native*Region.*'
       - 'tests/native_class_string_parity.rs'
+      - 'tests/native_source_input_admission.cpp'
       - 'tests/fixtures/native-class-string/**'
       - 'scripts/verify-native-class-string-macos.sh'
       - 'scripts/compile-aot.sh'
