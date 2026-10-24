@@ -21,8 +21,9 @@ struct NativeScalarFutureId {
 // No waiting on a carrier, no guest callback on a producer thread. The only
 // executor of Resume is NativeActorGroup's single-flight parent CONTROL lane.
 // The producer MUST retain a shared/weak frame reference until its callback
-// quiesces. Group shutdown/cancellation revokes queued resume; the group itself
-// owns CONTROL delivery. This is not source Future<T> / await lowering.
+// quiesces. The owning supervisor MUST explicitly cancel on group teardown:
+// the group can drop queued CONTROL callbacks without notifying this frame.
+// This is not source Future<T> / await lowering.
 class NativeScalarFutureAwait final
         : public std::enable_shared_from_this<NativeScalarFutureAwait> {
 public:
