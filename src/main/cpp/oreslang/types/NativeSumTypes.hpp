@@ -20,10 +20,10 @@ inline const NativeSumType& native_sum(const Program& program, const std::string
 inline void resolve_native_sums(Program& program) {
     struct Hint {
         ScalarType scalar = ScalarType::I64;
-        std::string sum, cls;
+        std::string sum{}, cls{};
         bool array = false;
         ScalarType element = ScalarType::I64;
-        std::string element_class;
+        std::string element_class{};
     };
     using Env = std::unordered_map<std::string, Hint>;
     std::unordered_map<std::string, const ClassDecl*> classes;

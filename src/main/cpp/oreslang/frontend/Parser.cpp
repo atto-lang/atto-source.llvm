@@ -2153,7 +2153,7 @@ private:
         if (sum_variant(expr->name)) {
             if (expr->type_arguments_present) fail("native sum explicit constructor type arguments unsupported; use a declared sum type");
             const std::size_t arity = expr->name == "None" ? 0 : 1;
-            if (expr->arguments.size() != arity || !expr->argument_names.empty() && std::any_of(expr->argument_names.begin(), expr->argument_names.end(), [](const std::string& s) { return !s.empty(); }))
+            if (expr->arguments.size() != arity || (!expr->argument_names.empty() && std::any_of(expr->argument_names.begin(), expr->argument_names.end(), [](const std::string& s) { return !s.empty(); })))
                 fail("native sum constructor requires its exact positional payload arity");
             expr->kind = Expression::Kind::SumConstruct;
         }
