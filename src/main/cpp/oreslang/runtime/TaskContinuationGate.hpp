@@ -81,9 +81,16 @@ public:
 
     bool notify_ready() noexcept {
         std::lock_guard<std::mutex> guard(shared_->mutex);
-        if (!shared_->open || shared_->authority->is_cancelled()) return false;
-        return ores_native_continuation_store_notify_ready(
-            shared_->continuations, shared_->link.continuation) != 0;
+        if (!shared_->open) return false;
+        /*
+         * The Task graph lock protects this C store transition against the
+         * exact cancellation/retirement marking boundary, not just eventual
+         * delivery of the subscription revoker.
+         */
+        return shared_->authority->with_active_authority([&]() {
+            return ores_native_continuation_store_notify_ready(
+                shared_->continuations, shared_->link.continuation) != 0;
+        });
     }
 
     bool try_resume(
@@ -91,12 +98,15 @@ public:
             OresNativeExecutionHandle* out_execution,
             OresNativeExecutionContext* out_context = nullptr) noexcept {
         std::lock_guard<std::mutex> guard(shared_->mutex);
-        if (!shared_->open || shared_->authority->is_cancelled())
-            return false;
+        if (!shared_->open) return false;
         // NativeAwaitTraceBridge atomically performs READY -> CLAIMED.
-        return ores_native_await_trace_ready_resume_begin(
-            shared_->executions, shared_->continuations,
-            physical_execution, shared_->link, out_execution, out_context) != 0;
+        // Holding Task authority admission across the claim means a retiring
+        // or cancelled Task cannot be marked inactive and still enter guest.
+        return shared_->authority->with_active_authority([&]() {
+            return ores_native_await_trace_ready_resume_begin(
+                shared_->executions, shared_->continuations,
+                physical_execution, shared_->link, out_execution, out_context) != 0;
+        });
     }
 
     bool finish_resume() noexcept {
