@@ -80,7 +80,7 @@ expect_rejected "tracked source mutation" 65 "source checkout has tracked or unt
 # Two committed symlinks to the same external file can pass cmp byte-equality
 # while their contents are not covered by either reported Git commit.
 make_repos
-printf 'pub fnc main():int{return 0;}\\n' > "$temp/external-main.ores"
+printf 'pub fnc main():int{return 0;}\n' > "$temp/external-main.ores"
 for kind in llvm java; do
   rm "$temp/$kind/tests/fixtures/native-class-string/main.ores"
   ln -s "$temp/external-main.ores" "$temp/$kind/tests/fixtures/native-class-string/main.ores"
@@ -93,7 +93,7 @@ expect_rejected "committed external fixture symlinks" 65 "expected regular track
 # modified tracked fixture. The gate must reject that index state regardless.
 make_repos
 git -C "$temp/java" update-index --assume-unchanged tests/fixtures/native-class-string/main.ores
-printf 'tampered source\\n' > "$temp/java/tests/fixtures/native-class-string/main.ores"
+printf 'tampered source\n' > "$temp/java/tests/fixtures/native-class-string/main.ores"
 if [[ -n "$(git -C "$temp/java" status --porcelain --untracked-files=all)" ]]; then
   echo "FAIL setup: hidden tracked mutation unexpectedly visible to git status" >&2
   exit 1
@@ -103,13 +103,13 @@ expect_rejected "hidden tracked Java fixture mutation" 65 "unverified Git index 
 # --untracked-files=all still omits Git-ignored sources; imported ignored
 # Oreslang code may not be credited to the pinned source revision.
 make_repos
-printf 'injected.ores\\n' >> "$temp/java/.git/info/exclude"
-printf 'pub fnc main():int{return 1;}\\n' > "$temp/java/injected.ores"
+printf 'injected.ores\n' >> "$temp/java/.git/info/exclude"
+printf 'pub fnc main():int{return 1;}\n' > "$temp/java/injected.ores"
 expect_rejected "ignored untracked Java source" 65 "ignored untracked input" "$launcher"
 
 make_repos
-printf 'injected.ores\\n' >> "$temp/llvm/.git/info/exclude"
-printf 'pub fnc main():int{return 1;}\\n' > "$temp/llvm/injected.ores"
+printf 'injected.ores\n' >> "$temp/llvm/.git/info/exclude"
+printf 'pub fnc main():int{return 1;}\n' > "$temp/llvm/injected.ores"
 expect_rejected "ignored untracked LLVM source" 65 "ignored untracked input" "$launcher"
 
 # No tracked symlink may appear anywhere in a source-exact checkout, even if
