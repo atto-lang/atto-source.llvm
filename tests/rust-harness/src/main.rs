@@ -571,6 +571,13 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "duplicate native method name/arity",
         ),
         (
+            "explicit-call-site-receiver-is-not-erased",
+            "define class X as\n  pub foo(self,int n):int{return n;}\n\\
+             pub wrong(self):int{return self.foo(self,5);}\nend\n\\
+             pub fnc main():int {let X x=new X();return x.wrong();}\n",
+            "unknown method or wrong explicit call arity 'foo'",
+        ),
+        (
             "trailing-receiver-comma",
             "define class X as foo(self,):void {} end\n\
              pub fnc main():int{return 42;}\n",
@@ -600,7 +607,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
                 out.status.code(), stdout(&out), stderr(&out)),
         )?;
     }
-    println!("native inline self: 4 compiled/AOT-executed positive cases, 5 fail-closed negatives");
+    println!("native inline self: 4 compiled/AOT-executed positive cases, 6 fail-closed negatives");
     Ok(())
 }
 
