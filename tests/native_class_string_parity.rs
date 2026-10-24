@@ -251,6 +251,39 @@ fn main() {
             "health\nmissing\nmethod\n",
         ),
         (
+            "template-quote-vectors",
+            r#"pub fnc main():int{
+                stdio.print("abc");stdio.print("|");
+                stdio.print("'abc'");stdio.print("|");
+                stdio.print('\"abc\"');stdio.print("|");
+                stdio.print(`'\"abc\"'`);return 0;}"#,
+            "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "template-two-parameter-interpolation",
+            r#"fnc render(string bar,string star):string{return `${bar} is ${star}`;}
+              pub fnc main():int{stdio.println(render("Mars","bright"));return 0;}"#,
+            "Mars is bright\n",
+        ),
+        (
+            "template-nested-expression-and-quotes",
+            r#"pub fnc main():int{val string word="ok";stdio.print(`before:${`inside:${word}`}:after`);
+              stdio.print("|");stdio.print(`${"}"+"{"}`);return 0;}"#,
+            "before:inside:ok:after|}{",
+        ),
+        (
+            "template-escapes",
+            r#"pub fnc main():int{stdio.print(`line\n\t\${literal}\`\u00e9`);return 0;}"#,
+            "line\n\t${literal}`é",
+        ),
+        (
+            "template-left-to-right-once",
+            r#"fnc first():string{stdio.print("1");return "A";}
+              fnc second():string{stdio.print("2");return "B";}
+              pub fnc main():int{stdio.print(`${first()}-${second()}`);return 0;}"#,
+            "12A-B",
+        ),
+        (
             "source-effect-order",
             r#"fnc mark():string{stdio.print("method;");return "a";}
           pub fnc main():int{stdio.print("before;");val string a=mark();stdio.print("after;");
@@ -493,6 +526,26 @@ fn main() {
         (
             "string-ordering",
             r#"pub fnc main():int{return "a" < "b" ? 0 : 1;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-non-string-interpolation",
+            r#"pub fnc main():int{val string x=`${5}`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-empty-interpolation",
+            r#"pub fnc main():int{val string x=`${   }`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-invalid-escape",
+            r#"pub fnc main():int{val string x=`\q`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-unclosed-interpolation",
+            r#"pub fnc main():int{val string x=`${"x"`;return 0;}"#.to_owned(),
             foo.to_owned(),
         ),
         (
