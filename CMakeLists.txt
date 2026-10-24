@@ -1258,6 +1258,20 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_hasfuture_double_await
         source-actor-await-worker-twice.ores
         --diagnostic "native source supports only one await get_ready continuation")
+    # HasFuture must be a checked live actor capability, not merely an
+    # identifier that happens to appear in an await expression.
+    oreslang_contract_test(reject_source_actor_hasfuture_scalar_operand
+        source-actor-await-non-hasfuture-scalar.ores
+        --diagnostic "await get_ready requires a live direct ActorRef receiver")
+    oreslang_contract_test(reject_source_actor_hasfuture_stopped_actor
+        source-actor-await-after-stop.ores
+        --diagnostic "await get_ready must precede post-await actor effects")
+    oreslang_contract_test(reject_source_actor_hasfuture_skips_linear_future
+        source-actor-future-void-await-worker-instead.ores
+        --diagnostic "native Future<void> await requires its declared readiness token")
+    oreslang_contract_test(reject_source_actor_hasfuture_reuses_future
+        source-actor-future-void-await-again.ores
+        --diagnostic "native source supports only one await get_ready continuation")
     # First actual native source-level typed Future: Future<void> from a
     # single ActorRef.get_ready(). It uses the existing root CONTROL
     # continuation, not synchronous polling or a generic Future<T> ABI.

@@ -3033,12 +3033,16 @@ private:
                  * capability, no scalar/class/array owner crossing suspension,
                  * no defer/guard CFG, and no generic Future<T> representation.
                  */
-                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
-                    throw std::runtime_error(
-                        "await get_ready requires one source actor without suspended locals");
+                // Resolve the HasFuture operand against a *live ActorRef*
+                // before checking suspended locals. Otherwise a scalar with
+                // the same spelling could surface only a local-frame error,
+                // obscuring the admission boundary for non-awaitable values.
                 if (!live_actors.count(fn.ready_await_actor))
                     throw std::runtime_error(
                         "await get_ready requires a live direct ActorRef receiver");
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "await get_ready requires one source actor without suspended locals");
                 /*
                  * The first vertical slice evaluates the final scalar result on
                  * the root continuation before trusted-main stop. Keep that

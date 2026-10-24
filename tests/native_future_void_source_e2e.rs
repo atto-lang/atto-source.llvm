@@ -73,6 +73,13 @@ fn main() {
                        "oreslang_source_actor_stop"] {
             assert!(ir.contains(symbol), "{name}: missing {symbol}");
         }
+        // The runtime declaration alone is not proof of suspension. Require
+        // precisely one compiler-generated call to the CONTROL await bridge.
+        let await_calls = ir.lines().filter(|line|
+            line.contains("call ") &&
+            line.contains("@oreslang_source_actor_await_ready(")).count();
+        assert_eq!(await_calls, 1,
+            "{name}: source HasFuture await must emit exactly one resume call");
         let ll = work.join(format!("ready-{index}.ll"));
         fs::write(&ll, &ir).expect("write LLVM IR");
         let bin = work.join(format!("ready-{index}"));
