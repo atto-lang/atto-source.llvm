@@ -244,6 +244,103 @@ static void root_resume_turn(void) {
     group_unlock();
 }
 
+static void finish_source_handler_segment(
+        SourceActor* instance, int64_t result, int count_message) {
+    if (atomic_exchange_explicit(
+            &instance->end_requested, 0, memory_order_acq_rel) != 0) {
+        /* Mark terminal only. This is carrier-safe and never waits. */
+        (void)ores_native_vm_stop(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
+        group_lock();
+        ensure(pthread_cond_broadcast(&group.output_ready) == 0);
+        group_unlock();
+    }
+    atomic_store_explicit(
+        &instance->last_result, result, memory_order_relaxed);
+    if (count_message) {
+        atomic_fetch_add_explicit(
+            &instance->processed, 1, memory_order_release);
+    }
+}
+
+static void resume_output_turn(SourceActor* instance) {
+    OresSourceActorOutputContinuation continuation;
+    OresNativeSuspensionLink link;
+    int64_t original_mail;
+    int64_t output_value;
+
+    group_lock();
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(instance->output_waiting && instance->output_wait_ready);
+    continuation = instance->output_continuation;
+    link = instance->output_wait_link;
+    original_mail = instance->output_wait_mail;
+    output_value = instance->output_wait_value;
+    ensure(continuation != NULL);
+    instance->output_continuation = NULL;
+    instance->output_wait_child = NULL;
+    instance->output_wait_mail = 0;
+    instance->output_wait_value = 0;
+    instance->output_wait_source_token = 0;
+    instance->output_waiting = 0;
+    instance->output_wait_ready = 0;
+    instance->output_wait_link = (OresNativeSuspensionLink){0};
+    group_unlock();
+
+    /* CONTROL owns this actor lane, so DATA can be ungated now without
+     * permitting a concurrent handler before this continuation returns. */
+    ensure(ores_native_vm_resume_current_user_mailbox(
+        group.vm, ORES_NATIVE_VM_MAIN));
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == instance->ref.actor_slot);
+
+    OresNativeExecutionHandle resumed = {0, 0};
+    OresNativeExecutionContext logical = {0};
+    ensure(ores_native_await_trace_resume_begin(
+        group.executions,
+        group.continuations,
+        physical.id,
+        link,
+        &resumed,
+        &logical));
+    ensure(same_allocation(logical.allocation, physical.allocation));
+    ensure(!ores_native_store_handle_valid(current_source_execution));
+
+    OresActorTurn turn =
+        ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    ensure(current_source_actor == NULL && current_source_phase == 0);
+    current_source_execution = resumed;
+    current_source_actor = instance;
+    current_source_phase = 2;
+    const int64_t result = continuation(
+        instance->heap,
+        turn.domain,
+        turn.epoch,
+        original_mail,
+        output_value);
+    current_source_phase = 0;
+    current_source_actor = NULL;
+    current_source_execution = (OresNativeExecutionHandle){0, 0};
+    ores_actor_i64_heap_leave(instance->heap, turn);
+
+    finish_source_handler_segment(instance, result, 0);
+    ensure(ores_native_await_trace_resume_finish(
+        group.continuations, link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, resumed));
+    ensure(ores_native_continuation_store_release(
+        group.continuations, link.continuation));
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_ACTOR_OUTPUT_AWAIT_TRACE_PASS actor_slot=%llu fresh_resume=1\n",
+        (unsigned long long)instance->ref.actor_slot);
+#endif
+}
+
 static void initialize(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
     if (slot == SOURCE_GROUP_ROOT_SLOT) {
@@ -253,8 +350,14 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         return;
     }
 
-    ensure(payload == 0);
     SourceActor* instance = lookup(slot);
+    if (payload == SOURCE_ACTOR_CONTROL_OUTPUT_RESUME) {
+        ensure(atomic_load_explicit(
+            &instance->initialized, memory_order_acquire) == 1);
+        resume_output_turn(instance);
+        return;
+    }
+    ensure(payload == 0);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     ensure(current_source_actor == NULL && current_source_phase == 0);
@@ -284,30 +387,34 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(instance->on_message != NULL);
     ensure(atomic_load_explicit(
         &instance->initialized, memory_order_acquire) == 1);
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == instance->ref.actor_slot);
+    OresNativeExecutionHandle execution = {0, 0};
+    ensure(ores_native_execution_context_store_insert(
+        group.executions, &physical, &execution));
+
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     ensure(current_source_actor == NULL && current_source_phase == 0);
+    ensure(!ores_native_store_handle_valid(current_source_execution));
+    current_source_execution = execution;
     current_source_actor = instance;
     current_source_phase = 2;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
     current_source_phase = 0;
     current_source_actor = NULL;
+    current_source_execution = (OresNativeExecutionHandle){0, 0};
     ores_actor_i64_heap_leave(instance->heap, turn);
-    if (atomic_exchange_explicit(
-            &instance->end_requested, 0, memory_order_acq_rel) != 0) {
-        /* Nonblocking on the current carrier: mark terminal only. External
-         * trusted code performs wait/reclamation after the callback exits. */
-        (void)ores_native_vm_stop(
-            group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
-        group_lock();
-        ensure(pthread_cond_broadcast(&group.output_ready) == 0);
-        group_unlock();
-    }
-    atomic_store_explicit(
-        &instance->last_result, result, memory_order_relaxed);
-    atomic_fetch_add_explicit(
-        &instance->processed, 1, memory_order_release);
+
+    finish_source_handler_segment(instance, result, 1);
+    /* A published await continuation retains its own durable pin. */
+    ensure(ores_native_execution_context_store_release(
+        group.executions, execution));
 }
 
 static void open_group_locked(void) {
@@ -501,11 +608,16 @@ void oreslang_source_actor_emit_output(
     ensure(current_source_phase == 2 && instance->heap == heap);
 
     group_lock();
-    ensure(instance->output_count < SOURCE_ACTOR_OUTPUT_CAPACITY);
-    instance->outputs[instance->output_tail] = payload;
-    instance->output_tail = (uint8_t)(
-        (instance->output_tail + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
-    instance->output_count++;
+    if (instance->output_waiter) {
+        SourceActor* waiter = instance->output_waiter;
+        publish_output_resume_locked(waiter, instance, payload);
+    } else {
+        ensure(instance->output_count < SOURCE_ACTOR_OUTPUT_CAPACITY);
+        instance->outputs[instance->output_tail] = payload;
+        instance->output_tail = (uint8_t)(
+            (instance->output_tail + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
+        instance->output_count++;
+    }
     ensure(pthread_cond_broadcast(&group.output_ready) == 0);
     group_unlock();
 }
@@ -534,11 +646,8 @@ int64_t oreslang_source_actor_take_output(void* opaque) {
         }
         ensure(pthread_cond_wait(&group.output_ready, &group.mutex) == 0);
     }
-    const int64_t value = instance->outputs[instance->output_head];
-    instance->outputs[instance->output_head] = 0;
-    instance->output_head = (uint8_t)(
-        (instance->output_head + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
-    instance->output_count--;
+    int64_t value = 0;
+    ensure(pop_output_locked(instance, &value));
     group_unlock();
     return value;
 }
@@ -548,6 +657,58 @@ void oreslang_source_actor_request_end(OresActorI64Heap* heap) {
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     ensure(current_source_phase == 2 && instance->heap == heap);
     atomic_store_explicit(&instance->end_requested, 1, memory_order_release);
+}
+
+void oreslang_source_actor_await_child_output(
+        OresActorI64Heap* heap,
+        uint64_t capability,
+        int64_t original_mail,
+        OresSourceActorOutputContinuation continuation,
+        uint64_t source_token) {
+    SourceActor* waiter = current_source_actor;
+    ensure(waiter && waiter->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 2 && waiter->heap == heap);
+    ensure(continuation != NULL);
+    ensure(capability < waiter->child_count);
+    SourceActor* child = waiter->children[capability];
+    ensure(child && child->magic == SOURCE_ACTOR_MAGIC);
+    ensure(waiter->capabilities[capability].scheduler_domain
+        == child->ref.scheduler_domain);
+    ensure(waiter->capabilities[capability].actor_slot
+        == child->ref.actor_slot);
+    ensure(waiter->capabilities[capability].generation
+        == child->ref.generation);
+    ensure(!waiter->output_waiting && child->output_waiter == NULL);
+    ensure(ores_native_store_handle_valid(current_source_execution));
+
+    OresNativeContinuationHandle no_parent = {0, 0};
+    OresNativeSuspensionLink link = {0};
+    ensure(ores_native_await_trace_suspend(
+        group.executions,
+        group.continuations,
+        current_source_execution,
+        no_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT,
+        1,
+        source_token,
+        &link));
+    ensure(ores_native_vm_suspend_current_user_mailbox(
+        group.vm, ORES_NATIVE_VM_MAIN));
+
+    group_lock();
+    waiter->output_continuation = continuation;
+    waiter->output_wait_child = child;
+    waiter->output_wait_link = link;
+    waiter->output_wait_mail = original_mail;
+    waiter->output_wait_source_token = source_token;
+    waiter->output_waiting = 1;
+    waiter->output_wait_ready = 0;
+    child->output_waiter = waiter;
+
+    int64_t already_ready = 0;
+    if (pop_output_locked(child, &already_ready))
+        publish_output_resume_locked(waiter, child, already_ready);
+    group_unlock();
 }
 
 void oreslang_source_actor_spawn_child_capability(
