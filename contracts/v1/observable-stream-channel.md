@@ -99,6 +99,49 @@ cancellation, and supervisor state. The **mailbox layer**, not ordinary
   post-stop resume must be rejected. Physical state deallocation requires
   quiescence of active carriers, loans and transport I/O.
 
+### Awaitable actor-mailbox admission linearization
+
+Awaitable actor send is a mailbox operation layered over bounded Channel
+mechanics, not a retry loop and not another unbounded queue.
+
+- `send(message)` remains an immediate admission attempt. A full USER lane
+  fails with an explicit mailbox-full result; it never parks a carrier.
+- `send_async(message)` / selectable outbox admission may suspend the logical
+  producer, but the runtime must retain only a finite number of producer
+  registrations. Pending-producer count is bounded independently of queued
+  message count, bytes, checked-out frames and select registrations.
+- The payload's ownership/freeze/copy snapshot and retained-byte accounting are
+  established before the producer can remain pending. A suspended producer may
+  not retain an unaccounted mutable graph whose eventual contents differ from
+  the requested send.
+- The "mailbox full?" observation and waiter registration share one admission
+  linearization domain with slot release. A check-then-register design is
+  invalid: capacity becoming free between those two operations must not leave a
+  producer asleep forever.
+- Releasing a USER slot either returns that credit to the free pool or transfers
+  it directly to one already-admitted producer waiter. A transferred credit
+  stays charged during handoff so a racing synchronous sender cannot steal it.
+- Cancellation may withdraw a producer only **before** credit transfer commits.
+  Once transfer wins, ownership admission is irrevocable; a later cancellation
+  detaches observation rather than pretending an accepted message was rolled
+  back. Any failure before envelope publication returns/transfers the credit
+  exactly once.
+- Waiter cancellation, STOP, graceful sealing and actor failure detach pending
+  registrations atomically. Future settlement and continuation wakeup occur
+  only after mailbox/accounting/lifecycle locks are released; runtime callbacks
+  may re-enter actor APIs and therefore cannot run under those locks.
+- An actor holding the serial logical lifetime must not await capacity in its
+  own mailbox when only that same lifetime can release the required credit.
+  Detect this dependency and fail with a structured would-deadlock diagnostic.
+- A mailbox credit acknowledges **admission**, never handler completion,
+  network flush, peer receipt or physical quiescence. Those require their own
+  drain/reply/ACK/fence protocols.
+
+These rules are observable semantics. Java may implement them with actor-owned
+bounded waiter descriptors and LLVM may use generation-fenced scheduler
+continuations/port credits; neither backend may expose pthread/JVM blocking,
+poll/yield retry loops, or unbounded waiter retention as equivalent behavior.
+
 A long-lived WebSocket/TCP stream can hold a serial actor's only lease
 indefinitely. The recommended design is a **connection actor** per stream
 with independent bounded queues; a serial coordination actor handles
