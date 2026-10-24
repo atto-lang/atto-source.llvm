@@ -41,7 +41,15 @@ struct OresNativeContinuationStore {
     uint32_t cursor;
 };
 
+/*
+ * A producer commit executes while this store is locked. Same-store API
+ * re-entry from that callback must fail closed instead of self-deadlocking.
+ * Nested commits on a different store remain permitted.
+ */
+static _Thread_local OresNativeContinuationStore* ready_commit_owner;
+
 static int lock_store(OresNativeContinuationStore* store) {
+    if (ready_commit_owner == store) return 0;
     return pthread_mutex_lock(&store->lock) == 0;
 }
 static void unlock_store(OresNativeContinuationStore* store) {
@@ -341,7 +349,10 @@ int ores_native_continuation_store_commit_ready(
     int ok = resolve_locked(store, handle, &block, &lane, &index)
         && block->state[lane] == ORES_CONTINUATION_PENDING;
     if (ok) {
+        OresNativeContinuationStore* previous = ready_commit_owner;
+        ready_commit_owner = store;
         ok = commit(context);
+        ready_commit_owner = previous;
         if (ok)
             block->state[lane] = (unsigned char)ORES_CONTINUATION_READY;
     }
