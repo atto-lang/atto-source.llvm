@@ -1268,6 +1268,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_duplicate_ready_future
         source-actor-future-void-duplicate.ores
         --diagnostic "native source supports only one Future<void> readiness token")
+    oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
+        source-actor-future-void-wrong-producer.ores
+        --diagnostic "expected 'get_ready'")
+    oreslang_contract_test(reject_source_actor_ready_future_as_message
+        source-actor-future-void-send.ores
+        --diagnostic "unknown parameter")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
