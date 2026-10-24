@@ -216,5 +216,31 @@ int main() {
           "next generation still pinned after revoke");
     check(next_finalizer.finalized(), "next generation finalization failed");
 
+    // Even if a buggy host reuses the same numeric generation after physical
+    // finalization, the old ActorRef ticket is not the new actor capability.
+    NativeActorGroup reused_group(9802, 1);
+    auto reused_owner = reused_group.adopt(9802, 1, 1, [] {});
+    check(reused_group.mark_ready(reused_owner), "reused generation not ready");
+    auto reused_finalizer = reused_group.runtime_finalizer(reused_owner);
+    auto reused_future = NativeScalarFutureAwait::open(reused_owner, 81);
+    check(reused_future->complete(reused_future->id(), 12),
+          "reused generation Future not settled");
+    check(!detached_owner.same_capability(reused_owner),
+          "distinct actor lifetimes shared capability ticket");
+    check(!reused_future->try_schedule(
+              reused_future->id(), reused_group, detached_owner,
+              [&](const auto&) {}),
+          "old same-generation capability scheduled newer Future");
+    check(!reused_future->cancel_if_owner_detached(
+              reused_future->id(), detached_owner),
+          "old same-generation capability revoked newer Future");
+    reused_group.close();
+    check(reused_future->cancel_if_owner_detached(
+              reused_future->id(), reused_owner),
+          "current reused capability did not revoke Future");
+    check(reused_finalizer.ready_for_resource_reclamation(),
+          "reused generation still pinned");
+    check(reused_finalizer.finalized(), "reused generation finalization failed");
+
     return 0;
 }
