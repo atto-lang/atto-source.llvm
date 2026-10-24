@@ -28,7 +28,7 @@ struct NativeScalarFutureId {
 class NativeScalarFutureAwait final
         : public std::enable_shared_from_this<NativeScalarFutureAwait> {
 public:
-    enum class Phase { pending, ready, scheduled, completed, cancelled };
+    enum class Phase { pending, ready, scheduled, running, completed, cancelled };
     struct Result {
         bool success = false;
         std::int64_t value = 0;
@@ -65,7 +65,9 @@ public:
     bool cancel(NativeScalarFutureId ticket) noexcept {
         if (!valid(ticket)) return false;
         std::lock_guard<std::mutex> guard(mutex_);
-        if (phase_ == Phase::completed || phase_ == Phase::cancelled) return false;
+        if (phase_ == Phase::running || phase_ == Phase::completed
+                || phase_ == Phase::cancelled)
+            return false;
         phase_ = Phase::cancelled;
         return true;
     }
@@ -115,9 +117,23 @@ public:
                         std::lock_guard<std::mutex> lock(self->mutex_);
                         if (self->phase_ != Phase::scheduled) return;
                         outcome = self->result_;
-                        self->phase_ = Phase::completed;
+                        // Callback execution has now started on the owning
+                        // CONTROL lane. Cancellation is no longer allowed.
+                        self->phase_ = Phase::running;
                     }
-                    resume(outcome);
+                    try {
+                        resume(outcome);
+                    } catch (...) {
+                        std::lock_guard<std::mutex> lock(self->mutex_);
+                        if (self->phase_ != Phase::running)
+                            std::terminate();
+                        self->phase_ = Phase::completed;
+                        throw;
+                    }
+                    std::lock_guard<std::mutex> lock(self->mutex_);
+                    if (self->phase_ != Phase::running)
+                        std::terminate();
+                    self->phase_ = Phase::completed;
                 }))
             return false;
         phase_ = Phase::scheduled;
