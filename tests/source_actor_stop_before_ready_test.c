@@ -119,6 +119,7 @@ static void stop_before_constructor(void) {
 static void stop_during_constructor(void) {
     reset_constructor();
     oreslang_source_actor_test_hold_initialization(0);
+    oreslang_source_actor_test_hold_readiness_publication(0);
 
     void* actor =
         oreslang_source_actor_spawn(constructor, on_message, 1);
@@ -145,6 +146,42 @@ static void stop_during_constructor(void) {
         &constructor_calls, memory_order_acquire) == 1);
     check_failed_readiness(actor);
 
+    oreslang_source_actor_join_done(actor);
+}
+
+static void stop_after_constructor_before_ready(void) {
+    reset_constructor();
+    oreslang_source_actor_test_hold_initialization(0);
+    oreslang_source_actor_test_hold_readiness_publication(1);
+    atomic_store_explicit(
+        &constructor_release, 1, memory_order_release);
+
+    void* actor =
+        oreslang_source_actor_spawn(constructor, on_message, 1);
+    check(actor != NULL);
+
+    while (!oreslang_source_actor_test_readiness_publication_entered())
+        sched_yield();
+
+    check(atomic_load_explicit(
+        &constructor_calls, memory_order_acquire) == 1);
+    check(oreslang_source_actor_ready_status(actor)
+        == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING);
+
+    /*
+     * This is the lost-race window: guest construction has returned, but
+     * readiness has not yet acquired the publication mutex.
+     */
+    oreslang_source_actor_request_stop(actor);
+    oreslang_source_actor_test_hold_readiness_publication(0);
+
+    while (oreslang_source_actor_ready_status(actor)
+            == ORES_SOURCE_ACTOR_STARTUP_INITIALIZING)
+        sched_yield();
+
+    check(oreslang_source_actor_ready_status(actor)
+        == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
+    check_failed_readiness(actor);
     oreslang_source_actor_join_done(actor);
 }
 
@@ -182,6 +219,7 @@ static void successful_readiness(void) {
 int main(void) {
     stop_before_constructor();
     stop_during_constructor();
+    stop_after_constructor_before_ready();
     successful_readiness();
     puts("SOURCE_ACTOR_STOP_BEFORE_READY_PASS");
     return 0;
