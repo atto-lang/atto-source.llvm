@@ -513,6 +513,21 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+
+    /*
+     * SourceActor is dynamically allocated. Initialize every C11 atomic
+     * explicitly instead of relying on calloc byte patterns to stand in for
+     * atomic object initialization.
+     */
+    atomic_init(&instance->initialized, 0);
+    atomic_init(
+        &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
+    atomic_init(&instance->constructor_started, 0);
+    atomic_init(&instance->stop_requested, 0);
+    atomic_init(&instance->join_started, 0);
+    atomic_init(&instance->processed, 0);
+    atomic_init(&instance->last_result, 0);
+
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref =
