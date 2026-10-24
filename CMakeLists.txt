@@ -2698,7 +2698,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-native-wake-carrier-failure-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_definitions(oreslang-native-wake-carrier-failure-test PRIVATE
-        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
     target_compile_options(oreslang-native-wake-carrier-failure-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(oreslang-native-wake-carrier-failure-test PRIVATE
