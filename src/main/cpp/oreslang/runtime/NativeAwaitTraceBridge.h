@@ -34,6 +34,19 @@ int ores_native_await_trace_resume_begin(
     OresNativeExecutionHandle* out_execution,
     OresNativeExecutionContext* out_context);
 
+/*
+ * Future-backed scheduler wakeup. Unlike the legacy causal-trace path, this
+ * refuses to resume until the producer has published terminal readiness and
+ * atomically competes with cancellation.
+ */
+int ores_native_await_trace_ready_resume_begin(
+    OresNativeExecutionContextStore* executions,
+    OresNativeContinuationStore* continuations,
+    OresNativeExecutionId resumed_execution_id,
+    OresNativeSuspensionLink link,
+    OresNativeExecutionHandle* out_execution,
+    OresNativeExecutionContext* out_context);
+
 /* Finish after the resumed guest turn/cleanup has left its native stack. */
 int ores_native_await_trace_resume_finish(
     OresNativeContinuationStore* continuations,
