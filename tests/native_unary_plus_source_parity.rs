@@ -46,6 +46,8 @@ fn main() {
         // exit status alone truncates i64 and is not endpoint evidence.
         ("pub fnc main():int{if (-9_223_372_036_854_775_808 eq -0_9223372036854775808) {return 42;} fi return 1;}\n", 42),
         ("pub fnc main():int{if (0_9223372036854775807 eq 9_223_372_036_854_775_807) {return 42;} fi return 1;}\n", 42),
+        ("pub fnc main():int{if (-00_9223372036854775808 eq -9223372036854775808) {return 42;} fi return 1;}\n", 42),
+        ("pub fnc main():int{if (-0_0_9223372036854775808 eq -9_223_372_036_854_775_808) {return 42;} fi return 1;}\n", 42),
     ];
     for (i, (source, expected)) in valid.iter().enumerate() {
         let result = compile(&compiler, &dir, i, source);
@@ -79,6 +81,7 @@ fn main() {
         "pub fnc main():int{return 9_223_372_036_854_775_808;}\n".to_string(),
         "pub fnc main():int{return -0_9223372036854775809;}\n".to_string(),
         "pub fnc main():int{return -9_223_372_036_854_775_809;}\n".to_string(),
+        "pub fnc main():int{return -0__9223372036854775808;}\n".to_string(),
     ];
     for (i, source) in invalid.iter().enumerate() {
         let result = compile(&compiler, &dir, valid.len() + i, source);
@@ -88,5 +91,5 @@ fn main() {
         assert!(!result.stderr.is_empty(),
             "invalid unary plus case {i} rejected without a diagnostic");
     }
-    println!("nine native executable unary-plus/bounds positives, eleven no-IR negatives");
+    println!("eleven native executable unary-plus/bounds positives, twelve no-IR negatives");
 }
