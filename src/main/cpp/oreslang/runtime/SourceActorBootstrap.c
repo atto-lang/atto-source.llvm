@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -27,6 +28,8 @@ typedef struct {
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
     atomic_int initialized;
+    atomic_int startup_state;
+    atomic_int constructor_started;
     atomic_int stop_requested;
     atomic_int join_started;
     atomic_uint_fast64_t processed;
@@ -79,6 +82,28 @@ static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+static atomic_int test_hold_initialization;
+static atomic_int test_initialization_entered;
+
+void oreslang_source_actor_test_hold_initialization(int hold) {
+    if (hold) {
+        atomic_store_explicit(
+            &test_initialization_entered, 0, memory_order_release);
+        atomic_store_explicit(
+            &test_hold_initialization, 1, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &test_hold_initialization, 0, memory_order_release);
+    }
+}
+
+int oreslang_source_actor_test_initialization_entered(void) {
+    return atomic_load_explicit(
+        &test_initialization_entered, memory_order_acquire);
+}
+#endif
+
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
@@ -99,11 +124,19 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 
+int oreslang_source_actor_ready_status(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
+    return atomic_load_explicit(
+        &instance->startup_state, memory_order_acquire);
+}
+
 static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
     if (!frame->suspend_recorded
             || atomic_load_explicit(
-                &frame->actor->initialized, memory_order_acquire) != 1)
+                &frame->actor->startup_state, memory_order_acquire)
+                != ORES_SOURCE_ACTOR_STARTUP_READY)
         return;
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
