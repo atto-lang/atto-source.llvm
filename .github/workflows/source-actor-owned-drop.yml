@@ -154,6 +154,8 @@ jobs:
           if not compiler.is_file():
               raise SystemExit("tested LLVM source compiler binary missing")
           compiler_sha256 = hashlib.sha256(compiler.read_bytes()).hexdigest()
+          log_sha256 = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                        for p in logs}
           def tool_version(*command):
               return subprocess.check_output(command, text=True).splitlines()[0]
           receipt = {
@@ -165,6 +167,7 @@ jobs:
               "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
               "source_blobs": source_blobs,
               "compiler_sha256": compiler_sha256,
+              "native_execution_log_sha256": log_sha256,
               "toolchain": {
                   "clang": tool_version("clang", "--version"),
                   "cmake": tool_version("cmake", "--version"),
@@ -185,6 +188,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: source-actor-owned-drop-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/source-actor-owned-drop-receipt.json
+          path: |
+            ${{ runner.temp }}/source-actor-owned-drop-receipt.json
+            ${{ runner.temp }}/source-actor-owned-drop-release.log
+            ${{ runner.temp }}/source-actor-owned-drop-sanitized.log
           if-no-files-found: error
           retention-days: 7
