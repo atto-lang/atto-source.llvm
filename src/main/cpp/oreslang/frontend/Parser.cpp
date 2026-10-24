@@ -692,8 +692,50 @@ private:
                     {ActorHandlerAction::Kind::CapabilitySend,index});
                 continue;
             }
-            if (token_.text == "val" || token_.text == "await") {
-                fail("native receive await child output requires continuation lowering");
+            if (token_.text == "val") {
+                if (!method.actor_mail_parameter)
+                    fail("native actor await child output currently requires receive(ActorMail<int>)");
+                if (method.actor_output_await)
+                    fail("native actor receive supports only one child-output await in this slice");
+                if (method.actor_end_requested)
+                    fail("native actor cannot await after self.end()");
+                method.actor_output_await_offset = token_.offset;
+                require("val");
+                const std::string local = identifier();
+                if (names.count(local) || local == method.parameters.front().name)
+                    fail("actor awaited output local shadows field or parameter");
+                require("=");
+                require("(");
+                require("await");
+                require("self");
+                require(".");
+                const std::string capability = identifier();
+                if (!capability_names.count(capability))
+                    fail("native actor await outputs requires owned ActorRef field");
+                require(".");
+                require("outputs");
+                require(".");
+                require("next");
+                require("(");
+                require(")");
+                require(")");
+                require(".");
+                require("value");
+                require(".");
+                require("unwrap");
+                require("(");
+                require(")");
+                require(";");
+                method.actor_output_await = true;
+                method.actor_output_await_field = capability;
+                method.actor_output_await_local = local;
+                method.actor_output_await_action_index =
+                    method.actor_handler_actions.size();
+                names.insert(local);
+                continue;
+            }
+            if (token_.text == "await") {
+                fail("native receive supports await only as val x = (await self.child.outputs.next()).value.unwrap()");
             }
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
@@ -3024,13 +3066,40 @@ private:
                         local.name + "'");
                 fields.insert(local.name);
             }
-            for (const auto& send : method.actor_capability_sends) {
-                if (!capability_names.count(send.field))
-                    throw std::runtime_error("unknown actor capability field '" + send.field + "'");
-                validate_expression(*send.payload, fields, functions);
+            if (method.actor_output_await) {
+                if (!capability_names.count(method.actor_output_await_field))
+                    throw std::runtime_error("unknown awaited actor capability field '" +
+                        method.actor_output_await_field + "'");
+                if (!all_names.insert(method.actor_output_await_local).second)
+                    throw std::runtime_error("duplicate awaited actor output local '" +
+                        method.actor_output_await_local + "'");
             }
-            for (const auto& output : method.actor_outputs)
-                validate_expression(*output, fields, functions);
+            std::unordered_set<std::string> action_fields = fields;
+            for (std::size_t action_index = 0;
+                    action_index < method.actor_handler_actions.size();
+                    ++action_index) {
+                if (method.actor_output_await &&
+                        action_index == method.actor_output_await_action_index)
+                    action_fields.insert(method.actor_output_await_local);
+                const auto& action = method.actor_handler_actions[action_index];
+                if (action.kind == ActorHandlerAction::Kind::CapabilitySend) {
+                    if (action.index >= method.actor_capability_sends.size())
+                        throw std::runtime_error("invalid actor capability action index");
+                    const auto& send = method.actor_capability_sends[action.index];
+                    if (!capability_names.count(send.field))
+                        throw std::runtime_error("unknown actor capability field '" + send.field + "'");
+                    validate_expression(*send.payload, action_fields, functions);
+                } else if (action.kind == ActorHandlerAction::Kind::Output) {
+                    if (action.index >= method.actor_outputs.size())
+                        throw std::runtime_error("invalid actor output action index");
+                    validate_expression(*method.actor_outputs[action.index],
+                                        action_fields, functions);
+                }
+            }
+            if (method.actor_output_await &&
+                    method.actor_output_await_action_index ==
+                        method.actor_handler_actions.size())
+                action_fields.insert(method.actor_output_await_local);
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
