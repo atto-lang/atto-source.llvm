@@ -24,6 +24,8 @@ typedef struct {
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    OresNativeActorRef capabilities[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
+    uint8_t capability_count;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
@@ -61,6 +63,7 @@ typedef struct {
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
+static _Thread_local SourceActor* current_source_actor;
 
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
@@ -224,8 +227,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    ensure(current_source_actor == NULL);
+    current_source_actor = instance;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
@@ -283,13 +289,28 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+void* oreslang_source_actor_spawn_with_capabilities(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
-        uint64_t fields) {
+        uint64_t fields,
+        void* const* actors,
+        uint64_t actor_count) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+    ensure(actor_count <= ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+    ensure(actor_count == 0 || actors != NULL);
     group_lock();
     if (!group.vm) open_group_locked();
+
+    OresNativeActorRef copied[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+    for (uint64_t i = 0; i < actor_count; ++i) {
+        SourceActor* target = (SourceActor*)actors[i];
+        ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
+        const size_t target_slot = (size_t)target->ref.actor_slot;
+        ensure(target->ref.scheduler_domain
+            && target_slot < group.next_slot
+            && group.actors[target_slot] == target);
+        copied[i] = target->ref;
+    }
 
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     const size_t slot = group.next_slot++;
@@ -301,6 +322,9 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->capability_count = (uint8_t)actor_count;
+    for (uint64_t i = 0; i < actor_count; ++i)
+        instance->capabilities[i] = copied[i];
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref =
@@ -317,13 +341,65 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    return oreslang_source_actor_spawn_with_capabilities(
+        constructor, on_message, fields, NULL, 0);
+}
+
+static OresNativeSendStatus source_actor_send_ref(
+        OresNativeActorRef ref, int64_t payload) {
+    ensure(group.vm != NULL && ref.scheduler_domain != 0);
+    return ores_native_vm_try_send(
+        group.vm, ORES_NATIVE_VM_MAIN, ref, (uint64_t)payload);
+}
+
+static int source_actor_try_send_ref(
+        OresNativeActorRef ref, int64_t payload) {
+    const OresNativeSendStatus status = source_actor_send_ref(ref, payload);
+    if (status == ORES_NATIVE_SEND_ACCEPTED) return 1;
+    if (status == ORES_NATIVE_SEND_MAILBOX_FULL) return 0;
+    ensure(0);
+    return 0;
+}
+
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
         && instance->on_message);
-    ensure(ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+    ensure(source_actor_send_ref(instance->ref, payload)
         == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->on_message);
+    return source_actor_try_send_ref(instance->ref, payload);
+}
+
+static OresNativeActorRef current_capability(
+        OresActorI64Heap* heap, uint64_t slot) {
+    SourceActor* instance = current_source_actor;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(instance->heap == heap);
+    ensure(slot < instance->capability_count);
+    OresNativeActorRef ref = instance->capabilities[slot];
+    ensure(ref.scheduler_domain != 0);
+    return ref;
+}
+
+void oreslang_source_actor_send_capability(
+        OresActorI64Heap* heap, uint64_t slot, int64_t payload) {
+    ensure(source_actor_send_ref(current_capability(heap, slot), payload)
+        == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_try_send_capability(
+        OresActorI64Heap* heap, uint64_t slot, int64_t payload) {
+    return source_actor_try_send_ref(current_capability(heap, slot), payload);
 }
 
 int64_t oreslang_source_actor_await_ready(
