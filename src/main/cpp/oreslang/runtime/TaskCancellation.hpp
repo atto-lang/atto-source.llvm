@@ -164,7 +164,8 @@ public:
     }
 
     void retire() {
-        std::vector<std::shared_ptr<Registration>> detached;
+        std::vector<std::shared_ptr<Registration>> retire_revokers;
+        std::vector<std::shared_ptr<Registration>> detached_observers;
         std::vector<std::shared_ptr<Registration>> detached_links;
         std::function<void()> notify_lifetime_parent;
         {
@@ -179,17 +180,25 @@ public:
             owner_.reset();
             notify_lifetime_parent = detach_lifetime_parent_locked();
 
-            append_registrations(revokers_, detached);
+            /*
+             * Retiring a Task authority must revoke its outstanding native
+             * wait registrations, not silently orphan them. Cancellation
+             * and retirement share one revocation linearization boundary.
+             */
+            append_registrations(revokers_, retire_revokers);
             revokers_.clear();
             if (!cancelled_ || revocation_complete_) {
-                append_registrations(observers_, detached);
+                append_registrations(observers_, detached_observers);
                 observers_.clear();
             }
         }
 
-        for (const auto& registration : detached) registration->close();
+        std::exception_ptr first_failure;
+        deliver_all(retire_revokers, first_failure);
+        for (const auto& registration : detached_observers) registration->close();
         for (const auto& registration : detached_links) registration->close();
         if (notify_lifetime_parent) notify_lifetime_parent();
+        if (first_failure) std::rethrow_exception(first_failure);
     }
 
     bool seal_and_observe_child_quiescence(std::function<void()> on_drained) {
@@ -283,8 +292,14 @@ private:
         bool discard = false;
         {
             std::lock_guard<std::mutex> guard(graph_mutex());
-            discard = retired_;
-            deliver = !discard && cancelled_ && (revoke || revocation_complete_);
+            /*
+             * A registration racing retirement must also be revoked:
+             * otherwise a stale retired authority could admit a new await.
+             * Cancellation observers remain suppressed after retirement.
+             */
+            discard = retired_ && !revoke;
+            deliver = (retired_ && revoke) ||
+                      (!retired_ && cancelled_ && (revoke || revocation_complete_));
             if (!discard && !deliver) {
                 (revoke ? revokers_ : observers_).emplace(registration->id, registration);
             }
