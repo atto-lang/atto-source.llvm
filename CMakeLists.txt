@@ -1799,6 +1799,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/owned-path-pattern.ores
                 tests/fixtures/native-class-string/record-return.ores
                 tests/fixtures/native-class-string/nested-owned-capture.ores
+                tests/fixtures/native-class-string/routing-option-capture.ores
                 tests/fixtures/native-class-string/routing-path-validation.ores
                 tests/fixtures/native-class-string/typed-array-iteration.ores
                 tests/fixtures/native-class-string/owned-aggregate-return.ores

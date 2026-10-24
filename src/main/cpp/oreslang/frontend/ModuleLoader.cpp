@@ -53,6 +53,10 @@ public:
                 fail(unit, "native linked suspend functions require module continuation lowering");
             if (index && !unit.program.actors.empty())
                 fail(unit, "native imported actor declarations require typed module actor placement lowering");
+            for (const auto& type : unit.program.sum_types) {
+                bool found = false; for (const auto& existing : linked.sum_types) if (existing.name == type.name) found = true;
+                if (!found) linked.sum_types.push_back(type);
+            }
             for (auto& fn : unit.program.functions) {
                 qualify_function(unit, fn);
                 fn.name = unit.prefix + fn.name;

@@ -3,6 +3,7 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -55,7 +56,7 @@ bool reserved(std::string_view name) {
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
         "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
-        "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
+        "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
 }
@@ -249,6 +250,10 @@ bool native_constructor_scalar_tree(const Expression& expr,
     using Kind = Expression::Kind;
     if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
             expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::SumConstruct)
+        return std::all_of(expr.arguments.begin(), expr.arguments.end(), [&](const auto& arg) {
+            return native_constructor_scalar_tree(*arg, depth + 1);
+        });
     if (expr.kind == Kind::Field)
         return expr.left && expr.left->kind == Kind::Variable;
     if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
@@ -416,12 +421,19 @@ public:
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        program.sum_types = std::move(sum_types_);
         return program;
     }
 
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    std::vector<NativeSumType> sum_types_;
+    bool is_sum_name(const std::string& name) const {
+        return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
+    }
+    static bool sum_variant(std::string_view name) { return name == "Some" || name == "None" || name == "Ok" || name == "Err"; }
+
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
@@ -643,6 +655,7 @@ private:
     ClassDecl class_declaration() {
         ClassDecl result;
         result.name = nominal_declaration_name();
+        if (result.name == "Option" || result.name == "Result") fail("native sum type names are compiler-owned");
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
@@ -653,7 +666,7 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
-            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && !reserved(token_.text)
+            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
@@ -749,22 +762,23 @@ private:
                 class_field_terminator(initializer_end);
             } else {
                 if (token_.text == "Array") fail("native Array<int> field requires mut referent capability");
-                if (token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
+                if (token_.text != "Option" && token_.text != "Result" && token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
                     if (!field.final_field || literal_const) fail("expected val or final for native nested class field");
                     field.class_name = type_identifier(); field.name = identifier();
                     if (!seen.insert(field.name).second) fail("duplicate class field '" + field.name + "'");
                     require(";"); field.constructor_argument = true;
                     result.fields.push_back(std::move(field)); continue;
                 }
+                if (token_.text == "Option" || token_.text == "Result") field.sum_type = type_identifier();
                 field.scalar_type = accept("bool") ? ScalarType::Bool :
                     (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
-                if (field.scalar_type == ScalarType::I64) require("int");
+                if (field.scalar_type == ScalarType::I64 && field.sum_type.empty()) require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
                 if (accept(";")) {
-                    if (!field.final_field || literal_const)
-                        fail("declaration-only native field requires val or final");
+                    if (literal_const)
+                        fail("const native field requires a literal initializer");
                     field.constructor_argument = true;
                     result.fields.push_back(std::move(field));
                     continue;
@@ -778,6 +792,9 @@ private:
                         !(field.scalar_type == ScalarType::Bool && (token_.text == "true" || token_.text == "false")))
                     fail("class field requires i64 literal initializer");
                 auto initializer = expression();
+                if (initializer->kind == Expression::Kind::Negate && initializer->left && initializer->left->kind == Expression::Kind::Integer) {
+                    initializer->integer = -initializer->left->integer; initializer->left.reset(); initializer->kind = Expression::Kind::Integer;
+                }
                 if (literal_const && initializer->kind != Expression::Kind::Integer && initializer->kind != Expression::Kind::Boolean)
                     fail("class field requires i64 literal initializer");
                 if (initializer->kind == Expression::Kind::Integer || initializer->kind == Expression::Kind::Boolean) {
@@ -812,13 +829,18 @@ private:
         std::unordered_set<std::string> allowed(
             result.constructor_parameters.begin(), result.constructor_parameters.end());
         for (const auto& field : result.fields) {
+            if (!field.sum_type.empty() && result.explicit_constructor) fail("native sum field constructor requires checked nominal parameters");
             if (!field.class_name.empty() && result.explicit_constructor)
                 fail("native nested owned class constructor requires checked parameter ownership");
             if (field.int_array && result.explicit_constructor)
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
+            const bool literal_sum = !field.sum_type.empty() && field.initializer_expression->kind == Expression::Kind::SumConstruct &&
+                std::all_of(field.initializer_expression->arguments.begin(), field.initializer_expression->arguments.end(), [](const auto& arg) {
+                    return arg->kind == Expression::Kind::String || arg->kind == Expression::Kind::Integer || arg->kind == Expression::Kind::Boolean;
+                });
             if (!result.explicit_constructor && !field.constructor_argument &&
-                    field.initializer_expression->kind != Expression::Kind::Integer &&
+                    !literal_sum && field.initializer_expression->kind != Expression::Kind::Integer &&
                     field.initializer_expression->kind != Expression::Kind::Boolean &&
                     field.initializer_expression->kind != Expression::Kind::String)
                 fail("native nonliteral class field initializer requires explicit scalar constructor");
@@ -990,6 +1012,7 @@ private:
                         value.generic_parameters.end(),
                         [&](const GenericParameter& p) { return p.name == type; });
                     if (generic) parameter.generic_type = type;
+                    else if (is_sum_name(type)) parameter.sum_type = type;
                     else parameter.class_name = type;
                 }
                 if (token_.text == "?")
@@ -1019,7 +1042,8 @@ private:
                 const bool generic = std::any_of(value.generic_parameters.begin(),
                     value.generic_parameters.end(),
                     [&](const GenericParameter& p) { return p.name == type; });
-                if (!generic) value.return_class = type;
+                if (is_sum_name(type)) value.return_sum = type;
+                else if (!generic) value.return_class = type;
                 value.return_type = ScalarType::I64;
             }
         }
@@ -1055,7 +1079,20 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             LocalBinding binding;
             binding.offset = token_.offset;
-            if (array_effect_ahead()) {
+            Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
+            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
+                const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
+                binding.owner_mutable = mode != "const";
+                binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                if (binding.scalar_type == ScalarType::I64) require("int");
+                binding.name = identifier(); require("="); binding.initializer = expression();
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+                    (sum_first.text == "Option" || sum_first.text == "Result")) {
+                const auto mode = token_.text; advance(); binding.owner_mutable = mode == "val" || (mode == "let" && accept("mut"));
+                binding.sum_type = type_identifier(); binding.name = identifier(); require("="); binding.initializer = expression();
+            } else if (array_effect_ahead()) {
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
                 if (binding.initializer->kind != Expression::Kind::ArrayCall ||
@@ -1352,6 +1389,7 @@ private:
                     if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
                     else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
                     else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
+                    else if (is_sum_name(type)) statement.branch_local->sum_type = type;
                     else { statement.branch_local->class_name = type; statement.branch_local->record_view = true; }
                     require("=");
                     statement.branch_local->initializer = expression();
@@ -1531,12 +1569,11 @@ private:
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
-                require("(");
                 auto condition = expression();
                 if (terminal_try_finally && !native_pure_scalar_tree(*condition))
                     fail("native protected try guard requires a pure nonthrowing bool expression");
-                require(")");
-                require("{");
+                const bool then_form = accept(";");
+                if (then_form) require("then"); else require("{");
                 if (accept("return")) {
                     if (value.returns_void)
                         fail("guarded early return requires a scalar result");
@@ -1549,10 +1586,21 @@ private:
                     if (terminal_try_finally && !nonthrowing_protected_read(*guard.result))
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
-                    require("}");
+                    if (!then_form) require("}");
                     require("fi");
-                    value.early_returns.push_back(std::move(guard));
-                    return_guards_started = true;
+                    if (then_form && value.return_class.empty() && !terminal_try_finally) {
+                        if (return_guards_started)
+                            fail("native structured statements cannot follow guarded returns");
+                        if (++branch_count > 128) fail("native structured return branch limit exceeded (128)");
+                        Statement conditional; conditional.kind = Statement::Kind::Conditional; conditional.offset = offset;
+                        conditional.condition = std::move(guard.condition);
+                        Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
+                        terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
+                        value.statements.push_back(std::move(conditional));
+                    } else {
+                        value.early_returns.push_back(std::move(guard));
+                        return_guards_started = true;
+                    }
                 } else {
                     if (terminal_try_finally)
                         fail("native terminal try supports only guarded return branches");
@@ -1564,12 +1612,13 @@ private:
                     conditional.kind = Statement::Kind::Conditional;
                     conditional.offset = offset;
                     conditional.condition = std::move(condition);
-                    conditional.then_statements = branch_arm(false, false);
-                    require("}");
-                    require("else");
-                    require("{");
-                    conditional.else_statements = branch_arm(false, false);
-                    require("}");
+                    conditional.then_statements = branch_arm(false, then_form);
+                    if (!then_form) require("}");
+                    if (accept("else")) {
+                        if (!then_form) require("{");
+                        conditional.else_statements = branch_arm(false, then_form);
+                        if (!then_form) require("}");
+                    } else if (!then_form) require("else");
                     require("fi");
                     value.statements.push_back(std::move(conditional));
                 }
@@ -2043,11 +2092,12 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || (reserved(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" && !sum_variant(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         if (token_.text == "self" && !method_scope_.empty()) { expr->name = "self"; advance(); }
+        else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
         if (generic_call_type_arguments_ahead()) {
@@ -2100,6 +2150,13 @@ private:
                 require(")");
             }
         }
+        if (sum_variant(expr->name)) {
+            if (expr->type_arguments_present) fail("native sum explicit constructor type arguments unsupported; use a declared sum type");
+            const std::size_t arity = expr->name == "None" ? 0 : 1;
+            if (expr->arguments.size() != arity || (!expr->argument_names.empty() && std::any_of(expr->argument_names.begin(), expr->argument_names.end(), [](const std::string& s) { return !s.empty(); })))
+                fail("native sum constructor requires its exact positional payload arity");
+            expr->kind = Expression::Kind::SumConstruct;
+        }
         // Class-owned array expressions are intentionally limited to one
         // field selection followed by a native array method or .size.
         while (accept(".")) {
@@ -2125,7 +2182,6 @@ private:
                 }
             }
             expr = std::move(field);
-            if (expr->kind == Expression::Kind::ArrayCall) break;
         }
         return expr;
     }
@@ -2197,6 +2253,21 @@ private:
 
     std::string type_identifier() {
         auto name = identifier();
+        if ((name == "Option" || name == "Result") && accept("<")) {
+            NativeSumType type; type.kind = name == "Option" ? NativeSumType::Kind::Option : NativeSumType::Kind::Result;
+            auto payload = [&]() -> ScalarType {
+                if (accept("int")) return ScalarType::I64;
+                if (accept("bool")) return ScalarType::Bool;
+                if (accept("String") || accept("string")) return ScalarType::String;
+                fail("native sum class/compound payload requires ownership and lifetime lowering");
+            };
+            auto scalar_name = [](ScalarType t) { return t == ScalarType::String ? "String" : t == ScalarType::Bool ? "bool" : "int"; };
+            type.value_type = payload(); name += "<" + std::string(scalar_name(type.value_type));
+            if (type.kind == NativeSumType::Kind::Result) { require(","); type.error_type = payload(); name += "," + std::string(scalar_name(type.error_type)); }
+            require(">"); type.name = name + ">";
+            if (std::none_of(sum_types_.begin(), sum_types_.end(), [&](const NativeSumType& t) { return t.name == type.name; })) sum_types_.push_back(type);
+            return type.name;
+        }
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
         return name;
     }
@@ -2205,6 +2276,7 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
     }
@@ -2221,7 +2293,7 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || reserved(token_.text)) {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern")) {
             fail("expected non-keyword identifier");
         }
         std::string result(token_.text);
@@ -2304,7 +2376,10 @@ private:
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
+            case Expression::Kind::SumConstruct:
+            case Expression::Kind::SumAccess:
             case Expression::Kind::RecordConstruct:
+                if (expr.left) validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
@@ -2451,6 +2526,12 @@ private:
                     " at byte " + std::to_string(expr.offset));
         };
         switch (expr.kind) {
+            case Expression::Kind::SumConstruct:
+            case Expression::Kind::SumAccess:
+                if (expr.left) (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);
+                for (const auto& arg : expr.arguments) (void)validate_scalar_expression(*arg, variables, functions, depth + 1);
+                return expr.kind == Expression::Kind::SumAccess ? expr.resolved_type : ScalarType::I64;
+
             case Expression::Kind::Integer:
                 return ScalarType::I64;
             case Expression::Kind::Boolean:
@@ -2641,7 +2722,7 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
-        if (expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
+        if (expr->kind == Expression::Kind::SumConstruct || expr->kind == Expression::Kind::SumAccess || expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||
@@ -2764,7 +2845,7 @@ private:
                 signature.parameter_generic_types.push_back(param.generic_type);
                 signature.parameter_scalar_types.push_back(param.scalar_type);
                 signature.parameter_is_scalar.push_back(
-                    param.class_name.empty() && param.generic_type.empty());
+                    param.class_name.empty() && param.generic_type.empty() && param.sum_type.empty());
             }
             signature.return_type = fn.return_type;
             signature.returns_void = fn.returns_void;
@@ -2850,7 +2931,7 @@ private:
                     throw std::runtime_error("missing public native module contract method '"
                             + ref + "." + required.name + "'");
                 }
-                if (fn->returns_void) {
+                if (fn->returns_void || !fn->return_sum.empty()) {
                     throw std::runtime_error("native module contract requires int return");
                 }
                 if (fn->parameters.size() != required.parameter_modes.size()) {
@@ -2858,7 +2939,8 @@ private:
                             + ref + "." + required.name + "'");
                 }
                 for (std::size_t n = 0; n < required.parameter_modes.size(); ++n) {
-                    if (!fn->parameters[n].class_name.empty() || fn->parameters[n].mode != required.parameter_modes[n]) {
+                    if (!fn->parameters[n].class_name.empty() || !fn->parameters[n].sum_type.empty() ||
+                            fn->parameters[n].mode != required.parameter_modes[n]) {
                         throw std::runtime_error("native module contract ownership mode mismatch '"
                                 + ref + "." + required.name + "'");
                     }
@@ -3267,6 +3349,7 @@ void resolve_and_validate_program(Program& program) {
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
+    resolve_native_sums(program);
     Parser::validate_complete(program);
     validate_i64_ownership(program);
     validate_native_scalar_types(program);

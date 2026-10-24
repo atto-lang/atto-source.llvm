@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
@@ -67,6 +68,8 @@ struct RegionMoveLowering {
     llvm::Value* result_destination = nullptr;
     llvm::Value* result_region = nullptr;
     const NativeClassLayouts* layouts = nullptr;
+    const Program* sum_program = nullptr;
+    llvm::FunctionCallee sum_check;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -94,6 +97,23 @@ llvm::Value* array_handle_address(const Expression& receiver,
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
 
+llvm::Value* checked_sum_tag(llvm::IRBuilder<>& builder, llvm::Type* i64, llvm::Value* handle,
+                            std::uint64_t schema, std::size_t fields, llvm::FunctionCallee check, llvm::FunctionCallee get) {
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* schema_ok = llvm::BasicBlock::Create(builder.getContext(), "sum.schema.valid", function);
+    auto* tag_ok = llvm::BasicBlock::Create(builder.getContext(), "sum.tag.valid", function);
+    auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "sum.invalid", function);
+    auto* status = builder.CreateCall(check, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, fields)});
+    builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), schema_ok, invalid);
+    builder.SetInsertPoint(invalid);
+    auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
+    builder.CreateCall(panic); builder.CreateUnreachable();
+    builder.SetInsertPoint(schema_ok);
+    auto* tag = builder.CreateCall(get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 0)});
+    builder.CreateCondBr(builder.CreateICmpULE(tag, llvm::ConstantInt::get(i64, 1)), tag_ok, invalid);
+    builder.SetInsertPoint(tag_ok); return tag;
+}
+
 llvm::AllocaInst* entry_alloca(llvm::IRBuilder<>& builder, llvm::Type* type, llvm::Value* count = nullptr, const llvm::Twine& name = "") {
     auto& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
     llvm::IRBuilder<> slots(&entry, entry.begin());
@@ -108,6 +128,50 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::SumConstruct: {
+            const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            const bool option = type.kind == NativeSumType::Kind::Option;
+            const std::size_t count = option ? 2 : 3;
+            const bool error = expr.name == "Err";
+            const auto tag = option ? (expr.name == "Some" ? 1 : 0) : (error ? 1 : 0);
+            auto* payload = expr.arguments.empty() ? llvm::ConstantInt::get(i64, 0)
+                : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, count), "sum.fields");
+            for (std::size_t i = 0; i < count; ++i) builder.CreateStore(llvm::ConstantInt::get(i64, 0),
+                builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+            builder.CreateStore(llvm::ConstantInt::get(i64, tag), values);
+            if (!expr.arguments.empty()) builder.CreateStore(payload, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, error ? 2 : 1)));
+            return builder.CreateCall(moves->record_new, {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                llvm::ConstantInt::get(i64, count), values}, "sum.value");
+        }
+        case Expression::Kind::SumAccess: {
+            const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            auto* handle = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            llvm::Value* fallback = expr.arguments.empty() ? nullptr : lower(*expr.arguments[0], builder, i64, storage, field_storage, functions, moves);
+            const auto schema = moves->record_schemas->at(expr.sum_type);
+            auto* tag = checked_sum_tag(builder, i64, handle, schema, type.kind == NativeSumType::Kind::Option ? 2 : 3, moves->sum_check, moves->record_get);
+            const bool option = type.kind == NativeSumType::Kind::Option;
+            if (expr.name == "is_some" || expr.name == "is_none" || expr.name == "is_ok" || expr.name == "is_err") {
+                const auto selected = expr.name == "is_some" || expr.name == "is_err" ? 1 : 0;
+                return builder.CreateZExt(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), i64);
+            }
+            const auto selected = option ? 1 : 0;
+            auto* function = builder.GetInsertBlock()->getParent();
+            auto* present = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.present", function);
+            auto* absent = llvm::BasicBlock::Create(builder.getContext(), "sum.payload.absent", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), present, absent);
+            builder.SetInsertPoint(present);
+            auto* value = builder.CreateCall(moves->record_get, {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+            if (!fallback) {
+                builder.SetInsertPoint(absent);
+                auto panic = function->getParent()->getOrInsertFunction("abort", llvm::FunctionType::get(builder.getVoidTy(), false));
+                builder.CreateCall(panic); builder.CreateUnreachable(); builder.SetInsertPoint(present); return value;
+            }
+            auto* merge = llvm::BasicBlock::Create(builder.getContext(), "sum.fallback.merge", function);
+            builder.CreateBr(merge); builder.SetInsertPoint(absent); builder.CreateBr(merge);
+            builder.SetInsertPoint(merge); auto* result = builder.CreatePHI(i64, 2);
+            result->addIncoming(value, present); result->addIncoming(fallback, absent); return result;
+        }
         case Expression::Kind::RecordConstruct: {
             if (!moves || !moves->record_classes || !moves->record_schemas)
                 throw std::runtime_error("record construction lacks typed root region");
@@ -531,6 +595,7 @@ llvm::Value* lower(const Expression& expr,
 } // namespace
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+    for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
             throw std::runtime_error("reserved native record runtime symbol collision");
@@ -595,13 +660,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
-    bool string_runtime = false, console_runtime = false, record_runtime = false, iteration_runtime = false;
+    bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
     for (const auto& cls : source.classes) flat_classes.emplace(cls.name, native_flat_class(cls, layouts));
     auto class_owns_arrays = [&](const std::string& name) {
         return flat_classes.count(name) && layouts.at(name).owns_arrays;
     };
+    for (const auto& type : source.sum_types)
+        if (type.value_type == ScalarType::String || (type.kind == NativeSumType::Kind::Result && type.error_type == ScalarType::String)) string_runtime = true;
     const bool owning_result_runtime = std::any_of(source.functions.begin(), source.functions.end(),
         [&](const Function& f) { return class_owns_arrays(f.return_class); });
     std::function<void(const Expression*)> scan_string = [&](const Expression* e) {
@@ -838,11 +905,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     std::unordered_map<std::string, llvm::StructType*> class_types;
     std::unordered_map<std::string, const ClassDecl*> record_classes;
     std::unordered_map<std::string, std::uint64_t> record_schemas;
-    llvm::FunctionCallee record_new, record_get, record_check;
+    llvm::FunctionCallee record_new, record_get, record_check, sum_check;
     if (record_runtime) {
         record_new = module.getOrInsertFunction("ores_record_new",
             llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
         record_get = module.getOrInsertFunction("ores_record_get",
+            llvm::FunctionType::get(i64, {i64, i64, i64}, false));
+        sum_check = module.getOrInsertFunction("ores_record_check_shape",
             llvm::FunctionType::get(i64, {i64, i64, i64}, false));
         record_check = module.getOrInsertFunction("ores_record_check",
             llvm::FunctionType::get(i64, {i64, i64}, false));
@@ -863,6 +932,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             indices.emplace(cls.fields[i].name, i);
         field_indices.emplace(cls.name, std::move(indices));
     }
+
+    for (const auto& type : source.sum_types) record_schemas.emplace(type.name, record_schemas.size() + 1);
 
     // Exact by-value i64 / borrowed-i64-pointer argument types for all
     // same-module functions; no unsound conversion to i64 is permitted.
@@ -965,6 +1036,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             } else {
                 storage.emplace(param.name, &arg);
             }
+        }
+
+        for (const auto& parameter : fn.parameters) if (!parameter.sum_type.empty()) {
+            auto* handle = builder.CreateLoad(i64, storage.at(parameter.name));
+            checked_sum_tag(builder, i64, handle, record_schemas.at(parameter.sum_type), native_sum(source, parameter.sum_type).kind == NativeSumType::Kind::Option ? 2 : 3, sum_check, record_get);
         }
 
         // Every source actor ref is an opaque, unique capability owned by
@@ -1110,6 +1186,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             return builder.CreateLoad(i64, address, label + ".array.new");
         };
         region_moves.layouts = &layouts;
+        region_moves.sum_program = &source;
+        region_moves.sum_check = sum_check;
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
