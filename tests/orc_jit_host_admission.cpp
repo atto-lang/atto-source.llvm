@@ -105,6 +105,27 @@ constexpr Case cases[] = {
         false, 0, "module inline assembly"
     },
     {
+        "function_inline_asm",
+        "define i32 @main() {\n"
+        "entry:\n"
+        "  call void asm sideeffect \"nop\", \"\"()\n"
+        "  ret i32 42\n"
+        "}\n",
+        false, 0, "function inline assembly"
+    },
+    {
+        "nonhost_triple",
+        "target triple = \"wasm32-unknown-unknown\"\n"
+        "define i32 @main() { ret i32 42 }\n",
+        false, 0, "incompatible host target triple"
+    },
+    {
+        "nonhost_data_layout",
+        "target datalayout = \"e-p:16:16\"\n"
+        "define i32 @main() { ret i32 42 }\n",
+        false, 0, "incompatible host data layout"
+    },
+    {
         "global_constructor", global_ctors_ir, false, 0,
         "global constructors/destructors"
     },
