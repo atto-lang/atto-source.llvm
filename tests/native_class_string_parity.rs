@@ -655,6 +655,39 @@ fn main() {
             "{name}: internal compiler failure"
         );
     }
+    let mut interpolation_bomb =
+        "pub fnc main():int{val string x=`".to_owned();
+    for _ in 0..1025 { interpolation_bomb.push_str("${\"x\"}"); }
+    interpolation_bomb.push_str("`;return 0;}");
+
+    let brace_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{}0{}}}`;return 0;}}",
+        "{".repeat(257),
+        "}".repeat(257),
+    );
+
+    let mut nested = "\"x\"".to_owned();
+    for _ in 0..34 { nested = format!("`${{{nested}}}`"); }
+    let nesting_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{nested}}}`;return 0;}}"
+    );
+
+    for (name, source, diagnostic) in [
+        ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
+        ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
+        ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
+    ] {
+        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        assert_eq!(rejected.status.code(), Some(1), "{name}: must fail closed");
+        assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(diagnostic),
+            "{name}: wrong diagnostic: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
     fs::write(
         scratch.0.join("main.ores"),
         r#"pub fnc main():int{stdio.print("host only");return 0;}"#,
