@@ -501,8 +501,8 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
         ),
         (
             "public-void-dispatch",
-            "define class X1 as\n  pub foo():void {}\nend\n\\
-             define class X2 as\n  pub foo(self):void {}\nend\n\\
+            "define class X1 as\n  pub foo():void {}\nend\n\
+             define class X2 as\n  pub foo(self):void {}\nend\n\
              pub fnc main():int {\n  let X1 x1=new X1();\n  let X2 x2=new X2();\n  x1.foo();\n  x2.foo();\n  return 42;\n}\n",
         ),
         (
