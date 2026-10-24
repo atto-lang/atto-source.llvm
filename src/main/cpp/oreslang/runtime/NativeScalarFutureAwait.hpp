@@ -23,7 +23,7 @@ struct NativeScalarFutureId {
 // The producer MUST retain a shared/weak frame reference until its callback
 // quiesces. The owning supervisor MUST reconcile group teardown: a dropped
 // queued CONTROL event is exposed by NativeActorRef::control_delivery_lost()
-// and may be generation-fenced into cancellation via cancel_if_control_lost().
+// and may be generation-fenced into cancellation via cancel_if_owner_detached().
 // This is not source Future<T> / await lowering.
 class NativeScalarFutureAwait final
         : public std::enable_shared_from_this<NativeScalarFutureAwait> {
@@ -71,18 +71,19 @@ public:
     }
 
     /*
-     * Group close may revoke a queued CONTROL slot. Convert that explicit
-     * generation-fenced delivery-loss signal into terminal Future cancellation
-     * so a dropped callback cannot leave the frame permanently scheduled.
+     * Group close publishes a generation-fenced no-new-delivery barrier even
+     * when no CONTROL item happened to be queued. Convert that barrier into
+     * terminal Future cancellation so pending, ready, or scheduled frames
+     * cannot survive owner teardown indefinitely.
      */
-    bool cancel_if_control_lost(
+    bool cancel_if_owner_detached(
             NativeScalarFutureId ticket,
             const NativeActorRef& parent_ref) noexcept {
         if (!valid(ticket)
                 || parent_ref.runtime_id() != id_.runtime_id
                 || parent_ref.actor_id() != id_.actor_id
                 || parent_ref.generation() != id_.generation
-                || !parent_ref.control_delivery_lost())
+                || !parent_ref.delivery_closed())
             return false;
         return cancel(ticket);
     }
