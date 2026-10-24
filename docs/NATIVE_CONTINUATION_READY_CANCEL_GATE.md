@@ -284,3 +284,24 @@ logs may still exist and require security-owner review.
 A source-free canary can establish runner capacity but **cannot** authorize
 source export. A source-org exact-head runner is the alternative to a fully
 authorized private exact-tree transfer.
+
+## Exact suspension-link validation on native completion
+
+The direct native bridge's `ores_native_await_trace_resume_finish()` now
+rejects a link unless all of its continuation, parent-handle generation, and
+logical execution identity match the live continuation-store record. Previously
+it looked only at `link.continuation`, so a forged or stale parent/execution
+association could finish another CLAIMED frame. The C11 regression injects a
+different parent generation, execution number, and runtime domain while a real
+frame is CLAIMED; none may complete it, and the original link must finish once.
+The underlying raw C store API remains a **trusted runtime** entrypoint, not an
+unforgeable guest capability: arbitrary guest access to native store pointers
+or completion calls must remain prohibited.
+
+This hardening is committed on top of the previous externally executed,
+14-blob-only normal/ASan/UBSan success. **That earlier green run does not test
+these new finish checks, and is not a full-tree provenance receipt.** Source-org
+GitHub Actions currently fails admission even for no-checkout canaries. The
+protected-source allowlist has zero approved external destinations and `main`
+reports `protected=false`; no new cross-organization source export may run
+until those existing governance controls have been established and reviewed.
