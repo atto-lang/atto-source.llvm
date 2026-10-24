@@ -66,7 +66,23 @@ static void scenario(int fail_reservation, int fail_publish,
     if (m.sticky_failure || m.frame_loan || m.wake_pending)
         assert(!m.retired);
 }
+static void negative_controls(void) {
+    Model m = {0};
+    m.state = DONE; m.frame_loan = 1; m.retired = 1;
+    assert(!safe(&m)); /* premature physical frame release */
+    m.frame_loan = 0; m.wake_pending = 1;
+    assert(!safe(&m)); /* wake still reserved */
+    m.wake_pending = 0; m.sticky_failure = 1;
+    assert(!safe(&m)); /* quarantined failure */
+    m.sticky_failure = 0; m.state = PENDING;
+    assert(!safe(&m)); /* nonterminal continuation */
+    m.retired = 0; m.state = READY; m.result_committed = 0; m.wake_reserved = 1;
+    assert(!safe(&m)); /* readiness without result */
+    m.result_committed = 1; m.wake_reserved = 0;
+    assert(!safe(&m)); /* readiness without wake reservation */
+}
 int main(void) {
+    negative_controls();
     int count = 0;
     for (int reservation = 0; reservation < 2; ++reservation)
     for (int publication = 0; publication < 2; ++publication)
