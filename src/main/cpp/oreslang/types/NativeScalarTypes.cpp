@@ -22,7 +22,8 @@ Type local_type(const LocalBinding& local) {
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
         throw std::runtime_error("unsupported native array element type");
-    if (local.int_array) return {Kind::Array, local.array_element_type == ScalarType::String ? "String" : "int"};
+    if (local.int_array) return {Kind::Array, !local.array_record_class.empty() ? local.array_record_class :
+        local.array_element_type == ScalarType::String ? "String" : "int"};
     return local.class_name.empty() ? scalar(local.scalar_type) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
@@ -36,6 +37,15 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
+    auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
+        auto found = classes.find(name);
+        if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
+        const auto& cls = *found->second;
+        for (const auto& field : cls.fields)
+            if (!field.final_field || field.int_array)
+                fail(0, "record collections require immutable scalar/String fields");
+        return cls;
+    };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
     auto field_type = [&](Type owner, const std::string& name, std::size_t offset) -> Type {
@@ -104,13 +114,26 @@ void validate_native_scalar_types(const Program& program) {
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
-                const Type element = owner.name == "String" ? scalar(ScalarType::String) : scalar(false);
+                const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
+                    : Type{Kind::Class, immutable_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                     const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    if (!index && element.kind == Kind::Class &&
+                            e.arguments[i]->kind != E::RecordConstruct &&
+                            !(e.arguments[i]->kind == E::ArrayCall && e.arguments[i]->name == "get"))
+                        fail(e.offset, "record arrays require a new immutable record or existing array element");
                     require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
                             e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
                 }
                 return e.name == "get" ? element : scalar(false);
+            }
+            case E::RecordConstruct: {
+                const auto& cls = immutable_record(e.name);
+                if (e.arguments.size() != cls.constructor_parameters.size()) fail(e.offset, "record constructor argument arity mismatch");
+                for (std::size_t i = 0; i < e.arguments.size(); ++i)
+                    require(expression(*e.arguments[i], locals), scalar(cls.constructor_parameter_types.empty()
+                        ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), e.offset, "record constructor argument type mismatch");
+                return {Kind::Class, cls.name};
             }
             case E::Call: {
                 const auto& fn = *functions.at(native_function_slot(e.name, e.arguments.size()));
@@ -136,6 +159,7 @@ void validate_native_scalar_types(const Program& program) {
         if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
         else if (result.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
         else if (result.kind == Kind::Int) e.resolved_type = ScalarType::I64;
+        else if (result.kind == Kind::Class) e.resolved_class = result.name;
         return result;
     };
     auto compare = [&](const Expression& lhs, const Expression& rhs, const Locals& locals) {
@@ -161,6 +185,7 @@ void validate_native_scalar_types(const Program& program) {
     function = [&](const Function& fn, Locals locals) {
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
+            if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;

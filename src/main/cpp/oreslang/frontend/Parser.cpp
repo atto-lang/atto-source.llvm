@@ -1025,21 +1025,32 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio") {
+        auto array_effect_ahead = [&] {
+            return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
+                [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
+        };
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             LocalBinding binding;
             binding.offset = token_.offset;
-            if (token_.text == "stdio") {
+            if (array_effect_ahead()) {
+                binding.name = "$effect" + std::to_string(value.locals.size());
+                binding.initializer = primary();
+                if (binding.initializer->kind != Expression::Kind::ArrayCall ||
+                        (binding.initializer->name != "add" && binding.initializer->name != "set"))
+                    fail("native array effect supports only add(value) or set(index,value)");
+            } else if (token_.text == "stdio") {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
             } else if (token_.text == "val" && peek_next().text == "Array") {
                 advance(); require("Array"); require("<");
-                if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
-                else require("int");
+                array_element(binding);
                 require(">"); binding.name = identifier(); require("=");
                 require("new"); require("Array"); require("<");
-                if (binding.array_element_type == ScalarType::String) {
+                if (!binding.array_record_class.empty()) {
+                    if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                } else if (binding.array_element_type == ScalarType::String) {
                     if (!accept("String")) require("string");
                 } else require("int");
                 require(">"); require("("); require(")");
@@ -1058,7 +1069,12 @@ private:
                     binding.initializer = expression();
                 } else {
                     binding.class_name = type;
-                    require("new");
+                    if (!accept("new")) {
+                        binding.initializer = expression();
+                        if (binding.initializer->kind != Expression::Kind::ArrayCall || binding.initializer->name != "get")
+                            fail("native class initializer requires new or immutable record array get");
+                        binding.record_view = true;
+                    } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");
                     require("(");
                     if (!accept(")")) {
@@ -1066,6 +1082,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    }
                 }
             } else if (accept("let")) {
                 // Preserve the Java/Graal distinction between immutable
@@ -1085,15 +1102,16 @@ private:
                         fail("native Array<int> requires let mut owner");
                     require("Array");
                     require("<");
-                    if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
-                    else require("int");
+                    array_element(binding);
                     require(">");
                     binding.name = identifier();
                     require("=");
                     require("new");
                     require("Array");
                     require("<");
-                    if (binding.array_element_type == ScalarType::String) {
+                    if (!binding.array_record_class.empty()) {
+                        if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                    } else if (binding.array_element_type == ScalarType::String) {
                         if (!accept("String")) require("string");
                     } else require("int");
                     require(">");
@@ -1841,6 +1859,16 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (accept("new")) {
+            auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
+            expr->name = type_identifier();
+            require("(");
+            if (!accept(")")) {
+                do expr->arguments.push_back(expression()); while (accept(","));
+                require(")");
+            }
+            return expr;
+        }
         if (token_.kind == Kind::String) {
             auto expr = make_expression(Expression::Kind::String, offset);
             expr->name = string_literal(token_.text);
@@ -2057,6 +2085,11 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    void array_element(LocalBinding& binding) {
+        if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+        else if (!accept("int")) binding.array_record_class = type_identifier();
+    }
+
     std::string type_identifier() {
         auto name = identifier();
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
@@ -2155,6 +2188,10 @@ private:
                 return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
+            case Expression::Kind::RecordConstruct:
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
@@ -2351,6 +2388,10 @@ private:
                 }
                 return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
+            case Expression::Kind::RecordConstruct:
+                for (const auto& arg : expr.arguments)
+                    validate_scalar_expression(*arg, variables, functions, depth + 1);
+                return ScalarType::I64; // nominal record validation follows, never a guest integer
             case Expression::Kind::Call: {
                 const auto family = functions.find(expr.name);
                 if (family == functions.end() ||
@@ -2490,7 +2531,7 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
-        if (expr->kind == Expression::Kind::Call ||
+        if (expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||

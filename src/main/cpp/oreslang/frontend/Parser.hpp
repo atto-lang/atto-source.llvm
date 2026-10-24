@@ -33,13 +33,14 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
@@ -74,6 +75,8 @@ struct LocalBinding {
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
+    std::string array_record_class;
+    bool record_view = false; // readonly view of an invocation-owned immutable record
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.

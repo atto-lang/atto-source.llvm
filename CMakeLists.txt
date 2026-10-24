@@ -1193,7 +1193,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_local_uninitialized owned-uninitialized.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_local_duplicate owned-duplicate.ores --diagnostic "duplicate owned local")
     oreslang_contract_test(reject_local_forward_reference owned-use-before-declaration.ores --diagnostic "unknown parameter")
-    oreslang_contract_test(reject_local_unsupported_object owned-unsupported-heap.ores --diagnostic "expected int expression")
+    oreslang_contract_test(reject_local_unsupported_object owned-unsupported-heap.ores --diagnostic "unknown record class")
     oreslang_contract_test(reject_local_moved_before_read owned-local-use-after-take.ores --diagnostic "use of explicitly moved int")
     oreslang_contract_test(native_owned_local_shared_borrow owned-local-shared-borrow.ores --ir "llvm.lifetime.end")
     oreslang_contract_test(native_owned_local_mutable_borrow owned-local-mutable-borrow.ores --ir "llvm.lifetime.end")
@@ -1783,6 +1783,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/main.ores tests/fixtures/native-class-string/main-1.ores
                 tests/fixtures/native-class-string/string-array.ores
                 tests/fixtures/native-class-string/path-segment.ores
+                tests/fixtures/native-class-string/record-array.ores
             VERBATIM)
         add_custom_target(oreslang-native-class-string-parity-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")
@@ -3213,4 +3214,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-max-threads-admission-test)
     set_tests_properties(native_actor_max_threads_source_admission
         PROPERTIES TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-native-record-region-test
+        tests/native_record_region_test.c
+        src/main/cpp/oreslang/runtime/NativeRecordRegion.c)
+    target_include_directories(oreslang-native-record-region-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-record-region-test PRIVATE ORESLANG_RECORD_TEST_ALLOC_FAILURE=1)
+    target_compile_features(oreslang-native-record-region-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-record-region-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_link_libraries(oreslang-native-record-region-test PRIVATE Threads::Threads)
+    add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
+    set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()

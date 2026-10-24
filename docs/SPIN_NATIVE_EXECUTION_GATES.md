@@ -13,8 +13,10 @@ Adding a dummy field would merely expose later unsupported constructs.
 
 The execution path requires these compiler/runtime changes, in dependency order:
 
-1. General class/reference-owned fields and `Array<PathSegment>` and
-   `Array<Binding>`, with deterministic owner/drop behavior. Lexical synchronous
+1. General class/reference-owned fields and mutable/nested `Array<Binding>`
+   storage, with deterministic owner/drop behavior. Lexical immutable
+   `Array<PathSegment>` now executes with typed region-owned records; object-array
+   fields, parameters, returns and mutable elements still need lowering. Lexical synchronous
    `Array<String>` now executes natively, but String-array fields, parameter and
    return ownership still need lowering. Declaration-only int/bool/String records
    such as PathSegment now construct and copy natively. Native stack records and local
