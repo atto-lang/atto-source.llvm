@@ -33,6 +33,8 @@ int oreslang_source_actor_ready_status(void* actor);
  * begin; they are not linked into ordinary source programs. */
 void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
+void oreslang_source_actor_test_hold_readiness_publication(int hold);
+int oreslang_source_actor_test_readiness_publication_entered(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
