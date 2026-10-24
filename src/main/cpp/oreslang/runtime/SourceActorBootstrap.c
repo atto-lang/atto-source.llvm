@@ -83,6 +83,10 @@ static _Thread_local uint8_t current_source_phase;
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+static void scrub_bytes(void* address, size_t length) {
+    volatile unsigned char* bytes=(volatile unsigned char*)address;
+    for (size_t i=0; i<length; ++i) bytes[i]=0;
+}
 
 static int same_allocation(
         OresNativeAllocationDomainRef a,
@@ -473,6 +477,11 @@ void oreslang_source_actor_emit_output(
 
 int64_t oreslang_source_actor_take_output(void* opaque) {
     ensure(current_source_actor == NULL);
+    if (group.vm) {
+        OresNativeExecutionContext carrier={0};
+        ensure(!ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+    }
     group_lock();
     SourceActor* instance = NULL;
     for (size_t i = 0; i < group.next_slot; ++i) {
@@ -680,7 +689,7 @@ void oreslang_source_actor_stop(void* opaque) {
             &instance->last_result, memory_order_relaxed));
 #endif
     group.actors[slot] = NULL;
-    instance->magic = 0;
+    scrub_bytes(instance,sizeof(*instance));
     free(instance);
     ensure(group.live > 0);
     group.live--;
