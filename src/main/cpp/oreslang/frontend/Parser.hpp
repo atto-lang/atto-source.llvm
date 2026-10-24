@@ -234,9 +234,11 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
+    /* Restricted lifecycle-await slice: exactly one direct ActorRef await. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    std::string done_await_actor;
+    std::size_t done_await_offset = 0;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
@@ -314,7 +316,8 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32. The only admitted source suspension
-// is one zero-local await ActorRef.get_ready() in trusted zero-argument main.
+// is one zero-local direct ActorRef.get_ready() or ActorRef.get_done() await in
+// trusted zero-argument main.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
