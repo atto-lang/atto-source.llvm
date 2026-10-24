@@ -243,6 +243,7 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;
@@ -250,11 +251,14 @@ struct Function {
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;
+    std::string method_owner; // compiler-owned class method privilege, never source syntax
+    bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    std::string return_sum;
 };
 
-/** Frozen Oreslang scheduler tier, distinct from ActorGroup-wide parallelism. */
+/** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
@@ -262,8 +266,6 @@ struct ActorDecl {
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
-    // Source-level bound, not a host worker pool setting. Native runtime
-    // single-owner execution remains mandatory until per-turn state proof.
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
 };
 
