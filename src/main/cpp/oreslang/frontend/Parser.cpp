@@ -1096,6 +1096,36 @@ private:
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+            // Typed Future<void> is admitted ONLY as a linear lexical alias
+            // for one already-spawned ActorRef.get_ready() lifecycle promise.
+            // No scalar/object borrow crosses this suspension, and general
+            // Future<T> / async lowering must remain fail-closed.
+            if ((token_.text == "const" || token_.text == "val") &&
+                    peek_next().text == "Future") {
+                if (!value.ready_future_name.empty())
+                    fail("native source supports only one Future<void> readiness token");
+                advance();
+                require("Future");
+                require("<");
+                if (!accept("void"))
+                    fail("Future<T> requires native continuation lowering");
+                require(">");
+                value.ready_future_name = identifier();
+                require("=");
+                value.ready_future_actor = identifier();
+                require(".");
+                require("get_ready");
+                require("(");
+                require(")");
+                require(";");
+                const bool bound = std::any_of(value.actor_spawns.begin(),
+                    value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
+                        return spawn.name == value.ready_future_actor;
+                    });
+                if (!bound)
+                    fail("Future<void> requires previously spawned ActorRef.get_ready");
+                continue;
+            }
             LocalBinding binding;
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
@@ -1650,9 +1680,33 @@ private:
                 advance();
                 if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
                     fail("native source supports only one direct ActorRef lifecycle await");
-                const std::string actor = identifier();
+                const std::string awaited = identifier();
+
+                // A bound Future<void> is linear: once such a token exists,
+                // readiness must be consumed through that exact token.
+                if (!value.ready_future_name.empty()) {
+                    if (awaited != value.ready_future_name || token_.text != ";")
+                        fail("native Future<void> await requires its declared readiness token");
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("await get_ready must precede post-await actor effects");
+                    value.ready_await_actor = value.ready_future_actor;
+                    value.ready_await_offset = await_offset;
+                    require(";");
+                    continue;
+                }
+
+                // ActorRef<T> implements HasFuture in this restricted slice:
+                // direct await means readiness, never physical completion.
+                if (accept(";")) {
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("await get_ready must precede post-await actor effects");
+                    value.ready_await_actor = awaited;
+                    value.ready_await_offset = await_offset;
+                    continue;
+                }
+
                 if (token_.text != ".")
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
+                    fail("native async/channel/select boundary unsupported: only ActorRef HasFuture/get_ready/get_done is lowered");
                 require(".");
                 const std::string lifecycle = identifier();
                 require("(");
@@ -1661,10 +1715,10 @@ private:
                 if (lifecycle == "get_ready") {
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
-                    value.ready_await_actor = actor;
+                    value.ready_await_actor = awaited;
                     value.ready_await_offset = await_offset;
                 } else if (lifecycle == "get_done") {
-                    value.done_await_actor = actor;
+                    value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
                 } else {
                     fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
@@ -3001,6 +3055,22 @@ private:
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
+            }
+            if (!fn.ready_future_name.empty()) {
+                // A Future<void> alias must be consumed once, cannot shadow
+                // any live actor/parameter/local, and cannot be forged from
+                // an arbitrary scalar or a different actor capability.
+                if (fn.ready_await_actor != fn.ready_future_actor)
+                    throw std::runtime_error(
+                        "Future<void> readiness token must be awaited exactly once");
+                if (params.count(fn.ready_future_name) ||
+                        live_actors.count(fn.ready_future_name) ||
+                        std::any_of(fn.locals.begin(), fn.locals.end(),
+                            [&](const LocalBinding& item) {
+                                return item.name == fn.ready_future_name;
+                            }))
+                    throw std::runtime_error(
+                        "Future<void> readiness token shadows a live owner");
             }
             if (fn.ready_await_actor.empty()) {
                 if (!fn.throws_types.empty())
