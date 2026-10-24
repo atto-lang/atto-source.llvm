@@ -17,6 +17,11 @@ reactor, or native guest Future support. No actor heap reference, borrowed
 pointer, source closure, or runtime task crosses this host-only frame.
 A producer must retain a strong or weak frame reference until its callbacks
 have quiesced; frame lifetime and actor group lifetime remain separate.
+The scalar **result payload** carries no actor heap pointers. The scheduler-provided
+`Resume` closure is not statically inspected for captured pointers: only the
+source compiler's future ownership checking can guarantee borrow-safe capture.
+This host-only API must never be interpreted as permission to suspend with
+an unpinned actor-owned borrow or to execute a callback on the producer thread.
 
 The `native_scalar_future_single_winner_control` CTest covers stale
 generation, foreign owner, exactly-once completion, fail/cancel race,
