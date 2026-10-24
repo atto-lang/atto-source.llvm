@@ -243,6 +243,45 @@ static void retirement_is_a_strict_waiter_revocation_barrier() {
     }
 }
 
+static void retirement_and_ready_resume_claim_are_linearized() {
+    Stores stores;
+    for (std::uint64_t i = 0; i < 128; ++i) {
+        auto authority = TaskCancellation::root();
+        const auto link = stores.suspend(10000 + i);
+        TaskContinuationGate gate(authority, stores.executions,
+                                  stores.continuations, link);
+        assert(gate.notify_ready());
+        OresNativeExecutionHandle resumed{};
+        std::atomic<bool> go{false};
+        std::atomic<bool> won{false};
+        std::thread claimer([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            won.store(gate.try_resume(physical(12000 + i), &resumed),
+                      std::memory_order_release);
+        });
+        std::thread retire([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            authority->retire();
+        });
+        go.store(true, std::memory_order_release);
+        claimer.join();
+        retire.join();
+        if (won.load(std::memory_order_acquire)) {
+            assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+            assert(gate.finish_resume());
+            assert(ores_native_execution_context_store_release(
+                stores.executions, resumed));
+        } else {
+            assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+            assert(!gate.finish_resume());
+        }
+        gate.close();
+        stores.release(link);
+    }
+}
+
 static void completion_cancel_and_resume_cancel_races() {
     Stores stores;
     for (std::uint64_t i = 0; i < 256; ++i) {
@@ -345,6 +384,7 @@ int main() {
     already_cancelled_authority_closes_registration_race();
     rejects_forged_and_recycled_await_links();
     retirement_is_a_strict_waiter_revocation_barrier();
+    retirement_and_ready_resume_claim_are_linearized();
     completion_cancel_and_resume_cancel_races();
     close_disarms_concurrent_revocation();
     std::puts("NATIVE_TASK_CONTINUATION_GATE_PASS");
