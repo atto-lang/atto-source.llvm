@@ -33,11 +33,19 @@ jobs:
       - name: Checkout exact PR source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          # Avoid the synthetic pull_request merge commit; validate PR head exactly.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Print immutable test provenance
+      - name: Verify exact-head checkout and print immutable provenance
         shell: bash
         run: |
           set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Wrong source commit: expected $expected, checked out $actual" >&2
+            exit 65
+          fi
           echo "commit=$(git rev-parse HEAD)"
           echo "tree=$(git rev-parse 'HEAD^{tree}')"
           echo "run=${{ github.run_id }}"
