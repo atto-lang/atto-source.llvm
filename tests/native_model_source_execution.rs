@@ -111,7 +111,15 @@ impl Scratch {
         for attempt in 0..10 {
             let candidate = env::temp_dir().join(format!(
                 "ores-model-native-{}-{timestamp}-{attempt}", std::process::id()));
-            match fs::create_dir(&candidate) {
+            // Guest source may be private. Do not inherit a world-readable
+            // default temporary-directory mode on Unix shared runners.
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&candidate) {
                 Ok(()) => return Ok(Self(candidate)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(format!("create scratch directory: {e}")),
@@ -138,6 +146,15 @@ fn run(command: &mut Command, root: &Path) -> Result<(i32, Vec<u8>, Vec<u8>), St
         .spawn().map_err(|e| format!("launch command: {e}"))?;
     let start = Instant::now();
     let status = loop {
+        // Enforce disk-output bounds while children are still running, not
+        // merely after exit. This also prevents unbounded compiler logs.
+        let stdout_len = fs::metadata(&stdout_path).map_err(|e| e.to_string())?.len();
+        let stderr_len = fs::metadata(&stderr_path).map_err(|e| e.to_string())?.len();
+        if stdout_len > MAX_CAPTURE || stderr_len > MAX_CAPTURE {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("model compiler/tool emitted oversized output".into());
+        }
         match child.try_wait().map_err(|e| format!("wait for command: {e}"))? {
             Some(status) => break status,
             None if start.elapsed() >= CHILD_TIMEOUT => {
