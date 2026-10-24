@@ -864,6 +864,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
+    llvm::FunctionCallee sourceTakeOutput, sourceStdoutI64, sourceAwaitDone;
     llvm::FunctionCallee sourceSpawnChildCapability, sourceSendCapability;
     llvm::FunctionCallee sourceEmitOutput, sourceRequestEnd, sourceAwaitChildOutput;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -916,6 +917,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceAwaitReady = module.getOrInsertFunction(
             "oreslang_source_actor_await_ready",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceTakeOutput = module.getOrInsertFunction(
+            "oreslang_source_actor_take_output",
+            llvm::FunctionType::get(i64, {native_ptr}, false));
+        sourceStdoutI64 = module.getOrInsertFunction(
+            "oreslang_source_actor_stdout_i64",
+            llvm::FunctionType::get(voidTy, {i64}, false));
+        sourceAwaitDone = module.getOrInsertFunction(
+            "oreslang_source_actor_await_done",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -1089,6 +1099,64 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::ConstantInt::get(i64, nativeActorHeapCapacity(*actor))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
+        }
+
+        if (fn.async_actor_root) {
+            if (fn.actor_spawns.size() != 1
+                    || fn.actor_sends.size() != 1
+                    || fn.root_output_await_actor.empty()
+                    || fn.done_await_actor.empty()
+                    || !fn.root_stdout_write_output)
+                throw std::runtime_error("invalid pinned async actor root lowering");
+            const std::string& actorName=fn.ready_await_actor;
+            llvm::Value* actorRef=actorRefs.at(actorName);
+
+            auto* continuationType =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* readyResume = llvm::Function::Create(
+                continuationType,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".async_root_ready_continuation",
+                module);
+            auto* readyEntry =
+                llvm::BasicBlock::Create(context, "admitted", readyResume);
+            llvm::IRBuilder<> readyBuilder(readyEntry);
+            readyBuilder.CreateRet(llvm::ConstantInt::get(i64,0));
+
+            llvm::Value* readyPtr =
+                builder.CreatePointerCast(readyResume,native_ptr);
+            (void)builder.CreateCall(
+                sourceAwaitReady,
+                {
+                    actorRef,
+                    readyPtr,
+                    llvm::ConstantInt::get(
+                        i64,
+                        static_cast<std::uint64_t>(fn.ready_await_offset))
+                });
+
+            const auto& send=fn.actor_sends.front();
+            if (send.reference != actorName)
+                throw std::runtime_error("async root send references unexpected ActorRef");
+            llvm::Value* payload=lower(
+                *send.payload,
+                builder,
+                i64,
+                storage,
+                field_storage,
+                declarations,
+                nullptr);
+            builder.CreateCall(sourceSend,{actorRef,payload});
+
+            llvm::Value* observed=
+                builder.CreateCall(sourceTakeOutput,{actorRef},"async.root.output");
+            builder.CreateCall(sourceStdoutI64,{observed});
+
+            /* This barrier does not request stop. The actor must terminate via
+             * source self.end(); only then may trusted root reclaim it. */
+            builder.CreateCall(sourceAwaitDone,{actorRef});
+            builder.CreateRetVoid();
+            continue;
         }
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
