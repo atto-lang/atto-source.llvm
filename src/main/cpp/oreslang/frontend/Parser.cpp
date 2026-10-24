@@ -648,8 +648,53 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
-            if (token_.text == "self")
-                fail("native receive self output/end requires actor output and lifecycle lowering");
+            if (token_.text == "self") {
+                const std::size_t effect_offset=token_.offset;
+                require("self");
+                require(".");
+                if (accept("send")) {
+                    require("(");
+                    auto payload=expression();
+                    require(")");
+                    require(";");
+                    const std::size_t index=method.actor_outputs.size();
+                    method.actor_outputs.push_back(std::move(payload));
+                    method.actor_handler_actions.push_back(
+                        {ActorHandlerAction::Kind::Output,index});
+                    continue;
+                }
+                if (accept("end")) {
+                    require("(");
+                    require(")");
+                    require(";");
+                    if (method.actor_end_requested)
+                        fail("native actor self.end may be requested only once per handler");
+                    method.actor_end_requested=true;
+                    method.actor_handler_actions.push_back(
+                        {ActorHandlerAction::Kind::End,0});
+                    continue;
+                }
+                const std::string capability=identifier();
+                if (!capability_names.count(capability))
+                    fail("native actor self capability send requires ActorRef field");
+                require(".");
+                require("send");
+                require("(");
+                ActorCapabilitySend send;
+                send.offset=effect_offset;
+                send.field=capability;
+                send.payload=expression();
+                require(")");
+                require(";");
+                const std::size_t index=method.actor_capability_sends.size();
+                method.actor_capability_sends.push_back(std::move(send));
+                method.actor_handler_actions.push_back(
+                    {ActorHandlerAction::Kind::CapabilitySend,index});
+                continue;
+            }
+            if (token_.text == "val" || token_.text == "await") {
+                fail("native receive await child output requires continuation lowering");
+            }
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -690,7 +735,10 @@ private:
                 send.payload = expression();
                 require(")");
                 require(";");
+                const std::size_t index=method.actor_capability_sends.size();
                 method.actor_capability_sends.push_back(std::move(send));
+                method.actor_handler_actions.push_back(
+                    {ActorHandlerAction::Kind::CapabilitySend,index});
                 continue;
             }
             ActorFieldWrite write;
@@ -2981,6 +3029,8 @@ private:
                     throw std::runtime_error("unknown actor capability field '" + send.field + "'");
                 validate_expression(*send.payload, fields, functions);
             }
+            for (const auto& output : method.actor_outputs)
+                validate_expression(*output, fields, functions);
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
