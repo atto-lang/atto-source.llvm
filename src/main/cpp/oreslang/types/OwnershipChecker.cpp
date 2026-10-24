@@ -787,6 +787,10 @@ void validate_i64_ownership(const Program& program) {
             function.statements.end(), [](const Statement& stmt) {
                 return stmt.kind == Statement::Kind::Conditional;
             });
+        std::vector<Locals> structured_exits;
+        std::unordered_set<std::string> root_names;
+        for (const auto& item : locals) root_names.insert(item.first);
+        std::unordered_map<std::string, unsigned> iteration_loans;
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
@@ -818,9 +822,40 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch");
                 state = std::move(yes); return;
             }
+            if (stmt.kind == Statement::Kind::Return) {
+                const Locals before = state;
+                if (stmt.expression) check_value(*stmt.expression, state, functions);
+                if (!same_affine_state(before, state))
+                    throw std::runtime_error("structured return ownership transfer requires terminal-edge analysis");
+                Locals exit;
+                for (const auto& name : root_names) exit.emplace(name, state.at(name));
+                for (const auto& loan : iteration_loans) if (exit.count(loan.first)) {
+                    if (exit.at(loan.first).shared_loans < loan.second) throw std::runtime_error("internal loop loan accounting");
+                    exit.at(loan.first).shared_loans -= loan.second;
+                }
+                structured_exits.push_back(std::move(exit)); return;
+            }
+            if (stmt.kind == Statement::Kind::ForIndex) {
+                check_value(*stmt.branch_local->initializer, state, functions);
+                Locals entrance = state;
+                auto iterator = scoped_entry(*stmt.branch_local); iterator.mutable_owner = true;
+                if (!entrance.emplace(stmt.branch_local->name, iterator).second)
+                    throw std::runtime_error("native index loop shadows live owner");
+                Locals body = entrance;
+                check_value(*stmt.condition, body, functions);
+                if (!same_affine_state(entrance, body)) throw std::runtime_error("index condition must preserve ownership");
+                scoped_effects(stmt.then_statements, body);
+                check_value(*stmt.loop_step, body, functions);
+                if (!same_affine_state(entrance, body))
+                    throw std::runtime_error("ownership violation: index back-edge must preserve outer owners and loans");
+                return;
+            }
             if (stmt.kind == Statement::Kind::ForEach) {
                 auto& owner = array_owner(*stmt.expression, state, false);
                 ++owner.shared_loans;
+                const auto& source = *stmt.expression;
+                const std::string source_name = source.kind == Expression::Kind::Variable ? source.name : source.left->name;
+                ++iteration_loans[source_name];
                 const Locals entrance = state;
                 Locals body = entrance;
                 const auto& iterator = *stmt.branch_local;
@@ -833,6 +868,7 @@ void validate_i64_ownership(const Program& program) {
                 // No mutation/move can retire this owner while the read loan is
                 // active. Repeated iterations start in the same affine state.
                 --owner.shared_loans;
+                --iteration_loans[source_name];
                 return;
             }
             if (stmt.kind == Statement::Kind::ScopedLocal) {
@@ -929,6 +965,7 @@ void validate_i64_ownership(const Program& program) {
         };
         for (const auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
+                if (!structured_exits.empty()) throw std::runtime_error("defer after structured return requires path-specific registration");
                 deferred_effects.push_back(&stmt);
                 continue;
             }
@@ -1088,6 +1125,7 @@ void validate_i64_ownership(const Program& program) {
             else
                 check_return(*function.result, locals);
         }
+        for (auto& exit : structured_exits) check_deferred_exit(exit);
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
         // field-sensitive fixed-point verifier. This currently models the

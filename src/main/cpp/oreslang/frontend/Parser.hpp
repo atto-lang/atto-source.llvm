@@ -165,7 +165,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -174,6 +174,8 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // ForIndex: branch_local initializer, condition and checked next value.
+    std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
     // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
     // Exactly four Array<int> fields in class declaration order.

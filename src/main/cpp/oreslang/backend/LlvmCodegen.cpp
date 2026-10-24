@@ -586,8 +586,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
-        if (s.kind == Statement::Kind::ForEach) iteration_runtime = true;
+        if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex || s.kind == Statement::Kind::Return) iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
+        scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
         if (s.branch_local) scan_string(s.branch_local->initializer.get());
         for (const auto& child : s.then_statements) scan_statement(child);
@@ -1364,6 +1365,17 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         // Branch-local trivial i64 owners are initialized only along their
         // reached predecessor and end their lifetime before the join. They
         // never enter the enclosing lexical_slots or deferred cleanup list.
+        bool structured_returns = false;
+        std::function<void(const Statement&)> find_returns = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::Return) structured_returns = true;
+            for (const auto& child : stmt.then_statements) find_returns(child);
+            for (const auto& child : stmt.else_statements) find_returns(child);
+        };
+        for (const auto& stmt : fn.statements) find_returns(stmt);
+        llvm::BasicBlock* structured_cleanup = structured_returns
+            ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
+        llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
+            ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
         struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
@@ -1395,12 +1407,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
         };
+        std::vector<ScopedSlot> active_scopes;
+        auto forget_scope = [&](const ScopedSlot& slot) {
+            for (const auto& key : slot.fields) field_storage.erase(key);
+            storage.erase(slot.name);
+        };
         std::function<void(const std::vector<Statement>&)> lower_arm;
         std::function<void(const Statement&)> lower_control;
         lower_arm = [&](const std::vector<Statement>& arm) {
-            std::vector<ScopedSlot> scoped_names;
+            const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::Conditional) {
+                if (builder.GetInsertBlock()->getTerminator()) break;
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -1410,11 +1428,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 const LocalBinding& local = *action.branch_local;
                 llvm::Value* init = lower(*local.initializer, builder, i64,
                     storage, field_storage, declarations, &region_moves);
-                scoped_names.push_back(scoped_value(local, init));
+                active_scopes.push_back(scoped_value(local, init));
             }
-            for (auto it = scoped_names.rbegin(); it != scoped_names.rend(); ++it) end_scope(*it);
+            while (active_scopes.size() > scope_start) {
+                const auto scope = active_scopes.back(); active_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator()) end_scope(scope);
+                else forget_scope(scope);
+            }
         };
         lower_control = [&](const Statement& stmt) {
+            if (stmt.kind == Statement::Kind::Return) {
+                auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
+                if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
+                for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
+                    builder.CreateLifetimeEnd(it->address, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                builder.CreateBr(structured_cleanup); return;
+            }
+            if (stmt.kind == Statement::Kind::ForIndex) {
+                auto* initial = lower(*stmt.branch_local->initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                const auto counter = scoped_value(*stmt.branch_local, initial); active_scopes.push_back(counter);
+                auto* header = llvm::BasicBlock::Create(context, "for.index.header", function);
+                auto* body = llvm::BasicBlock::Create(context, "for.index.body", function);
+                auto* exit = llvm::BasicBlock::Create(context, "for.index.exit", function);
+                builder.CreateBr(header); builder.SetInsertPoint(header);
+                auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
+                builder.SetInsertPoint(body); lower_arm(stmt.then_statements);
+                if (!builder.GetInsertBlock()->getTerminator()) {
+                    auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
+                    builder.CreateStore(next, counter.address); builder.CreateBr(header);
+                }
+                active_scopes.pop_back(); builder.SetInsertPoint(exit); end_scope(counter); return;
+            }
             if (stmt.kind == Statement::Kind::ForEach) {
                 auto* selected = receiver_array_region(*stmt.expression, &region_moves);
                 auto* handle = builder.CreateLoad(i64, array_handle_address(*stmt.expression, storage, field_storage, &region_moves));
@@ -1429,10 +1474,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 builder.CreateCondBr(builder.CreateICmpULT(index, length), body, exit);
                 builder.SetInsertPoint(body);
                 auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
-                auto scope = scoped_value(*stmt.branch_local, element);
-                lower_arm(stmt.then_statements); end_scope(scope);
-                auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
-                auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
+                auto scope = scoped_value(*stmt.branch_local, element); active_scopes.push_back(scope);
+                lower_arm(stmt.then_statements); active_scopes.pop_back();
+                if (!builder.GetInsertBlock()->getTerminator()) {
+                    end_scope(scope);
+                    auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
+                    auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
+                } else forget_scope(scope);
                 builder.SetInsertPoint(exit); return;
             }
             llvm::Value* condition = nullptr;
@@ -1446,9 +1494,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* no = llvm::BasicBlock::Create(context, "if.else", function);
             auto* join = llvm::BasicBlock::Create(context, "if.merge", function);
             builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
-            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); builder.CreateBr(join);
-            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); builder.CreateBr(join);
-            builder.SetInsertPoint(join);
+            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !builder.GetInsertBlock()->getTerminator(); if (yes_live) builder.CreateBr(join);
+            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !builder.GetInsertBlock()->getTerminator(); if (no_live) builder.CreateBr(join);
+            builder.SetInsertPoint(join); if (!yes_live && !no_live) builder.CreateUnreachable();
         };
         if (fn.caught_throw_value) {
             // Real native CFG edges. Evaluate payload once, run scoped LIFO
@@ -1480,39 +1528,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 deferred_effects.push_back(&stmt);
                 continue;
             }
-            if (stmt.kind == Statement::Kind::ForEach) {
+            if (builder.GetInsertBlock()->getTerminator()) break;
+            if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
+                    stmt.kind == Statement::Kind::Conditional) {
                 lower_control(stmt); continue;
-            }
-            if (stmt.kind == Statement::Kind::Conditional) {
-                llvm::Value* conditionValue = nullptr;
-                if (stmt.condition) {
-                    conditionValue = lower(*stmt.condition, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
-                } else {
-                    llvm::Value* lhs = lower(*stmt.condition_lhs, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
-                    llvm::Value* rhs = lower(*stmt.condition_rhs, builder, i64,
-                        storage, field_storage, declarations, &region_moves);
-                    conditionValue = builder.CreateZExt(
-                        builder.CreateICmpEQ(lhs, rhs, "if.eq.i1"), i64, "if.eq");
-                }
-                llvm::Value* condition = builder.CreateICmpNE(
-                    conditionValue, llvm::ConstantInt::get(i64, 0), "if.cond.i1");
-                llvm::BasicBlock* thenBlock = llvm::BasicBlock::Create(
-                    context, "if.then", function);
-                llvm::BasicBlock* elseBlock = llvm::BasicBlock::Create(
-                    context, "if.else", function);
-                llvm::BasicBlock* mergeBlock = llvm::BasicBlock::Create(
-                    context, "if.merge", function);
-                builder.CreateCondBr(condition, thenBlock, elseBlock);
-                builder.SetInsertPoint(thenBlock);
-                lower_arm(stmt.then_statements);
-                builder.CreateBr(mergeBlock);
-                builder.SetInsertPoint(elseBlock);
-                lower_arm(stmt.else_statements);
-                builder.CreateBr(mergeBlock);
-                builder.SetInsertPoint(mergeBlock);
-                continue;
             }
             lower_effect(stmt);
         }
@@ -1760,7 +1779,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (array_region != nullptr) builder.CreateCall(arrayClose, {array_region});
             if (region != nullptr) builder.CreateCall(regionClose, {region});
         };
-        if (fn.early_returns.empty() && deferred_effects.empty()) {
+        if (fn.early_returns.empty() && deferred_effects.empty() && !structured_returns) {
             // Maintain stable native IR (ret i64 42, for example) for
             // functions without a multi-exit cleanup obligation.
             llvm::Value* result = awaited_result
@@ -1773,43 +1792,45 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             else builder.CreateRet(result);
         } else {
             llvm::Value* return_snapshot = fn.returns_void
-                ? nullptr : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot");
-            llvm::BasicBlock* cleanup = llvm::BasicBlock::Create(
+                ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot"));
+            llvm::BasicBlock* cleanup = structured_returns ? structured_cleanup : llvm::BasicBlock::Create(
                 context, "exit.cleanup", function);
             auto branch_to_cleanup = [&](llvm::Value* value) {
                 if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
                 builder.CreateBr(cleanup);
             };
-            for (const auto& guard : fn.early_returns) {
-                llvm::Value* conditionValue = nullptr;
-                if (guard.condition) {
-                    conditionValue = lower(*guard.condition, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
-                } else {
-                    llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
-                    llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
-                        declarations, &region_moves);
-                    conditionValue = builder.CreateZExt(
-                        builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
-                        i64, "return.guard.eq");
+            if (!builder.GetInsertBlock()->getTerminator()) {
+                for (const auto& guard : fn.early_returns) {
+                    llvm::Value* conditionValue = nullptr;
+                    if (guard.condition) {
+                        conditionValue = lower(*guard.condition, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                    } else {
+                        llvm::Value* left = lower(*guard.lhs, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                        llvm::Value* right = lower(*guard.rhs, builder, i64, storage, field_storage,
+                            declarations, &region_moves);
+                        conditionValue = builder.CreateZExt(
+                            builder.CreateICmpEQ(left, right, "return.guard.eq.i1"),
+                            i64, "return.guard.eq");
+                    }
+                    llvm::Value* takenCondition = builder.CreateICmpNE(
+                        conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
+                    llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
+                    llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
+                    builder.CreateCondBr(takenCondition, taken, next);
+                    builder.SetInsertPoint(taken);
+                    llvm::Value* selected = lower_return(*guard.result);
+                    branch_to_cleanup(selected);
+                    builder.SetInsertPoint(next);
                 }
-                llvm::Value* takenCondition = builder.CreateICmpNE(
-                    conditionValue, llvm::ConstantInt::get(i64, 0), "return.guard.cond.i1");
-                llvm::BasicBlock* taken = llvm::BasicBlock::Create(context, "guard.return", function);
-                llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "guard.next", function);
-                builder.CreateCondBr(takenCondition, taken, next);
-                builder.SetInsertPoint(taken);
-                llvm::Value* selected = lower_return(*guard.result);
-                branch_to_cleanup(selected);
-                builder.SetInsertPoint(next);
+                llvm::Value* result = awaited_result
+                    ? awaited_result
+                    : (fn.result
+                        ? lower_return(*fn.result)
+                        : nullptr);
+                branch_to_cleanup(result);
             }
-            llvm::Value* result = awaited_result
-                ? awaited_result
-                : (fn.result
-                    ? lower_return(*fn.result)
-                    : nullptr);
-            branch_to_cleanup(result);
             builder.SetInsertPoint(cleanup);
             // Capture the return before deferred calls can mutate class fields.
             for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it) {

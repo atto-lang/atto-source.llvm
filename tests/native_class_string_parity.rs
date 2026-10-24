@@ -49,6 +49,23 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("imported-module-routing-validation", r#"import module paths from './paths.ores';pub routine main():int{return paths.verify_paths();}"#, ""),
+        ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
+          fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
+          pub fnc main():int{let mut Counter counter=new Counter();update(rt borrow mut counter);return counter.value==99?0:1;}"#, ""),
+        ("foreach-return-releases-loan-before-defer", r#"define class Box as pub val Array<int> values;pub let int code=7;end
+          fnc pick(borrow mut Box owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt borrow mut owner);return selected==7&&owner.code==99?0:1;}"#, ""),
+        ("index-loop-branch-exits-and-string-result", r#"fnc choose_text(bool first):String{for(let int index=0;index<1;index=index+1){if(first){val String result="yes";return result;}else{val String result="no";return result;}fi}return "empty";}
+          pub fnc main():int{return choose_text(true)=="yes"&&choose_text(false)=="no"?0:1;}"#, ""),
+        ("index-loop-update-order-and-zero-iterations", r#"define class Counter as pub let int value=0;end
+          pub fnc main():int{let mut Counter counter=new Counter();for(let int index=0;index<4;index=index+1){counter.value=counter.value+index;}
+          for(let int index=4;index<4;index=index+1){counter.value=999;}return counter.value==6?0:1;}"#, ""),
+        ("actual-routing-path-validation", include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
+        ("foreach-return-unwinds-scopes", r#"fnc first(bool fill):int{val Array<int> values=new Array<int>();if(fill){values.add(42);}else{}fi for(const item of values){return item;}return 0;}pub fnc main():int{return first(true)==42&&first(false)==0?0:1;}"#, ""),
+        ("index-return-snapshot-before-deferred-field-write", r#"define class Counter as pub let int value=7;end
+          fnc choose(borrow mut Counter counter):int{defer counter.value=99;for(let int index=0;index<3;index=index+1){if index==1;then val int selected=counter.value;return selected;fi}return -1;}
+          pub fnc main():int{let mut Counter counter=new Counter();val selected:int=choose(rt borrow mut counter);return selected==7&&counter.value==99?0:1;}"#, ""),
         ("nested-read-loans-release-after-loop", r#"define class Counter as pub let int total=0;end
           pub routine main():int{val Array<int> values=new Array<int>();values.add(1);values.add(2);let mut Counter counter=new Counter();
           for(const first of values){for(const second of values){counter.total=counter.total+first+second;}}values.add(3);return counter.total==12&&values.size==3?0:1;}"#, ""),
@@ -292,6 +309,9 @@ fn main() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
+        let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
+            .replace("pub routine main(): int", "pub fnc verify_paths(): int");
+        fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
         let path = scratch.0.join("main.ores");
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
@@ -402,6 +422,7 @@ fn main() {
           fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
           pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
+            (include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
             (include_str!("fixtures/native-class-string/typed-array-iteration.ores"), "foo\nid\n"),
             (scalar_record, ""),
             (owning_int, ""),
@@ -424,6 +445,19 @@ fn main() {
         }
     }
     let negatives = [
+        ("index-loop-shadows-live-local", r#"pub fnc main():int{val index:int=0;for(let int index=0;index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-counter-escape", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){}return index;}"#.to_owned(), foo.to_owned()),
+        ("index-initializer-wrong-type", r#"pub fnc main():int{for(let int index="bad";index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-condition-wrong-type", r#"pub fnc main():int{for(let int index=0;index+1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-update-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=true){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-updates-other-counter", r#"pub fnc main():int{val other:int=0;for(let int index=0;index<1;other=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-backedge-consumes-outer", r#"fnc consume(int n):void{return;}pub fnc main():int{val external_value:int=42;for(let int index=0;index<2;index=index+1){consume(rt take external_value);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-condition-consumes-counter", r#"fnc yes(int n):bool{return true;}pub fnc main():int{for(let int index=0;yes(rt take index);index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-return-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){return true;}return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-return-ownership-transfer", r#"pub fnc main():int{val external_value:int=42;for(let int index=0;index<1;index=index+1){return rt take external_value;}return 0;}"#.to_owned(), foo.to_owned()),
+        ("late-defer-after-conditional-return", r#"fnc cleanup():void{return;}pub fnc main():int{for(let int index=0;index<1;index=index+1){return 0;}defer cleanup();return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-owning-class-return", r#"define class Box as pub val Array<int> values;end fnc bad():Box{val Array<int> values=new Array<int>();val Box box=new Box(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+
         ("iteration-backedge-consumes-scalar-owner", r#"fnc consume(int value):void{return;}pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val outer:int=42;for(const item of values){consume(rt take outer);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-record-alias-without-borrow", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const item of a){val Item other=item;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source", r#"pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);for(const n of a){a.add(n);}return 0;}"#.to_owned(), foo.to_owned()),
@@ -438,7 +472,6 @@ fn main() {
         ("scoped-mutable-record-snapshot", r#"define class Item as pub let int value=1;end pub fnc main():int{val Item i=new Item();if(true){val Item j=i;}else{}fi return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-write", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const n of a){n.value=2;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-break-without-cleanup", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){break;}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-return-without-cleanup", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){return n;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-non-array-source", r#"pub fnc main():int{val int a=1;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
 
         ("owning-return-duplicate-array", "define class Pair as val Array<int> a;val Array<int> b;end fnc bad():Pair{val Array<int> values=new Array<int>();return new Pair(values,values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),

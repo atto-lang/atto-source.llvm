@@ -74,6 +74,7 @@ void resolve_native_methods(Program& program) {
                 return;
             }
             expression(stmt.expression.get()); expression(stmt.condition.get()); expression(stmt.condition_lhs.get()); expression(stmt.condition_rhs.get());
+            expression(stmt.loop_step.get());
             expression(stmt.array_commit_length.get());
             for (auto& item : stmt.array_commit_values) expression(item.get());
             if (stmt.branch_local) {

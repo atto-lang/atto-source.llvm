@@ -239,7 +239,16 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals)> statements;
         statements = [&](const std::vector<Statement>& items, Locals scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ForEach) {
+                if (item.kind == Statement::Kind::ForIndex) {
+                    require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
+                    Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
+                    require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");
+                    require(expression(*item.loop_step, body), scalar(false), item.offset, "index update requires int");
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::Return) {
+                    if (item.expression) require(expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
+                    else if (!fn.returns_void) fail(item.offset, "non-void structured return requires value");
+                } else if (item.kind == Statement::Kind::ForEach) {
                     const auto source = expression(*item.expression, scope);
                     if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
                     const auto& iterator = *item.branch_local;
