@@ -68,6 +68,8 @@ static int64_t resumed_after_done(void* actor) {
     check(continuations[0].record.boundary
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     check(continuations[0].record.source_token == UINT64_C(0x5678));
+    check(continuations[0].record.state == ORES_CONTINUATION_CLAIMED);
+    check(continuations[0].record.code_generation == 1);
     return 43;
 }
 
