@@ -57,6 +57,14 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         oreslang_proxy_host_ctest(oreslang-native-epoll-transport-stress-test
             native_epoll_transport_capacity_stale_shutdown_stress 30
             tests/native_epoll_transport_capacity_stress_test.cpp)
+        oreslang_proxy_host_ctest(oreslang-native-vm-actor-nio-owned-test
+            native_vm_actor_nio_owned_callbacks 40
+            tests/native_vm_actor_nio_owned_test.cpp
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
     endif()
     return()
 endif()
@@ -3269,6 +3277,35 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         COMMAND oreslang-native-vm-nio-lifecycle-test)
     set_tests_properties(native_vm_nio_lifecycle_and_rt_prestart
         PROPERTIES TIMEOUT 30)
+endif()
+
+# Opt-in native VM NIO actor-owned completion path. The C++ host adapter
+# retains callback permits through explicit terminal acknowledgment; the
+# existing C NIO ABI remains available only on distinct backend instances.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-vm-actor-nio-owned-test
+        tests/native_vm_actor_nio_owned_test.cpp
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+        src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+    target_include_directories(oreslang-native-vm-actor-nio-owned-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-vm-actor-nio-owned-test
+        PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(oreslang-native-vm-actor-nio-owned-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-vm-actor-nio-owned-test PRIVATE
+        c_std_11 cxx_std_20)
+    target_compile_options(oreslang-native-vm-actor-nio-owned-test PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_vm_actor_nio_owned_callbacks
+        COMMAND oreslang-native-vm-actor-nio-owned-test)
+    set_tests_properties(native_vm_actor_nio_owned_callbacks
+        PROPERTIES TIMEOUT 40)
 endif()
 
 # This compiles the REAL native frontend parser and ownership checker,

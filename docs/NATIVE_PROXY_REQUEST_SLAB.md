@@ -204,3 +204,50 @@ iterations, verifying epoll/eventfd/socket handles are reclaimed. This is real e
 the focused native source in a local subset, **not an exact full LLVM source
 tree CMake/CTest or production guest actor runtime test**. Full CI,
 independent review and protected-source provenance remain blocking gates.
+
+## VM-backed actor-owned NIO completion admission
+
+The native VM's existing `NativeEpollReactorManager` now supports a separate
+trusted **C++ actor-owned completion mode** through
+`NativeOresVMActorNio.hpp`. This mode is opt-in, irreversible for one NIO
+backend, and mutually exclusive with the legacy C completion-record mode.
+A legacy `ores_native_nio_try_pop()` cannot consume an actor-owned terminal
+record and silently throw away its callback ownership. Invalid mode mixing
+rejects without touching the completion queue.
+
+`NativeActorNioCallbacks` holds one move-only
+`NativeTransportCallbackGate::Permit` per admitted watch in a fixed
+256-slot ledger (four reactor domains × 64 tickets). A watch is registered
+with the VM's existing native reactor manager **only after** obtaining a
+callback permit, and a short nonparking ledger mutex serializes registration
+against completion consumption. On READY, CANCELLED or STOPPED,
+`vm_nio_actor_try_pop()` returns the original readiness metadata plus a
+process-unique nonwrapping `lease_id` and the source actor domain/slot/
+generation/slab identity. The ledger **retains** its permit until trusted host
+code calls `vm_nio_actor_acknowledge()` after the final physical actor-memory
+access. A forged identity, mismatched ticket, stale lease, duplicate ack, or
+a legacy completion poll cannot refund that permit. Host-only
+`vm_nio_actor_stop()` joins the backend's reactor threads while still
+requiring subsequent consumption and explicit acknowledgment of STOPPED
+records. No guest actor can fabricate this receipt or access the C++ owner
+ledger as a source-level method.
+
+Every VM NIO API call acquires the existing backend retirement pin, so a
+concurrent VM close cannot free the backend during that call. **The host
+must also keep the VM and actor-owned callback gate alive across the entire
+asynchronous operation**, fence producers, stop or cancel watches, pop all
+terminal completions, acknowledge them, and only then retire/close the VM.
+Teardown with unacknowledged actor-owned watches intentionally fail-stops
+instead of dropping callback permits and freeing actor-owned memory.
+
+This is native host/VM readiness integration only, **not** guest Oreslang
+source lowering, a production HTTP request scheduler, or an externally
+validated remote transport. Actor ownership remains a trusted-host API
+boundary. The legacy C NIO behavior is unchanged for backends that select
+legacy mode.
+
+The `native_vm_actor_nio_owned_callbacks` regression exercises a real VM
+and Linux pipe readiness, foreign/forged/duplicate lease rejection,
+cross-carrier acknowledgement, cancellation, STOPPED completion and
+fail-closed legacy mode mixing. Register it in the opt-in host-only and
+ordinary Linux native CMake test matrix, GCC and Clang, plus ASan/UBSan.

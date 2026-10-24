@@ -5,6 +5,10 @@ on:
       - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeTransportCallbackGate.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorNioCallbacks.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMActorNio.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp'
+      - 'src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp'
       - 'src/main/cpp/oreslang/runtime/NativeEpollTransportBridge.hpp'
       - 'src/main/cpp/oreslang/runtime/NativeEpollReactor.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorArena.h'
@@ -15,6 +19,7 @@ on:
       - 'tests/native_proxy_transport_gate_test.cpp'
       - 'tests/native_epoll_transport_bridge_test.cpp'
       - 'tests/native_epoll_transport_capacity_stress_test.cpp'
+      - 'tests/native_vm_actor_nio_owned_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
   workflow_dispatch:
@@ -108,9 +113,26 @@ jobs:
                      oreslang-native-actor-proxy-slab-owner-test \
                      oreslang-native-proxy-transport-gate-test \
                      oreslang-native-epoll-transport-bridge-test \
-                     oreslang-native-epoll-transport-stress-test
+                     oreslang-native-epoll-transport-stress-test \
+                     oreslang-native-vm-actor-nio-owned-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress)$'
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_vm_actor_nio_owned_callbacks)$'
+      - name: Exercise VM actor-owned NIO backend under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B /tmp/ores-proxy-asan-vm \
+            -DORESLANG_PROXY_SLAB_HOST_ONLY=ON -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build /tmp/ores-proxy-asan-vm --parallel 2 \
+            --target oreslang-native-vm-actor-nio-owned-test
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir /tmp/ores-proxy-asan-vm --output-on-failure \
+              -R '^native_vm_actor_nio_owned_callbacks$'
       - name: Exercise counted transport callback gate under ASan/UBSan
         shell: bash
         run: |

@@ -16,6 +16,17 @@ namespace oreslang::runtime {
 // No per-callback heap allocation or blocking wait is performed by this gate.
 class NativeTransportCallbackGate final {
 public:
+    struct Binding final {
+        std::uint64_t domain = 0;
+        std::uint64_t slot = 0;
+        std::uint64_t generation = 0;
+        std::uint64_t slab = 0;
+    };
+    // Immutable routing metadata, NOT an authorization token. Trusted host
+    // retains the actual counted callback permit until final cleanup.
+    Binding binding() const noexcept {
+        return Binding{domain_, slot_, generation_, identity_};
+    }
     class Permit final {
     public:
         Permit() noexcept = default;
