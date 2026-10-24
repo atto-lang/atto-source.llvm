@@ -1243,6 +1243,49 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    # ActorRef implements HasFuture: awaiting its capability directly
+    # delegates to the same get_ready() root CONTROL continuation.
+    oreslang_contract_test(source_actor_hasfuture_direct_await_ir
+        source-actor-await-worker.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_hasfuture_direct_await_runtime_ir
+        source-actor-await-worker.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_hasfuture_unknown_receiver
+        source-actor-await-unknown.ores
+        --diagnostic "await get_ready requires a live direct ActorRef receiver")
+    oreslang_contract_test(reject_source_actor_hasfuture_double_await
+        source-actor-await-worker-twice.ores
+        --diagnostic "native source supports only one direct ActorRef lifecycle await")
+    # First native source-level typed Future: Future<void> from one
+    # ActorRef.get_ready(). It shares the existing root CONTROL continuation
+    # and #928's explicit throws ActorTerminated contract.
+    oreslang_contract_test(source_actor_typed_ready_future_continuation_ir
+        source-actor-future-void-ready.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_typed_ready_future_runtime_ir
+        source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_unused_ready_future
+        source-actor-future-void-unused.ores
+        --diagnostic "Future<void> readiness token must be awaited exactly once")
+    oreslang_contract_test(reject_source_actor_wrong_ready_future
+        source-actor-future-void-wrong-name.ores
+        --diagnostic "native Future<void> await requires its declared readiness token")
+    oreslang_contract_test(reject_source_actor_double_ready_future
+        source-actor-future-void-double-await.ores
+        --diagnostic "native source supports only one direct ActorRef lifecycle await")
+    oreslang_contract_test(reject_source_actor_unspawned_ready_future
+        source-actor-future-void-unspawned.ores
+        --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
+    oreslang_contract_test(reject_source_actor_ready_future_shadow
+        source-actor-future-void-shadow.ores
+        --diagnostic "Future<void> readiness token shadows a live owner")
+    oreslang_contract_test(reject_source_actor_duplicate_ready_future
+        source-actor-future-void-duplicate.ores
+        --diagnostic "native source supports only one Future<void> readiness token")
+    oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
+        source-actor-future-void-wrong-producer.ores
+        --diagnostic "expected 'get_ready'")
+    oreslang_contract_test(reject_source_actor_ready_future_as_message
+        source-actor-future-void-send.ores
+        --diagnostic "unknown parameter")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
@@ -1314,6 +1357,33 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
+    endif()
+
+    # Run direct ActorRef HasFuture await and typed Future<void> through real
+    # Clang-linked actor runtime, including independent release/sanitizer
+    # physical lifecycle receipts. No new Python test drivers.
+    find_program(ORE_READY_FUTURE_RUSTC NAMES rustc)
+    if(ORE_CLANG AND ORE_READY_FUTURE_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            COMMAND "${ORE_READY_FUTURE_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_future_void_source_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            DEPENDS tests/native_future_void_source_e2e.rs VERBATIM)
+        add_custom_target(oreslang-ready-future-void-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e")
+        add_test(NAME native_ready_future_void_guest_release
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_ready_future_void_guest_asan_ubsan
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(native_ready_future_void_guest_release
+            native_ready_future_void_guest_asan_ubsan PROPERTIES TIMEOUT 150)
     endif()
 
     # Trusted host resource reclamation: close in reverse acquisition order only
