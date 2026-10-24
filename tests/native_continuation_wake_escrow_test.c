@@ -21,6 +21,10 @@ typedef struct {
     atomic_int active, errors, wakes, controls, messages;
 } Fixture;
 
+static void no_op_data(void* raw, size_t actor, uint64_t payload) {
+    (void)raw; (void)actor; (void)payload;
+}
+
 static void event(Fixture* f, int code) {
     pthread_mutex_lock(&f->lock);
     if (f->events_len >= 32) abort();
@@ -148,6 +152,35 @@ static void contest(Fixture* f, OresNativeWakeTicket ticket, int both_cancel) {
     }
 }
 int main(void) {
+    /* Public wake-ticket APIs must fail closed on legacy schedulers that do
+     * not allocate a wake table. Before the matching_wake_locked hardening,
+     * a valid producer ref could drive transfer/cancel/publish into a NULL
+     * lane->wakes dereference. */
+    OresNativeActorScheduler* plain = ores_native_actor_scheduler_open(
+        1, 1, 1, no_op_data, NULL);
+    CHECK(plain);
+    OresNativeActorRef plain_actor = ores_native_actor_scheduler_spawn(plain, 0);
+    CHECK(plain_actor.scheduler_domain);
+    OresNativeWakeTicket unsupported = {
+        .producer = plain_actor,
+        .target = plain_actor,
+        .slot = 0,
+        .slot_generation = 1,
+        .continuation_slot = 1,
+        .continuation_generation = 1,
+        .code_generation = 1,
+        .descriptor_generation = 1
+    };
+    CHECK(!ores_native_actor_scheduler_transfer_wake(plain, unsupported));
+    CHECK(!ores_native_actor_scheduler_cancel_wake(plain, unsupported));
+    CHECK(!ores_native_actor_scheduler_abort_transferred_wake(plain, unsupported));
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        plain, unsupported, ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        plain, plain_actor) == 0);
+    ores_native_actor_scheduler_retire(plain);
+    CHECK(ores_native_actor_scheduler_try_destroy(plain));
+
     Fixture f = {0};
     setup(&f);
     /* DATA holds the actor's exclusive physical turn. Wake admission
