@@ -194,6 +194,10 @@ int ores_native_actor_scheduler_fifo_carriers_ready(
  * residency, or WCET. Must run before any message/control admission. */
 int ores_native_actor_scheduler_prestart_carriers(
     OresNativeActorScheduler* scheduler);
+/* Compatibility spelling for RT VM bootstrap; delegates to the stronger
+ * current prestart-carriers invariant rather than maintaining another state. */
+int ores_native_actor_scheduler_prestart_realtime(
+    OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_all_carriers_started(
     OresNativeActorScheduler* scheduler);
 /* True only when the scheduler mutex was successfully initialized with the
