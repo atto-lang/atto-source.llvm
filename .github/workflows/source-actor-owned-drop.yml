@@ -95,6 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -I - <<'PY'
+          import hashlib
           import json
           import os
           import pathlib
@@ -113,8 +114,10 @@ jobs:
           final = "PASS current-source actor lowering and physical heap reclamation"
           for path in logs:
               output = path.read_text()
-              if (output.count(marker) != 1 or output.count(isolation_marker) != 1
-                      or output.count(final) != 1):
+              actual_lines = output.splitlines()
+              if (actual_lines.count(marker) != 1
+                      or actual_lines.count(isolation_marker) != 1
+                      or actual_lines.count(final) != 1):
                   raise SystemExit("source actor native execution marker missing or duplicated")
           sha = git("rev-parse", "HEAD")
           if sha != os.environ["EXPECTED_HEAD"]:
@@ -124,10 +127,35 @@ jobs:
               "src/main/cpp/oreslang/backend/LlvmCodegen.cpp",
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c",
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
+              "src/main/cpp/oreslang/runtime/NativeActorScheduler.c",
+              "src/main/cpp/oreslang/runtime/NativeOresVM.c",
+              "src/main/cpp/oreslang/runtime/NativeActorFuture.c",
+              "src/main/cpp/oreslang/runtime/SourceActorBootstrap.c",
+              "src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c",
+              "src/main/cpp/oreslang/runtime/NativeContinuationStore.c",
+              "src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c",
+              "src/main/cpp/oreslang/runtime/NativeLogicalTrace.c",
+              ".github/workflows/source-actor-owned-drop.yml",
               "tests/source_actor_e2e.py",
+              "tests/test_source_actor_receipts.py",
               "tests/fixtures/source-actor-scoped-owned-i64.ores",
               "tests/fixtures/source-actor-two-owned-heaps.ores",
           ]
+          if git("status", "--porcelain", "--untracked-files=all"):
+              raise SystemExit("tested checkout changed after source execution")
+          source_blobs = {}
+          for path in files:
+              checked_out = git("hash-object", path)
+              committed = git("rev-parse", f"HEAD:{path}")
+              if checked_out != committed:
+                  raise SystemExit(f"tested source file differs from HEAD: {path}")
+              source_blobs[path] = committed
+          compiler = pathlib.Path("build/oreslang-llvmc")
+          if not compiler.is_file():
+              raise SystemExit("tested LLVM source compiler binary missing")
+          compiler_sha256 = hashlib.sha256(compiler.read_bytes()).hexdigest()
+          def tool_version(*command):
+              return subprocess.check_output(command, text=True).splitlines()[0]
           receipt = {
               "schema": "oreslang.native_source_actor_owned_drop_v1",
               "head_sha": sha,
@@ -135,7 +163,13 @@ jobs:
               "repository": os.environ["GITHUB_REPOSITORY"],
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
               "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-              "source_blobs": {p: git("hash-object", p) for p in files},
+              "source_blobs": source_blobs,
+              "compiler_sha256": compiler_sha256,
+              "toolchain": {
+                  "clang": tool_version("clang", "--version"),
+                  "cmake": tool_version("cmake", "--version"),
+                  "python": tool_version("python3", "--version"),
+              },
               "release_native_execution_verified": True,
               "asan_ubsan_native_execution_verified": True,
               "two_actor_owned_heaps_native_execution_verified": True,
