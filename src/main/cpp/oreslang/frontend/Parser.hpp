@@ -251,9 +251,17 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
+    /* Trusted-root actor await slices. Actor carriers never block; native
+     * process main may wait as the orchestration boundary. */
+    bool async_actor_root = false;
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    std::string root_output_await_actor;
+    std::string root_output_await_local;
+    std::size_t root_output_await_offset = 0;
+    bool root_stdout_write_output = false;
+    std::string done_await_actor;
+    std::size_t done_await_offset = 0;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
