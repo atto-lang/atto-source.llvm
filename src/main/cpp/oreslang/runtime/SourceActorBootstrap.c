@@ -12,6 +12,7 @@
 #define SOURCE_GROUP_ROOT_SLOT (SOURCE_GROUP_SLOTS - 1u)
 #define SOURCE_GROUP_CARRIERS 4u
 #define SOURCE_GROUP_MAILBOX 128u
+#define SOURCE_ACTOR_OUTPUT_CAPACITY 16u
 #define SOURCE_TRACE_EXECUTIONS 128u
 #define SOURCE_TRACE_CONTINUATIONS 128u
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
@@ -28,9 +29,14 @@ struct SourceActor {
     OresNativeActorRef capabilities[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
     struct SourceActor* children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
     struct SourceActor* parent;
+    int64_t outputs[SOURCE_ACTOR_OUTPUT_CAPACITY];
     uint8_t capability_count;
     uint8_t child_count;
+    uint8_t output_head;
+    uint8_t output_tail;
+    uint8_t output_count;
     atomic_int initialized;
+    atomic_int end_requested;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
 };
@@ -49,6 +55,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_cond_t output_ready;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -64,7 +71,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .output_ready = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 static _Thread_local SourceActor* current_source_actor;
@@ -245,6 +255,16 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     current_source_phase = 0;
     current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
+    if (atomic_exchange_explicit(
+            &instance->end_requested, 0, memory_order_acq_rel) != 0) {
+        /* Nonblocking on the current carrier: mark terminal only. External
+         * trusted code performs wait/reclamation after the callback exits. */
+        (void)ores_native_vm_stop(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
+        group_lock();
+        ensure(pthread_cond_broadcast(&group.output_ready) == 0);
+        group_unlock();
+    }
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(
@@ -435,6 +455,57 @@ int oreslang_source_actor_try_send_capability(
     return source_actor_try_send_ref(current_capability(heap, slot), payload);
 }
 
+void oreslang_source_actor_emit_output(
+        OresActorI64Heap* heap, int64_t payload) {
+    SourceActor* instance = current_source_actor;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 2 && instance->heap == heap);
+
+    group_lock();
+    ensure(instance->output_count < SOURCE_ACTOR_OUTPUT_CAPACITY);
+    instance->outputs[instance->output_tail] = payload;
+    instance->output_tail = (uint8_t)(
+        (instance->output_tail + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
+    instance->output_count++;
+    ensure(pthread_cond_broadcast(&group.output_ready) == 0);
+    group_unlock();
+}
+
+int64_t oreslang_source_actor_take_output(void* opaque) {
+    ensure(current_source_actor == NULL);
+    group_lock();
+    SourceActor* instance = NULL;
+    for (size_t i = 0; i < group.next_slot; ++i) {
+        if (group.actors[i] == opaque) {
+            instance = group.actors[i];
+            break;
+        }
+    }
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    while (instance->output_count == 0) {
+        if (ores_native_vm_poll_done(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref)) {
+            group_unlock();
+            abort();
+        }
+        ensure(pthread_cond_wait(&group.output_ready, &group.mutex) == 0);
+    }
+    const int64_t value = instance->outputs[instance->output_head];
+    instance->outputs[instance->output_head] = 0;
+    instance->output_head = (uint8_t)(
+        (instance->output_head + 1u) % SOURCE_ACTOR_OUTPUT_CAPACITY);
+    instance->output_count--;
+    group_unlock();
+    return value;
+}
+
+void oreslang_source_actor_request_end(OresActorI64Heap* heap) {
+    SourceActor* instance = current_source_actor;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 2 && instance->heap == heap);
+    atomic_store_explicit(&instance->end_requested, 1, memory_order_release);
+}
+
 void oreslang_source_actor_spawn_child_capability(
         OresActorI64Heap* heap,
         uint64_t slot,
@@ -569,8 +640,10 @@ void oreslang_source_actor_stop(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    ensure(ores_native_vm_stop(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    /* If self.end() already retired the lane, stop returns zero. The ref was
+     * validated above, so either state is safe to hand to wait_done. */
+    (void)ores_native_vm_stop(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
     group_unlock();
 
     ensure(ores_native_vm_wait_done(
