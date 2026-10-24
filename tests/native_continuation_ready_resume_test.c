@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "oreslang/runtime/NativeContinuationStore.h"
+#include "oreslang/runtime/NativeAwaitTraceBridge.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -159,6 +159,69 @@ int main(void) {
         check(ores_native_continuation_store_release(continuations, ready));
         check(!ores_native_continuation_store_get(continuations, ready, &record));
     }
+
+    /*
+     * Exercise the exact bridge called from real compiled actor await:
+     * a Future cannot re-enter a root actor turn while still PENDING,
+     * even if the host tries to schedule it with a forged new execution ID.
+     */
+    OresNativeExecutionContext trace_origin_context = context;
+    trace_origin_context.id.execution = 8;
+    OresNativeExecutionHandle trace_origin = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        executions, &trace_origin_context, &trace_origin));
+    OresNativeSuspensionLink link = {0};
+    check(ores_native_await_trace_suspend(
+        executions, continuations, trace_origin,
+        (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 77, 1300, &link));
+    check(ores_native_execution_context_store_release(executions, trace_origin));
+
+    OresNativeExecutionHandle resumed = {0, 0};
+    OresNativeExecutionContext resumed_context = {0};
+    check(!ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, &resumed, &resumed_context));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_PENDING);
+    check(ores_native_continuation_store_notify_ready(
+        continuations, link.continuation));
+    check(ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, &resumed, &resumed_context));
+    check(resumed_context.id.execution == 9);
+    check(resumed_context.allocation.owner == context.allocation.owner);
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
+    check(!ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 10},
+        link, &trace_origin, NULL));
+    check(ores_native_await_trace_resume_finish(continuations, link));
+    check(ores_native_execution_context_store_release(executions, resumed));
+    check(ores_native_continuation_store_release(
+        continuations, link.continuation));
+
+    /* A cancellation wins over any late ready event or scheduled callback. */
+    trace_origin_context.id.execution = 11;
+    check(ores_native_execution_context_store_insert(
+        executions, &trace_origin_context, &trace_origin));
+    OresNativeSuspensionLink cancelled_link = {0};
+    check(ores_native_await_trace_suspend(
+        executions, continuations, trace_origin,
+        (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 77, 1301, &cancelled_link));
+    check(ores_native_execution_context_store_release(executions, trace_origin));
+    check(ores_native_continuation_store_cancel(
+        continuations, cancelled_link.continuation));
+    check(!ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 12},
+        cancelled_link, &resumed, NULL));
+    check(!ores_native_continuation_store_notify_ready(
+        continuations, cancelled_link.continuation));
+    check(ores_native_continuation_store_release(
+        continuations, cancelled_link.continuation));
 
     check(ores_native_continuation_store_live(continuations) == 0);
     check(ores_native_continuation_store_close(continuations));
