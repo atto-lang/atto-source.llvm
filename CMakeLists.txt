@@ -3249,3 +3249,31 @@ if(BUILD_TESTING)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()
+
+# Source-actor lifecycle prerequisite for real ActorRef.get_done lowering:
+# stop request must not wait for physical termination; join_done owns the
+# host-side terminal ACK and heap-reclamation barrier.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-source-actor-stop-join-split-test
+        tests/source_actor_stop_join_split_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-stop-join-split-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-stop-join-split-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-stop-join-split-test PRIVATE c_std_11)
+    target_compile_options(oreslang-source-actor-stop-join-split-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_stop_request_join_split
+        COMMAND oreslang-source-actor-stop-join-split-test)
+    set_tests_properties(source_actor_stop_request_join_split PROPERTIES TIMEOUT 30)
+endif()
