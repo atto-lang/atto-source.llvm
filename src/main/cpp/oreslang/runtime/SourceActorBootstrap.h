@@ -15,6 +15,8 @@ typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
 typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
+typedef int64_t (*OresSourceActorOutputContinuation)(
+    OresActorI64Heap*, uint64_t, uint64_t, int64_t, int64_t);
 
 #define ORES_SOURCE_ACTOR_CAPABILITY_SLOTS 8u
 
@@ -55,6 +57,15 @@ void oreslang_source_actor_emit_output(
 int64_t oreslang_source_actor_take_output(void* actor);
 /* Handler-only nonblocking lifecycle request matching source self.end(). */
 void oreslang_source_actor_request_end(OresActorI64Heap* heap);
+/* First actor-handler suspension slice: wait for the next output from an owned
+ * child capability without parking the carrier. DATA for the parent remains
+ * bounded/admitted but gated until the CONTROL continuation resumes. */
+void oreslang_source_actor_await_child_output(
+    OresActorI64Heap* heap,
+    uint64_t capability,
+    int64_t original_mail,
+    OresSourceActorOutputContinuation continuation,
+    uint64_t source_token);
 /* Constructor-only structured child binding. The current actor must own heap,
  * slot must be the next dense capability slot, and the child is retained only
  * by trusted runtime metadata plus its generation-fenced capability identity.
