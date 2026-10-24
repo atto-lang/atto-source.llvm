@@ -17,7 +17,7 @@ typedef struct {
     int retired, sticky_failure;
 } Model;
 static int safe(const Model *m) {
-    if (m->retired && (m->wake_pending || m->frame_loan || m->sticky_failure))
+    if (m->retired && (m->wake_pending || m->frame_loan || m->sticky_failure ||\n                       (m->state != DONE && m->state != CANCELLED)))
         return 0;
     if (m->state == READY && (!m->result_committed || !m->wake_reserved))
         return 0;
@@ -59,7 +59,7 @@ static void scenario(int fail_reservation, int fail_publish,
         m.state = DONE;
     }
     if (physical_exit) m.frame_loan = 0;
-    if (!m.frame_loan && !m.wake_pending && !m.sticky_failure) m.retired = 1;
+    if (!m.frame_loan && !m.wake_pending && !m.sticky_failure &&\n        (m.state == DONE || m.state == CANCELLED)) m.retired = 1;
     assert(safe(&m));
     if (m.sticky_failure || m.frame_loan || m.wake_pending)
         assert(!m.retired);
