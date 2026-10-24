@@ -25,6 +25,7 @@ def main():
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
+        ("source-actor-zero-field.ores", 1, 1, 42),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
@@ -88,7 +89,7 @@ def main():
         "source-actor-child-capability-footprint-reject.ores":
             "native actor capability spawn tree exceeds 63 guest actor slots",
         "shared-actorref-child-capability-v1.ores":
-            "native actor currently requires at least one scalar int field",
+            "native actor requires pub on_message(int)",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
