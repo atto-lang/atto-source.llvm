@@ -24,6 +24,17 @@ typedef struct {
     int won;
 } RaceArgs;
 
+typedef struct {
+    int calls;
+    int result;
+} ReadyCommitProbe;
+
+static int ready_commit_probe(void* raw) {
+    ReadyCommitProbe* probe = (ReadyCommitProbe*)raw;
+    ++probe->calls;
+    return probe->result;
+}
+
 static void* contender(void* raw) {
     RaceArgs* race = (RaceArgs*)raw;
     while (!atomic_load_explicit(race->go, memory_order_acquire)) {
@@ -82,9 +93,40 @@ int main(void) {
     check(ores_native_execution_context_store_insert(
         executions, &context, &execution));
 
+    /*
+     * The producer commit and READY publication form one transaction relative
+     * to cancellation. A failed producer commit leaves PENDING unchanged.
+     */
+    OresNativeContinuationRecord record = {0};
+    ReadyCommitProbe probe = {0, 1};
+    OresNativeContinuationHandle transactional_ready =
+        publish(continuations, execution);
+    check(ores_native_continuation_store_commit_ready(
+        continuations, transactional_ready, ready_commit_probe, &probe));
+    check(probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, transactional_ready, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(
+        continuations, transactional_ready));
+    check(ores_native_continuation_store_release(
+        continuations, transactional_ready));
+
+    probe = (ReadyCommitProbe){0, 0};
+    OresNativeContinuationHandle failed_commit =
+        publish(continuations, execution);
+    check(!ores_native_continuation_store_commit_ready(
+        continuations, failed_commit, ready_commit_probe, &probe));
+    check(probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, failed_commit, &record));
+    check(record.state == ORES_CONTINUATION_PENDING);
+    check(ores_native_continuation_store_cancel(continuations, failed_commit));
+    check(ores_native_continuation_store_release(continuations, failed_commit));
+
     /* A not-yet-ready Future must not claim the source continuation. */
     OresNativeContinuationHandle pending = publish(continuations, execution);
-    OresNativeContinuationRecord record = {0};
+    record = (OresNativeContinuationRecord){0};
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, &record));
     check(ores_native_continuation_store_notify_ready(continuations, pending));
@@ -104,6 +146,10 @@ int main(void) {
     /* Cancellation before Future readiness is irrevocable. */
     OresNativeContinuationHandle cancelled = publish(continuations, execution);
     check(ores_native_continuation_store_cancel(continuations, cancelled));
+    ReadyCommitProbe cancelled_probe = {0, 1};
+    check(!ores_native_continuation_store_commit_ready(
+        continuations, cancelled, ready_commit_probe, &cancelled_probe));
+    check(cancelled_probe.calls == 0);
     check(!ores_native_continuation_store_notify_ready(continuations, cancelled));
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, cancelled, NULL));
