@@ -2674,6 +2674,41 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Scheduler-owned producer continuation wake escrow: independent from
+    # supervisor CONTROL and USER mail capacity. Native host substrate only.
+    add_executable(oreslang-native-continuation-wake-escrow-test
+        tests/native_continuation_wake_escrow_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-continuation-wake-escrow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-continuation-wake-escrow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-continuation-wake-escrow-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_escrow_stop_cancel_aba
+        COMMAND oreslang-native-continuation-wake-escrow-test)
+    set_tests_properties(native_continuation_wake_escrow_stop_cancel_aba
+        PROPERTIES TIMEOUT 45)
+
+    # Reservation must fail cleanly if pthread_create cannot allocate a
+    # future wake carrier. The macro is absent from production builds.
+    add_executable(oreslang-native-wake-carrier-failure-test
+        tests/native_continuation_wake_carrier_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-wake-carrier-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-wake-carrier-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
+    target_compile_options(oreslang-native-wake-carrier-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-wake-carrier-failure-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_carrier_failure_fence
+        COMMAND oreslang-native-wake-carrier-failure-test)
+    set_tests_properties(native_continuation_wake_carrier_failure_fence
+        PROPERTIES TIMEOUT 30)
+
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
     add_executable(oreslang-native-carrier-create-failure-test
