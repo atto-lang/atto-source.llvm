@@ -45,9 +45,10 @@ int main(void) {
         sched_yield();
 
     /*
-     * The handler cannot physically finish until this call returns and the
-     * host publishes release_handler. If request_stop waits for DONE, this
-     * test deadlocks and CTest's timeout catches the parity regression.
+     * Message 7 owns the active turn and message 8 is queued behind it.
+     * Source stop must return without waiting, preserve the already-active
+     * turn, and abandon the queued DATA envelope. If request_stop waits for
+     * DONE this deadlocks; if it drains queued DATA delivered becomes 2.
      */
     oreslang_source_actor_request_stop(actor);
     check(!atomic_load_explicit(&exited, memory_order_acquire));
@@ -55,7 +56,7 @@ int main(void) {
     atomic_store_explicit(&release_handler, 1, memory_order_release);
     oreslang_source_actor_join_done(actor);
     check(atomic_load_explicit(&exited, memory_order_acquire));
-    check(atomic_load_explicit(&delivered, memory_order_acquire) == 2);
+    check(atomic_load_explicit(&delivered, memory_order_acquire) == 1);
 
     puts("SOURCE_ACTOR_STOP_JOIN_SPLIT_PASS");
     return 0;
