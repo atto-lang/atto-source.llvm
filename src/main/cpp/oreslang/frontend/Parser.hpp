@@ -262,6 +262,11 @@ struct Function {
     std::vector<std::unique_ptr<Expression>> actor_outputs;
     std::vector<ActorHandlerAction> actor_handler_actions;
     bool actor_end_requested = false;
+    bool actor_output_await = false;
+    std::string actor_output_await_field;
+    std::string actor_output_await_local;
+    std::size_t actor_output_await_action_index = 0;
+    std::size_t actor_output_await_offset = 0;
     bool actor_mail_parameter = false; // receive(ActorMail<int> mail) aliases mail.value to payload
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
