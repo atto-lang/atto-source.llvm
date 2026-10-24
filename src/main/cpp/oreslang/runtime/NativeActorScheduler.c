@@ -14,19 +14,10 @@
 #include <unistd.h>
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
-/* Only compiled in the isolated fault-injection CTest; absent in production.
- * SIZE_MAX means disabled; N means allow exactly N create attempts to reach
- * pthread_create(), then fail the following attempt once and disarm. */
-static _Atomic size_t fail_carrier_create_after = SIZE_MAX;
+/* Only compiled in the isolated fault-injection CTest; absent in production. */
+static _Atomic int fail_next_carrier_create;
 void ores_native_actor_scheduler_test_fail_next_create(void) {
-    atomic_store_explicit(&fail_carrier_create_after, 0, memory_order_relaxed);
-}
-void ores_native_actor_scheduler_test_fail_create_after(
-        size_t successful_creates_before_failure) {
-    atomic_store_explicit(
-        &fail_carrier_create_after,
-        successful_creates_before_failure,
-        memory_order_relaxed);
+    atomic_store_explicit(&fail_next_carrier_create, 1, memory_order_relaxed);
 }
 #endif
 static int create_carrier(pthread_t* tid, void* context);
@@ -35,6 +26,8 @@ typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
+    pthread_t carrier_owner; /* owning physical worker while active */
+    unsigned carrier_owner_valid;
     unsigned has_control;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
@@ -59,12 +52,6 @@ struct OresNativeActorScheduler {
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
-    /* One-way bootstrap profile: all worker pthreads already exist before
-     * DATA/CONTROL admission, and hot path cannot create new pthreads.
-     * A failed bootstrap poisons this scheduler: RT preparation is a
-     * single-shot state transition, never a resource-dependent retry loop. */
-    int realtime_preallocated;
-    int realtime_prestart_failed;
     uint64_t domain;
     uint64_t next_execution;
     uint64_t reserved_executions;
@@ -76,7 +63,7 @@ struct OresNativeActorScheduler {
     int carrier_priority;
     OresNativeActorTaskFn callback;
     OresNativeActorTaskFn control_callback;
-    OresNativeActorSupervisorFn supervisor_callback;
+    OresNativeActorPanicFn panic_callback;
     void* context;
     OresNativePhysicalTurnGate* physical_turn_gate;
 };
@@ -169,41 +156,6 @@ int ores_native_actor_scheduler_test_set_next_execution(
     return ok;
 }
 #endif
-
-static void publish_terminal_locked(
-        OresNativeActorScheduler* s, size_t actor_index) {
-    ActorLane* lane = &s->actors[actor_index];
-    if (!lane->spawned || lane->terminal_valid
-            || !lane->retired || lane->active || lane->queued || lane->has_control)
-        return;
-
-    /* DONE is a physical-release receipt, never just a logical stop flag.
-     * Every caller must retire the execution authority before publishing it. */
-    if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
-        abort();
-
-    if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
-            && lane->requested_terminal_kind
-                != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
-        abort();
-
-    /* The current scheduler drains every accepted DATA envelope before DONE.
-     * Do not fabricate zero abandonment if accounting ever diverges. A future
-     * force/failure path must explicitly publish abandoned counts instead. */
-    if (lane->processed_user_messages != lane->accepted_user_messages)
-        abort();
-
-    lane->terminal = (OresNativeActorTerminalState){
-        .actor = {s->domain, (uint64_t)actor_index, lane->generation},
-        .kind = lane->requested_terminal_kind,
-        .accepted_user_messages = lane->accepted_user_messages,
-        .processed_user_messages = lane->processed_user_messages,
-        .abandoned_user_messages = 0,
-        .abandoned_control_messages = 0,
-    };
-    lane->terminal_valid = 1;
-}
-
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
         size_t recent_actor, unsigned consecutive) {
     /* Priority CONTROL may never be bypassed by a warm DATA cache hint.
@@ -325,7 +277,7 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
-        if (typed_failure) s->supervisor_callback(s->context, i, failure);
+        if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
         executing_actor = (OresNativeActorRef){0, 0, 0};
@@ -346,8 +298,11 @@ static void* carrier(void* raw) {
         unlock(s);
         if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
+        lane->carrier_owner_valid = 0;
         s->outstanding--;
         s->completed++;
         if (!control) {
@@ -379,7 +334,7 @@ static void* carrier(void* raw) {
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actors, size_t capacity, size_t workers,
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
-    OresNativeActorSupervisorFn supervisor_callback, void* ctx) {
+    OresNativeActorPanicFn panic_callback, void* ctx) {
     if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
         || !workers || workers > 128 || actors > SIZE_MAX / capacity)
         return NULL;
@@ -398,7 +353,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     s->worker_count = workers;
     s->callback = callback;
     s->control_callback = control_callback;
-    s->supervisor_callback = supervisor_callback;
+    s->panic_callback = panic_callback;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
         s->actors[i].messages = s->slots + i * capacity;
@@ -455,25 +410,11 @@ static int matching(OresNativeActorScheduler* s, OresNativeActorRef ref) {
  * acknowledges an unserviceable first message. */
 static int create_carrier(pthread_t* tid, void* context) {
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
-    /* Deterministically fail one selected worker-create attempt. The CAS
-     * loop keeps the test hook well-defined even if independent scheduler
-     * fixtures create carriers concurrently. Production builds omit it. */
-    size_t remaining = atomic_load_explicit(
-        &fail_carrier_create_after, memory_order_relaxed);
-    for (;;) {
-        if (remaining == SIZE_MAX) break;
-        if (remaining == 0) {
-            if (atomic_compare_exchange_weak_explicit(
-                    &fail_carrier_create_after, &remaining, SIZE_MAX,
-                    memory_order_relaxed, memory_order_relaxed))
-                return EAGAIN;
-            continue;
-        }
-        if (atomic_compare_exchange_weak_explicit(
-                &fail_carrier_create_after, &remaining, remaining - 1,
-                memory_order_relaxed, memory_order_relaxed))
-            break;
-    }
+    /* Fail exactly the next OS worker creation, without ever linking this
+     * fault injector into the production ABI or exported symbol table. */
+    if (atomic_exchange_explicit(
+            &fail_next_carrier_create, 0, memory_order_relaxed))
+        return EAGAIN;
 #endif
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)context;
     if (!s->explicit_carrier_policy)
@@ -502,13 +443,6 @@ static int execution_slot_available_locked(OresNativeActorScheduler* s) {
 }
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
-    /* A failed real-time prestart is a one-way poison state. Ordinary DATA or
-     * CONTROL admission must not "heal" the scheduler by creating carriers
-     * later; callers must retire and replace the scheduler instance. */
-    if (s->realtime_prestart_failed) return 0;
-    /* Real-time service must not allocate stacks or pthread metadata when
-     * processing live messages. Profile preparation happens before admission. */
-    if (s->realtime_preallocated) return s->started_workers >= required;
     while (s->started_workers < required) {
         if (create_carrier(&s->threads[s->started_workers], s) != 0)
             break;
@@ -585,30 +519,6 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
     unlock(s);
     return enabled;
 }
-/* Trusted host bootstrap only. No actor may have admitted runnable work.
- * Thread allocation/attachment is outside the later deadline-sensitive path.
- * On partial pthread creation failure return 0 and require VM teardown.
- */
-int ores_native_actor_scheduler_prestart_realtime(OresNativeActorScheduler* s) {
-    if (!s) return 0;
-    lock(s);
-    int ok = 0;
-    if (!s->retired && !s->realtime_preallocated
-            && !s->realtime_prestart_failed
-            && s->accepted == 0 && s->outstanding == 0) {
-        ok = ensure_workers_locked(s, s->worker_count);
-        if (ok) {
-            s->realtime_preallocated = 1;
-        } else {
-            /* Fail closed. Even a first-pthread EAGAIN is a failed bootstrap
-             * attempt: callers must tear this scheduler down rather than make
-             * RT service admission depend on a later resource-timing retry. */
-            s->realtime_prestart_failed = 1;
-        }
-    }
-    unlock(s);
-    return ok;
-}
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
@@ -629,8 +539,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
     if (a->accepted_user_messages == UINT64_MAX) abort();
-    s->reserved_executions++;
     ++a->accepted_user_messages;
+    s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
     pthread_cond_signal(&s->ready);
@@ -756,28 +666,16 @@ int ores_native_actor_scheduler_publish_control(
     unlock(s);
     return ok;
 }
-static int valid_supervisor_failure_kind(uint64_t kind) {
-    switch (kind) {
-        case ORES_NATIVE_CONTROL_PANIC:
-        case ORES_NATIVE_CONTROL_THROW:
-        case ORES_NATIVE_CONTROL_RAISE:
-        case ORES_NATIVE_CONTROL_CANCELLED:
-        case ORES_NATIVE_CONTROL_STOPPED:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* s, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure) {
     if (!s) return 0;
     lock(s);
-    int ok = s->supervisor_callback != NULL && !s->retired
+    int ok = s->panic_callback != NULL && !s->retired
         && matching(s, parent) && matching(s, failure.child)
         && parent.actor_slot != failure.child.actor_slot
-        && valid_supervisor_failure_kind(failure.kind)
+        && failure.kind >= ORES_NATIVE_CONTROL_PANIC
+        && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
         && s->accepted != UINT64_MAX
@@ -840,8 +738,7 @@ int ores_native_actor_scheduler_poll_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
     if (!s) return 0;
     lock(s);
-    int done = matching(s, actor)
-        && s->actors[actor.actor_slot].terminal_valid;
+    int done = matching(s, actor) && s->actors[actor.actor_slot].terminal_valid;
     unlock(s);
     return done;
 }
@@ -849,9 +746,6 @@ int ores_native_actor_scheduler_terminal_state(
         OresNativeActorScheduler* s,
         OresNativeActorRef actor,
         OresNativeActorTerminalState* output) {
-    // Failed or stale ActorRef queries may never retain an older terminal
-    // receipt in caller memory. Zero is not a terminal; check return code.
-    if (output) *output = (OresNativeActorTerminalState){0};
     if (!s || !output) return 0;
     lock(s);
     int available = matching(s, actor)
