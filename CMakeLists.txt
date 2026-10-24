@@ -1341,6 +1341,33 @@ if(BUILD_TESTING)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
     endif()
 
+    # Run both direct await and typed Future<void> source through real
+    # Clang-linked actor runtime, including independent release/sanitizer
+    # physical lifecycle receipts. No new Python test drivers.
+    find_program(ORE_READY_FUTURE_RUSTC NAMES rustc)
+    if(ORE_CLANG AND ORE_READY_FUTURE_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            COMMAND "${ORE_READY_FUTURE_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_future_void_source_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            DEPENDS tests/native_future_void_source_e2e.rs VERBATIM)
+        add_custom_target(oreslang-ready-future-void-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e")
+        add_test(NAME native_ready_future_void_guest_release
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_ready_future_void_guest_asan_ubsan
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(native_ready_future_void_guest_release
+            native_ready_future_void_guest_asan_ubsan PROPERTIES TIMEOUT 150)
+    endif()
+
     # Trusted host resource reclamation: close in reverse acquisition order only
     # after active turns, outstanding loans and native callbacks quiesce.
     add_executable(oreslang-actor-resource-registry-test
