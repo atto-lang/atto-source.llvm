@@ -74,7 +74,7 @@ pub fnc main(): int {
 }
 """,
             42,
-            "$mtd$Code$double$arity1",
+            "$mtd$Code$double",
         ),
         (
             "define_named_argument",
@@ -86,7 +86,7 @@ pub fnc main(): int {
 }
 """,
             42,
-            "$mtd$Code$plus$arity2",
+            "$mtd$Code$plus",
         ),
         (
             "forward_method_declaration",
@@ -99,7 +99,7 @@ pub fnc main(): int {
 }
 """,
             42,
-            "$mtd$Code$double$arity1",
+            "$mtd$Code$double",
         ),
         (
             "bool_alias_identity",
@@ -111,7 +111,7 @@ pub fnc main(): int {
 }
 """,
             1,
-            "$mtd$Flag$invert$arity1",
+            "$mtd$Flag$invert",
         ),
     ]
 
