@@ -106,6 +106,8 @@ def main():
     receiver_diag = contract["extension.diagnostic.receiver"]
     arity_diag = contract["extension.diagnostic.arity"]
     reserved_diag = contract["extension.diagnostic.reserved"]
+    self_diag = contract["extension.diagnostic.self_shadow"]
+    duplicate_diag = contract["extension.diagnostic.duplicate"]
 
     positives = [
         (
@@ -217,7 +219,7 @@ define mtd plus on Code(int x): int { return self + x; }
 define mtd plus on Code(int y): int { return self + y; }
 pub fnc main(): int { return 0; }
 """,
-            "EXTENSION_DUPLICATE_SLOT",
+            duplicate_diag,
         ),
         (
             "correct_alias_wrong_arity_rejected",
@@ -245,6 +247,14 @@ define mtd init on Code(): int { return self; }
 pub fnc main(): int { return 0; }
 """,
             reserved_diag,
+        ),
+        (
+            "explicit_self_shadow_rejected",
+            """declare type Code = int;
+define mtd bad on Code(int self): int { return self; }
+pub fnc main(): int { return 0; }
+""",
+            self_diag,
         ),
     ]
 
@@ -285,7 +295,7 @@ pub fnc main(): int {
 
     print(
         "PASS 5 executable alias-extension cases, 1 array-collision case, "
-        "and 8 fail-closed receiver/slot/name/arity cases"
+        "and 9 fail-closed receiver/slot/name/arity/self cases"
     )
     return 0
 
