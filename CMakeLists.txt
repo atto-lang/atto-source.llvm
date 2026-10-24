@@ -3246,3 +3246,24 @@ if(BUILD_TESTING)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()
+
+# Stage-2 prerequisite: readiness-gated Future continuation ownership.
+# This host race test is not source-level async, channels or select parity.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-continuation-ready-resume-test
+        tests/native_continuation_ready_resume_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c)
+    set_target_properties(oreslang-native-continuation-ready-resume-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-continuation-ready-resume-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-continuation-ready-resume-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-continuation-ready-resume-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_continuation_ready_cancel_resume_race
+        COMMAND oreslang-native-continuation-ready-resume-test)
+    set_tests_properties(native_continuation_ready_cancel_resume_race PROPERTIES TIMEOUT 45)
+endif()
