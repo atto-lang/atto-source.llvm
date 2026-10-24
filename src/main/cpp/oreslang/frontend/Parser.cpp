@@ -246,8 +246,10 @@ bool native_constructor_scalar_tree(const Expression& expr,
                                     std::size_t depth = 1) {
     require_expression_depth(depth, expr.offset);
     using Kind = Expression::Kind;
-    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean ||
+    if (expr.kind == Kind::Integer || expr.kind == Kind::Boolean || expr.kind == Kind::String ||
             expr.kind == Kind::Variable) return true;
+    if (expr.kind == Kind::Field)
+        return expr.left && expr.left->kind == Kind::Variable;
     if (expr.kind == Kind::Negate || expr.kind == Kind::LogicalNot)
         return expr.left && native_constructor_scalar_tree(*expr.left, depth + 1);
     if (expr.kind == Kind::Add || expr.kind == Kind::Subtract ||
@@ -684,6 +686,7 @@ private:
                         if (!params.insert(name).second)
                             fail("duplicate native constructor parameter '" + name + "'");
                         result.constructor_parameters.push_back(std::move(name));
+                        result.constructor_parameter_types.push_back(ScalarType::I64);
                     } while (accept(","));
                     require(")");
                 }
@@ -729,13 +732,22 @@ private:
                 require(")");
                 class_field_terminator(initializer_end);
             } else {
-                if (mutable_referent && token_.text != "int" && token_.text != "bool")
+                if (mutable_referent && token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "String" && token_.text != "string")
                     fail("native class field supports only scalar int/bool or mut Array<int>");
-                field.scalar_type = accept("bool") ? ScalarType::Bool : ScalarType::I64;
-                if (field.scalar_type != ScalarType::Bool) require("int");
+                field.scalar_type = accept("bool") ? ScalarType::Bool :
+                    (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                if (field.scalar_type == ScalarType::I64) require("int");
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
+                if (accept(";")) {
+                    if (!field.final_field || literal_const)
+                        fail("declaration-only native field requires val or final");
+                    field.constructor_argument = true;
+                    result.fields.push_back(std::move(field));
+                    continue;
+                }
                 if (!accept(":") && !accept("="))
                     fail(field.final_field
                         ? "final class field requires declaration-site initializer"
@@ -761,6 +773,18 @@ private:
             }
             result.fields.push_back(std::move(field));
         }
+        // Immutable declaration-only fields form a positional constructor.
+        // Initializers use parameter slots, never uninitialized field storage.
+        for (auto& field : result.fields) {
+            if (!field.constructor_argument) continue;
+            if (result.explicit_constructor)
+                fail("declaration-only fields with explicit constructor require checked field-assignment lowering");
+            result.constructor_parameters.push_back(field.name);
+            result.constructor_parameter_types.push_back(field.scalar_type);
+            field.initializer_expression = std::make_unique<Expression>();
+            field.initializer_expression->kind = Expression::Kind::Variable;
+            field.initializer_expression->name = field.name;
+        }
         // Fieldless classes still have nominal identity and checked receiver loans.
         for (const auto& method : result.methods)
             if (seen.count(method.name)) fail("native field/method name collision requires explicit callable member resolution");
@@ -770,8 +794,10 @@ private:
             if (field.int_array && result.explicit_constructor)
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
-            if (!result.explicit_constructor &&
-                    field.initializer_expression->kind != Expression::Kind::Integer && field.initializer_expression->kind != Expression::Kind::Boolean)
+            if (!result.explicit_constructor && !field.constructor_argument &&
+                    field.initializer_expression->kind != Expression::Kind::Integer &&
+                    field.initializer_expression->kind != Expression::Kind::Boolean &&
+                    field.initializer_expression->kind != Expression::Kind::String)
                 fail("native nonliteral class field initializer requires explicit scalar constructor");
             validate_expression(*field.initializer_expression, allowed, {});
         }
@@ -999,14 +1025,36 @@ private:
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
         }
         require("{");
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio") {
+        auto array_effect_ahead = [&] {
+            return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
+                [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
+        };
+        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             LocalBinding binding;
             binding.offset = token_.offset;
-            if (token_.text == "stdio") {
+            if (array_effect_ahead()) {
+                binding.name = "$effect" + std::to_string(value.locals.size());
+                binding.initializer = primary();
+                if (binding.initializer->kind != Expression::Kind::ArrayCall ||
+                        (binding.initializer->name != "add" && binding.initializer->name != "set"))
+                    fail("native array effect supports only add(value) or set(index,value)");
+            } else if (token_.text == "stdio") {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
                 binding.initializer = primary();
+            } else if (token_.text == "val" && peek_next().text == "Array") {
+                advance(); require("Array"); require("<");
+                array_element(binding);
+                require(">"); binding.name = identifier(); require("=");
+                require("new"); require("Array"); require("<");
+                if (!binding.array_record_class.empty()) {
+                    if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                } else if (binding.array_element_type == ScalarType::String) {
+                    if (!accept("String")) require("string");
+                } else require("int");
+                require(">"); require("("); require(")");
+                binding.int_array = binding.owner_mutable = true;
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -1021,7 +1069,12 @@ private:
                     binding.initializer = expression();
                 } else {
                     binding.class_name = type;
-                    require("new");
+                    if (!accept("new")) {
+                        binding.initializer = expression();
+                        if (binding.initializer->kind != Expression::Kind::ArrayCall || binding.initializer->name != "get")
+                            fail("native class initializer requires new or immutable record array get");
+                        binding.record_view = true;
+                    } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");
                     require("(");
                     if (!accept(")")) {
@@ -1029,6 +1082,7 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                    }
                 }
             } else if (accept("let")) {
                 // Preserve the Java/Graal distinction between immutable
@@ -1048,14 +1102,18 @@ private:
                         fail("native Array<int> requires let mut owner");
                     require("Array");
                     require("<");
-                    require("int");
+                    array_element(binding);
                     require(">");
                     binding.name = identifier();
                     require("=");
                     require("new");
                     require("Array");
                     require("<");
-                    require("int");
+                    if (!binding.array_record_class.empty()) {
+                        if (type_identifier() != binding.array_record_class) fail("array constructor element type mismatch");
+                    } else if (binding.array_element_type == ScalarType::String) {
+                        if (!accept("String")) require("string");
+                    } else require("int");
                     require(">");
                     require("(");
                     require(")");
@@ -1801,6 +1859,16 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (accept("new")) {
+            auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
+            expr->name = type_identifier();
+            require("(");
+            if (!accept(")")) {
+                do expr->arguments.push_back(expression()); while (accept(","));
+                require(")");
+            }
+            return expr;
+        }
         if (token_.kind == Kind::String) {
             auto expr = make_expression(Expression::Kind::String, offset);
             expr->name = string_literal(token_.text);
@@ -2017,6 +2085,11 @@ private:
         if (!accept(text)) fail("expected '" + std::string(text) + "'");
     }
 
+    void array_element(LocalBinding& binding) {
+        if (accept("String") || accept("string")) binding.array_element_type = ScalarType::String;
+        else if (!accept("int")) binding.array_record_class = type_identifier();
+    }
+
     std::string type_identifier() {
         auto name = identifier();
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
@@ -2123,6 +2196,10 @@ private:
                 return;
             case Expression::Kind::ArrayCall:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
+                for (const auto& arg : expr.arguments)
+                    validate_expression(*arg, parameters, functions, depth + 1);
+                return;
+            case Expression::Kind::RecordConstruct:
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
                 return;
@@ -2293,21 +2370,36 @@ private:
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
+                std::string receiver;
+                if (expr.left && expr.left->kind == Expression::Kind::Variable) receiver = expr.left->name;
+                else if (expr.left && expr.left->kind == Expression::Kind::Field && expr.left->left &&
+                        expr.left->left->kind == Expression::Kind::Variable)
+                    receiver = expr.left->left->name + "." + expr.left->name;
+                const auto element_slot = variables.find(receiver + ".$element");
+                const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
                 const std::size_t expected = expr.name == "get" || expr.name == "add"
                     ? 1 : expr.name == "set" ? 2 : 0;
                 if (expected == 0 || expr.arguments.size() != expected)
                     throw std::runtime_error("native Array<int> effect supports only add(value) or set(index,value); scalar expression supports only get(index) at byte " +
                         std::to_string(expr.offset));
-                for (const auto& argument : expr.arguments) {
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto& argument = expr.arguments[i];
                     const ScalarType actual = validate_scalar_expression(
                         *argument, variables, functions, depth + 1);
-                    if (actual != ScalarType::I64)
-                        throw std::runtime_error("native Array<int> arguments require int, got " +
+                    const bool index = (expr.name == "get" || expr.name == "set") && i == 0;
+                    if (actual != (index ? ScalarType::I64 : element))
+                        throw std::runtime_error(std::string(element == ScalarType::I64
+                            ? "native Array<int> arguments require int, got "
+                            : "native Array<String> argument type mismatch, got ") +
                             std::string(scalar_type_name(actual)) + " at byte " +
                             std::to_string(argument->offset));
                 }
-                return ScalarType::I64;
+                return expr.resolved_type = expr.name == "get" ? element : ScalarType::I64;
             }
+            case Expression::Kind::RecordConstruct:
+                for (const auto& arg : expr.arguments)
+                    validate_scalar_expression(*arg, variables, functions, depth + 1);
+                return ScalarType::I64; // nominal record validation follows, never a guest integer
             case Expression::Kind::Call: {
                 const auto family = functions.find(expr.name);
                 if (family == functions.end() ||
@@ -2447,7 +2539,7 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
-        if (expr->kind == Expression::Kind::Call ||
+        if (expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
             expr->kind == Expression::Kind::ArrayCall) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||
@@ -2858,9 +2950,14 @@ private:
             for (const auto& binding : fn.locals) {
                 if (binding.int_array || binding.new_class || binding.move_class) {
                     scalar_types.emplace(binding.name, ScalarType::I64);
+                    if (binding.int_array)
+                        scalar_types.emplace(binding.name + ".$element", binding.array_element_type);
                     if (binding.new_class) {
-                        for (const auto& arg : binding.constructor_arguments)
-                            require_scalar(*arg, ScalarType::I64,
+                        const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                            [&](const ClassDecl& c) { return c.name == binding.class_name; });
+                        for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i)
+                            require_scalar(*binding.constructor_arguments[i],
+                                cls->constructor_parameter_types.empty() ? ScalarType::I64 : cls->constructor_parameter_types.at(i),
                                 "native class constructor argument", scalar_types);
                     }
                     continue;

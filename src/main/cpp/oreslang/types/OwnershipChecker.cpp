@@ -401,6 +401,9 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
+        case Expression::Kind::RecordConstruct:
+            for (const auto& arg : expr.arguments) check_value(*arg, locals, functions);
+            return;
         case Expression::Kind::Call:
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
                 reject(expr, "void call cannot be used as an int expression");
@@ -457,6 +460,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::RecordConstruct:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
         case Expression::Kind::ArrayCall:
@@ -663,6 +667,20 @@ void validate_i64_ownership(const Program& program) {
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
                     throw std::runtime_error("invalid native Array<int> owner");
+            } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
+                    binding.initializer->kind == Expression::Kind::ArrayCall) {
+                const auto& call = *binding.initializer;
+                array_owner(*call.left, locals, true);
+                for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
+            } else if (binding.record_view) {
+                check_value(*binding.initializer, locals, functions);
+                entry.mode = Mode::Borrow;
+                entry.mutable_owner = false;
+                entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.final_fields = class_finals.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
             } else if (binding.new_class) {
                 // Pure syntax alone is insufficient: experimental owned-int
                 // operands carry fallible region reads. Do not let one unwind
@@ -670,7 +688,11 @@ void validate_i64_ownership(const Program& program) {
                 std::function<void(const Expression&)> validate_scalar;
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
-                    if (expr.kind == K::Integer || expr.kind == K::Boolean) return;
+                    if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::Field) {
+                        check_value(expr, locals, functions);
+                        return;
+                    }
                     if (expr.kind == K::Variable) {
                         const auto it = locals.find(expr.name);
                         if (it == locals.end() || it->second.heap_owned ||

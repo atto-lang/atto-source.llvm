@@ -19,7 +19,11 @@ Type parameter_type(const Parameter& p) {
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
 Type local_type(const LocalBinding& local) {
-    if (local.int_array) return {Kind::Array, {}};
+    if (local.int_array && local.array_element_type != ScalarType::I64 &&
+            local.array_element_type != ScalarType::String)
+        throw std::runtime_error("unsupported native array element type");
+    if (local.int_array) return {Kind::Array, !local.array_record_class.empty() ? local.array_record_class :
+        local.array_element_type == ScalarType::String ? "String" : "int"};
     return local.class_name.empty() ? scalar(local.scalar_type) : Type{Kind::Class, local.class_name};
 }
 [[noreturn]] void fail(std::size_t offset, const std::string& detail) {
@@ -33,6 +37,15 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
+    auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
+        auto found = classes.find(name);
+        if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
+        const auto& cls = *found->second;
+        for (const auto& field : cls.fields)
+            if (!field.final_field || field.int_array)
+                fail(0, "record collections require immutable scalar/String fields");
+        return cls;
+    };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
     auto field_type = [&](Type owner, const std::string& name, std::size_t offset) -> Type {
@@ -41,7 +54,7 @@ void validate_native_scalar_types(const Program& program) {
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
         for (const auto& field : cls->second->fields)
-            if (field.name == name) return field.int_array ? Type{Kind::Array, {}} : scalar(field.scalar_type == ScalarType::Bool);
+            if (field.name == name) return field.int_array ? Type{Kind::Array, "int"} : scalar(field.scalar_type);
         fail(offset, "unknown class field");
     };
     std::function<Type(const Expression&, const Locals&)> expression;
@@ -98,11 +111,30 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
-            case E::ArrayCall:
-                require(expression(*e.left, locals), {Kind::Array, {}}, e.offset, "array receiver");
-                for (const auto& arg : e.arguments)
-                    require(expression(*arg, locals), scalar(false), arg->offset, "Array<int> argument requires int");
-                return scalar(false); // existing native array ABI returns an i64 status/value
+            case E::ArrayCall: {
+                const auto owner = expression(*e.left, locals);
+                if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
+                const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
+                    : Type{Kind::Class, immutable_record(owner.name).name};
+                for (std::size_t i = 0; i < e.arguments.size(); ++i) {
+                    const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    if (!index && element.kind == Kind::Class &&
+                            e.arguments[i]->kind != E::RecordConstruct &&
+                            !(e.arguments[i]->kind == E::ArrayCall && e.arguments[i]->name == "get"))
+                        fail(e.offset, "record arrays require a new immutable record or existing array element");
+                    require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
+                            e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
+                }
+                return e.name == "get" ? element : scalar(false);
+            }
+            case E::RecordConstruct: {
+                const auto& cls = immutable_record(e.name);
+                if (e.arguments.size() != cls.constructor_parameters.size()) fail(e.offset, "record constructor argument arity mismatch");
+                for (std::size_t i = 0; i < e.arguments.size(); ++i)
+                    require(expression(*e.arguments[i], locals), scalar(cls.constructor_parameter_types.empty()
+                        ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), e.offset, "record constructor argument type mismatch");
+                return {Kind::Class, cls.name};
+            }
             case E::Call: {
                 const auto& fn = *functions.at(native_function_slot(e.name, e.arguments.size()));
                 std::size_t positional = 0;
@@ -127,6 +159,7 @@ void validate_native_scalar_types(const Program& program) {
         if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
         else if (result.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
         else if (result.kind == Kind::Int) e.resolved_type = ScalarType::I64;
+        else if (result.kind == Kind::Class) e.resolved_class = result.name;
         return result;
     };
     auto compare = [&](const Expression& lhs, const Expression& rhs, const Locals& locals) {
@@ -138,23 +171,32 @@ void validate_native_scalar_types(const Program& program) {
     // initialize bool fields; integer bit patterns cannot become boolean storage.
     for (const auto& cls : program.classes) {
         Locals parameters;
-        for (const auto& name : cls.constructor_parameters) parameters.emplace(name, scalar(false));
+        if (!cls.constructor_parameter_types.empty() && cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
+            throw std::runtime_error("native constructor type/parameter arity mismatch");
+        for (std::size_t i = 0; i < cls.constructor_parameters.size(); ++i)
+            parameters.emplace(cls.constructor_parameters[i], scalar(cls.constructor_parameter_types.empty()
+                ? ScalarType::I64 : cls.constructor_parameter_types[i]));
         for (const auto& field : cls.fields)
             if (field.initializer_expression)
-                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type == ScalarType::Bool),
+                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type),
                         field.initializer_expression->offset, "class field initializer type");
     }
     std::function<void(const Function&, Locals)> function;
     function = [&](const Function& fn, Locals locals) {
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
+            if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;
                 require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
             }
-            for (const auto& arg : binding.constructor_arguments)
-                require(expression(*arg, locals), scalar(false), arg->offset, "constructor parameter requires int");
+            for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                const auto& cls = *classes.at(binding.class_name);
+                const auto& arg = binding.constructor_arguments[i];
+                require(expression(*arg, locals), scalar(cls.constructor_parameter_types.empty()
+                    ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), arg->offset, "constructor parameter type mismatch");
+            }
             locals.emplace(binding.name, local_type(binding));
         }
         if (fn.scalar_while)

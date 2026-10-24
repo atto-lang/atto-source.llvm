@@ -57,6 +57,9 @@ struct RegionMoveLowering {
     // Values exactly match OresNativeIntArrayStatus; not a guest Result yet.
     llvm::Value* array_failure_status = nullptr;
     const std::unordered_map<std::string, llvm::Value*>* owned_failure_handles = nullptr;
+    const std::unordered_map<std::string, const ClassDecl*>* record_classes = nullptr;
+    const std::unordered_map<std::string, std::uint64_t>* record_schemas = nullptr;
+    llvm::FunctionCallee record_new, record_get, record_check;
 };
 
 // Only a lexical named array or a direct class-owned array field is legal.
@@ -85,6 +88,27 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::RecordConstruct: {
+            if (!moves || !moves->record_classes || !moves->record_schemas)
+                throw std::runtime_error("record construction lacks typed root region");
+            const auto& cls = *moves->record_classes->at(expr.name);
+            std::unordered_map<std::string, llvm::Value*> parameters;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                auto* value = lower(*expr.arguments[i], builder, i64, storage, field_storage, functions, moves);
+                auto* slot = builder.CreateAlloca(i64, nullptr, "record.argument");
+                builder.CreateStore(value, slot);
+                parameters.emplace(cls.constructor_parameters.at(i), slot);
+            }
+            auto* values = builder.CreateAlloca(i64, llvm::ConstantInt::get(i64, cls.fields.size()), "record.fields");
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                auto* value = lower(*cls.fields[i].initializer_expression, builder, i64, parameters, no_fields, functions, moves);
+                builder.CreateStore(value, builder.CreateGEP(i64, values, llvm::ConstantInt::get(i64, i)));
+            }
+            return builder.CreateCall(moves->record_new, {
+                llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
+                llvm::ConstantInt::get(i64, cls.fields.size()), values}, "record.handle");
+        }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
             auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
@@ -160,9 +184,11 @@ llvm::Value* lower(const Expression& expr,
                 builder.SetInsertPoint(proceed);
                 return llvm::ConstantInt::get(i64, 0);
             }
-            if (expr.name == "set" && args.size() == 2)
-                return builder.CreateCall(moves->array_set,
+            if (expr.name == "set" && args.size() == 2) {
+                builder.CreateCall(moves->array_set,
                     {moves->array_region, handle, args[0], args[1]});
+                return llvm::ConstantInt::get(i64, 0); // compiler-only discarded ANF effect status
+            }
             throw std::runtime_error("unsupported Array<int> native method");
         }
         case Expression::Kind::Borrow:
@@ -432,6 +458,9 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
     for (const auto& fn : source.functions)
+        if (fn.name.rfind("ores_record_", 0) == 0)
+            throw std::runtime_error("reserved native record runtime symbol collision");
+    for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_string_", 0) == 0)
             throw std::runtime_error("reserved native string runtime symbol collision");
     if (!source.imports.empty())
@@ -492,9 +521,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
-    bool string_runtime = false, console_runtime = false;
+    bool string_runtime = false, console_runtime = false, record_runtime = false;
     std::function<void(const Expression*)> scan_string = [&](const Expression* e) {
         if (!e) return;
+        if (e->kind == Expression::Kind::RecordConstruct) record_runtime = true;
         if (e->kind == Expression::Kind::String || e->resolved_type == ScalarType::String) string_runtime = true;
         if (e->kind == Expression::Kind::Console) console_runtime = string_runtime = true;
         scan_string(e->left.get()); scan_string(e->right.get()); scan_string(e->condition.get());
@@ -512,7 +542,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     auto scan_function = [&](const Function& fn) {
         if (fn.return_type == ScalarType::String) string_runtime = true;
         for (const auto& p : fn.parameters) if (p.scalar_type == ScalarType::String) string_runtime = true;
-        for (const auto& local : fn.locals) scan_string(local.initializer.get());
+        for (const auto& local : fn.locals) {
+            if (!local.array_record_class.empty() || local.record_view) record_runtime = true;
+            if (local.int_array && local.array_element_type == ScalarType::String) string_runtime = true;
+            scan_string(local.initializer.get());
+            for (const auto& arg : local.constructor_arguments) scan_string(arg.get());
+        }
         for (const auto& s : fn.statements) scan_statement(s);
         for (const auto& g : fn.early_returns) {
             scan_string(g.condition.get()); scan_string(g.lhs.get()); scan_string(g.rhs.get()); scan_string(g.result.get());
@@ -524,14 +559,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         scan_string(fn.result.get());
     };
     for (const auto& fn : source.functions) scan_function(fn);
+    for (const auto& cls : source.classes) for (const auto& field : cls.fields) {
+        if (field.scalar_type == ScalarType::String) string_runtime = true;
+        scan_string(field.initializer_expression.get());
+    }
     for (const auto& actor : source.actors) {
         for (const auto& field : actor.fields) scan_string(field.initializer.get());
         scan_function(actor.on_message);
     }
-    if (string_runtime) {
+    if (string_runtime || record_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) { return !f.ready_await_actor.empty() || f.caught_throw_value || f.scalar_while; }))
-            throw std::runtime_error("native strings currently require a synchronous host main region without actors, suspension or exception frames");
+            throw std::runtime_error(string_runtime
+                ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
+                : "native records currently require a synchronous host main region without actors, suspension or exception frames");
     }
     if (native_main) {
         if (!main_it->parameters.empty())
@@ -703,8 +744,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
     std::unordered_map<std::string, llvm::StructType*> class_types;
+    std::unordered_map<std::string, const ClassDecl*> record_classes;
+    std::unordered_map<std::string, std::uint64_t> record_schemas;
+    llvm::FunctionCallee record_new, record_get, record_check;
+    if (record_runtime) {
+        record_new = module.getOrInsertFunction("ores_record_new",
+            llvm::FunctionType::get(i64, {i64, i64, native_ptr}, false));
+        record_get = module.getOrInsertFunction("ores_record_get",
+            llvm::FunctionType::get(i64, {i64, i64, i64}, false));
+        record_check = module.getOrInsertFunction("ores_record_check",
+            llvm::FunctionType::get(i64, {i64, i64}, false));
+    }
     std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> field_indices;
     for (const auto& cls : source.classes) {
+        record_classes.emplace(cls.name, &cls);
+        record_schemas.emplace(cls.name, record_schemas.size() + 1);
         std::vector<llvm::Type*> layout(cls.fields.size(), i64);
         class_types.emplace(cls.name, llvm::StructType::create(context, layout, cls.name));
         std::unordered_map<std::string, std::size_t> indices;
@@ -893,7 +947,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         const RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
-            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles};
+            &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
+            &record_classes, &record_schemas, record_new, record_get, record_check};
         auto new_checked_array = [&](const std::string& label) -> llvm::Value* {
             if (!array_handle_shadows || next_array_shadow >= array_owner_count)
                 throw std::runtime_error("missing native array failure owner slot");
@@ -924,6 +979,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 builder.CreateStore(handle, slot);
                 storage.emplace(binding.name, slot);
                 lexical_slots.push_back({binding.name, slot, false, 8, true});
+                continue;
+            }
+            if (binding.record_view) {
+                const auto& cls = *record_classes.at(binding.class_name);
+                auto* shape = class_types.at(binding.class_name);
+                auto* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record.view");
+                const auto bytes = cls.fields.size() * 8;
+                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                auto* handle = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateCall(record_check, {handle, llvm::ConstantInt::get(i64, record_schemas.at(cls.name))});
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    auto* value = builder.CreateCall(record_get, {handle,
+                        llvm::ConstantInt::get(i64, record_schemas.at(cls.name)), llvm::ConstantInt::get(i64, i)});
+                    auto* address = builder.CreateStructGEP(shape, slot, static_cast<unsigned>(i));
+                    builder.CreateStore(value, address);
+                    field_storage.emplace(field_key(binding.name, cls.fields[i].name), address);
+                }
+                storage.emplace(binding.name, slot);
+                lexical_slots.push_back({binding.name, slot, false, bytes});
                 continue;
             }
             if (binding.new_class || binding.move_class) {
@@ -1831,6 +1905,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::IRBuilder<> builder(entry);
         llvm::Function* guest = declarations.at(native_function_slot("main", 0));
         llvm::FunctionCallee string_end;
+        llvm::FunctionCallee record_end;
         if (string_runtime) {
             auto begin = module.getOrInsertFunction("ores_string_region_begin",
                 llvm::FunctionType::get(i64, {i64}, false));
@@ -1843,10 +1918,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.SetInsertPoint(failed); builder.CreateRet(llvm::ConstantInt::get(i32, 1));
             builder.SetInsertPoint(ready);
         }
+        if (record_runtime) {
+            auto begin = module.getOrInsertFunction("ores_record_region_begin", llvm::FunctionType::get(i64, {}, false));
+            record_end = module.getOrInsertFunction("ores_record_region_end", llvm::FunctionType::get(i64, {}, false));
+            auto* status = builder.CreateCall(begin);
+            auto* ready = llvm::BasicBlock::Create(context, "record.region.ready", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "record.region.error", host_main);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i64, 0)), ready, failed);
+            builder.SetInsertPoint(failed);
+            if (string_runtime) builder.CreateCall(string_end);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(ready);
+        }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* records_ok = record_runtime
+            ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
+            : llvm::ConstantInt::getTrue(context);
         llvm::Value* output_ok = string_runtime
             ? builder.CreateICmpEQ(builder.CreateCall(string_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
+        output_ok = builder.CreateAnd(output_ok, records_ok);
         if (main_it->returns_void) {
             builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {

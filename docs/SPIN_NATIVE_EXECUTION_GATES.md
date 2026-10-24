@@ -13,9 +13,14 @@ Adding a dummy field would merely expose later unsupported constructs.
 
 The execution path requires these compiler/runtime changes, in dependency order:
 
-1. General class/reference-owned fields and `Array<PathSegment>`,
-   `Array<Binding>` and `Array<String>`, with deterministic owner/drop behavior.
-   Native stack scalar classes and `Array<int>` alone cannot represent the router.
+1. General class/reference-owned fields and mutable/nested `Array<Binding>`
+   storage, with deterministic owner/drop behavior. Lexical immutable
+   `Array<PathSegment>` now executes with typed region-owned records; object-array
+   fields, parameters, returns and mutable elements still need lowering. Lexical synchronous
+   `Array<String>` now executes natively, but String-array fields, parameter and
+   return ownership still need lowering. Declaration-only int/bool/String records
+   such as PathSegment now construct and copy natively. Native stack records and local
+   scalar/String arrays alone cannot represent the router.
 2. Typed `Result`/`Option` values, collection iteration and the remaining control
    flow used by the actual router. String content equality is now available.
 3. Source actor mailbox signatures and typed HTTP exchange capabilities. Every
