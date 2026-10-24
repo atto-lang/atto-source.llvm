@@ -500,6 +500,12 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
              pub fnc main():int { return 42; }\n",
         ),
         (
+            "public-void-dispatch",
+            "define class X1 as\n  pub foo():void {}\nend\n\\
+             define class X2 as\n  pub foo(self):void {}\nend\n\\
+             pub fnc main():int {\n  let X1 x1=new X1();\n  let X2 x2=new X2();\n  x1.foo();\n  x2.foo();\n  return 42;\n}\n",
+        ),
+        (
             "mixed-method-arities",
             "define class Counter as\n  let int value=20;\n\
              pub read():int{return self.value;}\n\
@@ -594,7 +600,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
                 out.status.code(), stdout(&out), stderr(&out)),
         )?;
     }
-    println!("native inline self: 3 compiled/AOT-executed positive cases, 5 fail-closed negatives");
+    println!("native inline self: 4 compiled/AOT-executed positive cases, 5 fail-closed negatives");
     Ok(())
 }
 
