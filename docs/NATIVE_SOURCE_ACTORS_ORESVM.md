@@ -100,3 +100,39 @@ existing nested-spawn model.
 identity and constructor-owned child drain. The compiler-produced
 `source-actor-child-capability.ores` fixture additionally checks that generated
 IR contains the child-spawn/send capability ABI and contains no `ptrtoint`.
+
+
+## Canonical receive/output/end compatibility
+
+The native actor frontend now admits the Java-compatible mailbox header
+`receive(ActorMail<int> mail): void`. The compiler treats `mail.value` as the
+scheduler-delivered scalar payload without materializing an ActorMail object in
+guest integer state. Zero-source-field actors reserve one hidden physical heap
+slot so a source actor is not forced to declare dummy state; physical capacity
+also includes compiler-owned handler locals for both top-level and child actors.
+
+Within this synchronous receive slice:
+
+- `self.child.send(value)` lowers to the generation-fenced child capability;
+- `self.send(value)` appends to a separate bounded 16-entry actor output
+  stream; it never recursively sends to the actor's own mailbox;
+- `self.end()` sets a handler-only end request. After the guest callback
+  releases its actor heap turn, the runtime nonblockingly marks the scheduler
+  lane stopping; it never waits on the carrier;
+- trusted-host `oreslang_source_actor_take_output` may block for output, but
+  explicitly rejects any OresVM carrier execution context;
+- source metadata, including unconsumed output values and capability refs, is
+  volatile-byte scrubbed before native reclamation.
+
+The compiler preserves capability-send/output/end effects in source order and
+runs output payloads through scalar typing and ownership checks.
+
+The exact common-source v1 fixture is checked into the LLVM test tree as
+`shared-actorref-child-capability-v1.ores`. It must currently fail before IR
+with `native receive await child output requires continuation lowering`.
+Therefore the remaining blocker for that fixture is now explicit: a receive
+handler must suspend on `await child.outputs.next()`, preserve the actor's
+single-writer state lease/logical turn, and resume from a runtime-owned
+continuation without parking a carrier. Top-level async/output/done syntax must
+then consume the same continuation machinery. No unchanged-source parity is
+claimed until that gate executes.
