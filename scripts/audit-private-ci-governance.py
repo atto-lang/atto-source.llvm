@@ -91,8 +91,18 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
         raise GovernanceError("required CODEOWNER reviews not enforced")
     if reviews.get("dismiss_stale_reviews") is not True:
         raise GovernanceError("stale reviews are not dismissed")
+    count = reviews.get("required_approving_review_count")
+    if type(count) is not int or count < 1:
+        raise GovernanceError("at least one real PR approval must be required")
+    bypass = reviews.get("bypass_pull_request_allowances") or {}
+    if not isinstance(bypass, dict) or any(bypass.get(kind) for kind in ("users", "teams", "apps")):
+        raise GovernanceError("pull request review bypass is not allowed")
     if (protection_data.get("enforce_admins") or {}).get("enabled") is not True:
         raise GovernanceError("administrator protection not enforced")
+    for setting in ("allow_force_pushes", "allow_deletions"):
+        config = protection_data.get(setting)
+        if not isinstance(config, dict) or config.get("enabled") is not False:
+            raise GovernanceError(f"protected main must explicitly disable {setting}")
 
 
 def _github_get(path: str, token: str) -> dict:
