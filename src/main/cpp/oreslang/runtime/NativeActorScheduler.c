@@ -729,9 +729,16 @@ int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
  * execution when its worker claims a READY wake. */
 static WakeCredit* matching_wake_locked(
         OresNativeActorScheduler* s, OresNativeWakeTicket t) {
-    if (!matching(s, t.producer) || t.slot >= ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
+    /* Wake mutation APIs are part of the public trusted-host ABI and may be
+     * called with a scheduler opened through the legacy no-wake constructors.
+     * Such schedulers deliberately have no wake table; fail closed instead of
+     * dereferencing a NULL per-lane wake pointer. */
+    if (!s->wake_callback || !matching(s, t.producer)
+            || t.slot >= ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
         return NULL;
-    WakeCredit* w = &s->actors[t.producer.actor_slot].wakes[t.slot];
+    ActorLane* lane = &s->actors[t.producer.actor_slot];
+    if (!lane->wakes) return NULL;
+    WakeCredit* w = &lane->wakes[t.slot];
     const OresNativeWakeTicket* old = &w->ticket;
     if (w->state == WAKE_EMPTY || !t.slot_generation
             || w->generation != t.slot_generation
