@@ -198,8 +198,15 @@ they belong to the receiving source context's domain (or traverse such a
 bridge) before guest read/write/select/close authority is exposed.
 Future-only select must still be charged to
 the caller's domain rather than escaping accounting because it has no Channel
-arm. Domain teardown atomically detaches/fails its pending selections and
-refunds both domain and process accounting exactly once.
+arm. Runtime-owned actor infrastructure (mailbox USER/CONTROL lanes, actor
+output streams, group Mailman outboxes, event-bus subscriptions, and equivalent
+backend-internal Channel users) must be charged to the owning runtime/domain,
+not silently to a process host-default bucket. Domain teardown atomically
+detaches/fails its pending selections and refunds both domain and process
+accounting exactly once. Structured channel-specific terminal publication
+happens before a residual runtime-domain fence so shutdown does not replace a
+more precise EOF/error/actor-termination result with a generic domain-close
+diagnostic.
 
 Ready operations retain the existing progress rule: a transient registration
 may probe/commit an immediately ready buffer/rendezvous before retained-pending
