@@ -15,7 +15,8 @@ admits only three known native source shapes:
 
 Unknown, scalar, class, `Future<int>`, unlive/stale ActorRefs, forged and consumed
 Future tokens, implicit `get_done()` or unverified nominal trait names remain
-unsupported. The validator performs identity and provenance checks before
+unsupported. A `Future<void>` producer must also match the exact actor
+identity being awaited, not merely assert a boolean provenance flag. The validator performs identity and provenance checks before
 lowering; it does not trust the spelling of `HasFuture`.
 
 The resolver is a **closed-world compiler contract**, not full arbitrary

@@ -9,19 +9,24 @@ using namespace oreslang;
 int main() {
     constexpr NativeAwaitDescriptor direct {
         NativeAwaitTargetKind::ActorRef, NativeAwaitForm::DirectHasFuture,
-        "Worker", "worker", true, false, false
+        "Worker", "worker", true, false, false, ""
     };
     constexpr NativeAwaitDescriptor method {
         NativeAwaitTargetKind::ActorRef, NativeAwaitForm::ExplicitGetReady,
-        "Worker", "worker", true, false, false
+        "Worker", "worker", true, false, false, ""
     };
     constexpr NativeAwaitDescriptor typed {
         NativeAwaitTargetKind::FutureVoid, NativeAwaitForm::FutureValue,
-        "Worker", "worker", true, true, true
+        "Worker", "worker", true, true, true, "worker"
     };
     static_assert(resolve_native_has_future(direct).abi == NativeAwaitAbi::SourceActorReadyControl);
     static_assert(resolve_native_has_future(method).returns_void);
     static_assert(resolve_native_has_future(typed).consumes_future_token);
+    constexpr NativeAwaitDescriptor foreign_future {
+        NativeAwaitTargetKind::FutureVoid, NativeAwaitForm::FutureValue,
+        "Worker", "worker", true, true, true, "other"
+    };
+    static_assert(resolve_native_has_future(foreign_future).abi == NativeAwaitAbi::Unsupported);
     assert(!resolve_native_has_future(direct).consumes_future_token);
     assert(resolve_native_has_future(method).abi == resolve_native_has_future(direct).abi);
     assert(resolve_native_has_future(typed).abi == resolve_native_has_future(direct).abi);
@@ -48,7 +53,8 @@ int main() {
                                 NativeAwaitDescriptor candidate{kind, form,
                                     nominal ? "Worker" : "",
                                     name ? "worker" : "",
-                                    live != 0, provenance != 0, unconsumed != 0};
+                                    live != 0, provenance != 0, unconsumed != 0,
+                                    kind == NativeAwaitTargetKind::FutureVoid ? "worker" : ""};
                                 const auto actual = resolve_native_has_future(candidate);
                                 const bool valid_actor = kind == NativeAwaitTargetKind::ActorRef &&
                                     (form == NativeAwaitForm::DirectHasFuture ||
@@ -60,6 +66,11 @@ int main() {
                                 assert((actual.abi == NativeAwaitAbi::SourceActorReadyControl) == accepted);
                                 assert(actual.returns_void == accepted);
                                 assert(actual.consumes_future_token == (accepted && valid_future));
+                                if (kind == NativeAwaitTargetKind::FutureVoid) {
+                                    auto wrong_producer = candidate;
+                                    wrong_producer.future_producer_actor_identity = "other";
+                                    assert(resolve_native_has_future(wrong_producer).abi == NativeAwaitAbi::Unsupported);
+                                }
                                 if (accepted) ++admitted; else ++rejected;
                             }
                         }

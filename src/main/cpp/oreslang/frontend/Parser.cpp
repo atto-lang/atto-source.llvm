@@ -3060,7 +3060,9 @@ private:
                     fn.ready_await_actor,
                     true, // resolved through the live ActorRef registry above
                     token_form && fn.ready_future_actor == fn.ready_await_actor,
-                    token_form && !fn.ready_future_name.empty()
+                    token_form && !fn.ready_future_name.empty(),
+                    token_form ? std::string_view{fn.ready_future_actor}
+                               : std::string_view{}
                 };
                 const NativeAwaitResolution resolution =
                     resolve_native_has_future(candidate);

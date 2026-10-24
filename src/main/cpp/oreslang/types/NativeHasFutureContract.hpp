@@ -25,6 +25,8 @@ struct NativeAwaitDescriptor {
     bool live_actor = false;
     bool verified_get_ready_provenance = false;
     bool future_token_unconsumed = false;
+    // Bind a Future<void> to the exact actor capability that produced it.
+    std::string_view future_producer_actor_identity;
 };
 struct NativeAwaitResolution {
     NativeAwaitAbi abi = NativeAwaitAbi::Unsupported;
@@ -47,7 +49,8 @@ constexpr NativeAwaitResolution resolve_native_has_future(
     if (candidate.kind == NativeAwaitTargetKind::FutureVoid &&
             candidate.form == NativeAwaitForm::FutureValue &&
             candidate.verified_get_ready_provenance &&
-            candidate.future_token_unconsumed) {
+            candidate.future_token_unconsumed &&
+            candidate.future_producer_actor_identity == candidate.actor_identity) {
         return {NativeAwaitAbi::SourceActorReadyControl, true, true};
     }
     return {};
