@@ -98,3 +98,36 @@ queues before calling it. A malicious or faulty trusted host could lie, so
 this alone is not evidence of real network callback safety. The guest
 language cannot call this method through actor messages. No native guest
 lowering, live HTTP/TCP integration or Java/GraalVM parity is claimed.
+
+
+## Counted transport callback drain receipt (host integration layer)
+
+`NativeTransportCallbackGate` adds explicit, allocation-free physical callback
+accounting. A trusted I/O adapter **must obtain and retain one move-only
+`Permit` before enqueueing each timer, waker, network callback or completion
+that may touch actor arena memory**. Moving the permit with the asynchronous
+completion envelope keeps it held across carrier migration, and releasing it
+only after the callback's final access decrements the registered in-flight
+count. Its accounting mutex serializes enqueue admission and shutdown.
+
+Shutdown invokes `stop_admission()`, preventing new permits, and only when
+all registered permits are released can `try_drain()` produce a copyable,
+non-default-constructible `DrainReceipt`. The receipt is bound to the exact
+gate address, actor scheduler domain/slot/generation and globally unique slab
+identity. `ActorOwnedProxyRequestSlab::confirm_transport_quiescence(receipt)`
+checks this binding plus logical `live()==0` on the owning actor lane before
+allowing `close()` or the retired destructor fallback. The old no-argument
+trust-me assertion has been removed. Admission and callback pinning also stop
+when the callback gate begins closing.
+
+`native_proxy_transport_callback_gate_races` tests physical carrier
+completion after logical shutdown, receipt rejection from another slab,
+freeze/admission ordering and move-only permit semantics. Owner-wrapper tests
+exercise premature and foreign confirmation, physical permits retained after
+logical drain, replays, and ordinary close/destructor retirement.
+
+**Scope limit:** the gate only counts callbacks whose transport adapters enroll
+them. It does not automatically intercept epoll/kqueue/IOCP/HTTP callbacks,
+join an external network reactor or prove a real HTTP/TCP shutdown. Any adapter
+not yet wired to this gate remains out of scope; this is a host-side safety
+substrate, not production guest networking or cross-backend conformance.

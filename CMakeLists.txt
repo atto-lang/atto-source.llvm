@@ -47,6 +47,9 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         tests/native_actor_proxy_request_slab_owner_test.cpp
         src/main/cpp/oreslang/runtime/NativeActorScheduler.c
         src/main/cpp/oreslang/runtime/ActorArena.c)
+    oreslang_proxy_host_ctest(oreslang-native-proxy-transport-gate-test
+        native_proxy_transport_callback_gate_races 20
+        tests/native_proxy_transport_gate_test.cpp)
     return()
 endif()
 
@@ -3310,4 +3313,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-proxy-arena-pages-test)
     set_tests_properties(native_proxy_slab_arena_pages_and_zeroization
         PROPERTIES TIMEOUT 30)
+endif()
+
+# Counted physical callback permits and slab/generation-bound drain receipts.
+# Host-only proof: no guest lowering, real epoll integration, or I/O transport.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-proxy-transport-gate-test
+        tests/native_proxy_transport_gate_test.cpp)
+    target_include_directories(oreslang-native-proxy-transport-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-proxy-transport-gate-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-proxy-transport-gate-test PRIVATE
+        cxx_std_20)
+    target_compile_options(oreslang-native-proxy-transport-gate-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_proxy_transport_callback_gate_races
+        COMMAND oreslang-native-proxy-transport-gate-test)
+    set_tests_properties(native_proxy_transport_callback_gate_races
+        PROPERTIES TIMEOUT 20)
 endif()

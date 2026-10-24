@@ -8,10 +8,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 
 using oreslang::runtime::ActorOwnedProxyRequestSlab;
 using oreslang::runtime::ActorShardBudget;
+using oreslang::runtime::NativeTransportCallbackGate;
 using oreslang::runtime::ProxyRequestSlab;
 
 struct State {
@@ -27,6 +30,8 @@ struct State {
     std::uint64_t stale_ticket = 0;
     std::uint64_t ticket = 0;
     ActorOwnedProxyRequestSlab::Receipt pin{};
+    NativeTransportCallbackGate::Permit outstanding{};
+    std::optional<NativeTransportCallbackGate::DrainReceipt> other_proof;
     bool foreign_denied = false;
     bool closed_foreign_denied = false;
     bool failed = false;
@@ -52,7 +57,8 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             try { (void)state.slab->identity(); }
             catch (const std::logic_error&) { identity_denied = true; }
             bool quiescence_denied = false;
-            try { state.slab->confirm_transport_quiescence(); }
+            assert(state.other_proof);
+            try { state.other_slab->confirm_transport_quiescence(*state.other_proof); }
             catch (const std::logic_error&) { quiescence_denied = true; }
             state.foreign_denied = denied && identity_denied && quiescence_denied;
             return;
@@ -99,12 +105,20 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
                     assert(state.actor_budget->used_bytes() == before + 2U * 1024U * 1024U);
                     auto sample = multi_page.admit(10, 7, 17);
                     assert(sample && multi_page.route(sample) == 17);
+                    auto& callbacks = multi_page.transport_callbacks();
+                    callbacks.stop_admission();
+                    auto drain = callbacks.try_drain();
+                    assert(drain);
+                    bool live_confirmation_denied = false;
+                    try { multi_page.confirm_transport_quiescence(*drain); }
+                    catch (const std::logic_error&) { live_confirmation_denied = true; }
+                    assert(live_confirmation_denied && multi_page.live() == 1);
                     assert(multi_page.retire(sample));
                     bool unconfirmed_denied = false;
                     try { multi_page.close(); }
                     catch (const std::logic_error&) { unconfirmed_denied = true; }
                     assert(unconfirmed_denied);
-                    multi_page.confirm_transport_quiescence();
+                    multi_page.confirm_transport_quiescence(*drain);
                     multi_page.close();
                 }
                 assert(state.actor_budget->used_bytes() == before);
@@ -113,6 +127,8 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             state.stale_ticket = state.slab->admit(5, 1, 42);
             assert(state.stale_ticket != 0 && state.slab->route(state.stale_ticket) == 42);
             state.pin = state.slab->pin(state.stale_ticket);
+            state.outstanding = state.slab->transport_callbacks().try_admit();
+            assert(state.outstanding);
             assert(state.pin.claim != 0 && state.slab->retire(state.stale_ticket));
             // A retired request with a pending external completion still
             // owns its physical slot. Closing must fail without refunding
@@ -126,10 +142,7 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.slab->pending(state.stale_ticket) == 1);
             assert(state.actor_budget->used_bytes() == charged_before_close);
             assert(state.slab->route(state.stale_ticket) == 42);
-            bool pending_quiescence_denied = false;
-            try { state.slab->confirm_transport_quiescence(); }
-            catch (const std::logic_error&) { pending_quiescence_denied = true; }
-            assert(pending_quiescence_denied);
+            assert(!state.slab->transport_callbacks().try_drain());
             assert(state.slab->pending(state.stale_ticket) == 1);
             // A second slab deliberately mints the same raw low-level
             // claim. Identity/callback provenance must block misdelivery.
@@ -147,6 +160,7 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.slab->admit(6, 2, 55) == 0);
         } else if (step == 2) {
             assert(state.slab->settle(state.pin));
+            state.outstanding.release();
             assert(!state.slab->settle(state.pin));
             assert(state.slab->live() == 0);
             state.ticket = state.slab->admit(6, 2, 55);
@@ -164,10 +178,24 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.other_slab->settle(state.other_pin));
             assert(!state.other_slab->settle(state.other_pin));
             assert(state.other_slab->live() == 0);
+            auto& second_gate = state.other_slab->transport_callbacks();
+            second_gate.stop_admission();
+            state.other_proof = second_gate.try_drain();
+            assert(state.other_proof);
+            bool wrong_slab_proof_denied = false;
+            try { state.slab->confirm_transport_quiescence(*state.other_proof); }
+            catch (const std::logic_error&) { wrong_slab_proof_denied = true; }
+            assert(wrong_slab_proof_denied);
             assert(state.slab->retire(state.ticket));
             assert(state.slab->live() == 0);
         } else if (step == 4) {
             assert(state.slab->live() == 0);
+            auto& callbacks = state.slab->transport_callbacks();
+            auto late = callbacks.try_admit();
+            assert(late); // an admitted callback can outlive its logical request
+            callbacks.stop_admission();
+            assert(!callbacks.try_admit());
+            assert(!callbacks.try_drain());
             // Logical quiescence (live==0) must NOT permit page reclamation
             // until the trusted transport has explicitly acknowledged that
             // its timers/wakers and callback envelopes have been joined.
@@ -176,8 +204,11 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             catch (const std::logic_error&) { missing_transport_fence_denied = true; }
             assert(missing_transport_fence_denied);
             assert(state.slab->live() == 0);
-            state.slab->confirm_transport_quiescence();
-            state.slab->confirm_transport_quiescence(); // monotonic/idempotent
+            late.release(); // simulates physical I/O completion retirement
+            auto drain = callbacks.try_drain();
+            assert(drain);
+            state.slab->confirm_transport_quiescence(*drain);
+            state.slab->confirm_transport_quiescence(*drain); // idempotent
             bool admission_after_fence_denied = false;
             try { (void)state.slab->admit(7, 10, 20); }
             catch (const std::logic_error&) { admission_after_fence_denied = true; }
@@ -206,7 +237,8 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             // joins its I/O callbacks; only the combined transport fence,
             // logical drain, and exact scheduler-done gate allows the
             // trusted retired destructor to scrub and refund its pages.
-            state.other_slab->confirm_transport_quiescence();
+            assert(state.other_proof);
+            state.other_slab->confirm_transport_quiescence(*state.other_proof);
         } else {
             state.failed = true;
         }
