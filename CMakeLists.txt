@@ -1286,6 +1286,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_duplicate_ready_future
         source-actor-future-void-duplicate.ores
         --diagnostic "native source supports only one Future<void> readiness token")
+    oreslang_contract_test(reject_source_actor_mutable_val_ready_future
+        source-actor-future-void-val-reject.ores
+        --diagnostic "Future<void> readiness token must be const")
+    oreslang_contract_test(reject_source_actor_mutable_let_ready_future
+        source-actor-future-void-let-reject.ores
+        --diagnostic "Future<void> readiness token must be const")
     oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
         source-actor-future-void-wrong-producer.ores
         --diagnostic "expected 'get_ready'")
