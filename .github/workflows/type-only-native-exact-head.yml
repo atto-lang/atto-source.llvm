@@ -8,6 +8,7 @@ on:
       - '.github/workflows/type-only-native-exact-head.yml'
       - 'CMakeLists.txt'
       - 'contracts/v1/type-alias-extension-constraint-v1.properties'
+      - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/frontend/**'
       - 'src/main/cpp/oreslang/types/**'
       - 'tests/native_type_only_declarations.py'
