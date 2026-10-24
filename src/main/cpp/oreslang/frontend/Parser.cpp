@@ -1,3 +1,4 @@
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
@@ -677,7 +678,7 @@ private:
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
                 signature.name = method.name.substr(result.name.size() + 1);
-                signature.arity = method.parameters.size() - 1;
+                signature.arity = native_source_value_arity(method.parameters.size(), true);
                 signature.public_member = publicly_visible;
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
