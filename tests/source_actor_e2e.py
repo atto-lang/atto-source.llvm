@@ -2,6 +2,7 @@
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -74,6 +75,43 @@ def parse_native_control_receipt(line, marker, expected, dynamic=()):
     for key, value in expected.items():
         assert fields[key] == value, ("wrong native control receipt value", key, fields)
     return fields
+
+def verify_native_owned_ir(ir, name):
+    """Require two actual [3 x i64] ownership tokens and LIFO native drops."""
+    # Match compiler-issued named stack tokens, not incidental "i64 3"
+    # constants from a user message, initializer or unrelated instruction.
+    token_pattern = (
+        r"^\\s*%([A-Za-z_.$][A-Za-z0-9_.$]*)\\s*=\\s*alloca\\s+"
+        r"\\[3 x i64\\](?:,\\s*align\\s+\\d+)?\\s*$"
+    )
+    tokens = re.findall(token_pattern, ir, flags=re.MULTILINE)
+    assert len(tokens) == 2 and len(set(tokens)) == 2, (
+        name, "missing or aliased three-word native ownership tokens", tokens)
+    assert all(token.endswith(".actor.owned.token") for token in tokens), (
+        name, "native token did not come from an owned actor local", tokens)
+
+    def issued_tokens(symbol):
+        calls = [
+            line.strip() for line in ir.splitlines()
+            if re.match(r"^\\s*call void @" + re.escape(symbol) + r"\\(", line)
+        ]
+        used = []
+        for line in calls:
+            token = re.search(
+                r"\\bptr\\s+%([A-Za-z_.$][A-Za-z0-9_.$]*)\\)\\s*$", line)
+            assert token, (name, "missing native ownership token argument", line)
+            used.append(token.group(1))
+        return used
+
+    issued = issued_tokens("ores_actor_i64_heap_scoped_new")
+    dropped = issued_tokens("ores_actor_i64_heap_scoped_drop")
+    assert issued == tokens, (
+        name, "native ownership constructor count, identity or order mismatch",
+        issued, tokens)
+    assert dropped == list(reversed(tokens)), (
+        name, "native ownership drops must be exactly once in LIFO order",
+        dropped, tokens)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -169,15 +207,7 @@ def main():
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
             }:
-                assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_new(") == 2, name
-                assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
-                # One actor-native heap for the retained field plus two
-                # reusable temporary slots: the second mailbox delivery
-                # must fail if either compiler drop was omitted.
-                assert "i64 3" in guest.stdout, (
-                    name, "actor heap needs bounded local slot reserve")
+                verify_native_owned_ir(guest.stdout, name)
             if name == "source-actor-await-ready.ores":
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
