@@ -116,6 +116,7 @@ int main(void) {
      * Capacity two ensures repeated publication eventually reuses it.
      */
     OresNativeContinuationHandle stale = cancelled;
+    int observed_reused_slot = 0;
     for (int reuse = 0; reuse < 8; ++reuse) {
         OresNativeContinuationHandle current = publish(continuations, execution);
         check(!ores_native_continuation_store_notify_ready(continuations, stale));
@@ -128,13 +129,14 @@ int main(void) {
         check(ores_native_continuation_store_get(continuations, current, &record));
         check(record.state == ORES_CONTINUATION_PENDING);
         if (current.slot == stale.slot) {
+            observed_reused_slot = 1;
             check(current.generation != stale.generation);
             check(!ores_native_continuation_store_release(continuations, stale));
         }
         check(ores_native_continuation_store_cancel(continuations, current));
         check(ores_native_continuation_store_release(continuations, current));
     }
-
+    check(observed_reused_slot);
 
     /*
      * Stress two distinct linearization windows:
