@@ -232,7 +232,7 @@ public:
     // Nonblocking: transport first freezes admission, joins/revokes all
     // registered asynchronous callbacks, and obtains a DrainReceipt. The
     // receipt must originate from THIS slab's exact actor generation.
-    // Registration/drain are mutex-serialized on the transport gate.
+    // Admission, freeze and drain use one bounded atomic stop/count word.
     void confirm_transport_quiescence(
             const NativeTransportCallbackGate::DrainReceipt& receipt) {
         in_turn([&] {

@@ -1,9 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
-#include <limits>
-#include <mutex>
 #include <optional>
 #include <utility>
 
@@ -13,7 +12,7 @@ namespace oreslang::runtime {
 // Every queued callback, timer, waker and I/O completion that might touch
 // actor-owned storage must hold one move-only permit from enqueue/admission
 // until its last physical callback/cleanup finishes. Registration and freeze
-// share one mutex, so a drained receipt cannot race a newly admitted permit.
+// share one atomic word, so a drained receipt cannot race admitted permits.
 // No per-callback heap allocation or blocking wait is performed by this gate.
 class NativeTransportCallbackGate final {
 public:
@@ -70,59 +69,63 @@ public:
     NativeTransportCallbackGate(NativeTransportCallbackGate&&) = delete;
     NativeTransportCallbackGate& operator=(NativeTransportCallbackGate&&) = delete;
     ~NativeTransportCallbackGate() {
-        // Prevent destroying the accounting mutex while a registered callback
+        // Prevent destroying the gate while a registered callback
         // can still touch its associated actor arena. This is not proof that
         // an unregistered external callback cannot exist (host must wire it).
-        std::lock_guard<std::mutex> guard(mu_);
-        if (active_ != 0) std::abort();
+        if ((state_.load(std::memory_order_acquire) & kCountMask) != 0)
+            std::abort();
     }
 
     [[nodiscard]] Permit try_admit() noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        if (stopped_ || active_ == std::numeric_limits<std::uint64_t>::max()) {
-            return {};
+        auto observed = state_.load(std::memory_order_acquire);
+        for (;;) {
+            // Reserve the high bit for terminal shutdown; count cannot wrap
+            // or consume the stop bit even under hostile callback volume.
+            if ((observed & kStopped) != 0 ||
+                    (observed & kCountMask) == kCountMask) return {};
+            if (state_.compare_exchange_weak(observed, observed + 1,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return Permit(this);
+            }
         }
-        ++active_;
-        return Permit(this);
     }
 
     void stop_admission() noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        stopped_ = true;
+        // Atomic with concurrent admissions: a racing CAS either precedes
+        // this shutdown and owns a counted permit, or fails to admit.
+        state_.fetch_or(kStopped, std::memory_order_acq_rel);
     }
 
     [[nodiscard]] bool accepting() const noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        return !stopped_;
+        return (state_.load(std::memory_order_acquire) & kStopped) == 0;
     }
 
     [[nodiscard]] std::optional<DrainReceipt> try_drain() const noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        if (!stopped_ || active_ != 0) return std::nullopt;
+        // Acquire from the final permit release before allowing page scrub.
+        if (state_.load(std::memory_order_acquire) != kStopped)
+            return std::nullopt;
         return DrainReceipt(this, domain_, slot_, generation_, identity_);
     }
 
     [[nodiscard]] bool verifies(const DrainReceipt& receipt) const noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        return stopped_ && active_ == 0 && receipt.gate_ == this
-            && receipt.domain_ == domain_ && receipt.slot_ == slot_
-            && receipt.generation_ == generation_
+        return state_.load(std::memory_order_acquire) == kStopped
+            && receipt.gate_ == this && receipt.domain_ == domain_
+            && receipt.slot_ == slot_ && receipt.generation_ == generation_
             && receipt.identity_ == identity_;
     }
 
 private:
     void release_one() noexcept {
-        std::lock_guard<std::mutex> guard(mu_);
-        if (active_ == 0) std::abort();
-        --active_;
+        const auto prior = state_.fetch_sub(1, std::memory_order_acq_rel);
+        if ((prior & kCountMask) == 0) std::abort();
     }
+    static constexpr std::uint32_t kStopped = std::uint32_t{1} << 31;
+    static constexpr std::uint32_t kCountMask = kStopped - 1;
     const std::uint64_t domain_;
     const std::uint64_t slot_;
     const std::uint64_t generation_;
     const std::uint64_t identity_;
-    mutable std::mutex mu_;
-    std::uint64_t active_ = 0;
-    bool stopped_ = false;
+    std::atomic<std::uint32_t> state_{0};
 };
 
 } // namespace oreslang::runtime

@@ -108,7 +108,8 @@ accounting. A trusted I/O adapter **must obtain and retain one move-only
 that may touch actor arena memory**. Moving the permit with the asynchronous
 completion envelope keeps it held across carrier migration, and releasing it
 only after the callback's final access decrements the registered in-flight
-count. Its accounting mutex serializes enqueue admission and shutdown.
+count. A 32-bit atomic stop/count word serializes enqueue admission against
+shutdown without a per-callback heap allocation, mutex or busy wait.
 
 Shutdown invokes `stop_admission()`, preventing new permits, and only when
 all registered permits are released can `try_drain()` produce a copyable,
@@ -131,3 +132,17 @@ them. It does not automatically intercept epoll/kqueue/IOCP/HTTP callbacks,
 join an external network reactor or prove a real HTTP/TCP shutdown. Any adapter
 not yet wired to this gate remains out of scope; this is a host-side safety
 substrate, not production guest networking or cross-backend conformance.
+
+
+### Lock-free terminal admission hardening
+
+The native callback gate uses one `std::atomic<uint32_t>` rather than a
+mutex: the high bit means `stopped`, and the low 31 bits count admitted
+physical callback permits. Admission is a CAS that fails once shutdown wins;
+shutdown atomically sets the stop bit; each permit's final release decrements
+the count with acquire/release ordering. `try_drain()` and receipt validation
+require exactly the stop bit with zero outstanding permits. The low counter
+cannot overflow into the stop bit, and a racing CAS cannot admit an uncounted
+callback after freeze. The focused test includes 128 two-thread producer vs
+freeze races in addition to a separately blocked in-flight callback. The
+full native actor/repository test matrix remains gated on executing CI.

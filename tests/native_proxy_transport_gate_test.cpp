@@ -51,5 +51,32 @@ int main() {
     callback.join();
     auto after = concurrent.try_drain();
     assert(after && concurrent.verifies(*after));
+    // Race producer admission against the terminal stop bit. Every admitted
+    // permit must be counted before freeze, and no permit may appear after.
+    for (std::uint64_t iteration = 0; iteration < 128; ++iteration) {
+        NativeTransportCallbackGate raced(17, 8, 123, 300 + iteration);
+        std::atomic<bool> go{false};
+        std::thread producer([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int attempt = 0; attempt < 200; ++attempt) {
+                auto permit = raced.try_admit();
+                if (!permit) break;
+                std::this_thread::yield();
+                // RAII release is the last operation touching the arena.
+            }
+        });
+        std::thread freezer([&] {
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            raced.stop_admission();
+        });
+        go.store(true, std::memory_order_release);
+        producer.join();
+        freezer.join();
+        assert(!raced.try_admit() && !raced.accepting());
+        const auto terminal = raced.try_drain();
+        assert(terminal && raced.verifies(*terminal));
+    }
     std::puts("NATIVE_PROXY_TRANSPORT_GATE_OK");
 }
