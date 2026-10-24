@@ -93,6 +93,14 @@ static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
             == ORES_NATIVE_FUTURE_PENDING) {
         ensure(ores_native_actor_future_complete(
             frame->ready_future, ORES_NATIVE_FUTURE_READY));
+        /*
+         * The Future has committed its terminal outcome and reserved root
+         * CONTROL wakeup. Our group mutex keeps the resumed root turn from
+         * entering before the continuation's READY record is visible.
+         * A failure must never silently strand the reserved wake.
+         */
+        ensure(ores_native_continuation_store_notify_ready(
+            group.continuations, frame->link.continuation));
     }
 }
 
@@ -157,7 +165,7 @@ static void root_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin(
         group.executions,
         group.continuations,
         physical.id,
