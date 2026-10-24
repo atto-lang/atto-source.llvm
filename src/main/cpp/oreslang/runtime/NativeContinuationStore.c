@@ -330,6 +330,25 @@ int ores_native_continuation_store_release(
     return released_any;
 }
 
+int ores_native_continuation_store_commit_ready(
+        OresNativeContinuationStore* store,
+        OresNativeContinuationHandle handle,
+        OresNativeContinuationReadyCommit commit,
+        void* context) {
+    if (!store || !commit || !lock_store(store)) return 0;
+    uint32_t lane = 0, index = 0;
+    ContinuationBlock* block = NULL;
+    int ok = resolve_locked(store, handle, &block, &lane, &index)
+        && block->state[lane] == ORES_CONTINUATION_PENDING;
+    if (ok) {
+        ok = commit(context);
+        if (ok)
+            block->state[lane] = (unsigned char)ORES_CONTINUATION_READY;
+    }
+    unlock_store(store);
+    return ok;
+}
+
 int ores_native_continuation_store_notify_ready(
         OresNativeContinuationStore* store,
         OresNativeContinuationHandle handle) {
