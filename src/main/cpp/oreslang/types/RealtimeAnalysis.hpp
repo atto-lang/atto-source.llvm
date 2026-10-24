@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -129,6 +130,18 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
     }
 
     switch (expr->kind) {
+        case Expression::Kind::SumConstruct:
+            add_effect(facts, FunctionEffect::Alloc); facts.unsupported_runtime = true; break;
+        case Expression::Kind::SumAccess:
+            add_effect(facts, FunctionEffect::StateRead); facts.unsupported_runtime = true;
+            if (expr->name == "unwrap") add_effect(facts, FunctionEffect::Panic);
+            break;
+        case Expression::Kind::String:
+            add_effect(facts, FunctionEffect::Alloc);
+            break;
+        case Expression::Kind::Console:
+            add_effect(facts, FunctionEffect::Io);
+            break;
         case Expression::Kind::Call:
             if (facts.calls.size() >= facts.call_limit) {
                 facts.call_budget_exceeded = true;
@@ -139,6 +152,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             facts.calls.push_back(function_key(expr->name, expr->arguments.size()));
             break;
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::RecordConstruct:
             // Current native Array<int> runtime may allocate/resize. It is not
             // admitted until lowered onto the fixed-capacity RT arena.
             add_effect(facts, FunctionEffect::Alloc);
@@ -156,6 +170,8 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
         case Expression::Kind::Add:
+            if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
+            break;
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
         case Expression::Kind::Equal:
@@ -192,6 +208,7 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     scan_expression(statement.condition.get(), facts);
     scan_expression(statement.condition_lhs.get(), facts);
     scan_expression(statement.condition_rhs.get(), facts);
+    scan_expression(statement.loop_step.get(), facts);
     scan_expression(statement.array_commit_length.get(), facts);
     for (const auto& value : statement.array_commit_values) {
         scan_expression(value.get(), facts);
@@ -207,6 +224,12 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         add_effect(facts, FunctionEffect::Alloc);
     if (statement.kind == Statement::Kind::Defer)
         facts.bounded_cleanup = false;
+    if (statement.kind == Statement::Kind::ForEach || statement.kind == Statement::Kind::ForIndex) {
+        add_effect(facts, FunctionEffect::StateRead);
+        // Synchronous array iteration is not yet a certified scheduler/fuel
+        // loop. Do not admit it into strict realtime or pretend it can yield.
+        facts.unsupported_runtime = true;
+    }
 
     for (const auto& nested : statement.then_statements) {
         scan_statement(nested, facts);
@@ -221,6 +244,13 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
 inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Even a passthrough validates a region-backed descriptor at entry. The
+    // scalar ABI does not make sum storage a certified hard-RT resource.
+    if (!function.return_sum.empty() || std::any_of(function.parameters.begin(), function.parameters.end(),
+            [](const Parameter& p) { return !p.sum_type.empty(); }))
+        facts.unsupported_runtime = true;
+    // Returning a named leaf record snapshots fields into native region storage.
+    if (!function.return_class.empty()) add_effect(facts, FunctionEffect::Alloc);
 
     for (const auto& local : function.locals) {
         scan_binding(local, facts);
