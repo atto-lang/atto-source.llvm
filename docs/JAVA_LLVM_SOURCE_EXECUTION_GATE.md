@@ -65,8 +65,10 @@ receipt if a Java fixture fails, stdout diverges, a pinned SHA is malformed,
 a tracked or untracked checkout is modified, or a previous receipt already
 exists. It requires `jq` to independently verify the versioned receipt schema,
 both exact checkout SHAs, the complete nine-case corpus, execution counts,
-identical hexadecimal stdout bytes and exit statuses before it publishes a
-receipt. JSON is slurped as **exactly one** document; concatenated receipts
+identical hexadecimal stdout bytes, **the independently pinned expected
+stdout bytes for every named case**, and exit statuses before it publishes a
+receipt. A forged receipt in which both backends supposedly print the same
+incorrect bytes is rejected. JSON is slurped as **exactly one** document; concatenated receipts
 are rejected. A nonempty file or a process exit zero is not sufficient.
 
 The Java reference launcher must be reviewed to ensure it really executes
@@ -82,12 +84,16 @@ Run `bash tests/java_llvm_parity_gate_admission.sh` and
 `bash tests/java_llvm_parity_receipt_admission.sh` before attempting any
 private-source runner. The latter uses mocked toolchains to prove that malformed
 JSON, a forged Java revision, missing fixture results, divergent guest stdout,
-concatenated JSON documents and malformed hex output **cannot** publish a success receipt. These admission
+concatenated JSON documents, malformed hex output, and equal-but-incorrect
+backend output **cannot** publish a success receipt. These admission
 tests provide no real compiled source evidence.
 
 The first suite creates disposable **synthetic** Git repositories to
 exercise denial of untracked LLVM and Java sources, a modified tracked source,
-committed Java/LLVM fixture divergence, and an untracked launcher. It also
+committed Java/LLVM fixture divergence, an untracked launcher, and **committed
+symlinks to identical external fixture data**. Guest fixtures must be regular
+Git blobs (mode `100644`), and the Java launcher must be a tracked executable
+Git blob (mode `100755`); neither may be an escape through a tracked symlink. It also
 syntax-checks the actual strict runner. These tests are safe to execute without
 LLVM, GraalVM, Maven or a private source export; they are **not** guest
 execution or cross-backend conformance evidence.
