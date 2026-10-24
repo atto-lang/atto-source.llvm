@@ -1049,6 +1049,23 @@ private:
         }
         if (token_.text == "?")
             fail("native optional return type '?' requires versioned Option/default ABI lowering");
+
+        /*
+         * First typed exceptional declaration admitted by native source:
+         * readiness can terminate before publication. Preserve the concrete
+         * source type without claiming general throw lowering.
+         */
+        if (accept("throws")) {
+            const std::string type = type_identifier();
+            if (type != "ActorTerminated")
+                fail("native typed throws supports only ActorTerminated for ActorRef.get_ready");
+            value.throws_types.push_back(type);
+            if (accept(","))
+                fail("native typed throws supports only one ActorTerminated type");
+        }
+        if (token_.text == "raises" || token_.text == "panics")
+            fail("native typed exceptional effect declaration is not yet enabled");
+
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
