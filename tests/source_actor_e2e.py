@@ -81,8 +81,8 @@ def verify_native_owned_ir(ir, name):
     # Match compiler-issued named stack tokens, not incidental "i64 3"
     # constants from a user message, initializer or unrelated instruction.
     token_pattern = (
-        r"^\\s*%([A-Za-z_.$][A-Za-z0-9_.$]*)\\s*=\\s*alloca\\s+"
-        r"\\[3 x i64\\](?:,\\s*align\\s+\\d+)?\\s*$"
+        r"^\s*%([A-Za-z_.$][A-Za-z0-9_.$]*)\s*=\s*alloca\s+"
+        r"\[3 x i64\](?:,\s*align\s+\d+)?\s*$"
     )
     tokens = re.findall(token_pattern, ir, flags=re.MULTILINE)
     assert len(tokens) == 2 and len(set(tokens)) == 2, (
@@ -93,12 +93,12 @@ def verify_native_owned_ir(ir, name):
     def issued_tokens(symbol):
         calls = [
             line.strip() for line in ir.splitlines()
-            if re.match(r"^\\s*call void @" + re.escape(symbol) + r"\\(", line)
+            if re.match(r"^\s*call void @" + re.escape(symbol) + r"\(", line)
         ]
         used = []
         for line in calls:
             token = re.search(
-                r"\\bptr\\s+%([A-Za-z_.$][A-Za-z0-9_.$]*)\\)\\s*$", line)
+                r"\bptr\s+%([A-Za-z_.$][A-Za-z0-9_.$]*)\)\s*$", line)
             assert token, (name, "missing native ownership token argument", line)
             used.append(token.group(1))
         return used
