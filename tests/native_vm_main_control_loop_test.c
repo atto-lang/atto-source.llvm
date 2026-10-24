@@ -8,8 +8,10 @@
 
 enum { WRITERS = 4, NOTIFICATIONS = 300 };
 typedef struct {
+    OresNativeVM* vm;
     atomic_int guest_data;
     atomic_int actor_control;
+    atomic_int actor_control_on_carrier;
 } Counters;
 typedef struct {
     OresNativeVM* vm;
@@ -26,6 +28,12 @@ static void on_data(void* opaque, size_t slot, uint64_t payload) {
 static void on_control(void* opaque, size_t slot, uint64_t payload) {
     Counters* counters = (Counters*)opaque;
     require(slot == 0 && payload == 17);
+    OresNativeExecutionContext context = {0};
+    require(counters->vm != NULL);
+    require(ores_native_vm_current_execution_context(
+        counters->vm, ORES_NATIVE_VM_MAIN, &context));
+    require(context.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    atomic_store(&counters->actor_control_on_carrier, 1);
     atomic_fetch_add(&counters->actor_control, 1);
 }
 static OresNativeVMConfig make_config(Counters counters[ORES_NATIVE_VM_DOMAIN_COUNT]) {
@@ -64,6 +72,10 @@ int main(void) {
 
     OresNativeVM* vm = ores_native_vm_open(&config);
     require(vm != NULL);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        counters[i].vm = vm;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        counters[i].vm = vm;
     require(!ores_native_vm_main_control_loop_started(vm));
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         require(ores_native_vm_started_carriers(
@@ -115,11 +127,14 @@ int main(void) {
     require(!ores_native_vm_start_main_control_loop(vm));
     require(ores_native_vm_close(vm)); /* joins CONTROL before scheduler free */
     require(atomic_load(&counters[0].actor_control) == 1);
+    require(atomic_load(&counters[0].actor_control_on_carrier) == 1);
     require(atomic_load(&counters[0].guest_data) == 0);
 
     /* A competing cold NIO bootstrap excludes main-loop thread creation. */
     vm = ores_native_vm_open(&config);
     require(vm != NULL);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        counters[i].vm = vm;
     require(ores_native_vm_nio_begin_bootstrap(vm));
     require(!ores_native_vm_start_main_control_loop(vm));
     ores_native_vm_nio_cancel_bootstrap(vm);
@@ -131,6 +146,8 @@ int main(void) {
      * provision the main CONTROL pthread on a guest/hot execution path. */
     vm = ores_native_vm_open(&config);
     require(vm != NULL);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        counters[i].vm = vm;
     require(ores_native_vm_prepare_realtime(vm));
     require(!ores_native_vm_start_main_control_loop(vm));
     require(!ores_native_vm_main_control_loop_started(vm));
@@ -149,6 +166,8 @@ int main(void) {
      * A later, repeated CONTROL start must still reject the RT transition. */
     vm = ores_native_vm_open(&config);
     require(vm != NULL);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        counters[i].vm = vm;
     require(ores_native_vm_start_main_control_loop(vm));
     require(ores_native_vm_prepare_realtime(vm));
     require(!ores_native_vm_start_main_control_loop(vm));
