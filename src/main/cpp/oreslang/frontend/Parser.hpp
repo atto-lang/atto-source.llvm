@@ -15,6 +15,15 @@ namespace oreslang {
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
 enum class ScalarType { I64, Bool, String };
 
+// Sum payloads are values, never untyped integer handles or class pointers.
+struct NativeSumType {
+    enum class Kind { Option, Result };
+    Kind kind = Kind::Option;
+    std::string name;
+    ScalarType value_type = ScalarType::I64;
+    ScalarType error_type = ScalarType::I64;
+};
+
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
     std::string type; // native stage 1 admits only int
@@ -33,7 +42,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -57,6 +66,7 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    mutable std::string sum_type;
 };
 
 struct Parameter {
@@ -66,6 +76,7 @@ struct Parameter {
     std::string generic_type; // stage-one i64 generic slot
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
+    std::string sum_type;
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
@@ -88,6 +99,7 @@ struct LocalBinding {
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
+    std::string sum_type;
 };
 
 struct ClassField {
@@ -103,6 +115,7 @@ struct ClassField {
     bool constructor_argument = false; // declaration-only field supplied by implicit positional constructor
     ScalarType array_element_type = ScalarType::I64;
     std::string array_record_class;
+    std::string sum_type;
 };
 
 struct ClassMethod {
@@ -242,6 +255,7 @@ struct Function {
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    std::string return_sum;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
@@ -294,6 +308,7 @@ struct Program {
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<std::string> conforms;
+    std::vector<NativeSumType> sum_types;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

@@ -51,6 +51,10 @@ for every workload.
   fieldless instance methods, typed `val` declarations, string returns and
   concatenation, and nonblocking console output. See
   [native class/string parity and remaining limits](docs/NATIVE_CLASS_STRING_PARITY.md).
+- Scalar-payload `Option`/`Result` values use distinct checked types and
+  generation/schema/tag validation. Real routing capture fixtures run natively;
+  class payloads and the full Spin server remain work in progress. See
+  [native sums and lifetime boundaries](docs/NATIVE_SCALAR_SUMS.md).
 - Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
 - Typed `int` and `bool` parameters, scalar fields and loans; checked bool operators
