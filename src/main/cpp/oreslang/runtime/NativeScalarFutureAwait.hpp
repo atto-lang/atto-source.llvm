@@ -43,8 +43,7 @@ public:
                 || !future_id)
             throw std::invalid_argument("invalid scalar future owner identity");
         return std::shared_ptr<NativeScalarFutureAwait>(
-            new NativeScalarFutureAwait({owner.runtime_id(), owner.actor_id(),
-                                         owner.generation(), future_id}));
+            new NativeScalarFutureAwait(owner, future_id));
     }
 
     NativeScalarFutureAwait(const NativeScalarFutureAwait&) = delete;
@@ -83,9 +82,7 @@ public:
             NativeScalarFutureId ticket,
             const NativeActorRef& parent_ref) noexcept {
         if (!valid(ticket)
-                || parent_ref.runtime_id() != id_.runtime_id
-                || parent_ref.actor_id() != id_.actor_id
-                || parent_ref.generation() != id_.generation
+                || !parent_ref.same_capability(owner_)
                 || !parent_ref.delivery_closed())
             return false;
         return cancel(ticket);
@@ -103,9 +100,7 @@ public:
                       const NativeActorRef& parent_ref,
                       Resume resume) {
         if (!resume) throw std::invalid_argument("missing scalar future resume");
-        if (!valid(ticket) || parent_ref.runtime_id() != id_.runtime_id
-                || parent_ref.actor_id() != id_.actor_id
-                || parent_ref.generation() != id_.generation)
+        if (!valid(ticket) || !parent_ref.same_capability(owner_))
             return false;
 
         std::lock_guard<std::mutex> guard(mutex_);
@@ -142,7 +137,9 @@ public:
     }
 
 private:
-    explicit NativeScalarFutureAwait(NativeScalarFutureId id) : id_(id) {}
+    NativeScalarFutureAwait(const NativeActorRef& owner, std::uint64_t future_id)
+        : owner_(owner),
+          id_{owner.runtime_id(), owner.actor_id(), owner.generation(), future_id} {}
 
     bool valid(NativeScalarFutureId ticket) const noexcept {
         return ticket.runtime_id == id_.runtime_id
@@ -160,6 +157,7 @@ private:
         return true;
     }
 
+    const NativeActorRef owner_;
     const NativeScalarFutureId id_;
     mutable std::mutex mutex_;
     Phase phase_ = Phase::pending;
