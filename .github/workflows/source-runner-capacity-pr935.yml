@@ -1,0 +1,20 @@
+name: Source-only runner admission canary for PR935
+on:
+  push:
+    branches: [ci/source-runner-capacity-20261024-pr935]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  admission:
+    name: source-only-admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Prove a real step runs without checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo ORESLANG_SOURCE_RUNNER_EXECUTED
+          uname -srm
+          command -v gcc
