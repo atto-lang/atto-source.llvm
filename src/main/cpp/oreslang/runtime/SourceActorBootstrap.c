@@ -17,7 +17,8 @@
 #define SOURCE_ROOT_CONTROL_SUSPEND UINT64_C(1)
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 
-typedef struct {
+typedef struct SourceActor SourceActor;
+struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
@@ -25,11 +26,14 @@ typedef struct {
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
     OresNativeActorRef capabilities[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
+    struct SourceActor* children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
+    struct SourceActor* parent;
     uint8_t capability_count;
+    uint8_t child_count;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
-} SourceActor;
+};
 
 typedef struct {
     pthread_cond_t completed;
@@ -64,6 +68,7 @@ static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 static _Thread_local SourceActor* current_source_actor;
+static _Thread_local uint8_t current_source_phase;
 
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
@@ -203,7 +208,13 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     SourceActor* instance = lookup(slot);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    ensure(current_source_actor == NULL && current_source_phase == 0);
+    current_source_actor = instance;
+    current_source_phase = 1;
     instance->constructor(instance->heap, turn.domain, turn.epoch);
+    current_source_phase = 0;
+    current_source_phase = 0;
+    current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
 
@@ -227,8 +238,9 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
-    ensure(current_source_actor == NULL);
+    ensure(current_source_actor == NULL && current_source_phase == 0);
     current_source_actor = instance;
+    current_source_phase = 2;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
     current_source_actor = NULL;
@@ -289,37 +301,17 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn_with_capabilities(
+static SourceActor* spawn_actor_locked(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
         uint64_t fields,
-        void* const* actors,
-        uint64_t actor_count) {
+        const OresNativeActorRef* copied,
+        uint64_t actor_count,
+        SourceActor* parent) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
     ensure(actor_count <= ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
-    ensure(actor_count == 0 || actors != NULL);
-    group_lock();
+    ensure(actor_count == 0 || copied != NULL);
     if (!group.vm) open_group_locked();
-
-    OresNativeActorRef copied[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
-    for (uint64_t i = 0; i < actor_count; ++i) {
-        SourceActor* target = NULL;
-        size_t target_slot = 0;
-        /* Opaque refs are trusted compiler handles, but validation must not
-         * dereference a stale/arbitrary pointer. Find identity in the live
-         * group table first, then inspect the matched object. */
-        for (size_t candidate = 0; candidate < group.next_slot; ++candidate) {
-            if (group.actors[candidate] == actors[i]) {
-                target = group.actors[candidate];
-                target_slot = candidate;
-                break;
-            }
-        }
-        ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
-        ensure(target->ref.scheduler_domain
-            && target->ref.actor_slot == target_slot);
-        copied[i] = target->ref;
-    }
 
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
     const size_t slot = group.next_slot++;
@@ -332,6 +324,7 @@ void* oreslang_source_actor_spawn_with_capabilities(
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->capability_count = (uint8_t)actor_count;
+    instance->parent = parent;
     for (uint64_t i = 0; i < actor_count; ++i)
         instance->capabilities[i] = copied[i];
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
@@ -346,6 +339,36 @@ void* oreslang_source_actor_spawn_with_capabilities(
     /* CONTROL initializes the compiler-emitted actor constructor on a worker. */
     ensure(ores_native_vm_publish_control(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
+    return instance;
+}
+
+void* oreslang_source_actor_spawn_with_capabilities(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        void* const* actors,
+        uint64_t actor_count) {
+    ensure(actor_count <= ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+    ensure(actor_count == 0 || actors != NULL);
+    group_lock();
+    OresNativeActorRef copied[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+    for (uint64_t i = 0; i < actor_count; ++i) {
+        SourceActor* target = NULL;
+        size_t target_slot = 0;
+        for (size_t candidate = 0; candidate < group.next_slot; ++candidate) {
+            if (group.actors[candidate] == actors[i]) {
+                target = group.actors[candidate];
+                target_slot = candidate;
+                break;
+            }
+        }
+        ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
+        ensure(target->ref.scheduler_domain
+            && target->ref.actor_slot == target_slot);
+        copied[i] = target->ref;
+    }
+    SourceActor* instance = spawn_actor_locked(
+        constructor, on_message, fields, copied, actor_count, NULL);
     group_unlock();
     return instance;
 }
@@ -393,6 +416,7 @@ static OresNativeActorRef current_capability(
         OresActorI64Heap* heap, uint64_t slot) {
     SourceActor* instance = current_source_actor;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 2);
     ensure(instance->heap == heap);
     ensure(slot < instance->capability_count);
     OresNativeActorRef ref = instance->capabilities[slot];
@@ -409,6 +433,30 @@ void oreslang_source_actor_send_capability(
 int oreslang_source_actor_try_send_capability(
         OresActorI64Heap* heap, uint64_t slot, int64_t payload) {
     return source_actor_try_send_ref(current_capability(heap, slot), payload);
+}
+
+void oreslang_source_actor_spawn_child_capability(
+        OresActorI64Heap* heap,
+        uint64_t slot,
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    SourceActor* parent = current_source_actor;
+    ensure(parent && parent->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 1 && parent->heap == heap);
+    ensure(slot == parent->capability_count);
+    ensure(slot == parent->child_count);
+    ensure(slot < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+
+    group_lock();
+    SourceActor* child = spawn_actor_locked(
+        constructor, on_message, fields, NULL, 0, parent);
+    ensure(child != NULL);
+    parent->capabilities[slot] = child->ref;
+    parent->children[slot] = child;
+    parent->capability_count++;
+    parent->child_count++;
+    group_unlock();
 }
 
 int64_t oreslang_source_actor_await_ready(
@@ -527,6 +575,19 @@ void oreslang_source_actor_stop(void* opaque) {
 
     ensure(ores_native_vm_wait_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+
+    SourceActor* children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+    uint8_t child_count = 0;
+    group_lock();
+    ensure(group.actors[slot] == instance);
+    child_count = instance->child_count;
+    for (uint8_t i = 0; i < child_count; ++i)
+        children[i] = instance->children[i];
+    group_unlock();
+
+    for (uint8_t i = 0; i < child_count; ++i) {
+        if (children[i]) oreslang_source_actor_stop(children[i]);
+    }
 
     group_lock();
     ensure(group.actors[slot] == instance);
