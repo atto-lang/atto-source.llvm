@@ -112,4 +112,12 @@ printf 'injected.ores\\n' >> "$temp/llvm/.git/info/exclude"
 printf 'pub fnc main():int{return 1;}\\n' > "$temp/llvm/injected.ores"
 expect_rejected "ignored untracked LLVM source" 65 "ignored untracked input" "$launcher"
 
+# No tracked symlink may appear anywhere in a source-exact checkout, even if
+# it is not one of the two explicitly compared guest fixtures.
+make_repos
+ln -s "tests/fixtures/native-class-string/main.ores" "$temp/java/unrelated-symlink.ores"
+git -C "$temp/java" add unrelated-symlink.ores
+git -C "$temp/java" -c user.name=ParityAdmission -c user.email=parity@invalid.example commit -qm unrelated-symlink
+expect_rejected "unrelated committed source symlink" 65 "unverified tracked file mode" "$launcher"
+
 echo "PASS: synthetic fail-closed parity gate admissions; no runtime parity inferred"
