@@ -73,3 +73,28 @@ completion receipt, proves charges remain stable after rejection, and
 rejects late callbacks after close. Neither these host tests nor the
 standalone host-only CMake option establishes guest `.ores` lowering,
 real HTTP/TCP callback quiescence, JDK25, or GraalVM parity.
+
+
+## Explicit external-callback quiescence admission
+
+The actor-owned native wrapper now requires a trusted host to call
+`confirm_transport_quiescence()` on the correct logical actor turn **after**
+stopping new physical I/O operations and joining any queued callbacks,
+timers and wakers. Merely observing `live()==0`, recycling a ticket, or
+retiring the scheduler does not authorize arena reclamation. Confirmation
+is monotonic and disables subsequent request admission or callback pinning.
+`close()` fails before confirmation; the destructor's scheduler-retired
+cleanup also fail-stops if no confirmation was recorded. An outstanding
+logical request (including a retired request with an unsettled completion
+pin) prevents confirmation. The owning actor test exercises premature close
+while logically empty, premature confirmation while a pin is pending,
+foreign actor confirmation, rejection of admission after confirmation,
+idempotent confirmation, and the terminal cleanup path.
+
+**Trust boundary:** the confirmation call records a trusted host assertion;
+it **does not inspect, join or revoke arbitrary external I/O callbacks**.
+Transport and supervisor implementations must actually quiesce their own
+queues before calling it. A malicious or faulty trusted host could lie, so
+this alone is not evidence of real network callback safety. The guest
+language cannot call this method through actor messages. No native guest
+lowering, live HTTP/TCP integration or Java/GraalVM parity is claimed.

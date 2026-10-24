@@ -44,9 +44,11 @@ inline std::uint64_t reserve_proxy_slab_identity() {
  * a future actor-turn-batched kernel, but keeps the existing arena guard and
  * its 1 MiB-per-persistent-slot policy rather than exporting raw pointers.
  *
- * Host must fence external I/O, preferably close() on the owning actor
- * turn, then retire actor budget after exact scheduler done. The destructor
- * can scrub a quiescent, unclosed slab only after that retirement fence.
+ * Trusted host must first stop external I/O admission, join all I/O
+ * callbacks, and call confirm_transport_quiescence() on the owner turn.
+ * This is an explicit host assertion, NOT an independently generated
+ * transport receipt. Both close() and the scheduler-retired destructor
+ * fallback require it; logical live()==0 is never sufficient by itself.
  * Any live request remains fail-stop. This object and its budgets must outlive
  * all associated callback envelopes; teardown must precede destruction of
  * scheduler and budget ledgers. No Oreslang source lowering is provided.
@@ -126,8 +128,10 @@ public:
             // An actor may have drained all requests but missed explicit
             // close() during terminal cancellation. Permit trusted host
             // cleanup ONLY after the scheduler-done retirement fence.
-            // Anything still live, including pending I/O, remains fail-stop.
-            if (!actor_budget_.retired() || slab_->live() != 0) std::abort();
+            // A retired logical actor is not an external callback join.
+            // An explicit owner-turn host quiescence assertion is required.
+            if (!actor_budget_.retired() || !transport_quiescent_
+                    || slab_->live() != 0) std::abort();
             ArenaTurn session(arena_, owner_);
             slab_->resume(session.turn());
             slab_->close();
@@ -158,7 +162,12 @@ public:
     }
     std::uint64_t admit(std::uint32_t epoch, std::uint32_t connection,
                         std::uint32_t route) {
-        return in_turn([&] { return slab_->admit(epoch, connection, route); });
+        return in_turn([&] {
+            if (transport_quiescent_) {
+                throw std::logic_error("proxy slab transport already quiesced");
+            }
+            return slab_->admit(epoch, connection, route);
+        });
     }
     std::uint32_t route(std::uint64_t ticket) const {
         return in_turn([&] { return slab_->route(ticket); });
@@ -177,6 +186,9 @@ public:
     // The claim alone is NOT enough to prove the destination slab/actor.
     Receipt pin(std::uint64_t ticket) {
         return in_turn([&] {
+            if (transport_quiescent_) {
+                throw std::logic_error("proxy slab transport already quiesced");
+            }
             auto claim = slab_->pin(ticket);
             return claim ? Receipt{owner_.scheduler_domain, owner_.actor_slot,
                 owner_.generation, identity_, ticket, claim} : Receipt{};
@@ -203,9 +215,29 @@ public:
     bool retire(std::uint64_t ticket) {
         return in_turn([&] { return slab_->retire(ticket); });
     }
+
+    // Trusted host completion-dispatch barrier. The transport owner must
+    // revoke admission and join all timer, waker, and external I/O callbacks
+    // BEFORE making this assertion on the owning logical actor lane.
+    // This API cannot independently verify an external queue has drained.
+    // All completed request pins must also have settled; this fails closed
+    // for outstanding logical work and permanently disables admit()/pin().
+    void confirm_transport_quiescence() {
+        in_turn([&] {
+            if (slab_->live() != 0) {
+                throw std::logic_error(
+                    "cannot confirm transport quiescence with live requests");
+            }
+            transport_quiescent_ = true;
+        });
+    }
+
     void close() {
         require_owner();
         if (closed_) return;
+        if (!transport_quiescent_) {
+            throw std::logic_error("transport quiescence not confirmed");
+        }
         in_turn([&] { slab_->close(); });
         closed_ = true;
     }
@@ -250,6 +282,9 @@ private:
     std::array<OresArenaHandle, 16> handles_{};
     OresActorArena* arena_ = nullptr;
     std::unique_ptr<ProxyRequestSlab> slab_;
+    // Monotonic trusted host assertion made on the owner's actor lane.
+    // Never inferred solely from slab_->live()==0 or scheduler retirement.
+    bool transport_quiescent_ = false;
     bool closed_ = false;
 };
 

@@ -51,7 +51,10 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             bool identity_denied = false;
             try { (void)state.slab->identity(); }
             catch (const std::logic_error&) { identity_denied = true; }
-            state.foreign_denied = denied && identity_denied;
+            bool quiescence_denied = false;
+            try { state.slab->confirm_transport_quiescence(); }
+            catch (const std::logic_error&) { quiescence_denied = true; }
+            state.foreign_denied = denied && identity_denied && quiescence_denied;
             return;
         }
         assert(actor == 0);
@@ -97,6 +100,11 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
                     auto sample = multi_page.admit(10, 7, 17);
                     assert(sample && multi_page.route(sample) == 17);
                     assert(multi_page.retire(sample));
+                    bool unconfirmed_denied = false;
+                    try { multi_page.close(); }
+                    catch (const std::logic_error&) { unconfirmed_denied = true; }
+                    assert(unconfirmed_denied);
+                    multi_page.confirm_transport_quiescence();
                     multi_page.close();
                 }
                 assert(state.actor_budget->used_bytes() == before);
@@ -118,6 +126,11 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.slab->pending(state.stale_ticket) == 1);
             assert(state.actor_budget->used_bytes() == charged_before_close);
             assert(state.slab->route(state.stale_ticket) == 42);
+            bool pending_quiescence_denied = false;
+            try { state.slab->confirm_transport_quiescence(); }
+            catch (const std::logic_error&) { pending_quiescence_denied = true; }
+            assert(pending_quiescence_denied);
+            assert(state.slab->pending(state.stale_ticket) == 1);
             // A second slab deliberately mints the same raw low-level
             // claim. Identity/callback provenance must block misdelivery.
             state.other_slab = std::make_unique<ActorOwnedProxyRequestSlab>(
@@ -155,6 +168,24 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.slab->live() == 0);
         } else if (step == 4) {
             assert(state.slab->live() == 0);
+            // Logical quiescence (live==0) must NOT permit page reclamation
+            // until the trusted transport has explicitly acknowledged that
+            // its timers/wakers and callback envelopes have been joined.
+            bool missing_transport_fence_denied = false;
+            try { state.slab->close(); }
+            catch (const std::logic_error&) { missing_transport_fence_denied = true; }
+            assert(missing_transport_fence_denied);
+            assert(state.slab->live() == 0);
+            state.slab->confirm_transport_quiescence();
+            state.slab->confirm_transport_quiescence(); // monotonic/idempotent
+            bool admission_after_fence_denied = false;
+            try { (void)state.slab->admit(7, 10, 20); }
+            catch (const std::logic_error&) { admission_after_fence_denied = true; }
+            assert(admission_after_fence_denied);
+            bool pin_after_fence_denied = false;
+            try { (void)state.slab->pin(state.ticket); }
+            catch (const std::logic_error&) { pin_after_fence_denied = true; }
+            assert(pin_after_fence_denied);
             state.slab->close();
             // A successful close invalidates the complete host API, not
             // only mutating operations: no stale metadata reads after close.
@@ -171,10 +202,11 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             catch (const std::logic_error&) { closed_completion_denied = true; }
             assert(closed_completion_denied); // stale async callback after close
             state.slab->close(); // idempotent owner cleanup
-            // Deliberately omit other_slab.close() even though all its
-            // requests are settled: after the exact scheduler-done fence,
-            // trusted host retirement must scrub/free it safely instead of
-            // aborting an otherwise quiescent supervisor shutdown.
+            // Deliberately omit other_slab.close() after the host explicitly
+            // joins its I/O callbacks; only the combined transport fence,
+            // logical drain, and exact scheduler-done gate allows the
+            // trusted retired destructor to scrub and refund its pages.
+            state.other_slab->confirm_transport_quiescence();
         } else {
             state.failed = true;
         }
