@@ -16,13 +16,37 @@ typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
+#define ORES_SOURCE_ACTOR_CAPABILITY_SLOTS 8u
+
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
-/* Nonblocking bounded one-way send. Overload currently fails closed with a
- * host error; a typed guest overload result still needs compiler lowering.
+/* Runtime-only foundation for future compiler-lowered actor capabilities.
+ * Each input must be a live source ActorRef from the same active group.
+ * The runtime copies only the generation-fenced native actor identity into
+ * the new actor; it never retains the caller's SourceActor* pointer.
+ * Source syntax for binding these slots remains separately gated.
+ */
+void* oreslang_source_actor_spawn_with_capabilities(
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields,
+    void* const* actors,
+    uint64_t actor_count);
+/* Nonblocking bounded one-way send. Strict send fails closed on any rejection.
+ * try_send returns 0 only for mailbox saturation; stale/terminated/invalid
+ * references remain fatal runtime contract violations.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+int oreslang_source_actor_try_send(void* actor, int64_t payload);
+/* Handler-only capability send. heap must be the current actor's private heap,
+ * and slot must name a runtime-copied generation-fenced capability. These
+ * functions never expose a raw target pointer to guest scalar state.
+ */
+void oreslang_source_actor_send_capability(
+    OresActorI64Heap* heap, uint64_t slot, int64_t payload);
+int oreslang_source_actor_try_send_capability(
+    OresActorI64Heap* heap, uint64_t slot, int64_t payload);
 void oreslang_source_actor_stop(void* actor);
 
 /*
