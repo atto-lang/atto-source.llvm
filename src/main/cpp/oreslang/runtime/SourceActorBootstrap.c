@@ -171,6 +171,17 @@ static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
             == ORES_NATIVE_FUTURE_PENDING) {
         ensure(ores_native_actor_future_complete(
             frame->ready_future, future_status));
+        /*
+         * This READY state belongs to the logical continuation, not the actor
+         * startup outcome. Both READY and FAILED Future terminals must make
+         * the root CONTROL cleanup resumable; guest continuation execution is
+         * still suppressed below for TERMINATED_BEFORE_READY.
+         *
+         * group.mutex remains held here, so the reserved CONTROL callback
+         * cannot enter root_resume_turn before this publication is visible.
+         */
+        ensure(ores_native_continuation_store_notify_ready(
+            group.continuations, frame->link.continuation));
     }
 }
 
@@ -237,7 +248,7 @@ static void root_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin(
         group.executions,
         group.continuations,
         physical.id,
@@ -331,7 +342,7 @@ static void root_done_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin(
         group.executions,
         group.continuations,
         physical.id,
@@ -736,6 +747,13 @@ int64_t oreslang_source_actor_await_done(
         == ORES_NATIVE_FUTURE_PENDING);
     ensure(ores_native_actor_future_complete(
         frame.done_future, ORES_NATIVE_FUTURE_READY));
+    /*
+     * get_done is Future-backed too: physical terminal ACK must publish the
+     * continuation as scheduler-resumable before the root CONTROL turn can
+     * claim it. Holding group.mutex closes the completion/wakeup race.
+     */
+    ensure(ores_native_continuation_store_notify_ready(
+        group.continuations, frame.link.continuation));
 
     while (!frame.done)
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
