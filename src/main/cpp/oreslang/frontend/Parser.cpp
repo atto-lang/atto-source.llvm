@@ -2982,6 +2982,27 @@ private:
             }
         }
 
+        /* Constructor-owned ActorRef fields form a static spawn graph in this
+         * native slice. Reject every cycle before IR emission: otherwise
+         * A->B->A recursively spawns on constructor CONTROL until the bounded
+         * actor table aborts at runtime. */
+        std::unordered_map<std::string, unsigned> actor_capability_marks;
+        std::function<void(const ActorDecl&)> visit_actor_capabilities;
+        visit_actor_capabilities = [&](const ActorDecl& actor) {
+            unsigned& mark = actor_capability_marks[actor.name];
+            if (mark == 2) return;
+            if (mark == 1)
+                throw std::runtime_error(
+                    "native actor capability spawn graph contains a cycle at '" +
+                    actor.name + "'");
+            mark = 1;
+            for (const auto& capability : actor.capability_fields)
+                visit_actor_capabilities(*actor_types.at(capability.actor_type));
+            mark = 2;
+        };
+        for (const auto& actor : program.actors)
+            visit_actor_capabilities(actor);
+
         // Same-file contracts are compile-time structural checks. Requiring
         // matching *public* members prevents accidental admission through
         // private functions that external callers cannot invoke.
