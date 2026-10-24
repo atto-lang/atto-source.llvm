@@ -575,8 +575,8 @@ private:
             TypeConstraintDescriptor descriptor;
             descriptor.schema_id = "ores.type-constraint.v1";
             descriptor.representation = "i64";
-            const std::string local_name = program.module.empty()
-                ? decl.name : program.module + "." + decl.name;
+            const std::string local_name = decl.module_name.empty()
+                ? decl.name : decl.module_name + "." + decl.name;
             descriptor.qualified_type_name = program.namespace_name.empty()
                 ? local_name : program.namespace_name + "." + local_name;
             descriptor.canonical = descriptor.schema_id +
@@ -615,6 +615,7 @@ private:
         }
 
         TypeOnlyDecl decl;
+        decl.module_name = program.module;
         decl.exported = exported;
         if (accept("type")) decl.kind = TypeOnlyDecl::Kind::Alias;
         else if (accept("trait")) decl.kind = TypeOnlyDecl::Kind::Trait;
