@@ -196,6 +196,58 @@ int main(void) {
 
 
     /*
+     * Cross-store re-entry is also rejected: otherwise concurrent callbacks
+     * could acquire A->B and B->A and deadlock even though neither re-enters
+     * its own store.
+     */
+    OresNativeExecutionContextStore* other_executions =
+        ores_native_execution_context_store_open(2);
+    check(other_executions != NULL);
+    OresNativeExecutionContext other_context = context;
+    other_context.id.runtime_domain = 99;
+    other_context.id.execution = 1;
+    other_context.allocation.domain = 99;
+    other_context.allocation.owner = 4;
+    OresNativeExecutionHandle other_execution = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        other_executions, &other_context, &other_execution));
+    OresNativeContinuationStore* other_continuations =
+        ores_native_continuation_store_open(1, other_executions);
+    check(other_continuations != NULL);
+    OresNativeContinuationHandle other_handle =
+        publish(other_continuations, other_execution);
+
+    OresNativeContinuationHandle cross_store_reentry =
+        publish(continuations, execution);
+    ReentryProbe cross_store_probe = {
+        other_continuations, other_handle, 0
+    };
+    check(ores_native_continuation_store_commit_ready(
+        continuations, cross_store_reentry,
+        reentry_probe, &cross_store_probe));
+    check(cross_store_probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, cross_store_reentry, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_get(
+        other_continuations, other_handle, &record));
+    check(record.state == ORES_CONTINUATION_PENDING);
+
+    check(ores_native_continuation_store_cancel(
+        continuations, cross_store_reentry));
+    check(ores_native_continuation_store_release(
+        continuations, cross_store_reentry));
+    check(ores_native_continuation_store_cancel(
+        other_continuations, other_handle));
+    check(ores_native_continuation_store_release(
+        other_continuations, other_handle));
+    check(ores_native_continuation_store_close(other_continuations));
+    check(ores_native_execution_context_store_release(
+        other_executions, other_execution));
+    check(ores_native_execution_context_store_close(other_executions));
+
+
+    /*
      * Deterministic commit-vs-cancel contention. The producer callback blocks
      * while commit_ready owns the continuation-store lock. Cancellation may
      * only proceed after READY is published, so both calls may succeed but
