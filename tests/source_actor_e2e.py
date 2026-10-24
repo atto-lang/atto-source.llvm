@@ -33,6 +33,25 @@ def parse_actor_receipt(line):
         "native actor constructor/release not verified", fields)
     return fields
 
+
+def parse_native_control_receipt(line, marker, expected, dynamic=()):
+    """Require exact native VM/continuation evidence, never substring evidence."""
+    parts = line.split()
+    assert parts and parts[0] == marker, ("wrong native control receipt marker", line)
+    required = set(expected) | set(dynamic)
+    fields = {}
+    for part in parts[1:]:
+        key, sep, value = part.partition("=")
+        assert sep and key in required and key not in fields, (
+            "duplicate or unexpected control receipt field", part)
+        assert value and value.isascii() and value.isdecimal(), (
+            "invalid unsigned native control receipt", part)
+        fields[key] = int(value)
+    assert set(fields) == required, ("missing native control receipt fields", fields)
+    for key, value in expected.items():
+        assert fields[key] == value, ("wrong native control receipt value", key, fields)
+    return fields
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -170,14 +189,18 @@ def main():
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
-            assert len(vm_lines) == 1 and (
-                "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
-                name, vm_lines)
+            assert len(vm_lines) == 1, (name, vm_lines)
+            parse_native_control_receipt(
+                vm_lines[0], "SOURCE_ACTOR_VM_ROUTING_VERIFIED",
+                {"domains": 4, "main": 1, "cold_carriers": 0, "root_slot": 63})
             if name == "source-actor-await-ready.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
-                assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+                parse_native_control_receipt(
+                    trace_lines[0], "SOURCE_AWAIT_READY_TRACE_PASS",
+                    {"execution_id_persisted": 1, "fresh_resume": 1,
+                     "root_slot": 63}, dynamic=("source_token",))
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
