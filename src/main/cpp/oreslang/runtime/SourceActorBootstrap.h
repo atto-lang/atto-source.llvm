@@ -55,6 +55,8 @@ int oreslang_source_actor_try_send_capability(
 void oreslang_source_actor_emit_output(
     OresActorI64Heap* heap, int64_t payload);
 int64_t oreslang_source_actor_take_output(void* actor);
+/* Trusted root observation used only by the pinned native async-main slice. */
+void oreslang_source_actor_stdout_i64(int64_t value);
 /* Handler-only nonblocking lifecycle request matching source self.end(). */
 void oreslang_source_actor_request_end(OresActorI64Heap* heap);
 /* First actor-handler suspension slice: wait for the next output from an owned
@@ -77,6 +79,9 @@ void oreslang_source_actor_spawn_child_capability(
     OresSourceActorMessage on_message,
     uint64_t fields);
 void oreslang_source_actor_stop(void* actor);
+/* Trusted-root done barrier: never requests stop. Waits for self/supervisor
+ * termination, then performs structured-child cleanup and physical reclaim. */
+void oreslang_source_actor_await_done(void* actor);
 
 /*
  * Restricted compiler-generated await slice:
