@@ -1243,6 +1243,31 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    # First actual native source-level typed Future: Future<void> from a
+    # single ActorRef.get_ready(). It uses the existing root CONTROL
+    # continuation, not synchronous polling or a generic Future<T> ABI.
+    oreslang_contract_test(source_actor_typed_ready_future_continuation_ir
+        source-actor-future-void-ready.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_typed_ready_future_runtime_ir
+        source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_unused_ready_future
+        source-actor-future-void-unused.ores
+        --diagnostic "Future<void> readiness token must be awaited exactly once")
+    oreslang_contract_test(reject_source_actor_wrong_ready_future
+        source-actor-future-void-wrong-name.ores
+        --diagnostic "native Future<void> await requires its declared readiness token")
+    oreslang_contract_test(reject_source_actor_double_ready_future
+        source-actor-future-void-double-await.ores
+        --diagnostic "native source supports only one await get_ready continuation")
+    oreslang_contract_test(reject_source_actor_unspawned_ready_future
+        source-actor-future-void-unspawned.ores
+        --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
+    oreslang_contract_test(reject_source_actor_ready_future_shadow
+        source-actor-future-void-shadow.ores
+        --diagnostic "Future<void> readiness token shadows a live owner")
+    oreslang_contract_test(reject_source_actor_duplicate_ready_future
+        source-actor-future-void-duplicate.ores
+        --diagnostic "native source supports only one Future<void> readiness token")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
