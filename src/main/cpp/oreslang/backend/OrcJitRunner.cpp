@@ -93,7 +93,8 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
     // A source module without a target is native-host IR, not proof that an
     // explicitly foreign target can be executed safely. LLJIT has historically
     // differed in whether it rejects a non-host triple on module addition.
-#if LLVM_VERSION_MAJOR >= 19
+#if LLVM_VERSION_MAJOR >= 21
+    // LLVM 21+ stores a Triple in the module (LLVM 14-20 store a string).
     const std::string module_triple = module->getTargetTriple().str();
 #else
     const std::string module_triple = module->getTargetTriple();
@@ -104,7 +105,7 @@ int execute_host_llvm_ir_with_orc(const std::string& verified_ir) {
     if (!module->getDataLayout().isDefault() &&
             module->getDataLayout() != jit->getDataLayout())
         throw std::runtime_error("ORC JIT: incompatible host data layout");
-#if LLVM_VERSION_MAJOR >= 19
+#if LLVM_VERSION_MAJOR >= 21
     module->setTargetTriple(jit->getTargetTriple());
 #else
     module->setTargetTriple(host_triple);
