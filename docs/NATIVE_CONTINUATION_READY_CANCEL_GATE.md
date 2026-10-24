@@ -84,3 +84,41 @@ Native `select` additionally needs a single winner across *all* registered
 channel/timeout/cancel arms and losing-arm detachment; independently claiming
 one continuation per arm is not select correctness. Java/GraalVM ↔ LLVM
 source-execution fixtures and exact-head sanitizer evidence remain mandatory.
+
+## Native Task/continuation integration branch (October 24, 2026)
+
+The composed native integration branch brings together the two previously
+separate draft components: the source-compiled ActorRef.get_ready() readiness
+gate and the runtime-private structured TaskCancellation authority tree.
+
+TaskContinuationGate.hpp is a **new host-only bridge**. It accepts a pinned
+OresNativeSuspensionLink and uses the TaskCancellation revocation subscription
+to call the generation-checked continuation store's cancel operation.
+The Task authority cancels its subtree first, with revokers firing before
+ordinary cancellation observers. A pending or READY waiter therefore cannot
+be claimed after its revoker has won; the strict scheduler bridge alone can
+claim READY -> CLAIMED. Closing the gate cancels unclaimed work and detaches
+the subscription before stores can be retired. The binding's mutex protects
+borrowed store access during concurrent close and callback invocation.
+
+The independent integration CTest:
+- verifies parent/child cancellation and child physical-lifetime observer order;
+- verifies cancellation before registration and late after CLAIMED;
+- races producer readiness against Task cancellation (256 iterations);
+- races root CONTROL continuation claims against Task cancellation (256);
+- races teardown/detach against revocation (128);
+- verifies fresh resumed logical execution identity, allocation ownership,
+  one-shot finish and live-store accounting.
+
+**Explicit remaining limitations:** This host bridge has no guest TaskHandle
+representation or lowerable task source syntax, does not atomically couple
+scheduler enqueue with Task authority revocation, does not yet own the physical
+execution release, and cannot claim that Task get_done() is quiescent. A Task
+cancelled after CLAIMED still requires *cooperative* cancellation checks in
+guest execution. Native callbacks and C stores remain borrowed with an explicit
+close-before-store-release contract. Until an executed exact-head CTest exists,
+these tests are committed test definitions, not independently verified passes.
+
+Release gates: run host CTest under ASan/UBSan and optionally TSAN; run
+source_actor_await_trace_runtime and source_actor_compiled_native_lifecycle;
+verify exact source-tree hash, executor identity, exit codes and test logs.
