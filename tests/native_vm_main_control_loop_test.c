@@ -125,5 +125,34 @@ int main(void) {
     ores_native_vm_nio_cancel_bootstrap(vm);
     require(ores_native_vm_start_main_control_loop(vm));
     require(ores_native_vm_close(vm));
+
+    /* Real-time preallocation is a one-way OS-thread creation barrier.
+     * Neither a successful RT bootstrap nor an RT-open VM can subsequently
+     * provision the main CONTROL pthread on a guest/hot execution path. */
+    vm = ores_native_vm_open(&config);
+    require(vm != NULL);
+    require(ores_native_vm_prepare_realtime(vm));
+    require(!ores_native_vm_start_main_control_loop(vm));
+    require(!ores_native_vm_main_control_loop_started(vm));
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        require(ores_native_vm_started_carriers(
+            vm, (enum OresNativeVMDomain)i) == 2);
+    require(ores_native_vm_close(vm));
+
+    vm = ores_native_vm_open_realtime(&config);
+    require(vm != NULL);
+    require(!ores_native_vm_start_main_control_loop(vm));
+    require(!ores_native_vm_main_control_loop_started(vm));
+    require(ores_native_vm_close(vm));
+
+    /* If both are required, start CONTROL while cold, before RT prestart.
+     * A later, repeated CONTROL start must still reject the RT transition. */
+    vm = ores_native_vm_open(&config);
+    require(vm != NULL);
+    require(ores_native_vm_start_main_control_loop(vm));
+    require(ores_native_vm_prepare_realtime(vm));
+    require(!ores_native_vm_start_main_control_loop(vm));
+    require(ores_native_vm_main_control_loop_started(vm));
+    require(ores_native_vm_close(vm));
     return 0;
 }
