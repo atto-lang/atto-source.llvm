@@ -3,6 +3,7 @@
 // Result storage is a pinned shared allocation, never an actor heap pointer.
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
