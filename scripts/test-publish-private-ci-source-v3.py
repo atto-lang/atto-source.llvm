@@ -434,6 +434,49 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             digest, hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
         )
 
+    def test_source_tree_file_count_bound_has_headroom_and_stays_bounded(self):
+        self.assertGreaterEqual(v3.MAX_FILES, 2048)
+        self.assertLessEqual(v3.MAX_FILES, 4096)
+        seen = []
+
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route.endswith("/pulls/669"):
+                return {
+                    "number": 669,
+                    "state": "open",
+                    "head": {
+                        "sha": "9" * 40,
+                        "repo": {"full_name": v3.SOURCE_REPO},
+                    },
+                    "base": {"ref": "main"},
+                }
+            if "/git/commits/" in route:
+                return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
+            if "/git/trees/" in route:
+                return {
+                    "sha": SOURCE_TREE,
+                    "truncated": False,
+                    "tree": [
+                        {
+                            "path": f"src/{index}.cpp",
+                            "type": "blob",
+                            "mode": "100644",
+                            "sha": str(index + 2) * 40,
+                            "size": 1,
+                        }
+                        for index in range(3)
+                    ],
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "MAX_FILES", 2), \
+                patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(
+                    v3.Denied, "source mirror exceeds bounded capacity"):
+                v3.exact_source_tree(669, "9" * 40)
+        self.assertFalse(any("/git/blobs/" in route for route in seen))
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):

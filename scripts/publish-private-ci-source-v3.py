@@ -36,7 +36,7 @@ HANDOFF_REF = re.compile(
     r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
-MAX_FILES = 1024
+MAX_FILES = 4096
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
