@@ -1,4 +1,5 @@
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include <functional>
 #include <stdexcept>
@@ -16,6 +17,7 @@ using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
 Type declared_field_type(const ClassField& field) {
+    if (!field.class_name.empty()) return {Kind::Class, field.class_name};
     if (!field.int_array) return scalar(field.scalar_type);
     return {Kind::Array, !field.array_record_class.empty() ? field.array_record_class :
         field.array_element_type == ScalarType::String ? "String" : "int"};
@@ -51,14 +53,13 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
+    const NativeClassLayouts layouts(program);
+    auto owns_arrays = [&](const std::string& name) { return classes.count(name) && layouts.at(name).owns_arrays; };
     auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
-        auto found = classes.find(name);
-        if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
-        const auto& cls = *found->second;
-        for (const auto& field : cls.fields)
-            if (!field.final_field || field.int_array)
-                fail(0, "record collections require immutable scalar/String fields");
-        return cls;
+        if (!classes.count(name)) fail(0, "unknown record class '" + name + "'");
+        for (const auto& leaf : layouts.at(name).leaves)
+            if (!leaf.field->final_field || leaf.field->int_array) fail(0, "record collections require immutable scalar/String fields");
+        return *classes.at(name);
     };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
@@ -143,11 +144,14 @@ void validate_native_scalar_types(const Program& program) {
                 return e.name == "get" ? element : scalar(false);
             }
             case E::RecordConstruct: {
-                const auto& cls = immutable_record(e.name);
+                const bool owning = owns_arrays(e.name);
+                const auto& cls = owning ? *classes.at(e.name) : immutable_record(e.name);
+                if (owning) for (const auto& field : cls.fields)
+                    if (field.int_array && !field.constructor_argument)
+                        fail(e.offset, "owning return constructor requires explicit array arguments");
                 if (e.arguments.size() != cls.constructor_parameters.size()) fail(e.offset, "record constructor argument arity mismatch");
                 for (std::size_t i = 0; i < e.arguments.size(); ++i)
-                    require(expression(*e.arguments[i], locals), scalar(cls.constructor_parameter_types.empty()
-                        ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), e.offset, "record constructor argument type mismatch");
+                    require(expression(*e.arguments[i], locals), constructor_parameter_type(cls, i), e.offset, "record constructor argument type mismatch");
                 return {Kind::Class, cls.name};
             }
             case E::Call: {
@@ -199,10 +203,19 @@ void validate_native_scalar_types(const Program& program) {
     }
     std::function<void(const Function&, Locals)> function;
     function = [&](const Function& fn, Locals locals) {
-        if (!fn.return_class.empty()) (void)immutable_record(fn.return_class);
+        if (!fn.return_class.empty() && !owns_arrays(fn.return_class)) (void)immutable_record(fn.return_class);
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
-            if (binding.record_view) (void)immutable_record(binding.class_name);
+            if (binding.record_view) {
+                if (owns_arrays(binding.class_name)) {
+                    std::function<bool(const Expression&)> owning_call_tree = [&](const Expression& e) {
+                        return e.kind == Expression::Kind::Call ||
+                            (e.kind == Expression::Kind::Conditional && owning_call_tree(*e.when_true) && owning_call_tree(*e.when_false));
+                    };
+                    if (!binding.initializer || !owning_call_tree(*binding.initializer))
+                        fail(binding.offset, "owning class result requires a named call binding");
+                } else (void)immutable_record(binding.class_name);
+            }
             if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
@@ -221,8 +234,27 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals)> statements;
         statements = [&](const std::vector<Statement>& items, Locals scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ScopedLocal) {
+                if (item.kind == Statement::Kind::ForIndex) {
+                    require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
+                    Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
+                    require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");
+                    require(expression(*item.loop_step, body), scalar(false), item.offset, "index update requires int");
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::Return) {
+                    if (item.expression) require(expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
+                    else if (!fn.returns_void) fail(item.offset, "non-void structured return requires value");
+                } else if (item.kind == Statement::Kind::ForEach) {
+                    const auto source = expression(*item.expression, scope);
+                    if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
+                    const auto& iterator = *item.branch_local;
+                    const Type element = source.name == "String" ? scalar(ScalarType::String) : source.name == "int" ? scalar(false)
+                        : Type{Kind::Class, immutable_record(source.name).name};
+                    require(local_type(iterator), element, item.offset, "for-of element annotation");
+                    Locals body = scope; body.emplace(iterator.name, element);
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
+                    if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
                     require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
                 } else if (item.kind == Statement::Kind::Conditional) {

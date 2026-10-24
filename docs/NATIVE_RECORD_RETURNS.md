@@ -30,7 +30,9 @@ and environment. The executable does not invoke Java, a compiler or source code.
 The driver rejects output aliases of the source/compiler/Clang by file identity;
 Rust tests check direct paths, symlinks and hard links without touching real tools.
 
-Mutable object identity, nested array-owning return values, by-value owning
+Array-containing classes now use a separate [owning return ABI](NATIVE_OWNING_AGGREGATE_RETURNS.md)
+that transfers storage rather than snapshotting array tokens. Mutable object
+identity within record arrays, nested reference owners, by-value owning
 parameters, returned loan lifetimes, actors, suspension and exception-frame
 record lifetimes remain unimplemented and rejected. General router loops are
 the next parser/lowering boundary in the actual routing source; the full Spin

@@ -76,7 +76,7 @@ struct LocalBinding {
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
-    bool record_view = false; // readonly view of an invocation-owned immutable record
+    bool record_view = false; // class-valued initializer: leaf view or uniquely owned array-containing call result
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.
@@ -96,6 +96,7 @@ struct ClassField {
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
     ScalarType scalar_type = ScalarType::I64;
+    std::string class_name; // unique inline nested class, never a raw handle
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
@@ -165,14 +166,17 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
-    // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
-    // Non-Copy branch-local classes are still rejected until drop glue exists.
+    // Scoped scalar or readonly leaf record. ForEach uses an implicit element
+    // binding (no initializer); expression is its named array source and
+    // then_statements is the body. No owning scoped class drop is implied.
     std::unique_ptr<LocalBinding> branch_local;
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // ForIndex: branch_local initializer, condition and checked next value.
+    std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
     // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
     // Exactly four Array<int> fields in class declaration order.

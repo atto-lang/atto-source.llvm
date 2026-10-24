@@ -290,6 +290,14 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_transaction_recovery
         COMMAND oreslang-native-int-array-transaction-test)
     set_tests_properties(native_int_array_transaction_recovery PROPERTIES TIMEOUT 120)
+    add_executable(oreslang-native-int-array-transfer-test
+        tests/native_int_array_transfer_test.c
+        src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c)
+    target_include_directories(oreslang-native-int-array-transfer-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-int-array-transfer-test PRIVATE ORESLANG_NATIVE_TEST_ALLOC_FAILURE=1)
+    target_compile_options(oreslang-native-int-array-transfer-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Werror -Wpedantic>)
+    add_test(NAME native_int_array_cross_region_transfer COMMAND oreslang-native-int-array-transfer-test)
     # Deterministic model-based differential stress on real Array<int> ABI.
     add_executable(oreslang-native-int-array-model-test
         tests/native_int_array_model_test.c
@@ -1790,6 +1798,10 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/record-array.ores
                 tests/fixtures/native-class-string/owned-path-pattern.ores
                 tests/fixtures/native-class-string/record-return.ores
+                tests/fixtures/native-class-string/nested-owned-capture.ores
+                tests/fixtures/native-class-string/routing-path-validation.ores
+                tests/fixtures/native-class-string/typed-array-iteration.ores
+                tests/fixtures/native-class-string/owned-aggregate-return.ores
             VERBATIM)
         add_custom_target(oreslang-native-class-string-parity-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")
