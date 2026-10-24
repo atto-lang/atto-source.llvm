@@ -96,6 +96,7 @@ struct ClassField {
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
     ScalarType scalar_type = ScalarType::I64;
+    std::string class_name; // unique inline nested class, never a raw handle
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness

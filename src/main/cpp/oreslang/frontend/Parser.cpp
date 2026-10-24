@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/frontend/MethodResolver.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
@@ -747,9 +748,14 @@ private:
                 require(")");
                 class_field_terminator(initializer_end);
             } else {
-                if (mutable_referent && token_.text != "int" && token_.text != "bool" &&
-                        token_.text != "String" && token_.text != "string")
-                    fail("native class field supports only scalar int/bool or mut Array<int>");
+                if (token_.text == "Array") fail("native Array<int> field requires mut referent capability");
+                if (token_.text != "int" && token_.text != "bool" && token_.text != "String" && token_.text != "string") {
+                    if (!field.final_field || literal_const) fail("expected val or final for native nested class field");
+                    field.class_name = type_identifier(); field.name = identifier();
+                    if (!seen.insert(field.name).second) fail("duplicate class field '" + field.name + "'");
+                    require(";"); field.constructor_argument = true;
+                    result.fields.push_back(std::move(field)); continue;
+                }
                 field.scalar_type = accept("bool") ? ScalarType::Bool :
                     (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (field.scalar_type == ScalarType::I64) require("int");
@@ -806,6 +812,8 @@ private:
         std::unordered_set<std::string> allowed(
             result.constructor_parameters.begin(), result.constructor_parameters.end());
         for (const auto& field : result.fields) {
+            if (!field.class_name.empty() && result.explicit_constructor)
+                fail("native nested owned class constructor requires checked parameter ownership");
             if (field.int_array && result.explicit_constructor)
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
@@ -2475,18 +2483,15 @@ private:
                 return found == variables.end() ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
-                if (expr.left && expr.left->kind == Expression::Kind::Variable) {
-                    auto found = variables.find(expr.left->name + "." + expr.name);
+                if (expr.left) {
+                    auto found = variables.find(native_place_key(expr));
                     if (found != variables.end()) return found->second;
                 }
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
                 std::string receiver;
-                if (expr.left && expr.left->kind == Expression::Kind::Variable) receiver = expr.left->name;
-                else if (expr.left && expr.left->kind == Expression::Kind::Field && expr.left->left &&
-                        expr.left->left->kind == Expression::Kind::Variable)
-                    receiver = expr.left->left->name + "." + expr.left->name;
+                if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
                 const ScalarType element = element_slot == variables.end() ? ScalarType::I64 : element_slot->second;
                 const std::size_t expected = expr.name == "get" || expr.name == "add"
@@ -2727,6 +2732,7 @@ private:
     }
 
     static void validate(const Program& program) {
+        const NativeClassLayouts layouts(program);
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
             if (cls.constructor_exported && !cls.exported)
@@ -3065,12 +3071,13 @@ private:
             // symbols or accidentally turns a typing failure into binding.
             using TypeMap = std::unordered_map<std::string, ScalarType>;
             TypeMap scalar_types;
+
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
-                for (const auto& cls : program.classes) if (cls.name == type)
-                    for (const auto& field : cls.fields) {
-                        scalar_types.emplace(owner + "." + field.name, field.scalar_type);
-                        if (field.int_array) scalar_types.emplace(owner + "." + field.name + ".$element", field.array_element_type);
-                    }
+                if (type.empty()) return;
+                for (const auto& leaf : layouts.at(type).leaves) {
+                    scalar_types.emplace(owner + "." + leaf.path, leaf.field->scalar_type);
+                    if (leaf.field->int_array) scalar_types.emplace(owner + "." + leaf.path + ".$element", leaf.field->array_element_type);
+                }
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
@@ -3112,9 +3119,10 @@ private:
             check_statement_types = [&](const Statement& stmt, TypeMap& env) {
                 auto scoped_type = [&](const LocalBinding& local, TypeMap& scope) {
                     scope.emplace(local.name, local.scalar_type);
-                    if (!local.class_name.empty()) for (const auto& cls : program.classes)
-                        if (cls.name == local.class_name) for (const auto& field : cls.fields)
-                            scope.emplace(local.name + "." + field.name, field.scalar_type);
+                    if (!local.class_name.empty()) for (const auto& leaf : layouts.at(local.class_name).leaves) {
+                        scope.emplace(local.name + "." + leaf.path, leaf.field->scalar_type);
+                        if (leaf.field->int_array) scope.emplace(local.name + "." + leaf.path + ".$element", leaf.field->array_element_type);
+                    }
                 };
                 if (stmt.kind == Statement::Kind::ForIndex) {
                     require_scalar(*stmt.branch_local->initializer, ScalarType::I64, "index initializer", env);

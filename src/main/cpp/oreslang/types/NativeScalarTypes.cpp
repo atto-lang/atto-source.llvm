@@ -1,4 +1,5 @@
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include <functional>
 #include <stdexcept>
@@ -16,6 +17,7 @@ using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
 Type declared_field_type(const ClassField& field) {
+    if (!field.class_name.empty()) return {Kind::Class, field.class_name};
     if (!field.int_array) return scalar(field.scalar_type);
     return {Kind::Array, !field.array_record_class.empty() ? field.array_record_class :
         field.array_element_type == ScalarType::String ? "String" : "int"};
@@ -51,20 +53,13 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
-    auto owns_arrays = [&](const std::string& name) {
-        auto found = classes.find(name);
-        if (found == classes.end()) return false;
-        for (const auto& field : found->second->fields) if (field.int_array) return true;
-        return false;
-    };
+    const NativeClassLayouts layouts(program);
+    auto owns_arrays = [&](const std::string& name) { return classes.count(name) && layouts.at(name).owns_arrays; };
     auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
-        auto found = classes.find(name);
-        if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
-        const auto& cls = *found->second;
-        for (const auto& field : cls.fields)
-            if (!field.final_field || field.int_array)
-                fail(0, "record collections require immutable scalar/String fields");
-        return cls;
+        if (!classes.count(name)) fail(0, "unknown record class '" + name + "'");
+        for (const auto& leaf : layouts.at(name).leaves)
+            if (!leaf.field->final_field || leaf.field->int_array) fail(0, "record collections require immutable scalar/String fields");
+        return *classes.at(name);
     };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
