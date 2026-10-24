@@ -281,6 +281,17 @@ int ores_native_continuation_store_release(
             unlock_store(store);
             return 0;
         }
+        /*
+         * A claimed continuation still owns a live execution turn.
+         * Releasing its FINAL reference before finish_resume() would
+         * invalidate ancestry and admit use-after-free / stale callbacks.
+         * Releasing a nonfinal owner's pin is still permitted.
+         */
+        if (block->refs[lane] == 1
+                && block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+            unlock_store(store);
+            return 0;
+        }
         released_any = 1;
         if (block->refs[lane] > 1) {
             --block->refs[lane];
