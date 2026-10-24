@@ -53,3 +53,33 @@ external destructor. A duplicate, stale, live, unregistered, wrong-domain or
 post-retirement confirmation is rejected. Shutdown with unreported terminal
 notices still requires explicit host reconciliation/escalation; this change
 does not imply full source-level ActorGroup finalization.
+
+
+## Bounded runtime capability slots
+
+The hosted source-actor bootstrap now has a runtime-only capability-slot
+foundation for future compiler lowering. A source actor may be created through
+`oreslang_source_actor_spawn_with_capabilities` with at most eight already-live
+source actor references from the same active group. The bootstrap validates the
+inputs while holding trusted group metadata, then copies only each target's
+`OresNativeActorRef` (scheduler domain, actor slot and generation) into the
+new actor. The caller-owned pointer array and target `SourceActor*` addresses
+are not retained.
+
+During an admitted message handler, the current actor may use
+`oreslang_source_actor_send_capability(heap, slot, payload)` or the nonblocking
+`oreslang_source_actor_try_send_capability` form. The heap must be exactly the
+current actor's private heap and the slot must be in range. The target is sent
+through the copied generation-fenced scheduler reference; stale/terminated or
+otherwise invalid capabilities fail closed. The `try_send` form reports zero
+only for mailbox saturation.
+
+This is deliberately a **runtime ABI prerequisite**, not a source-language
+feature claim. Current LLVM source syntax does not yet bind ActorRef-valued actor
+state or expose these slots to `.ores` handlers. Java currently rejects actor
+startup arguments, so LLVM does not invent a backend-only `spawn Actor(peer)`
+surface here. Source lowering and cross-backend syntax remain a separate gate.
+
+`source_actor_capability_runtime` proves a handler can deliver to a peer through
+a copied capability after the caller-owned capability array is overwritten,
+without storing a raw target pointer in guest scalar state.
