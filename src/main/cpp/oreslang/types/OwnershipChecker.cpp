@@ -396,7 +396,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.arguments[0], locals, functions);
             return;
         }
+        case Expression::Kind::SumConstruct:
+        case Expression::Kind::SumAccess:
         case Expression::Kind::RecordConstruct:
+            if (expr.left) check_value(*expr.left, locals, functions);
             for (const auto& arg : expr.arguments) check_value(*arg, locals, functions);
             return;
         case Expression::Kind::Call:
@@ -455,6 +458,8 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Take:
         case Expression::Kind::Call:
+        case Expression::Kind::SumConstruct:
+        case Expression::Kind::SumAccess:
         case Expression::Kind::RecordConstruct:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
@@ -687,6 +692,10 @@ void validate_i64_ownership(const Program& program) {
                 validate_scalar = [&](const Expression& expr) {
                     using K = Expression::Kind;
                     if (expr.kind == K::Integer || expr.kind == K::Boolean || expr.kind == K::String) return;
+                    if (expr.kind == K::SumConstruct) {
+                        for (const auto& arg : expr.arguments) validate_scalar(*arg);
+                        return;
+                    }
                     if (expr.kind == K::Field) {
                         check_value(expr, locals, functions);
                         return;

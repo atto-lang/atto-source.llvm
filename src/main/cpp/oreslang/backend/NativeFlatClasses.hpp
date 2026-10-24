@@ -7,6 +7,7 @@ inline std::unique_ptr<Expression> clone_native_expression(const Expression* sou
     target->kind = source->kind; target->offset = source->offset;
     target->integer = source->integer; target->boolean = source->boolean;
     target->resolved_type = source->resolved_type; target->resolved_class = source->resolved_class;
+    target->sum_type = source->sum_type;
     target->name = source->name; target->argument_names = source->argument_names;
     target->type_arguments = source->type_arguments; target->type_arguments_present = source->type_arguments_present;
     target->left = clone_native_expression(source->left.get()); target->right = clone_native_expression(source->right.get());
@@ -24,6 +25,7 @@ inline ClassDecl native_flat_class(const ClassDecl& source, const NativeClassLay
     for (const auto& leaf : layouts.at(source.name).leaves) {
         ClassField field;
         const auto& original = *leaf.field;
+        field.sum_type = leaf.field->sum_type;
         field.name = leaf.path; field.initial = original.initial;
         field.public_member = original.public_member; field.scalar_type = original.scalar_type;
         field.int_array = original.int_array; field.final_field = original.final_field;

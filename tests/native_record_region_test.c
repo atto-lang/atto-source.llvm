@@ -51,6 +51,20 @@ int main(void) {
     require(ores_record_region_begin() == 1);
     require(ores_record_region_end() == 1);
 
+    for (int64_t expected = -1; expected <= 17; ++expected) {
+        require(ores_record_region_begin() == 0);
+        first = ores_record_new(1, 2, values);
+        require(ores_record_check_shape(first, 1, expected) == (expected == 2 ? 0 : 1));
+        require(ores_record_region_end() == (expected == 2 ? 0 : 1));
+    }
+    require(ores_record_region_begin() == 0);
+    first = ores_record_new(1, 2, values);
+    require(ores_record_check_shape(first, 2, 2) == 1);
+    require(ores_record_region_end() == 1);
+    require(ores_record_region_begin() == 0);
+    require(ores_record_check_shape(first, 1, 2) == 1);
+    require(ores_record_region_end() == 1);
+
     ores_record_test_fail_after(1);
     require(ores_record_region_begin() == 0);
     for (int i = 0; i < 32; ++i) require(ores_record_new(1, 2, values) != 0);
