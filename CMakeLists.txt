@@ -1843,6 +1843,16 @@ if(BUILD_TESTING)
         target_compile_options(oreslang-nonblocking-tcp-linux-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
         add_test(NAME native_linux_nonblocking_tcp_readiness COMMAND oreslang-nonblocking-tcp-linux-test)
         set_tests_properties(native_linux_nonblocking_tcp_readiness PROPERTIES TIMEOUT 20)
+        # Kernel-level multi-listener accept: four independent worker sockets
+        # bind to one port through SO_REUSEPORT. No compiled guest actor claim.
+        add_executable(oreslang-worker-reuseport-accept-test
+            tests/native_worker_reuseport_accept_test.cpp)
+        target_include_directories(oreslang-worker-reuseport-accept-test PRIVATE src/main/cpp)
+        target_compile_options(oreslang-worker-reuseport-accept-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_linux_worker_reuseport_accept
+            COMMAND oreslang-worker-reuseport-accept-test)
+        set_tests_properties(native_linux_worker_reuseport_accept PROPERTIES TIMEOUT 20)
         # Host-only, bounded network request buffer/loan contract. The test
         # executes actual nonblocking TCP handoff on Linux; it does not prove
         # Oreslang guest actor lowering or HTTP parser parity.
