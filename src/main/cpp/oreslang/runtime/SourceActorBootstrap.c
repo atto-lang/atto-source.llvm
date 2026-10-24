@@ -657,6 +657,15 @@ int64_t oreslang_source_actor_take_output(void* opaque) {
     return value;
 }
 
+void oreslang_source_actor_stdout_i64(int64_t value) {
+    OresNativeExecutionContext carrier={0};
+    if (group.vm)
+        ensure(!ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+    ensure(fprintf(stdout, "%lld", (long long)value) >= 0);
+    ensure(fflush(stdout) == 0);
+}
+
 void oreslang_source_actor_request_end(OresActorI64Heap* heap) {
     SourceActor* instance = current_source_actor;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
@@ -837,7 +846,7 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
-void oreslang_source_actor_stop(void* opaque) {
+static void finish_source_actor(void* opaque, int request_stop) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
@@ -861,10 +870,12 @@ void oreslang_source_actor_stop(void* opaque) {
         ensure(pthread_cond_wait(&group.output_ready, &group.mutex) == 0);
         ensure(group.actors[slot] == instance);
     }
-    /* If self.end() already retired the lane, stop returns zero. The ref was
-     * validated above, so either state is safe to hand to wait_done. */
-    (void)ores_native_vm_stop(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
+    if (request_stop) {
+        /* If self.end() already retired the lane, stop returns zero. The ref
+         * was validated above, so either state is safe to hand to wait_done. */
+        (void)ores_native_vm_stop(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
+    }
     group_unlock();
 
     ensure(ores_native_vm_wait_done(
@@ -894,7 +905,8 @@ void oreslang_source_actor_stop(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld outputs=%u\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 requested_stop=%d processed=%llu last=%lld outputs=%u\n",
+        request_stop,
         (unsigned long long)atomic_load_explicit(
             &instance->processed, memory_order_acquire),
         (long long)atomic_load_explicit(
@@ -929,4 +941,13 @@ void oreslang_source_actor_stop(void* opaque) {
         group.peak = 0;
     }
     group_unlock();
+}
+
+
+void oreslang_source_actor_stop(void* opaque) {
+    finish_source_actor(opaque, 1);
+}
+
+void oreslang_source_actor_await_done(void* opaque) {
+    finish_source_actor(opaque, 0);
 }
