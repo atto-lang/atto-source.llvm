@@ -32,6 +32,26 @@ PENDING, and remains for legacy synchronous/host causal-trace callers.
 The source compiler still has to pick the strict API and prove it cannot
 accidentally reach that legacy path.
 
+## First compiled-source integration
+
+The restricted compiled `await actor.get_ready()` vertical slice now uses
+the strict ready-only resume API in `SourceActorBootstrap.c`.
+`complete_ready_if_admitted_locked()` first commits the actual
+`NativeActorFuture` and reserves root CONTROL admission, then marks the
+persistent continuation READY while holding the source group's mutex.
+The root resume turn must acquire that same mutex, so no wake can observe
+the Future as complete without observing its continuation READY. The resumed
+guest callback receives an already-claimed trace record; the existing
+actor-source and host trace tests check the execution lineage and CLAIMED
+state. This is a **real compiled Oreslang actor get_ready execution path**,
+not merely a disconnected C++ substrate.
+
+The group is still process-local, the codegen only accepts one actor and one
+await site, and the top-level trusted launcher may block outside actor
+carriers on the final completion condition variable. This does not establish
+`Future<T>`, `Task`, arbitrary values across suspension, or guest
+`select` support.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:
