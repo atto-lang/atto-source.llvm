@@ -67,6 +67,21 @@ for toolchain in gcc clang; do
       timeout 30s "$dest/main-control"
   done
   printf 'PASS: %s VM main CONTROL thread startup and retirement (ASan+UBSan)\n' "$toolchain"
+  # The GNU/Clang linker wrapper fails the first ACTUAL pthread_create call
+  # inside NativeOresVM and then permits a retry of the same cold VM.
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c \
+    tests/native_vm_main_control_create_failure_test.c \
+    -o "$dest/main_control_failure_test.o"
+  "$cc" "${shared[@]}" -Wl,--wrap=pthread_create \
+    "$dest/main_control_failure_test.o" \
+    "$dest/NativeOresVM.o" "$dest/NativeActorScheduler.o" \
+    "$dest/NativeActorFuture.o" -o "$dest/main-control-failure"
+  for attempt in {1..10}; do
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 30s "$dest/main-control-failure"
+  done
+  printf 'PASS: %s CONTROL pthread-create failure and retry (ASan+UBSan)\n' "$toolchain"
   # Include the byte-identical standalone epoll and bootstrap-failure
   # fixtures in the source-local native sanitizer gate.
   for fixture in native_epoll_reactor_test native_epoll_reactor_bootstrap_failure_test; do
