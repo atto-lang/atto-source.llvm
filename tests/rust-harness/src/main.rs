@@ -484,6 +484,111 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// Executable source-to-AOT proof for receiver-erased method selectors. The
+// native frontend stores a hidden receiver in its ABI, not source arity.
+fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-inline-self-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("methods.ores");
+    let ir = temp.path.join("methods.ll");
+    let executable = temp.path.join("methods-native");
+
+    let positives = [
+        (
+            "exact-empty-void",
+            "define class X1 as\n  foo():void {}\nend\n\
+             define class X2 as\n  foo(self):void {}\nend\n\
+             pub fnc main():int { return 42; }\n",
+        ),
+        (
+            "mixed-method-arities",
+            "define class Counter as\n  let int value=40;\n\
+             pub read():int{return self.value;}\n\
+             pub read(self, int n):int{return self.value+n;}\nend\n\
+             pub fnc main():int {let Counter c=new Counter();return c.read(0)+c.read();}\n",
+        ),
+        (
+            "mutable-inline-self",
+            "define class Counter as\n  let int value=40;\n\
+             pub bump(mut self, int n):void{self.value=self.value+n;return;}\n\
+             pub read(self):int{return self.value;}\nend\n\
+             pub fnc main():int {let mut Counter c=new Counter();c.bump(2);return c.read();}\n",
+        ),
+    ];
+    for (name, program) in positives {
+        fs::write(&source, program).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            out.status.success() && stdout(&out).starts_with("; ModuleID"),
+            format!("{name}: compiler rejected source or did not emit IR: {}", stderr(&out)),
+        )?;
+        fs::write(&ir, &out.stdout).map_err(|e| e.to_string())?;
+        let linked = run(
+            clang,
+            [
+                OsStr::new("-O1"),
+                ir.as_os_str(),
+                OsStr::new("-o"),
+                executable.as_os_str(),
+            ],
+        )?;
+        require(
+            linked.status.success(),
+            format!("{name}: clang failed: {}", stderr(&linked)),
+        )?;
+        let executed = run(&executable, [] as [&OsStr; 0])?;
+        require(
+            executed.status.code() == Some(42),
+            format!("{name}: native return status {:?}, stderr={}", executed.status.code(), stderr(&executed)),
+        )?;
+    }
+
+    let negatives = [
+        (
+            "duplicate-zero-slot",
+            "define class X as foo():void {} foo(self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "duplicate-one-slot",
+            "define class X as foo(int n):void {} foo(self,int n):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "trailing-receiver-comma",
+            "define class X as foo(self,):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "explicit self receiver must be followed by a parameter",
+        ),
+        (
+            "typed-read-receiver-unsupported",
+            "define class X as foo(self X):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "explicitly typed read self receiver unsupported",
+        ),
+        (
+            "duplicate-mutable-self",
+            "define class X as foo():void {} foo(mut self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+    ];
+    for (name, program, diagnostic) in negatives {
+        fs::write(&source, program).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains(diagnostic),
+            format!("{name}: expected rejection '{diagnostic}'; status={:?}, stdout={}, stderr={}",
+                out.status.code(), stdout(&out), stderr(&out)),
+        )?;
+    }
+    println!("native inline self: 3 compiled/AOT-executed positive cases, 5 fail-closed negatives");
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -504,6 +609,11 @@ fn real_main() -> Result<(), String> {
         Some("callable-nominal") => {
             let compiler = path_arg(&args, 2, "usage: callable-nominal <compiler>")?;
             callable_nominal(&compiler)
+        }
+        Some("native-inline-self-arity") => {
+            let compiler = path_arg(&args, 2, "usage: native-inline-self-arity <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: native-inline-self-arity <compiler> <clang>")?;
+            native_inline_self_arity(&compiler, &clang)
         }
         Some("native-async-io-boundary") => {
             let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
@@ -532,7 +642,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
