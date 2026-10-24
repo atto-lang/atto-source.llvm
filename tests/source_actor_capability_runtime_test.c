@@ -12,6 +12,8 @@ static atomic_int_fast64_t target_last;
 static atomic_uint nested_parent_messages;
 static atomic_uint nested_child_messages;
 static atomic_int_fast64_t nested_child_last;
+static atomic_uint await_resume_seen;
+static atomic_uint await_second_message_seen;
 
 static void init_zero(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
     ores_actor_i64_heap_field_init_mutable(heap,domain,epoch,0,0);
@@ -79,6 +81,53 @@ static int64_t output_end_handler(
     return 0;
 }
 
+static int64_t await_child_handler(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)domain;
+    (void)epoch;
+    oreslang_source_actor_emit_output(heap,payload+1);
+    oreslang_source_actor_request_end(heap);
+    return 0;
+}
+
+static int64_t await_parent_resume(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t original_mail, int64_t output) {
+    (void)domain;
+    (void)epoch;
+    assert(original_mail==41);
+    assert(output==42);
+    OresNativeExecutionHandle execution={0,0};
+    assert(oreslang_source_actor_current_execution_handle(&execution)==1);
+    atomic_store_explicit(&await_resume_seen,1,memory_order_release);
+    oreslang_source_actor_emit_output(heap,output);
+    return 0;
+}
+
+static void await_parent_init(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
+    ores_actor_i64_heap_field_init_mutable(heap,domain,epoch,0,0);
+    oreslang_source_actor_spawn_child_capability(
+        heap,0,init_zero,await_child_handler,1);
+}
+
+static int64_t await_parent_handler(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    if(payload==41) {
+        oreslang_source_actor_send_capability(heap,0,payload);
+        oreslang_source_actor_await_child_output(
+            heap,0,payload,await_parent_resume,UINT64_C(0xA117));
+        return 0;
+    }
+    assert(payload==99);
+    assert(atomic_load_explicit(&await_resume_seen,memory_order_acquire)==1);
+    atomic_store_explicit(&await_second_message_seen,1,memory_order_release);
+    const int64_t prior=
+        ores_actor_i64_heap_field_read(heap,domain,epoch,0);
+    ores_actor_i64_heap_field_write(heap,domain,epoch,0,prior+payload);
+    return prior+payload;
+}
+
 int main(void) {
     void* target=oreslang_source_actor_spawn(init_zero,target_handler,1);
     assert(target!=0);
@@ -123,5 +172,20 @@ int main(void) {
     assert(oreslang_source_actor_try_send(output_actor,41)==1);
     assert(oreslang_source_actor_take_output(output_actor)==42);
     oreslang_source_actor_stop(output_actor);
+
+    /* Fourth session: DATA admitted after the first message remains gated
+     * while the handler awaits child output. CONTROL resume runs first,
+     * preserving serial actor state across the suspension boundary. */
+    void* await_parent=oreslang_source_actor_spawn(
+        await_parent_init,await_parent_handler,1);
+    assert(await_parent!=0);
+    assert(oreslang_source_actor_try_send(await_parent,41)==1);
+    assert(oreslang_source_actor_try_send(await_parent,99)==1);
+    assert(oreslang_source_actor_take_output(await_parent)==42);
+    oreslang_source_actor_stop(await_parent);
+    assert(atomic_load_explicit(
+        &await_resume_seen,memory_order_acquire)==1);
+    assert(atomic_load_explicit(
+        &await_second_message_seen,memory_order_acquire)==1);
     return 0;
 }
