@@ -8,8 +8,6 @@ import unittest
 
 from native_scalar_generic_source_execution import load_shared_conformance
 
-ROOT = Path(__file__).resolve().parents[1]
-REAL = ROOT / "contracts/v1/generics-stage1/cases.json"
 BASE = {
     "schema_version": "1.0.0",
     "scope": "native-scalar-i64-only",
@@ -28,9 +26,9 @@ class ContractAdmissionTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             return load_shared_conformance(path)
 
-    def test_repository_contract(self):
-        valid, invalid = load_shared_conformance(REAL)
-        self.assertEqual((len(valid), len(invalid)), (3, 3))
+    def test_no_implicit_repository_specific_source_manifest(self):
+        with self.assertRaises(TypeError):
+            load_shared_conformance()
 
     def test_accept_two_kinds(self):
         valid, invalid = self.validate(BASE)

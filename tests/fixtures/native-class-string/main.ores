@@ -1,0 +1,9 @@
+import class Foo from './main-1.ores';
+
+pub routine main(): int {
+    stdio.println("hello world");
+    val Foo f = new Foo();
+    val string x = f.bar();
+    stdio.print(x);
+    return 0;
+}

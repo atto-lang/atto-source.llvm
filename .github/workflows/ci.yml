@@ -36,6 +36,8 @@ jobs:
         run: ctest --test-dir build --output-on-failure --timeout 240 --parallel 2
       - name: Repeat actor stress and cancellation races
         run: ctest --test-dir build -R hungry_carrier_async_bounded_cancel --repeat until-fail:12 --output-on-failure
+      - name: Repeat per-payload send-stop exactly-once races
+        run: ctest --test-dir build -R '^native_actor_send_stop_linearizable_race$' --repeat until-fail:12 --output-on-failure --timeout 30
       - name: ASan and UBSan native actor memory and concurrency smoke
         run: |
           clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \

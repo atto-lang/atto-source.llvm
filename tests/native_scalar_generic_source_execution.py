@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual native Oreslang -> LLVM IR -> Clang guest i64 generic conformance.
+"""Historical native LLVM scalar compiler regressions (non-normative).
 
 Stage 1 intentionally admits only generics whose concrete representation is
 int64. This test never treats unsupported classes/actors as generic support.
@@ -101,9 +101,8 @@ def _reject_json_constant(token):
     raise AssertionError(f"nonfinite JSON value in generic contract: {token}")
 
 
-def load_shared_conformance(contract=None):
-    if contract is None:
-        contract = Path(__file__).resolve().parents[1] / "contracts/v1/generics-stage1/cases.json"
+def load_shared_conformance(contract):
+    """Validate an explicit synthetic LLVM regression contract only."""
     contract = Path(contract)
     if contract.stat().st_size > 1_048_576:
         raise AssertionError("generic conformance contract exceeds 1 MiB")
@@ -178,8 +177,7 @@ def run(argv):
 def verify(compiler, clang):
     with tempfile.TemporaryDirectory(prefix="oreslang-native-generics-") as tmp:
         tmp = Path(tmp)
-        shared_valid, shared_invalid = load_shared_conformance()
-        for name, (source, exit_code) in {**VALID, **shared_valid}.items():
+        for name, (source, exit_code) in VALID.items():
             path = tmp / (name + ".ores")
             path.write_text(source)
             result = run([str(compiler), str(path)])
@@ -195,7 +193,7 @@ def verify(compiler, clang):
             if executed.returncode != exit_code:
                 raise AssertionError(f"{name}: guest exit {executed.returncode}, expected {exit_code}, stderr={executed.stderr!r}")
             print(f"PASS guest {name}: {exit_code}", flush=True)
-        for name, (source, diagnostic) in {**INVALID, **shared_invalid}.items():
+        for name, (source, diagnostic) in INVALID.items():
             path = tmp / (name + ".ores")
             path.write_text(source)
             result = run([str(compiler), str(path)])

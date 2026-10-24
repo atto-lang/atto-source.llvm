@@ -1,0 +1,7 @@
+define class Entry as
+  pub int key = 1;
+end
+
+fnc main(): int {
+  return 0;
+}

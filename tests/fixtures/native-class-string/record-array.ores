@@ -1,0 +1,15 @@
+define class PathSegment as
+    pub val int kind;
+    pub val String value;
+end
+pub routine main(): int {
+    val Array<PathSegment> segments = new Array<PathSegment>();
+    segments.add(new PathSegment(0, "foo"));
+    segments.add(new PathSegment(1, "id"));
+    val PathSegment first = segments.get(0);
+    segments.set(0, new PathSegment(2, "tail"));
+    val PathSegment current = segments.get(0);
+    stdio.println(first.value);
+    stdio.println(current.value);
+    return first.kind == 0 && current.kind == 2 && segments.size == 2 ? 0 : 1;
+}

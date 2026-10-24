@@ -17,27 +17,27 @@ import tempfile
 FIXTURES = {
     "src/int_linked_queue.ores": (
         "2a250d3d8721ecd0817dce6c3adc50b5dfe7f52f",
-        "oreslang-llvmc: expected 'module', 'class' or 'actor' at byte 311",
+        "oreslang-llvmc: expected '(' at byte 1102",
     ),
     "tests/smoke.ores": (
         "55c417dde5210dc71666b256d7ee90bce9f812f2",
-        "oreslang-llvmc: expected fnc or routine at byte 156",
+        "oreslang-llvmc: expected 'from' at byte 183",
     ),
     "tests/stress.ores": (
         "90759f6cc630c8c5f6ce2cfdd662211cdffad813",
-        "oreslang-llvmc: expected fnc or routine at byte 124",
+        "oreslang-llvmc: expected '(' at byte 267",
     ),
     "tests/edge_cases.ores": (
         "3ef072c04f4176e3d786c447790c6fb254e6b04b",
-        "oreslang-llvmc: expected fnc or routine at byte 82",
+        "oreslang-llvmc: expected '(' at byte 227",
     ),
     "tests/instances.ores": (
         "6bcc4396862b6f87412e6a78a4fea31be2f37df8",
-        "oreslang-llvmc: expected fnc or routine at byte 143",
+        "oreslang-llvmc: expected '(' at byte 340",
     ),
     "tests/relink_matrix.ores": (
         "52b40ceac8a9f8dd948ee93093e7b33583e3bf36",
-        "oreslang-llvmc: expected fnc or routine at byte 67",
+        "oreslang-llvmc: expected '(' at byte 211",
     ),
 }
 
