@@ -181,6 +181,28 @@ read/write directions and capabilities. Backpressure must propagate through
 the whole graph to the OS adapter; OS write **admission** is not flush,
 remote receipt, or peer application processing.
 
+## Admission-domain isolation
+
+A bounded Channel implementation must not make one unrelated runtime/context
+consume another runtime's normal retained-select budget. Source Channels and
+their select registrations belong to an explicit runtime/execution admission
+domain with finite pending-selection and pending-arm quotas.
+
+The implementation may still use a process-wide arbitration coordinator for
+atomic winner semantics, but it should retain a larger finite process emergency
+ceiling only as defense in depth. Ordinary domain A saturation must not deny
+domain B merely because both share a JVM/process coordinator. A multi-Channel
+atomic select is same-domain by default; crossing domains requires an explicit
+verified bridge or fails closed. Future-only select must still be charged to
+the caller's domain rather than escaping accounting because it has no Channel
+arm. Domain teardown atomically detaches/fails its pending selections and
+refunds both domain and process accounting exactly once.
+
+Ready operations retain the existing progress rule: a transient registration
+may probe/commit an immediately ready buffer/rendezvous before retained-pending
+quota rejection. Admission domains are accounting/authority boundaries, not
+one-thread/one-executor-per-Channel scheduling domains.
+
 ## Terminal ordering, fairness and trust
 
 1. A stream/channel completes with exactly one terminal outcome:
