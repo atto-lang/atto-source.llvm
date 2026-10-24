@@ -9,6 +9,7 @@
 static atomic_int constructor_calls;
 static atomic_int constructor_entered;
 static atomic_int constructor_release;
+static atomic_int readiness_continuation_calls;
 
 static void check(int condition) {
     if (!condition) abort();
@@ -39,6 +40,27 @@ static int64_t on_message(
     return payload;
 }
 
+static int64_t readiness_continuation(void* actor) {
+    (void)actor;
+    atomic_fetch_add_explicit(
+        &readiness_continuation_calls, 1, memory_order_acq_rel);
+    return 77;
+}
+
+static void check_failed_readiness(void* actor) {
+    int64_t result = INT64_C(99);
+    const int outcome = oreslang_source_actor_await_ready_checked(
+        actor,
+        readiness_continuation,
+        UINT64_C(0x4242),
+        &result);
+    check(outcome
+        == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
+    check(result == INT64_C(99));
+    check(atomic_load_explicit(
+        &readiness_continuation_calls, memory_order_acquire) == 0);
+}
+
 static void reset_constructor(void) {
     atomic_store_explicit(
         &constructor_calls, 0, memory_order_release);
@@ -46,6 +68,8 @@ static void reset_constructor(void) {
         &constructor_entered, 0, memory_order_release);
     atomic_store_explicit(
         &constructor_release, 0, memory_order_release);
+    atomic_store_explicit(
+        &readiness_continuation_calls, 0, memory_order_release);
 }
 
 static void stop_before_constructor(void) {
@@ -73,6 +97,7 @@ static void stop_before_constructor(void) {
         == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
     check(atomic_load_explicit(
         &constructor_calls, memory_order_acquire) == 0);
+    check_failed_readiness(actor);
 
     oreslang_source_actor_join_done(actor);
 }
@@ -104,6 +129,7 @@ static void stop_during_constructor(void) {
         == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
     check(atomic_load_explicit(
         &constructor_calls, memory_order_acquire) == 1);
+    check_failed_readiness(actor);
 
     oreslang_source_actor_join_done(actor);
 }
