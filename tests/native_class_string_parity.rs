@@ -49,6 +49,51 @@ fn main() {
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
         (
+            "owned-path-pattern-borrowed-methods",
+            include_str!("fixtures/native-class-string/owned-path-pattern.ores"),
+            "/foo/:id\nfoo\n",
+        ),
+        (
+            "nested-borrows-distinguish-array-regions",
+            r#"define class Box as pub val Array<int> values; end
+              fnc sum(borrow Box left,borrow Box right):int{return left.values.get(0)+right.values.get(0);}
+              fnc nested(borrow Box parent):int {
+                val Array<int> numbers=new Array<int>(); numbers.add(29);
+                val Box child=new Box(numbers);
+                return sum(rt borrow parent,rt borrow child);
+              }
+              pub routine main():int {
+                val Array<int> numbers=new Array<int>(); numbers.add(13);
+                val Box owner=new Box(numbers);
+                return nested(rt borrow owner)==42?0:1;
+              }"#,
+            "",
+        ),
+        (
+            "exclusive-class-array-borrow",
+            r#"define class Box as pub val Array<int> values; end
+              fnc append(borrow mut Box owner):void {owner.values.add(29);return;}
+              pub routine main():int {
+                val Array<int> numbers=new Array<int>(); numbers.add(13);
+                val Box owner=new Box(rt take numbers);
+                append(rt borrow mut owner);
+                return owner.values.size==2 && owner.values.get(1)==29?0:1;
+              }"#,
+            "",
+        ),
+        (
+            "borrowed-string-array-field",
+            r#"define class Names as val Array<String> values;
+                pub first():String{return self.values.get(0);}
+              end
+              pub routine main():int {
+                val Array<String> names=new Array<String>();names.add("route");
+                val Names owner=new Names(names);
+                stdio.println(owner.first());return 0;
+              }"#,
+            "route\n",
+        ),
+        (
             "immutable-record-array-replacement",
             include_str!("fixtures/native-class-string/record-array.ores"),
             "foo\ntail\n",
@@ -168,8 +213,15 @@ fn main() {
             "a\0b",
         ),
     ];
+    // Java does not yet admit named value arguments. Keep that ABI regression
+    // explicit and native-only rather than weakening the common-source gate.
+    let named_source = positives[2].1.replace(
+        "sum(rt borrow parent,rt borrow child)",
+        "sum(right:rt borrow child,left:rt borrow parent)",
+    );
+    let native_only = [("named-borrows-distinguish-array-regions", named_source.as_str(), "")];
     let mut comparisons = 0;
-    for (name, source, expected) in &positives {
+    for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         let path = scratch.0.join("main.ores");
@@ -227,7 +279,7 @@ fn main() {
                 String::from_utf8_lossy(&native.stderr)
             );
         }
-        if let Some(launcher) = &java {
+        if let Some(launcher) = java.as_ref().filter(|_| case_index < positives.len()) {
             let reference = run(Command::new(launcher).arg(&path));
             assert_eq!(
                 reference.status.code(),
@@ -240,6 +292,12 @@ fn main() {
         }
     }
     let negatives = [
+        ("constructor-array-use-after-move", "define class Box as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return a.size;}".to_owned(), foo.to_owned()),
+        ("constructor-array-duplicate-owner", "define class Pair as val Array<int> left;val Array<int> right;end pub fnc main():int{val Array<int> a=new Array<int>();val Pair p=new Pair(a,a);return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-element-mismatch", "define class Box as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return 0;}".to_owned(), foo.to_owned()),
+        ("shared-class-array-mutation", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):int{val Box other=new Box(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("class-array-by-value-escape", "define class Box as pub val Array<int> values;end fnc bad(Box owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("mutable-record-array", "define class Item as pub let int value=1; end pub fnc main():int{val Array<Item> a=new Array<Item>();return 0;}".to_owned(), foo.to_owned()),
         ("record-array-integer-forgery", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
@@ -387,5 +445,5 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
-    println!("PASS class/string parity: {} positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, sanitized={sanitize}", positives.len(), negatives.len());
+    println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
 }

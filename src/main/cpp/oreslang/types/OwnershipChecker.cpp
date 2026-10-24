@@ -112,11 +112,11 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
                 : "native Array<int> operation requires a live array owner");
         reject(receiver, "native Array<int> operation requires an owned Array<int> place");
     }
-    if (owner.mode != Mode::Value)
+    if (owner.mode == Mode::Borrow && write)
         reject(receiver, "ownership violation: Array<int> cannot be accessed through a borrowed class");
     if (owner.exclusive_loan || (write && owner.shared_loans))
         reject(receiver, "ownership violation: Array<int> conflicts with active class loan");
-    if (write && !owner.mutable_owner)
+    if (write && owner.mode == Mode::Value && !owner.mutable_owner)
         reject(receiver, "ownership violation: Array<int> mutation requires live let mut owner");
     return owner;
 }
@@ -636,8 +636,6 @@ void validate_i64_ownership(const Program& program) {
             if (!param.class_name.empty()) {
                 if (!class_fields.count(param.class_name))
                     throw std::runtime_error("unknown parameter class '" + param.class_name + "'");
-                if (!class_arrays.at(param.class_name).empty())
-                    throw std::runtime_error("ownership violation: Array<int> class cannot be borrowed or passed as a parameter");
                 if (param.mode == Mode::Value)
                     throw std::runtime_error("ownership violation: by-value class parameter '" +
                         param.name + "' requires exclusive borrow or proven move/drop lowering");
@@ -726,8 +724,22 @@ void validate_i64_ownership(const Program& program) {
                     }
                     reject(expr, "native scalar constructor argument requires pure integer expression");
                 };
-                for (const auto& arg : binding.constructor_arguments)
-                    validate_scalar(*arg);
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& item) { return item.name == binding.class_name; });
+                for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                    const auto& arg = binding.constructor_arguments[i];
+                    const auto* field = constructor_field(*cls, i);
+                    if (!field || !field->int_array) { validate_scalar(*arg); continue; }
+                    const Expression* source = arg.get();
+                    if (source->kind == Expression::Kind::Take && source->left) source = source->left.get();
+                    if (source->kind != Expression::Kind::Variable)
+                        reject(*arg, "collection constructor requires a unique named lexical array");
+                    auto& owner = local(*source, locals);
+                    if (!owner.int_array || owner.mode != Mode::Value || owner.moved ||
+                            owner.exclusive_loan || owner.shared_loans)
+                        reject(*arg, "collection constructor requires a live unique array owner");
+                    owner.moved = true;
+                }
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
