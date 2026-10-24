@@ -61,12 +61,29 @@ inline IoAttempt try_write(int fd, const void* bytes, std::size_t size) noexcept
 struct TryAccept { OwnedSocketFd client; bool would_block; int error_number; };
 class NonblockingTcpListener final {
 public:
-    static NonblockingTcpListener loopback(std::uint16_t port, int backlog) {
+    // Each worker can bind its own socket to the same address:port with
+    // SO_REUSEPORT. The kernel selects a listening socket for each incoming
+    // connection; no supervisor-to-worker per-connection FD transfer is needed.
+    // This is a host primitive, NOT authorization to expose a guest actor FD.
+    static NonblockingTcpListener loopback_reuseport(std::uint16_t port, int backlog) {
+        return loopback(port, backlog, true);
+    }
+    static NonblockingTcpListener loopback(std::uint16_t port, int backlog,
+                                           bool reuse_port = false) {
         if (backlog < 1 || backlog > 65535) throw std::invalid_argument("invalid listen backlog");
         auto s = OwnedSocketFd::create_tcp();
         int reuse = 1;
         if (::setsockopt(s.get(), SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0)
             throw std::system_error(errno, std::generic_category(), "SO_REUSEADDR");
+        if (reuse_port) {
+#if defined(SO_REUSEPORT)
+            // Set this on every participating socket, before bind().
+            if (::setsockopt(s.get(), SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) != 0)
+                throw std::system_error(errno, std::generic_category(), "SO_REUSEPORT");
+#else
+            throw std::system_error(ENOTSUP, std::generic_category(), "SO_REUSEPORT unavailable");
+#endif
+        }
         sockaddr_in address{};
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
