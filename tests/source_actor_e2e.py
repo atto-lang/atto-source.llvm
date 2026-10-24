@@ -131,6 +131,11 @@ def main():
                         "source-actor-future-void-ready.ores"}:
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
+                # A runtime declaration or source text alone is not an await:
+                # require exactly one generated call to the CONTROL bridge.
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
