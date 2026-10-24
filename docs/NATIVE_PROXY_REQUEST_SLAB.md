@@ -279,3 +279,24 @@ Git blob identity and compiled and executed locally with GCC/Clang strict
 C++20, optimized repetition, ASan and UBSan. This is focused host-runtime
 proof only; an executing source CI runner is still required for the complete
 LLVM actor and VM integration suite. No private compiler tree was mirrored.
+
+
+### FD loan lifetime and terminal-envelope identity (October 24, 2026)
+
+The actor-owned VM NIO completion ledger now **retains exclusive ownership of
+its watched FD until terminal completion acknowledgment**, not merely until
+`NativeEpollReactorManager::try_pop()` releases the kernel readiness slot.
+An outstanding delivered completion therefore prevents a second actor, slab,
+or generation from registering that same numeric descriptor through the
+actor-owned interface. Only the exact acknowledged terminal completion can
+release the counted callback permit and make the descriptor eligible again.
+
+The ledger also preserves the original FD and full delivered terminal record.
+Acknowledge refuses altered FD, readiness events, terminal outcome, watch,
+lease identity, or actor owner metadata. The host retains responsibility for
+not closing/recycling the numeric FD before its terminal acknowledgment, and
+for guaranteeing that acknowledgment follows the consumer's **last physical
+access**. This does not make copyable host metadata a guest capability or
+retroactively protect legacy C NIO mode. Native actor-owned VM tests exercise
+rejection of FD reuse before acknowledgment, positive rearm afterward, and
+hostile terminal-envelope modification.

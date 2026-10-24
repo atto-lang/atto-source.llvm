@@ -60,6 +60,9 @@ if(ORESLANG_PROXY_SLAB_HOST_ONLY)
         oreslang_proxy_host_ctest(oreslang-native-epoll-bridge-lifetime-test
             native_epoll_bridge_external_handoff_failstop 20
             tests/native_epoll_bridge_lifetime_test.cpp)
+        oreslang_proxy_host_ctest(oreslang-native-actor-nio-fd-lease-test
+            native_actor_nio_fd_lease_exclusive_rearm 20
+            tests/native_actor_nio_fd_lease_test.cpp)
         oreslang_proxy_host_ctest(oreslang-native-vm-actor-nio-owned-test
             native_vm_actor_nio_owned_callbacks 40
             tests/native_vm_actor_nio_owned_test.cpp
@@ -3432,5 +3435,26 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME native_epoll_bridge_external_handoff_failstop
         COMMAND oreslang-native-epoll-bridge-lifetime-test)
     set_tests_properties(native_epoll_bridge_external_handoff_failstop
+        PROPERTIES TIMEOUT 20)
+endif()
+
+# Focused Linux epoll actor-owned FD lifetime contract without LLVM frontend or
+# the full VM bootstrap. Compiles the REAL reactor/manager + exact callback
+# ledger, never the lightweight external-adapter mock.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-actor-nio-fd-lease-test
+        tests/native_actor_nio_fd_lease_test.cpp)
+    target_include_directories(oreslang-native-actor-nio-fd-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-nio-fd-lease-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-nio-fd-lease-test
+        PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-actor-nio-fd-lease-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_actor_nio_fd_lease_exclusive_rearm
+        COMMAND oreslang-native-actor-nio-fd-lease-test)
+    set_tests_properties(native_actor_nio_fd_lease_exclusive_rearm
         PROPERTIES TIMEOUT 20)
 endif()

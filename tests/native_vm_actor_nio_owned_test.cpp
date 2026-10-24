@@ -88,6 +88,23 @@ int main() {
     forged = completed;
     ++forged.lease_id;
     assert(!vm_nio_actor_acknowledge(vm, forged));
+    forged = completed;
+    forged.event.fd = -1;
+    assert(!vm_nio_actor_acknowledge(vm, forged));
+    forged = completed;
+    forged.event.events ^= EPOLLOUT;
+    assert(!vm_nio_actor_acknowledge(vm, forged));
+    forged = completed;
+    forged.event.outcome = ORES_NATIVE_NIO_STOPPED;
+    assert(!vm_nio_actor_acknowledge(vm, forged));
+
+    // The reactor has already popped this readiness and may accept another
+    // watch of its FD. But the actor-owned ledger must retain exclusive FD
+    // ownership until physical callback acknowledgment.
+    NativeTransportCallbackGate overlap_gate(17, 19, 99, 119);
+    OresNativeNioWatch overlap{};
+    assert(!vm_nio_actor_try_watch(vm, overlap_gate, p[0], EPOLLIN, &overlap));
+    assert(!gate.try_drain());
 
     // The downstream carrier owns the completion until its last actor
     // memory access. Releasing the receipt early is not sufficient.
@@ -106,6 +123,17 @@ int main() {
     consumer.join();
     assert(!vm_nio_actor_acknowledge(vm, completed)); // double completion
     assert(gate.try_drain());
+    // The same FD may be rearmed only AFTER the previous owner has actually
+    // acknowledged its completion. The readiness byte remains unread.
+    const auto rearmed = watch(vm, overlap_gate, p[0]);
+    assert(rearmed.ticket != w.ticket);
+    auto renewed = pop(vm);
+    assert(renewed.event.watch.ticket == rearmed.ticket);
+    assert(renewed.event.outcome == ORES_NATIVE_NIO_READY);
+    overlap_gate.stop_admission();
+    assert(!overlap_gate.try_drain());
+    assert(vm_nio_actor_acknowledge(vm, renewed));
+    assert(overlap_gate.try_drain());
     ::close(p[0]); ::close(p[1]);
 
     // Cancelled terminal work must also be acknowledged; the old C API

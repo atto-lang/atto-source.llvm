@@ -21,6 +21,7 @@ on:
       - 'tests/native_epoll_transport_capacity_stress_test.cpp'
       - 'tests/native_epoll_bridge_lifetime_test.cpp'
       - 'tests/native_vm_actor_nio_owned_test.cpp'
+      - 'tests/native_actor_nio_fd_lease_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/native-proxy-slab-exact-head.yml'
   workflow_dispatch:
@@ -116,9 +117,20 @@ jobs:
                      oreslang-native-epoll-transport-bridge-test \
                      oreslang-native-epoll-transport-stress-test \
                      oreslang-native-epoll-bridge-lifetime-test \
+                     oreslang-native-actor-nio-fd-lease-test \
                      oreslang-native-vm-actor-nio-owned-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_epoll_bridge_external_handoff_failstop|native_vm_actor_nio_owned_callbacks)$'
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota|native_proxy_transport_callback_gate_races|native_epoll_transport_callback_retirement|native_epoll_transport_capacity_stale_shutdown_stress|native_epoll_bridge_external_handoff_failstop|native_actor_nio_fd_lease_exclusive_rearm|native_vm_actor_nio_owned_callbacks)$'
+      - name: Verify actor-owned FD is exclusive until exact terminal acknowledgment under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_nio_fd_lease_test.cpp \
+            -o /tmp/actor-nio-fd-lease-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/actor-nio-fd-lease-sanitized
       - name: Exercise VM actor-owned NIO backend under ASan/UBSan
         shell: bash
         run: |

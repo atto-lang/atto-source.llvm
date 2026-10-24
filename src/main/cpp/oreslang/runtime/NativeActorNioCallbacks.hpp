@@ -46,7 +46,12 @@ public:
         if (!lock.owns_lock()) return false;
         Entry* free = nullptr;
         for (auto& item : entries_) {
-            if (!item.occupied) { free = &item; break; }
+            // The reactor releases its FD claim when try_pop() consumes the
+            // kernel completion, but the actor's physical callback loan ends
+            // only at acknowledge(). Do not let another actor or generation
+            // register the same FD while an older completion is outstanding.
+            if (item.occupied && item.fd == fd) return false;
+            if (!item.occupied && !free) free = &item;
         }
         if (!free) return false;
         const auto id = reserve_lease_id();
@@ -57,6 +62,8 @@ public:
         if (!watch) return false;
         free->occupied = true;
         free->delivered = false;
+        free->fd = fd;
+        free->terminal = {};
         free->watch = OresNativeNioWatch{watch->ticket.value, watch->reactor};
         free->owner = gate.binding();
         free->lease_id = *id;
@@ -97,9 +104,13 @@ public:
                     outcome = ORES_NATIVE_NIO_STOPPED; break;
                 default: std::abort();
             }
+            // Validate the reactor completion against its original FD
+            // before transferring an actor-visible terminal record.
+            if (result->event.fd != item.fd) std::abort();
+            item.terminal = OresNativeNioCompletion{
+                watch, result->event.fd, result->event.events, outcome};
             item.delivered = true;
-            *output = Completion{{watch, result->event.fd,
-                result->event.events, outcome}, item.owner, item.lease_id};
+            *output = Completion{item.terminal, item.owner, item.lease_id};
             return true;
         }
         // Owned completions must never silently lose their accounting permit.
@@ -115,11 +126,19 @@ public:
             if (!item.occupied || !item.delivered ||
                     item.lease_id != completion.lease_id ||
                     !same_watch(item.watch, completion.event.watch) ||
-                    !same_owner(item.owner, completion.owner)) continue;
-            item.permit.release(); // final physical actor-memory access first
+                    !same_owner(item.owner, completion.owner) ||
+                    item.terminal.fd != completion.event.fd ||
+                    item.terminal.events != completion.event.events ||
+                    item.terminal.outcome != completion.event.outcome) continue;
+            // The caller attests this is the final physical actor-memory
+            // access. Reject altered completion metadata before releasing
+            // the callback permit and allowing the FD to be reused.
+            item.permit.release();
             item.occupied = false;
             item.delivered = false;
             item.lease_id = 0;
+            item.fd = -1;
+            item.terminal = {};
             return true;
         }
         return false;
@@ -134,9 +153,11 @@ public:
 private:
     struct Entry {
         OresNativeNioWatch watch{};
+        OresNativeNioCompletion terminal{};
         Gate::Binding owner{};
         Gate::Permit permit{};
         std::uint64_t lease_id = 0;
+        int fd = -1;
         bool occupied = false;
         bool delivered = false;
     };
