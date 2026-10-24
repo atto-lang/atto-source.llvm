@@ -86,6 +86,8 @@ static _Thread_local OresNativeExecutionHandle current_source_execution;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
+static atomic_int test_hold_readiness_publication;
+static atomic_int test_readiness_publication_entered;
 
 void oreslang_source_actor_test_hold_initialization(int hold) {
     if (hold) {
@@ -102,6 +104,23 @@ void oreslang_source_actor_test_hold_initialization(int hold) {
 int oreslang_source_actor_test_initialization_entered(void) {
     return atomic_load_explicit(
         &test_initialization_entered, memory_order_acquire);
+}
+
+void oreslang_source_actor_test_hold_readiness_publication(int hold) {
+    if (hold) {
+        atomic_store_explicit(
+            &test_readiness_publication_entered, 0, memory_order_release);
+        atomic_store_explicit(
+            &test_hold_readiness_publication, 1, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &test_hold_readiness_publication, 0, memory_order_release);
+    }
+}
+
+int oreslang_source_actor_test_readiness_publication_entered(void) {
+    return atomic_load_explicit(
+        &test_readiness_publication_entered, memory_order_acquire);
 }
 #endif
 
@@ -397,6 +416,17 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (atomic_load_explicit(
+            &test_hold_readiness_publication, memory_order_acquire)) {
+        atomic_store_explicit(
+            &test_readiness_publication_entered, 1, memory_order_release);
+        while (atomic_load_explicit(
+                &test_hold_readiness_publication, memory_order_acquire))
+            sched_yield();
+    }
+#endif
 
     /*
      * Stop may race an already-running constructor. Re-enter the same group
