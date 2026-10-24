@@ -42,6 +42,12 @@ if ! git -C "$java_root" ls-files --error-unmatch -- "$launcher_relative_path" >
   echo "Java launcher must be a tracked file at the pinned Java revision" >&2
   exit 65
 fi
+# Do not follow a tracked symlink into a mutable, untracked build or external
+# path. The launcher must be a regular executable Git blob at the pinned SHA.
+if [[ ! "$(git -C "$java_root" ls-files --stage -- "$launcher_relative_path")" =~ ^100755[[:space:]] ]]; then
+  echo "Java launcher must be a tracked regular executable (mode 100755)" >&2
+  exit 65
+fi
 
 llvm_sha="$(git -C "$source_root" rev-parse --verify HEAD)"
 java_sha="$(git -C "$java_root" rev-parse --verify HEAD)"
@@ -64,6 +70,14 @@ for fixture in main.ores main-1.ores; do
   relative="tests/fixtures/native-class-string/$fixture"
   git -C "$source_root" ls-files --error-unmatch -- "$relative" >/dev/null
   git -C "$java_root" ls-files --error-unmatch -- "$relative" >/dev/null
+  for tree in "$source_root" "$java_root"; do
+    # cmp follows symlinks. A symlink committed as mode 120000 could resolve
+    # outside either checkout, defeating the commit-pinned fixture guarantee.
+    if [[ ! "$(git -C "$tree" ls-files --stage -- "$relative")" =~ ^100644[[:space:]] ]]; then
+      echo "expected regular tracked guest source fixture (mode 100644): $tree/$relative" >&2
+      exit 65
+    fi
+  done
   if ! cmp -s "$source_root/$relative" "$java_root/$relative"; then
     echo "Java and LLVM class/String source fixtures diverge: $relative" >&2
     exit 65
