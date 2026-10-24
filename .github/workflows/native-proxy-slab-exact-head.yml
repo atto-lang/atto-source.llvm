@@ -94,7 +94,8 @@ jobs:
           cmake -S . -B /tmp/ores-proxy-ctest \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
-            -DBUILD_TESTING=ON
+            -DBUILD_TESTING=ON \
+            -DORESLANG_PROXY_SLAB_HOST_ONLY=ON
           cmake --build /tmp/ores-proxy-ctest --parallel 2 \
             --target oreslang-native-proxy-request-slab-test \
                      oreslang-native-proxy-arena-pages-test \

@@ -106,6 +106,18 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             assert(state.stale_ticket != 0 && state.slab->route(state.stale_ticket) == 42);
             state.pin = state.slab->pin(state.stale_ticket);
             assert(state.pin.claim != 0 && state.slab->retire(state.stale_ticket));
+            // A retired request with a pending external completion still
+            // owns its physical slot. Closing must fail without refunding
+            // quota, invalidating the active receipt, or closing the slab.
+            const auto charged_before_close = state.actor_budget->used_bytes();
+            bool pinned_close_rejected = false;
+            try { state.slab->close(); }
+            catch (const std::logic_error&) { pinned_close_rejected = true; }
+            assert(pinned_close_rejected);
+            assert(state.slab->live() == 1);
+            assert(state.slab->pending(state.stale_ticket) == 1);
+            assert(state.actor_budget->used_bytes() == charged_before_close);
+            assert(state.slab->route(state.stale_ticket) == 42);
             // A second slab deliberately mints the same raw low-level
             // claim. Identity/callback provenance must block misdelivery.
             state.other_slab = std::make_unique<ActorOwnedProxyRequestSlab>(
@@ -154,6 +166,10 @@ static void on_message(void* context, std::size_t actor, std::uint64_t step) {
             try { (void) state.slab->admit(8, 2, 3); }
             catch (const std::logic_error&) { closed_admission_denied = true; }
             assert(closed_admission_denied);
+            bool closed_completion_denied = false;
+            try { (void)state.slab->settle(state.pin); }
+            catch (const std::logic_error&) { closed_completion_denied = true; }
+            assert(closed_completion_denied); // stale async callback after close
             state.slab->close(); // idempotent owner cleanup
             // Deliberately omit other_slab.close() even though all its
             // requests are settled: after the exact scheduler-done fence,

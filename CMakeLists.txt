@@ -5,6 +5,51 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Isolated native host test entrypoint: no LLVM development package, Rust
+# harness, guest frontend or network access is required to verify the real
+# C ActorArena + C++20 proxy slab + actor-owned scheduler contract.
+# This is explicitly NOT a complete LLVM/compiler or guest-runtime build.
+option(ORESLANG_PROXY_SLAB_HOST_ONLY
+    "Build only the three native proxy slab host proofs without LLVM" OFF)
+if(ORESLANG_PROXY_SLAB_HOST_ONLY)
+    include(CTest)
+    if(NOT BUILD_TESTING)
+        message(FATAL_ERROR "Proxy slab host proof requires BUILD_TESTING=ON")
+    endif()
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang"
+            OR NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "Proxy slab host proof requires GCC or Clang")
+    endif()
+    find_package(Threads REQUIRED)
+
+    function(oreslang_proxy_host_ctest target test_name timeout_seconds)
+        add_executable(${target} ${ARGN})
+        target_include_directories(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(${target} PRIVATE c_std_11 cxx_std_20)
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        target_link_libraries(${target} PRIVATE Threads::Threads)
+        add_test(NAME ${test_name} COMMAND ${target})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT ${timeout_seconds})
+    endfunction()
+
+    oreslang_proxy_host_ctest(oreslang-native-proxy-request-slab-test
+        native_proxy_request_slab_host_only 20
+        tests/native_proxy_request_slab_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    oreslang_proxy_host_ctest(oreslang-native-proxy-arena-pages-test
+        native_proxy_slab_arena_pages_and_zeroization 30
+        tests/native_proxy_request_slab_arena_pages_test.cpp
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    oreslang_proxy_host_ctest(oreslang-native-actor-proxy-slab-owner-test
+        native_actor_proxy_slab_generation_and_quota 30
+        tests/native_actor_proxy_request_slab_owner_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/ActorArena.c)
+    return()
+endif()
+
 # Managed Oreslang references are a language/runtime storage policy, separate
 # from the native target ABI. Keep compact actor-local references as the
 # default on 64-bit hosts while preserving an explicit full-width mode.

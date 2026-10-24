@@ -58,3 +58,18 @@ After all slab request receipts have been settled and `live() == 0`, `close()` s
 **Authority boundary:** this is exclusivity between **trusted slab adapters**. The low-level `ores_actor_arena_read/write` functions remain trusted host entry points and are not yet fully capability-gated by the page claim; a privileged host holding an arena handle and authenticated actor turn can still access bytes. No private arena pointer or page receipt is a guest-visible Oreslang capability. Do not market this as isolation from malicious or buggy trusted host code.
 
 The `native_proxy_slab_arena_pages_and_zeroization` CTest exercises true two-page storage, conflicting whole and subset reservations, untouched sentinels after rejected conflicts, claim replay/partial-release rejection, post-close reuse, disjoint slabs, and final arena destruction. The exact-head workflow includes its strict C++20 and ASan/UBSan builds. **No checked-in test execution is yet proven**: source-organization Actions jobs continue failing with zero recorded steps; the review/CI authorization process must unblock actual runner evidence before merge.
+
+## LLVM-independent native acceptance gate
+
+Use `-DORESLANG_PROXY_SLAB_HOST_ONLY=ON -DBUILD_TESTING=ON` to configure
+a dedicated GCC/Clang C11+C++20 CTest build containing only the checked-in
+host slab, real `ActorArena.c`, and exact-generation native scheduler
+tests. This deliberately avoids a mandatory LLVM development dependency
+for this *host-side* unit-test gate; normal Oreslang compiler builds are
+unchanged. Execute all three registered CTests under both compilers and
+run the direct ASan/UBSan workflow checks as separate required gates.
+The actor test now rejects close while a retired request retains a pending
+completion receipt, proves charges remain stable after rejection, and
+rejects late callbacks after close. Neither these host tests nor the
+standalone host-only CMake option establishes guest `.ores` lowering,
+real HTTP/TCP callback quiescence, JDK25, or GraalVM parity.
