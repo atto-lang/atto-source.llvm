@@ -25,10 +25,11 @@ build="$root/build-class-string-llvm$version"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DLLVM_DIR="$prefix/lib/cmake/llvm" -DORE_CLANG="$prefix/bin/clang"
 cmake --build "$build" --target oreslang-llvmc oreslang-native-class-string-parity-build --parallel 2
-ctest --test-dir "$build" -R "^native_class_string_parity_release$" --output-on-failure --no-tests=error
-if [[ "$version" == 23 ]]; then
-  ctest --test-dir "$build" -R "^native_class_string_parity_sanitizer$" --output-on-failure --no-tests=error
-fi
+# Run the same executable guest corpus on *both* supported LLVM versions.
+# A release pass on LLVM 19 cannot stand in for ASan/UBSan qualification.
+ctest --test-dir "$build" \
+  -R "^native_class_string_parity_(release|sanitizer)$" \
+  --output-on-failure --no-tests=error
 work="$(mktemp -d "${TMPDIR:-/tmp}/oreslang-native-text.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 cp tests/fixtures/native-class-string/main-1.ores "$work/main-1.ores"
