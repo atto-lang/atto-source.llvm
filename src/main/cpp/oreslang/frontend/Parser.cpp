@@ -666,8 +666,13 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
+            // Formatter may insert 'mtd', but method identity and receiver
+            // erasure must remain unchanged. Never consume it as a class field.
+            const bool method_marker = accept("mtd");
             const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
+            if (method_marker && !method_ahead)
+                fail("native mtd marker must precede a method signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
