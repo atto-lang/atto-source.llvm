@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <future>
 #include <map>
@@ -440,22 +441,35 @@ public:
                     unsealed, NativeActorRef::terminal_resource_bit,
                     std::memory_order_acq_rel, std::memory_order_acquire))
                 return false;
-            // Close may settle readiness after detaching the worker table,
-            // outside the group lock. The ticket mutex decides the winner.
-            ActorReadyResult rejected{false,
-                failure.empty() ? "actor terminated before ready" : failure};
-            callbacks = settle_ticket(ref, std::move(rejected));
-            // A cancelled or failed startup is also a terminal failure,
-            // even when its physical cleanup acknowledgment has no separate
-            // error argument. Inspect readiness under the ticket mutex:
-            // close() may have rejected startup on another thread.
-            if (failure.empty()) {
-                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
-                if (!ref.ticket_->result.ready)
-                    failure = ref.ticket_->result.error;
+            try {
+                // Close may settle readiness after detaching the worker table,
+                // outside the group lock. The ticket mutex decides the winner.
+                ActorReadyResult rejected{false,
+                    failure.empty() ? "actor terminated before ready" : failure};
+                callbacks = settle_ticket(ref, std::move(rejected));
+                // A cancelled or failed startup is also a terminal failure,
+                // even when its physical cleanup acknowledgment has no separate
+                // error argument. Inspect readiness under the ticket mutex:
+                // close() may have rejected startup on another thread.
+                if (failure.empty()) {
+                    std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                    if (!ref.ticket_->result.ready)
+                        failure = ref.ticket_->result.error;
+                }
+                // Settle done ONLY on acknowledged physical finalization.
+                done_callbacks = settle_done(ref, failure);
+            } catch (...) {
+                // The terminal resource bit is an admission fence, not a
+                // one-way state transition until readiness/DONE settlement
+                // succeeds. Roll it back on allocation/settlement failure so
+                // a later physical-finalization retry is possible.
+                std::uint64_t sealed = NativeActorRef::terminal_resource_bit;
+                if (!ref.ticket_->resource_state.compare_exchange_strong(
+                        sealed, 0, std::memory_order_acq_rel,
+                        std::memory_order_acquire))
+                    std::terminate();
+                throw;
             }
-            // Settle done ONLY on acknowledged physical finalization.
-            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
@@ -633,15 +647,24 @@ private:
                     unsealed, NativeActorRef::terminal_resource_bit,
                     std::memory_order_acq_rel, std::memory_order_acquire))
                 return false;
-            ActorReadyResult rejected{false,
-                failure.empty() ? "actor terminated before ready" : failure};
-            callbacks = settle_ticket(ref, std::move(rejected));
-            if (failure.empty()) {
-                std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
-                if (!ref.ticket_->result.ready)
-                    failure = ref.ticket_->result.error;
+            try {
+                ActorReadyResult rejected{false,
+                    failure.empty() ? "actor terminated before ready" : failure};
+                callbacks = settle_ticket(ref, std::move(rejected));
+                if (failure.empty()) {
+                    std::lock_guard<std::mutex> ticket_guard(ref.ticket_->mutex);
+                    if (!ref.ticket_->result.ready)
+                        failure = ref.ticket_->result.error;
+                }
+                done_callbacks = settle_done(ref, failure);
+            } catch (...) {
+                std::uint64_t sealed = NativeActorRef::terminal_resource_bit;
+                if (!ref.ticket_->resource_state.compare_exchange_strong(
+                        sealed, 0, std::memory_order_acq_rel,
+                        std::memory_order_acquire))
+                    std::terminate();
+                throw;
             }
-            done_callbacks = settle_done(ref, failure);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             owners.live.erase(it);
         }
