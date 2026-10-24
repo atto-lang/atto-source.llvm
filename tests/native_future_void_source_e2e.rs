@@ -1,4 +1,4 @@
-// No Python: compile two actual Oreslang actor-readiness programs to LLVM IR,
+// No Python: compile three actual Oreslang actor-readiness programs to LLVM IR,
 // link with the native actor scheduler, and compare physical/runtime receipts.
 // Source/compiler must be exact-head, independently pinned by the CI workflow.
 use std::env;
@@ -62,6 +62,7 @@ fn main() {
     let includes = root.join("src/main/cpp");
 
     for (index, name) in ["source-actor-await-ready.ores",
+                          "source-actor-await-worker.ores",
                           "source-actor-future-void-ready.ores"].iter().enumerate() {
         let fixture = root.join("tests/fixtures").join(name);
         let source = run(Command::new(&compiler).arg(&fixture), "compile guest");

@@ -1243,6 +1243,21 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    # ActorRef implements HasFuture: awaiting its capability directly
+    # delegates to the same get_ready() root CONTROL continuation.
+    oreslang_contract_test(source_actor_hasfuture_direct_await_ir
+        source-actor-await-worker.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_hasfuture_direct_await_runtime_ir
+        source-actor-await-worker.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_hasfuture_unknown_receiver
+        source-actor-await-unknown.ores
+        --diagnostic "await get_ready requires a live direct ActorRef receiver")
+    oreslang_contract_test(reject_source_actor_hasfuture_get_done
+        source-actor-await-get-done.ores
+        --diagnostic "expected 'get_ready'")
+    oreslang_contract_test(reject_source_actor_hasfuture_double_await
+        source-actor-await-worker-twice.ores
+        --diagnostic "native source supports only one await get_ready continuation")
     # First actual native source-level typed Future: Future<void> from a
     # single ActorRef.get_ready(). It uses the existing root CONTROL
     # continuation, not synchronous polling or a generic Future<T> ABI.
