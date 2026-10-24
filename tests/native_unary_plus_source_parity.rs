@@ -42,6 +42,10 @@ fn main() {
         ("pub fnc main():int{return +0;}\n", 0),
         ("pub fnc main():int{return +(4_0+2);}\n", 42),
         ("pub fnc main():int{return + (40_0 - 35_8);}\n", 42),
+        // Exercise signed i64 endpoints inside the real guest: process
+        // exit status alone truncates i64 and is not endpoint evidence.
+        ("pub fnc main():int{if (-9_223_372_036_854_775_808 eq -0_9223372036854775808) {return 42;} fi return 1;}\n", 42),
+        ("pub fnc main():int{if (0_9223372036854775807 eq 9_223_372_036_854_775_807) {return 42;} fi return 1;}\n", 42),
     ];
     for (i, (source, expected)) in valid.iter().enumerate() {
         let result = compile(&compiler, &dir, i, source);
@@ -73,6 +77,8 @@ fn main() {
         "pub fnc main():int{return 1_;}\n".to_string(),
         "pub fnc main():int{return 1_+2;}\n".to_string(),
         "pub fnc main():int{return 9_223_372_036_854_775_808;}\n".to_string(),
+        "pub fnc main():int{return -0_9223372036854775809;}\n".to_string(),
+        "pub fnc main():int{return -9_223_372_036_854_775_809;}\n".to_string(),
     ];
     for (i, source) in invalid.iter().enumerate() {
         let result = compile(&compiler, &dir, valid.len() + i, source);
@@ -82,5 +88,5 @@ fn main() {
         assert!(!result.stderr.is_empty(),
             "invalid unary plus case {i} rejected without a diagnostic");
     }
-    println!("seven native executable unary-plus positives, nine no-IR negatives");
+    println!("nine native executable unary-plus/bounds positives, eleven no-IR negatives");
 }
