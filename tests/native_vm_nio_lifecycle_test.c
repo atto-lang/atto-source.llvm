@@ -236,6 +236,9 @@ int main(void) {
     check(cold != NULL);
     check(ores_native_vm_nio_begin_bootstrap(cold));
     check(!ores_native_vm_nio_begin_bootstrap(cold));
+    // The reservation owner must not synchronously wait for itself. Rejection
+    // is non-destructive: after cancelling, this same VM remains attachable.
+    check(!ores_native_vm_close(cold));
     const OresNativeActorRef denied =
         ores_native_vm_spawn(cold, ORES_NATIVE_VM_MAIN, 0);
     check(denied.scheduler_domain == 0);
