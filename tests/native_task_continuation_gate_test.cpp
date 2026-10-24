@@ -141,6 +141,51 @@ static void already_cancelled_authority_closes_registration_race() {
     parent->retire();
 }
 
+static void rejects_forged_and_recycled_await_links() {
+    Stores stores;
+    auto task = TaskCancellation::root();
+    const auto link = stores.suspend(400);
+    OresNativeSuspensionLink forged = link;
+    forged.execution_id.execution += 1;
+    bool rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, forged);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+
+    forged = link;
+    forged.parent.generation += 1;
+    rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, forged);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+
+    {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link);
+        gate.close();
+    }
+    stores.release(link);
+    rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    task->retire();
+}
+
 static void completion_cancel_and_resume_cancel_races() {
     Stores stores;
     for (std::uint64_t i = 0; i < 256; ++i) {
@@ -241,6 +286,7 @@ int main() {
     revokes_pending_and_drains_children();
     late_task_cancel_cannot_reenter_claimed_guest();
     already_cancelled_authority_closes_registration_race();
+    rejects_forged_and_recycled_await_links();
     completion_cancel_and_resume_cancel_races();
     close_disarms_concurrent_revocation();
     std::puts("NATIVE_TASK_CONTINUATION_GATE_PASS");
