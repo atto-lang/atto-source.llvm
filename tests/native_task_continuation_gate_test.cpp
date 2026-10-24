@@ -107,6 +107,10 @@ static void late_task_cancel_cannot_reenter_claimed_guest() {
         assert(context.id.execution == 201);
         assert(context.allocation.owner == 3);
         assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+        // Final reference release must not retire the live guest frame.
+        assert(!ores_native_continuation_store_release(
+            stores.continuations, link.continuation));
+        assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
         assert(!gate.try_resume(physical(202), &resumed));
         assert(parent->cancel("late-cancellation"));
         assert(child->is_cancelled());
