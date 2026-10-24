@@ -231,6 +231,8 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
 inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Returning a named leaf record snapshots fields into native region storage.
+    if (!function.return_class.empty()) add_effect(facts, FunctionEffect::Alloc);
 
     for (const auto& local : function.locals) {
         scan_binding(local, facts);

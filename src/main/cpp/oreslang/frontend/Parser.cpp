@@ -1006,12 +1006,12 @@ private:
                 value.return_type = ScalarType::String;
             } else {
                 const std::size_t type_offset = token_.offset;
-                const std::string type = identifier();
+                const std::string type = type_identifier();
                 if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                 const bool generic = std::any_of(value.generic_parameters.begin(),
                     value.generic_parameters.end(),
                     [&](const GenericParameter& p) { return p.name == type; });
-                if (!generic) fail("native return type requires int, bool or scalar generic slot");
+                if (!generic) value.return_class = type;
                 value.return_type = ScalarType::I64;
             }
         }
@@ -1087,8 +1087,10 @@ private:
                     binding.class_name = type;
                     if (!accept("new")) {
                         binding.initializer = expression();
-                        if (binding.initializer->kind != Expression::Kind::ArrayCall || binding.initializer->name != "get")
-                            fail("native class initializer requires new or immutable record array get");
+                        if (binding.initializer->kind != Expression::Kind::Call &&
+                                binding.initializer->kind != Expression::Kind::Conditional &&
+                                binding.initializer->kind != Expression::Kind::ArrayCall)
+                            fail("native class initializer requires new or immutable record value");
                         binding.record_view = true;
                     } else {
                     if (type_identifier() != type) fail("class constructor type mismatch");

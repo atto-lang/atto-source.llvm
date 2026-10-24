@@ -226,6 +226,7 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
     std::string catch_binding;

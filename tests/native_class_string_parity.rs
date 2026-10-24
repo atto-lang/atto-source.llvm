@@ -19,6 +19,7 @@ fn run(command: &mut Command) -> Output {
 fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
     let mut sanitize = false;
+    let mut aot_driver = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -26,6 +27,7 @@ fn main() {
             "--clang" => clang = args.next(),
             "--runtime" => runtime = args.next(),
             "--java-command" => java = args.next(),
+            "--aot-driver" => aot_driver = args.next(),
             "--sanitize" => sanitize = true,
             _ => panic!("unknown argument {arg}"),
         }
@@ -48,6 +50,27 @@ fn main() {
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
+        (
+            "imported-class-return-and-borrowed-method",
+            r#"import class Foo from './main-1.ores';
+              fnc create():Foo{return new Foo();}
+              pub routine main():int{val Foo value=create();stdio.println(value.bar());return 0;}"#,
+            "hiiii 2hiiii\n",
+        ),
+        (
+            "lazy-record-return-forwarding",
+            r#"define class Value as pub val int code;end
+              fnc fresh():Value{return new Value(42);}
+              fnc choose_record(bool use_new):Value{return use_new?new Value(42):fresh();}
+              fnc same_owner(bool first):Value{val Value value=new Value(42);return first?value:value;}
+              pub routine main():int{val Value a=choose_record(true);val Value b=choose_record(false);val Value c=same_owner(true);val Value d=same_owner(false);return a.code==42&&b.code==42&&c.code==42&&d.code==42?0:1;}"#,
+            "",
+        ),
+        (
+            "immutable-record-returns-after-callee-cleanup",
+            include_str!("fixtures/native-class-string/record-return.ores"),
+            "segment\nlocal\n",
+        ),
         (
             "owned-path-pattern-borrowed-methods",
             include_str!("fixtures/native-class-string/owned-path-pattern.ores"),
@@ -215,7 +238,7 @@ fn main() {
     ];
     // Java does not yet admit named value arguments. Keep that ABI regression
     // explicit and native-only rather than weakening the common-source gate.
-    let named_source = positives[2].1.replace(
+    let named_source = positives.iter().find(|case| case.0 == "nested-borrows-distinguish-array-regions").unwrap().1.replace(
         "sum(rt borrow parent,rt borrow child)",
         "sum(right:rt borrow child,left:rt borrow parent)",
     );
@@ -291,7 +314,64 @@ fn main() {
             comparisons += 1;
         }
     }
+    let mut standalone_runs = 0;
+    if let Some(driver) = &aot_driver {
+        #[cfg(unix)] {
+            use std::os::unix::{fs::PermissionsExt, fs::symlink};
+            let source = scratch.0.join("protected.ores");
+            fs::write(&source, "pub fnc main():int{return 0;}").unwrap();
+            let fake_compiler = scratch.0.join("compiler");
+            let fake_clang = scratch.0.join("clang");
+            let sentinel = b"#!/bin/sh\necho 'must not execute' >&2\nexit 99\n";
+            for path in [&fake_compiler, &fake_clang] {
+                fs::write(path, sentinel).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let symbolic = scratch.0.join("compiler-symlink");
+            symlink(&fake_compiler, &symbolic).unwrap();
+            let hard = scratch.0.join("clang-hardlink");
+            fs::hard_link(&fake_clang, &hard).unwrap();
+            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+                let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
+                    .env("CLANG", &fake_clang).arg(&source).arg(destination));
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
+                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                assert_eq!(fs::read(destination).unwrap(), sentinel);
+            }
+        }
+        let scalar_record = r#"define class Number as pub val int code;end
+          fnc create():Number{return new Number(42);}
+          pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
+        for (source, expected) in [
+            (scalar_record, ""),
+            (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
+        ] {
+            let path = scratch.0.join("standalone.ores");
+            let binary = scratch.0.join("standalone");
+            fs::write(&path, source).unwrap();
+            let built = run(Command::new(driver)
+                .env("ORESLANG_LLVMC", fs::canonicalize(&compiler).unwrap())
+                .env("CLANG", &clang).arg(&path).arg(&binary));
+            assert!(built.status.success(), "AOT driver: {}", String::from_utf8_lossy(&built.stderr));
+            fs::remove_file(&path).unwrap();
+            let executed = run(Command::new(&binary).env_clear().env("PATH", ""));
+            assert_eq!(executed.status.code(), Some(0), "source-free AOT: {}", String::from_utf8_lossy(&executed.stderr));
+            assert_eq!(executed.stdout, expected.as_bytes());
+            assert!(executed.stderr.is_empty());
+            standalone_runs += 1;
+        }
+    }
     let negatives = [
+        ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-mutable-identity", "define class Item as pub let int code=42;end fnc bad():Item{return new Item();}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-owned-array", "define class Box as val Array<int> values;end fnc bad():Box{val Array<int> a=new Array<int>();val Box b=new Box(a);return b;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-incoming-borrow", "define class Item as pub val int code;end fnc bad(borrow Item value):Item{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-moved-local", "define class Item as pub val int code;end fnc bad():Item{let mut Item value=new Item(1);let mut Item moved=rt take value;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-not-os-status", "define class Item as pub val int code;end pub fnc main():Item{return new Item(42);}".to_owned(), foo.to_owned()),
+        ("record-return-handle-as-int", "define class Item as pub val int code;end fnc make():Item{return new Item(42);}pub fnc main():int{return make();}".to_owned(), foo.to_owned()),
+        ("record-return-unknown-type", "fnc bad():Missing{return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("constructor-array-use-after-move", "define class Box as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return a.size;}".to_owned(), foo.to_owned()),
         ("constructor-array-duplicate-owner", "define class Pair as val Array<int> left;val Array<int> right;end pub fnc main():int{val Array<int> a=new Array<int>();val Pair p=new Pair(a,a);return 0;}".to_owned(), foo.to_owned()),
         ("constructor-array-element-mismatch", "define class Box as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return 0;}".to_owned(), foo.to_owned()),
@@ -404,6 +484,20 @@ fn main() {
             "{name}: must fail before codegen"
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
+        let expected_boundary = match *name {
+            "record-return-integer-forgery" | "record-return-wrong-nominal" |
+            "record-return-handle-as-int" => Some("return type"),
+            "record-return-mutable-identity" => Some("immutable scalar/String fields"),
+            "record-return-owned-array" | "record-return-incoming-borrow" |
+            "record-return-moved-local" => Some("record return requires"),
+            "record-return-not-os-status" => Some("OS entrypoint requires"),
+            "record-return-unknown-type" => Some("unknown record class"),
+            _ => None,
+        };
+        if let Some(boundary) = expected_boundary {
+            assert!(String::from_utf8_lossy(&rejected.stderr).contains(boundary),
+                "{name}: wrong boundary: {}", String::from_utf8_lossy(&rejected.stderr));
+        }
         if *name == "actor-string-region-boundary" {
             assert!(
                 String::from_utf8_lossy(&rejected.stderr)
@@ -445,5 +539,5 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
-    println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
+    println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
 }

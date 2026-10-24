@@ -24,6 +24,7 @@ struct LocalOwnership {
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
+    bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
@@ -672,6 +673,7 @@ void validate_i64_ownership(const Program& program) {
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
+                entry.record_view = true;
                 entry.mode = Mode::Borrow;
                 entry.mutable_owner = false;
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -969,6 +971,31 @@ void validate_i64_ownership(const Program& program) {
                 throw std::runtime_error("native caught throw binding shadows live local");
         }
         const Locals cfg_entry = locals;
+        // Immutable leaf records are returned by value into the root record
+        // region. This exception never exports a stack address or array owner.
+        std::function<void(const Expression&, Locals&)> check_return;
+        check_return = [&](const Expression& expr, Locals& state) {
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable) {
+                auto& owner = local(expr, state);
+                if (owner.class_name != function.return_class || owner.moved || owner.exclusive_loan ||
+                        (owner.mode != Mode::Value && !owner.record_view) || owner.shared_loans ||
+                        !owner.moved_fields.empty() || !owner.class_array_fields.empty() ||
+                        owner.final_fields.size() != owner.class_fields.size())
+                    reject(expr, "record return requires a live immutable leaf value without active exclusive loans");
+                if (owner.mode == Mode::Value) owner.moved = true;
+                return;
+            }
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Conditional) {
+                if (expr.condition) check_value(*expr.condition, state, functions);
+                else { check_value(*expr.condition_lhs, state, functions); check_value(*expr.condition_rhs, state, functions); }
+                Locals yes = state, no = state;
+                check_return(*expr.when_true, yes); check_return(*expr.when_false, no);
+                if (!same_affine_state(yes, no)) reject(expr, "record return ternary ownership mismatch");
+                state = std::move(yes);
+                return;
+            }
+            check_value(expr, state, functions);
+        };
         // Analyze each taken return independently. Even an explicit scalar
         // rt take in one return branch does not move that value in the
         // fallthrough path, which has a different live ownership state.
@@ -980,14 +1007,14 @@ void validate_i64_ownership(const Program& program) {
                 check_pure_guard(*guard.rhs, locals, functions);
             }
             Locals taken = locals;
-            check_value(*guard.result, taken, functions);
+            check_return(*guard.result, taken);
             check_deferred_exit(taken);
         }
         if (function.result) {
             if (function.caught_throw_value)
                 check_caught_throw_scalar_read(*function.result, locals, functions);
             else
-                check_value(*function.result, locals, functions);
+                check_return(*function.result, locals);
         }
         check_deferred_exit(locals);
         // Build the real guarded-return edge graph and run the reusable
@@ -1081,8 +1108,35 @@ void validate_i64_ownership(const Program& program) {
                 operations.push_back({OpKind::Read, cleanup.receiver + "." + cleanup.field});
             add_effects(*cleanup.expression, operations);
         };
+        auto add_return_effects = [&](const Expression& expr, Ops& operations) {
+            if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable &&
+                    cfg_entry.at(expr.name).mode == Mode::Value)
+                operations.push_back({OpKind::MoveObject, expr.name});
+            else add_effects(expr, operations);
+        };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);
+        // Record returns can move an owner in either lazy arm. Preserve those
+        // terminal edges instead of flattening both arms into sequential reads.
+        std::function<void(const Expression*, std::size_t)> append_return_path;
+        append_return_path = [&](const Expression* expr, std::size_t block) {
+            if (expr && !function.return_class.empty() && expr->kind == Expression::Kind::Conditional) {
+                if (expr->condition) add_effects(*expr->condition, cfg.blocks[block].operations);
+                else {
+                    add_effects(*expr->condition_lhs, cfg.blocks[block].operations);
+                    add_effects(*expr->condition_rhs, cfg.blocks[block].operations);
+                }
+                const std::size_t yes = cfg.blocks.size(), no = yes + 1;
+                cfg.blocks.resize(no + 1);
+                cfg.blocks[block].successors = {yes, no};
+                append_return_path(expr->when_true.get(), yes);
+                append_return_path(expr->when_false.get(), no);
+                return;
+            }
+            if (expr) add_return_effects(*expr, cfg.blocks[block].operations);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
+                add_cleanup_effects(**it, cfg.blocks[block].operations);
+        };
         for (std::size_t i = 0; i < guard_count; ++i) {
             const auto& guard = function.early_returns[i];
             auto& condition = cfg.blocks[2 * i];
@@ -1093,15 +1147,9 @@ void validate_i64_ownership(const Program& program) {
                 add_effects(*guard.rhs, condition.operations);
             }
             condition.successors = {2 * i + 1, 2 * i + 2};
-            add_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
-            // Preserve deferred call inputs after each early-return value.
-            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-                add_cleanup_effects(**it, cfg.blocks[2 * i + 1].operations);
+            append_return_path(guard.result.get(), 2 * i + 1);
         }
-        if (function.result)
-            add_effects(*function.result, cfg.blocks[guard_count * 2].operations);
-        for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-            add_cleanup_effects(**it, cfg.blocks[guard_count * 2].operations);
+        append_return_path(function.result.get(), guard_count * 2);
         // Every reachable terminal CFG path must end with an explicit
         // conditional drop of the experimental heap-owned places. The
         // emitter backs each DropIfOwned with a runtime live flag; scalar

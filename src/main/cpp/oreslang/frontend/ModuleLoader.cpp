@@ -233,6 +233,7 @@ private:
     }
     void qualify_function(const Unit& unit, Function& fn) {
         binding_name(unit, fn.name);
+        if (!fn.return_class.empty()) fn.return_class = class_type(unit, fn.return_class);
         if (!fn.method_owner.empty()) fn.method_owner = class_type(unit, fn.method_owner);
         for (auto& parameter : fn.parameters) {
             binding_name(unit, parameter.name);
