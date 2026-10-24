@@ -217,6 +217,12 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         add_effect(facts, FunctionEffect::Alloc);
     if (statement.kind == Statement::Kind::Defer)
         facts.bounded_cleanup = false;
+    if (statement.kind == Statement::Kind::ForEach) {
+        add_effect(facts, FunctionEffect::StateRead);
+        // Synchronous array iteration is not yet a certified scheduler/fuel
+        // loop. Do not admit it into strict realtime or pretend it can yield.
+        facts.unsupported_runtime = true;
+    }
 
     for (const auto& nested : statement.then_statements) {
         scan_statement(nested, facts);

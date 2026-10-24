@@ -787,14 +787,61 @@ void validate_i64_ownership(const Program& program) {
             function.statements.end(), [](const Statement& stmt) {
                 return stmt.kind == Statement::Kind::Conditional;
             });
-        auto check_effect = [&](const Statement& stmt, Locals& state) {
+        std::function<void(const Statement&, Locals&)> check_effect;
+        auto scoped_entry = [&](const LocalBinding& binding) {
+            LocalOwnership entry;
+            entry.class_name = binding.class_name;
+            if (!binding.class_name.empty()) {
+                if (!class_fields.count(binding.class_name))
+                    throw std::runtime_error("native scoped value has unknown class");
+                entry.mode = Mode::Borrow; entry.record_view = true;
+                entry.class_fields = class_fields.at(binding.class_name);
+                entry.class_array_fields = class_arrays.at(binding.class_name);
+                entry.final_fields = class_finals.at(binding.class_name);
+                entry.public_fields = function.method_owner == binding.class_name
+                    ? class_fields.at(binding.class_name) : class_public.at(binding.class_name);
+            }
+            return entry;
+        };
+        auto scoped_effects = [&](const std::vector<Statement>& body, Locals& state) {
+            for (const auto& action : body) check_effect(action, state);
+            for (const auto& action : body) if (action.kind == Statement::Kind::ScopedLocal)
+                state.erase(action.branch_local->name);
+        };
+        check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::Conditional) {
+                if (stmt.condition) check_value(*stmt.condition, state, functions);
+                else { check_pure_guard(*stmt.condition_lhs, state, functions); check_pure_guard(*stmt.condition_rhs, state, functions); }
+                Locals yes = state, no = state;
+                scoped_effects(stmt.then_statements, yes); scoped_effects(stmt.else_statements, no);
+                if (!same_affine_state(yes, no))
+                    throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch");
+                state = std::move(yes); return;
+            }
+            if (stmt.kind == Statement::Kind::ForEach) {
+                auto& owner = array_owner(*stmt.expression, state, false);
+                ++owner.shared_loans;
+                const Locals entrance = state;
+                Locals body = entrance;
+                const auto& iterator = *stmt.branch_local;
+                if (!body.emplace(iterator.name, scoped_entry(iterator)).second)
+                    throw std::runtime_error("native for-of element shadows live owner");
+                scoped_effects(stmt.then_statements, body);
+                body.erase(iterator.name);
+                if (!same_affine_state(entrance, body))
+                    throw std::runtime_error("ownership violation: for-of back-edge must preserve outer owners and loans");
+                // No mutation/move can retire this owner while the read loan is
+                // active. Repeated iterations start in the same affine state.
+                --owner.shared_loans;
+                return;
+            }
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const LocalBinding& local = *stmt.branch_local;
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
                 check_value(*local.initializer, state, functions);
-                state.emplace(local.name, LocalOwnership{});
+                state.emplace(local.name, scoped_entry(local));
                 return;
             }
             if (stmt.kind == Statement::Kind::ArrayCommitFilled) {
@@ -871,6 +918,8 @@ void validate_i64_ownership(const Program& program) {
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     check_call(call, state, functions);
+                } else if (call.kind == Expression::Kind::Console) {
+                    check_value(call, state, functions);
                 } else {
                     throw std::runtime_error("invalid native call statement");
                 }
@@ -894,10 +943,8 @@ void validate_i64_ownership(const Program& program) {
                 }
                 Locals then_state = locals;
                 Locals else_state = locals;
-                for (const auto& arm : stmt.then_statements)
-                    check_effect(arm, then_state);
-                for (const auto& arm : stmt.else_statements)
-                    check_effect(arm, else_state);
+                scoped_effects(stmt.then_statements, then_state);
+                scoped_effects(stmt.else_statements, else_state);
                 // Scoped i64 locals have complete lexical lifetime in their
                 // own arm; they may not influence the predecessor join or
                 // be observable on later exit cleanup paths.

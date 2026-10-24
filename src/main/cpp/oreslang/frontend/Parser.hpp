@@ -165,10 +165,11 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach };
     Kind kind;
-    // ScopedLocal is a trivially-owned i64 local limited to one if/else arm.
-    // Non-Copy branch-local classes are still rejected until drop glue exists.
+    // Scoped scalar or readonly leaf record. ForEach uses an implicit element
+    // binding (no initializer); expression is its named array source and
+    // then_statements is the body. No owning scoped class drop is implied.
     std::unique_ptr<LocalBinding> branch_local;
     std::unique_ptr<Expression> expression;
     std::string receiver;
