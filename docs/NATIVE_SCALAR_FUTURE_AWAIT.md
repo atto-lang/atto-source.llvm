@@ -10,11 +10,14 @@ A producer thread may settle the frame but may **never execute a guest
 continuation**. Only the owning `NativeActorGroup` parent CONTROL lane may
 consume the terminal outcome. When CONTROL is full, the outcome remains ready
 for retry. An explicit cancellation after enqueue suppresses the queued guest
-callback. If group close drops a reserved CONTROL callback, the generation-
-fenced `NativeActorRef::control_delivery_lost()` signal can be consumed via
-`cancel_if_control_lost()`, preventing the frame from remaining permanently
-scheduled. The actor supervisor still owns that teardown action; this isolated
-primitive does not autonomously subscribe to actor lifecycle events.
+callback. Group close publishes the generation-fenced
+`NativeActorRef::delivery_closed()` barrier before detached shutdown work.
+The supervisor can consume that barrier via `cancel_if_owner_detached()`,
+preventing pending, ready, or scheduled frames from surviving an owner that
+can no longer admit CONTROL delivery. `control_delivery_lost()` remains a
+diagnostic for an actually dropped reserved CONTROL item, not the authority
+for revoking every Future. This isolated primitive still does not autonomously
+subscribe to actor lifecycle events.
 
 This is **not** a zero-allocation result, a full compiler-owned typed MIR
 continuation, a safe borrow-across-await implementation, a transport/I/O
