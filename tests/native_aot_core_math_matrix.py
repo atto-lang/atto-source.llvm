@@ -108,13 +108,28 @@ def must_run(argv, *, timeout=60, cwd=None):
     return result.stdout
 
 
+def ores_i64_literal(value):
+    """Render signed i64 without a positive token outside the lexer range.
+
+    Native Parser.cpp parses a unary negative expression *after* parsing its
+    positive Integer token via std::from_chars<int64_t>. Consequently, the
+    literal '-9223372036854775808' would fail before unary negation. Encode
+    i64::MIN from individually representable, non-overflowing expressions.
+    """
+    if type(value) is not int or not MIN_I64 <= value <= MAX_I64:
+        raise ValueError("not a representable Oreslang signed-i64 literal")
+    if value == MIN_I64:
+        return "(-9223372036854775807 - 1)"
+    return str(value)
+
+
 def one_execution(compiler, clang, source, fn, args, expected, working, label, level):
     # An Oreslang comparison is checked in the *guest*; only its Boolean 0/1
     # result is returned as process status, avoiding i64 exit-code truncation.
-    call = fn + "(" + ", ".join(map(str, args)) + ")"
+    call = fn + "(" + ", ".join(map(ores_i64_literal, args)) + ")"
     main = ("\nfnc main(): int {\n"
             + "  const actual: int = " + call + ";\n"
-            + "  if (actual eq " + str(expected) + ") "
+            + "  if (actual eq " + ores_i64_literal(expected) + ") "
             + "{ return 0; } fi\n"
             + "  return 1;\n}\n")
     source_path = working / (label + ".ores")
@@ -134,12 +149,43 @@ def one_execution(compiler, clang, source, fn, args, expected, working, label, l
     return p.returncode
 
 
+def literal_source_self_test():
+    cases = read_cases()
+    samples = [MIN_I64, MIN_I64 + 1, -1, 0, 1, MAX_I64 - 1, MAX_I64]
+    for _case_id, _fn, args, expected in cases:
+        samples.extend(args)
+        samples.append(expected)
+    for value in samples:
+        output = ores_i64_literal(value)
+        if value == MIN_I64:
+            if output != "(-9223372036854775807 - 1)":
+                raise AssertionError("i64::MIN not rendered as admissible arithmetic")
+        elif output != str(value):
+            raise AssertionError("other signed-i64 literals were changed")
+        tokens = re.findall(r"(?<![0-9])[0-9]+", output)
+        if any(int(t) > MAX_I64 for t in tokens):
+            raise AssertionError("native source contains out-of-domain literal token")
+    for rejected in (MIN_I64 - 1, MAX_I64 + 1, True, "1", None):
+        try:
+            ores_i64_literal(rejected)
+        except ValueError:
+            continue
+        raise AssertionError("non-i64 host input admitted into native source")
+    print(f"NATIVE-I64-LITERAL-SOURCE-SELFTEST-OK cases={len(cases)}")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--compiler", required=True)
-    parser.add_argument("--clang", required=True)
-    parser.add_argument("--evidence-dir", required=True)
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--compiler")
+    parser.add_argument("--clang")
+    parser.add_argument("--evidence-dir")
     options = parser.parse_args()
+    if options.self_test:
+        literal_source_self_test()
+        return
+    if not all((options.compiler, options.clang, options.evidence_dir)):
+        parser.error("--compiler, --clang and --evidence-dir are required for guest execution")
     cases = read_cases()
     source_blob = FIXTURE.read_bytes()
     source = source_blob.decode("ascii")
