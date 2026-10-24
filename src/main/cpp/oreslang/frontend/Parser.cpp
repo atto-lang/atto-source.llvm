@@ -590,8 +590,6 @@ private:
         if (token_.text == "final") {
             fail("native final actor fields require typed field initialization and ownership lowering");
         }
-        if (actor.fields.empty())
-            fail("native actor currently requires at least one scalar int field in addition to any ActorRef capabilities");
         Function method;
         method.offset = token_.offset;
         method.exported = accept("pub");
