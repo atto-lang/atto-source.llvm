@@ -174,6 +174,16 @@ end
                 "CONSTRAINT_REPRESENTATION_UNSUPPORTED",
             ),
             (
+                "generic_alias",
+                "declare type Box<T> = int with min 0;\n",
+                "TYPE_ONLY_GENERIC_UNSUPPORTED",
+            ),
+            (
+                "trailing_and",
+                "declare type Code = int with min 0 and;\n",
+                "CONSTRAINT_PREDICATE_REQUIRED",
+            ),
+            (
                 "runtime_parameter",
                 """declare type Code = int with min 0 and max 5;
 fnc read(Code code): int { return code; }
@@ -206,7 +216,7 @@ define mtd double on Code(): int { return self + self; }
 
     print(
         "PASS native constraint descriptor parity: 6 positive metadata cases, "
-        "3 shared golden vectors, and 9 fail-closed negatives"
+        "3 shared golden vectors, and 11 fail-closed negatives"
     )
     return 0
 
