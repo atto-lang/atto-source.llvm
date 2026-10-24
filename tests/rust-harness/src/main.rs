@@ -519,6 +519,14 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
              pub fnc main():int {let X x=new X();return x.read()+x.read(0);}\n",
         ),
         (
+            "mtd-arrow-end-delimited",
+            "define class X as\n  pub mtd zero(self) -> void ::\n  end\n\
+             pub mtd answer(self) -> int ::\n    return 42;\n  end\n\
+             pub mtd echo(self,int value) -> int ::\n    return value;\n  end\n\
+             end\n\
+             pub fnc main():int {let X x=new X();x.zero();return x.answer()+x.echo(0);}\n",
+        ),
+        (
             "mutable-inline-self",
             "define class Counter as\n  let int value=40;\n\
              pub bump(mut self, int n):void{self.value=self.value+n;return;}\n\
@@ -596,6 +604,24 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             "native mtd marker must precede a method signature",
         ),
         (
+            "end-delimited-colon-must-be-arrow",
+            "define class X as mtd foo():void :: end end\n\
+             pub fnc main():int{return 42;}\n",
+            "native '::' method requires '->' return syntax",
+        ),
+        (
+            "end-delimited-nontrivial-void-body",
+            "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
+             pub fnc main():int{return 42;}\n",
+            "native end-delimited method supports only one terminal return",
+        ),
+        (
+            "end-delimited-nonvoid-missing-return",
+            "define class X as mtd foo() -> int :: end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected 'return'",
+        ),
+        (
             "trailing-receiver-comma",
             "define class X as foo(self,):void {} end\n\
              pub fnc main():int{return 42;}\n",
@@ -625,7 +651,7 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
                 out.status.code(), stdout(&out), stderr(&out)),
         )?;
     }
-    println!("native inline self: 5 compiled/AOT-executed positive cases, 8 fail-closed negatives");
+    println!("native inline self: 6 compiled/AOT-executed positive cases, 11 fail-closed negatives");
     Ok(())
 }
 
