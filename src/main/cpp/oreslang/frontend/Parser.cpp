@@ -1063,6 +1063,8 @@ private:
             if (accept(","))
                 fail("native typed throws supports only one ActorTerminated type");
         }
+        if (token_.text == "throws")
+            fail("duplicate native typed throws declaration");
         if (token_.text == "raises" || token_.text == "panics")
             fail("native typed exceptional effect declaration is not yet enabled");
 
@@ -2767,6 +2769,9 @@ private:
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
+        if (!fn.ready_await_actor.empty() && !fn.throws_types.empty())
+            throw std::runtime_error(
+                "await get_ready typed lifecycle effect cannot be combined with using effects");
         if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                 || !fn.actor_sends.empty() || !fn.actor_stops.empty()
                 || !fn.actor_field_writes.empty()) {
