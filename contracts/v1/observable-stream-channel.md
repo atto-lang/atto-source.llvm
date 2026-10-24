@@ -190,7 +190,11 @@ remote receipt, or peer application processing.
    an outstanding read. A new reader cannot use a stale lease.
 4. Bounded byte quotas include queued and *checked-out/unacknowledged* payloads;
    credit returns only after handler / device / transport ownership fences.
-   Pending producer registrations also need finite quotas.
+   Pending producer registrations also need finite quotas. A domain-local
+   generic Channel may retain a value only while that value remains charged to
+   its owning heap/arena; a stream, mailbox or transport adapter that copies,
+   freezes or serializes the value must charge the copied bytes to its own
+   finite budget before retaining the producer registration.
 5. FAIR select rotates deterministically; PRIORITY and RANDOM require
    explicit selection. A full waiter quota may reject a pending registration,
    **but cannot prevent an immediately ready rendezvous from committing**.
