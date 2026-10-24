@@ -86,6 +86,15 @@ public:
     }
 
     /**
+     * Host-runtime capability identity. Numeric actor identity is insufficient
+     * if a buggy host ever reuses a generation after physical retirement; the
+     * shared ticket distinguishes the exact admitted actor lifetime.
+     */
+    bool same_capability(const NativeActorRef& other) const noexcept {
+        return *this == other && ticket_ == other.ticket_;
+    }
+
+    /**
      * Register an enqueue-only host continuation. Never run guest code from
      * this callback; the caller must post guest resumption to its scheduler.
      * May be called after actor termination without resurrecting the actor.
