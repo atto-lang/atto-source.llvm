@@ -168,6 +168,29 @@ pub fnc main(): int { return 0; }
         root = Path(td)
         for label, source, expected, marker in positives:
             compile_and_run(compiler, clang, root, label, source, expected, marker)
+
+        # An alias extension sharing a name/arity with an ordinary Array member
+        # must not capture or reject the non-scalar Array receiver.
+        array_collision = compile_source(
+            compiler,
+            root / "array_member_collision.ores",
+            """declare type Code = int;
+define mtd add on Code(int delta): int { return self + delta; }
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  return values.get(0);
+}
+""",
+        )
+        require(array_collision.returncode == 0,
+                "array member collided with alias extension: "
+                + repr(array_collision.stderr[:1200]))
+        require(array_collision.stderr == b"",
+                "array member collision compiler emitted stderr")
+        require(b"@oreslang_int_array_try_add" in array_collision.stdout,
+                "array add lowering was captured by alias extension dispatch")
+
         source_path = root / "negative.ores"
         for label, source, diagnostic in negatives:
             rejected = compile_source(compiler, source_path, source)
@@ -177,7 +200,8 @@ pub fnc main(): int { return 0; }
                     label + " wrong diagnostic: " + repr(rejected.stderr[:1200]))
 
     print(
-        "PASS 4 executable alias-extension cases and 5 fail-closed receiver/slot cases"
+        "PASS 4 executable alias-extension cases, 1 array-collision case, "
+        "and 5 fail-closed receiver/slot cases"
     )
     return 0
 
