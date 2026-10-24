@@ -1,9 +1,10 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
-    path::PathBuf,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 struct Scratch(PathBuf);
 impl Drop for Scratch {
@@ -16,6 +17,36 @@ fn run(command: &mut Command) -> Output {
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
 }
+// Negative admission is adversarial: a broken O_NONBLOCK/fstat guard must
+// fail the test quickly rather than consume an entire macOS/Linux CI job.
+// Redirect both streams to files/null to avoid pipe-buffer deadlocks.
+#[cfg(unix)]
+fn run_bounded_no_ir(command: &mut Command, scratch: &Path, label: &str) {
+    let stdout_path = scratch.join("bounded-negative-stdout");
+    let stdout = fs::File::create(&stdout_path).expect("create negative output file");
+    let mut child = command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{label}: cannot spawn compiler: {error}"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        match child.try_wait().expect("poll child") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{label}: compiler blocked beyond eight seconds");
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    assert_eq!(status.code(), Some(1), "{label}: expected a rejected source");
+    assert_eq!(fs::metadata(&stdout_path).unwrap().len(), 0,
+               "{label}: compiler emitted partial IR");
+    fs::remove_file(&stdout_path).unwrap();
+}
+
 fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
     let mut sanitize = false;
@@ -331,9 +362,8 @@ fn main() {
 
         let made_fifo = Command::new("mkfifo").arg(&imported).status().unwrap();
         assert!(made_fifo.success(), "could not prepare FIFO import test");
-        let rejected = run(Command::new(&compiler).arg(&entry));
-        assert_eq!(rejected.status.code(), Some(1), "FIFO import admitted");
-        assert!(rejected.stdout.is_empty(), "FIFO import emitted partial IR");
+        run_bounded_no_ir(Command::new(&compiler).arg(&entry),
+                          &scratch.0, "FIFO import");
         fs::remove_file(&imported).unwrap();
 
         fs::hard_link(&entry, &imported).unwrap();
