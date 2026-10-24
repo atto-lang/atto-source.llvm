@@ -83,7 +83,7 @@ for toolchain in gcc clang; do
   mkdir -p "$dest"
   shared=(-O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer
           -Wall -Wextra -Wpedantic -Werror -I"$source_root")
-  for name in NativeOresVM NativeActorScheduler; do
+  for name in NativeOresVM NativeActorScheduler NativeActorFuture; do
     "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c "$runtime/$name.c" -o "$dest/$name.o"
   done
   "$cc" -std=c11 "${shared[@]}" -c "$test_source" -o "$dest/lifecycle.o"
@@ -196,6 +196,8 @@ for toolchain in gcc clang; do
     -I"$source_root" \
     tests/actor_max_threads_source_admission_test.cpp \
     "$source_root/oreslang/frontend/Parser.cpp" \
+    "$source_root/oreslang/frontend/MethodResolver.cpp" \
+    "$source_root/oreslang/types/NativeScalarTypes.cpp" \
     "$source_root/oreslang/types/OwnershipChecker.cpp" \
     -o "$tmp/actor-max-threads-$toolchain"
   ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
