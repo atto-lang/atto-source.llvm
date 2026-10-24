@@ -17,7 +17,7 @@ import tempfile
 FIXTURES = {
     "src/int_linked_queue.ores": (
         "2a250d3d8721ecd0817dce6c3adc50b5dfe7f52f",
-        "oreslang-llvmc: final class field requires declaration-site initializer at byte 352",
+        "oreslang-llvmc: expected '(' at byte 1102",
     ),
     "tests/smoke.ores": (
         "55c417dde5210dc71666b256d7ee90bce9f812f2",

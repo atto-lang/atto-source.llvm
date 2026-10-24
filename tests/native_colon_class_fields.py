@@ -137,10 +137,10 @@ pub fnc main(): int {
 }
 """, "cannot reassign final class field"),
     "bad-native-field-type": ("""define class Foo as
-  string a: "100";
+  string a: 100;
 end
 pub fnc main(): int { return 0; }
-""", "expected 'int'"),
+""", "class field initializer type"),
 }
 
 def main():
