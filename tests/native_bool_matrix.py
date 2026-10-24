@@ -211,14 +211,13 @@ pub fnc main(): bool {
   return true == 1;
 }
 """, "equality operands require the same scalar type"),
-    "reject-bool-borrow-abi": ("""
-fnc borrowed(borrow bool flag): bool {
-  return flag;
-}
+    "reject-overlapping-bool-loans": ("""
+fnc borrowed(borrow mut bool first, borrow mut bool second): int { return 0; }
 pub fnc main(): int {
-  return 0;
+  val flag: bool = false;
+  return borrowed(rt borrow mut flag, rt borrow mut flag);
 }
-""", "native bool borrow ABI is not yet admitted"),
+""", "conflicting active native borrow"),
     "reject-hidden-call-in-declared-effects-arm": ("""
 fnc leaf(): int {
   return 1;
@@ -253,6 +252,12 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     src = root / (name + ".ores")
     src.write_text(source, encoding="utf-8")
     produced = execute([compiler, "--tree-shake", str(src)])
+    if "define class" in source:
+        # Main's conservative tree shaker deliberately rejects classes until
+        # constructor roots are modeled. Still execute the unshaken program.
+        assert produced.returncode != 0 and not produced.stdout, name
+        assert "rejects class declarations until class initializer roots are modeled" in produced.stderr, (name, produced.stderr)
+        produced = execute([compiler, str(src)])
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
 
     ll = root / (name + ".ll")

@@ -29,7 +29,7 @@ The core proof vocabulary is:
 
 - Moving the Box transfers ownership without copying T.
 - Drop destroys T exactly once.
-- Shared/exclusive borrows dereference to `&T` / `&mut T`.
+- Shared/exclusive borrows dereference to `borrow T` / `borrow mut T`.
 - Box does not itself imply Share.
 - An actor-boundary move of unique storage requires a compiler/runtime
   allocation-domain transfer proof; raw actor-private pointers never escape.
@@ -64,8 +64,8 @@ metadata; it does not require runtime reflection.
 
 Examples of intended forms:
 
-    &dyn Handler
-    &mut dyn Handler
+    borrow dyn Handler
+    borrow mut dyn Handler
     Box<dyn Handler>
     Arc<dyn Handler + Send + Sync + Share>
 
@@ -80,7 +80,7 @@ remains compatible with closed-world tree shaking.
 
 ## Interior mutability and pinning
 
-A shared `&T` never regains ordinary mutation. Safe shared mutation requires
+A shared `borrow T` never regains ordinary mutation. Safe shared mutation requires
 compiler-recognized synchronization/interior-mutability types.
 
 `Pin` exists for address-stable values needed by async continuation frames,

@@ -1,0 +1,11 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+fnc sum(borrow int a, borrow int b): int {
+  return a + b;
+}
+pub fnc main(): int {
+  let Pair pair = new Pair();
+  return sum(rt borrow pair.left, rt borrow pair.right);
+}

@@ -90,13 +90,6 @@ pub fnc main(): int {
   return n;
 }
 """, "ownership violation: conditional CFG predecessor ownership mismatch"),
-    "side-effect-condition": ("""
-fnc one(): int { return 1; }
-pub fnc main(): int {
-  if (one() eq 1) { one(); } else { one(); } fi
-  return 42;
-}
-""", "native guarded condition must be pure"),
     "missing-else": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
@@ -137,6 +130,10 @@ pub fnc main(): int {
 }
 """, "native conditional statements cannot follow return guards"),
 }
+
+
+# Conditions execute once before splitting the affine ownership state.
+POSITIVE["side-effect-condition"] = '\nfnc one(): int { return 1; }\npub fnc main(): int {\n  if (one() eq 1) { one(); } else { one(); } fi\n  return 42;\n}\n'
 
 
 def execute(cmd):

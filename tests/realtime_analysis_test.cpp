@@ -131,7 +131,7 @@ int main() {
         const auto facts = realtime_detail::direct_facts(entry, 8);
         require(facts.calls.size() == 1,
                 "ternary-only call must participate in realtime call graph");
-        require(facts.calls.front() == native_function_slot("branch_only_callee", 0),
+        require(facts.calls.front() == realtime_detail::function_key("branch_only_callee", 0),
                 "ternary-only call identity");
     }
 
@@ -167,9 +167,9 @@ int main() {
         const auto facts = realtime_detail::direct_facts(entry, 8);
         require(facts.calls.size() == 2,
                 "bool statement/guard condition calls must enter realtime call graph");
-        require(facts.calls[0] == native_function_slot("statement_condition_only", 0),
+        require(facts.calls[0] == realtime_detail::function_key("statement_condition_only", 0),
                 "statement bool condition call identity");
-        require(facts.calls[1] == native_function_slot("guard_condition_only", 0),
+        require(facts.calls[1] == realtime_detail::function_key("guard_condition_only", 0),
                 "guard bool condition call identity");
     }
 

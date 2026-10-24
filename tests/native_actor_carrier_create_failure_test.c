@@ -32,6 +32,24 @@ static void until(atomic_int* flag) {
 }
 int main(void) {
     State state = {0};
+
+    /* Prestart itself fails closed: no work is admitted, and a later retry can
+     * complete the startup phase before any actor message exists. */
+    OresNativeActorScheduler* prestart =
+        ores_native_actor_scheduler_open(2, 2, 2, deliver, &state);
+    require(prestart != NULL);
+    ores_native_actor_scheduler_test_fail_next_create();
+    require(!ores_native_actor_scheduler_prestart_carriers(prestart));
+    require(ores_native_actor_scheduler_started_carriers(prestart) == 0);
+    require(!ores_native_actor_scheduler_all_carriers_started(prestart));
+    require(ores_native_actor_scheduler_accepted(prestart) == 0);
+    require(ores_native_actor_scheduler_prestart_carriers(prestart));
+    require(ores_native_actor_scheduler_all_carriers_started(prestart));
+    require(ores_native_actor_scheduler_started_carriers(prestart) == 2);
+    ores_native_actor_scheduler_retire(prestart);
+    require(ores_native_actor_scheduler_drain(prestart));
+    require(ores_native_actor_scheduler_try_destroy(prestart));
+
     OresNativeActorScheduler* s =
         ores_native_actor_scheduler_open(2, 2, 2, deliver, &state);
     require(s != NULL);

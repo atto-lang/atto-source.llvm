@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -24,12 +25,11 @@ namespace oreslang::runtime {
  */
 template <typename T>
 class BoundedActorPort final {
-    static_assert(std::is_nothrow_move_constructible_v<T>,
-                  "actor payload move construction must be noexcept for rollback-safe admission");
+    static_assert(std::is_move_constructible_v<T>, "actor payload must be movable");
 
     struct Envelope {
-        std::uint64_t id = 0;
-        std::size_t bytes = 0;
+        std::uint64_t id;
+        std::size_t bytes;
         std::unique_ptr<T> payload;
     };
     struct State {
@@ -41,6 +41,9 @@ class BoundedActorPort final {
         std::deque<Envelope> queue;
         std::size_t max_frames, max_bytes;
         std::size_t used_frames = 0, used_bytes = 0;
+        // Preparations reserve the same credits as queued/checked-out frames.
+        // Close may seal new work but must not reclaim a preparing message.
+        std::size_t pending_prepares = 0;
         std::uint64_t next_id = 1;
         bool closed = false;
     };
@@ -51,10 +54,9 @@ public:
         Delivery(const Delivery&) = delete;
         Delivery& operator=(const Delivery&) = delete;
         Delivery(Delivery&&) noexcept = default;
-        // Replacing a live delivery would destroy its payload while leaving
-        // the original frame/byte credits charged forever. A delivery lease
-        // may move only by construction; assignment is deliberately sealed.
-        Delivery& operator=(Delivery&&) = delete;
+        // Overwriting a live delivery would orphan its unacknowledged
+        // accounting receipt. Only move construction is safe.
+        Delivery& operator=(Delivery&&) noexcept = delete;
         T& value() {
             if (acknowledged_ || !payload_) throw std::logic_error("stale owned actor payload");
             return *payload_;
@@ -70,20 +72,16 @@ public:
          * ownership/borrow fences have acknowledged quiescence. */
         bool acknowledge_released() {
             if (acknowledged_ || !state_) return false;
-            std::unique_ptr<T> released;
-            {
-                std::lock_guard<std::mutex> guard(state_->mutex);
-                if (!state_->used_frames || state_->used_bytes < bytes_)
-                    throw std::logic_error("actor port accounting corrupted");
-                acknowledged_ = true;
-                --state_->used_frames;
-                state_->used_bytes -= bytes_;
-                released = std::move(payload_);
-            }
-            // User payload destruction is outside the admission/accounting
-            // mutex. Destructors may run arbitrary cleanup and must not be
-            // able to deadlock the port or stall unrelated producers.
-            released.reset();
+            // Terminalize the receipt before invoking potentially reentrant
+            // payload cleanup. Its bytes stay charged until destructor and
+            // external release hooks finish; never run them under our mutex.
+            acknowledged_ = true;
+            payload_.reset();
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            if (!state_->used_frames || state_->used_bytes < bytes_)
+                throw std::logic_error("actor port accounting corrupted");
+            --state_->used_frames;
+            state_->used_bytes -= bytes_;
             return true;
         }
 
@@ -110,30 +108,59 @@ public:
 
     bool offer(T&& payload, std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
-        std::lock_guard<std::mutex> guard(state_->mutex);
-        if (state_->closed) throw std::logic_error("actor port closed");
-        if (state_->next_id == 0)
-            throw std::overflow_error("actor frame identity exhausted");
-        if (state_->used_frames >= state_->max_frames ||
-            bytes > state_->max_bytes - state_->used_bytes)
-            return false;
-        // Reserve the deque node before touching caller ownership. Both the
-        // deque growth and payload allocation may throw; neither is allowed
-        // to consume a move-only sender value on failed admission.
-        state_->queue.emplace_back();
-        try {
-            auto owned = std::make_unique<T>(std::move(payload));
-            Envelope& admitted = state_->queue.back();
-            admitted.id = state_->next_id;
-            admitted.bytes = bytes;
-            admitted.payload = std::move(owned);
-        } catch (...) {
-            state_->queue.pop_back();
-            throw;
+        const auto state = state_;
+        {
+            std::lock_guard<std::mutex> guard(state->mutex);
+            if (state->closed) throw std::logic_error("actor port closed");
+            // Leave an ID for every concurrently preparing frame. Identity is
+            // assigned on publish; rejected/throwing preparations consume none.
+            if (state->next_id == 0 ||
+                state->pending_prepares >
+                    std::numeric_limits<std::uint64_t>::max() - state->next_id)
+                throw std::overflow_error("actor frame identity exhausted");
+            if (state->used_frames >= state->max_frames ||
+                bytes > state->max_bytes - state->used_bytes)
+                return false;
+            ++state->used_frames;
+            state->used_bytes += bytes;
+            ++state->pending_prepares;
         }
-        ++state_->next_id;
-        ++state_->used_frames;
-        state_->used_bytes += bytes;
+
+        // Construct user-owned T OUTSIDE the mailbox mutex. Its move
+        // constructor may invoke FFI, acquire another actor lock or re-enter
+        // this port. The reservation still enforces backpressure throughout.
+        struct Reservation {
+            std::shared_ptr<State> state;
+            std::size_t bytes;
+            bool committed = false;
+            ~Reservation() noexcept {
+                if (committed) return;
+                std::lock_guard<std::mutex> guard(state->mutex);
+                if (!state->pending_prepares || !state->used_frames ||
+                    state->used_bytes < bytes) std::terminate();
+                --state->pending_prepares;
+                --state->used_frames;
+                state->used_bytes -= bytes;
+            }
+        } reservation{state, bytes};
+
+        auto owned = std::make_unique<T>(std::move(payload));
+        Envelope frame{0, bytes, std::move(owned)};
+        {
+            std::lock_guard<std::mutex> guard(state->mutex);
+            // A concurrently running close() can seal new admissions while
+            // a previously reserved frame finishes preparing. This reservation
+            // already owns its credits, so it must be allowed to publish.
+            if (state->next_id == 0)
+                throw std::overflow_error("actor frame identity exhausted");
+            frame.id = state->next_id;
+            // No user payload destruction can occur under the mutex on
+            // allocation failure: the local frame outlives this guard.
+            state->queue.push_back(std::move(frame));
+            ++state->next_id;
+            --state->pending_prepares;
+            reservation.committed = true;
+        }
         return true;
     }
 
