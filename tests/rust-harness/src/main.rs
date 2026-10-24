@@ -294,7 +294,7 @@ fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
         "define contract _ as\n  fnc execute(int value) => int;\nend\n",
     ];
     for body in cases {
-        let full_source = format!("{body}pub fnc main(): int {{ return 0; }}\\n");
+        let full_source = format!("{body}pub fnc main(): int {{ return 0; }}\n");
         fs::write(&source, full_source).map_err(|e| e.to_string())?;
         let out = run(compiler, [source.as_os_str()])?;
         require(
@@ -310,7 +310,7 @@ fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
 
     fs::write(
         &source,
-        "define class Ordinary as\\n  pub let int value = 1;\nend\npub fnc main(): int { return 0; }\n",
+        "define class Ordinary as\n  pub let int value = 1;\nend\npub fnc main(): int { return 0; }\n",
     ).map_err(|e| e.to_string())?;
     let good = run(compiler, [source.as_os_str()])?;
     require(
