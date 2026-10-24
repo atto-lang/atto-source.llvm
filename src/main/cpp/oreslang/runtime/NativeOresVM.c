@@ -539,13 +539,21 @@ void ores_native_vm_retire(OresNativeVM* vm) {
 
 int ores_native_vm_close(OresNativeVM* vm) {
     if (!vm) return 0;
-    ores_native_vm_retire(vm);
-    /* Reject synchronous teardown from *any* owned carrier before waiting on
-     * any domain. Without this preflight, a callback in UNTRUSTED can block
-     * forever draining MAIN while MAIN waits for its callback to finish. */
+
+    /* Fail before retirement so an illegal synchronous close attempt cannot
+     * poison a still-live VM. No owned actor/CONTROL carrier may wait for its
+     * own scheduler, and the NIO bootstrap owner may not wait for its own
+     * reservation to be released. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
             return 0;
+    control_lock(vm);
+    int owns_nio_bootstrap = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self());
+    control_unlock(vm);
+    if (owns_nio_bootstrap) return 0;
+
+    ores_native_vm_retire(vm);
     /* No callback can synchronously join or destroy its own scheduler. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
