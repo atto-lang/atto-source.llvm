@@ -1400,6 +1400,65 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # Bounded-port mailbox ledger, physical ownership and supervisor CONTROL
+    # transport tests; host primitives only, not guest compiler parity.
+    target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
+    set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-mailbox-parallel-terminal-test
+        tests/native_mailbox_parallel_terminal_test.cpp)
+    target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-mailbox-parallel-terminal-test PRIVATE Threads::Threads)
+    add_test(NAME native_mailbox_parallel_terminal_races
+        COMMAND oreslang-native-mailbox-parallel-terminal-test)
+    set_tests_properties(native_mailbox_parallel_terminal_races PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-actor-port-alloc-fault-test
+        tests/native_actor_port_allocation_failure_test.cpp)
+    target_include_directories(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_ownership_allocator_rollback
+        COMMAND oreslang-native-actor-port-alloc-fault-test)
+    set_tests_properties(native_actor_port_ownership_allocator_rollback PROPERTIES TIMEOUT 15)
+
+    add_executable(oreslang-priority-actor-inbox-test tests/priority_actor_inbox_test.cpp)
+    target_include_directories(oreslang-priority-actor-inbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-priority-actor-inbox-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-priority-actor-inbox-test PRIVATE Threads::Threads)
+    add_test(NAME native_priority_user_inbox_control_isolation
+        COMMAND oreslang-priority-actor-inbox-test)
+    set_tests_properties(native_priority_user_inbox_control_isolation PROPERTIES TIMEOUT 30)
+
+    # Incarnation ticket finalization is a CAS winner-takes-all race.
+    # Register this target exactly once; stale #894 duplicated it.
+    add_executable(oreslang-actor-resource-loan-terminal-race-test
+        tests/actor_resource_loan_terminal_race_test.cpp)
+    target_include_directories(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-loan-terminal-race-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_loan_terminal_race
+        COMMAND oreslang-actor-resource-loan-terminal-race-test)
+    set_tests_properties(native_actor_resource_loan_terminal_race PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-actor-mailbox-completion-model-test
+        tests/actor_mailbox_completion_model_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-completion-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-mailbox-completion-model-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-completion-model-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_completion_model
+        COMMAND oreslang-actor-mailbox-completion-model-test)
+    set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
