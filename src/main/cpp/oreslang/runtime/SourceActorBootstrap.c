@@ -213,7 +213,6 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     current_source_phase = 1;
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     current_source_phase = 0;
-    current_source_phase = 0;
     current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(&instance->initialized, 1, memory_order_release);
@@ -243,6 +242,7 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     current_source_phase = 2;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    current_source_phase = 0;
     current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
