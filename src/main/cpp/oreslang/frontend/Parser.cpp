@@ -592,46 +592,64 @@ private:
         }
         Function method;
         method.offset = token_.offset;
-        method.exported = accept("pub");
-        if (!method.exported) fail("native actor requires pub on_message(int)");
-        // Match the Java frontend's declaration spelling contract. The native
-        // actor subset still lowers only on_message(int) and cannot admit
-        // arbitrary methods, static fnc members or suspension frames.
-        if (token_.text == "suspend" || token_.text == "suspends") {
-            fail("native suspends actor method requires continuation lowering");
+        const bool canonical_receive = token_.text == "receive";
+        if (canonical_receive) {
+            method.exported = true;
+            method.name = "on_message";
+            method.actor_mail_parameter = true;
+            method.returns_void = true;
+            require("receive");
+            require("(");
+            require("ActorMail");
+            require("<");
+            require("int");
+            require(">");
+            Parameter param;
+            param.name = identifier();
+            method.parameters.push_back(std::move(param));
+            require(")");
+            require(":");
+            require("void");
+            require("{");
+        } else {
+            method.exported = accept("pub");
+            if (!method.exported)
+                fail("native actor requires pub on_message(int) or receive(ActorMail<int>)");
+            if (token_.text == "suspend" || token_.text == "suspends") {
+                fail("native suspends actor method requires continuation lowering");
+            }
+            if (at_unsupported_critical_mode()) {
+                fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+            }
+            if (accept("static")) {
+                if (accept("method")) fail("static method is invalid; use static fnc");
+                fail("native actor static fnc requires separate member lowering");
+            }
+            if (!accept("fnc")) accept("method");
+            if (at_unsupported_critical_mode()) {
+                fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
+            }
+            method.name = identifier();
+            if (method.name != "on_message") fail("native actor supports only on_message or receive");
+            require("(");
+            if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
+            require("int");
+            Parameter param;
+            param.name = identifier();
+            method.parameters.push_back(std::move(param));
+            require(")");
+            require(":");
+            require("int");
+            require("{");
         }
-        // Actor method modifiers have their own admission boundary. Do not
-        // allow the fixed-int actor subset to parse these as method names or
-        // quietly route a read declaration through the legacy write lane.
-        if (at_unsupported_critical_mode()) {
-            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
-        }
-        if (accept("static")) {
-            if (accept("method")) fail("static method is invalid; use static fnc");
-            fail("native actor static fnc requires separate member lowering");
-        }
-        if (!accept("fnc")) accept("method"); // optional method marker
-        if (at_unsupported_critical_mode()) {
-            fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
-        }
-        method.name = identifier();
-        if (method.name != "on_message") fail("native actor supports only on_message");
-        require("(");
-        if (token_.text == "@") fail("native @Default actor method formal requires checked annotation ABI lowering");
-        require("int");
-        Parameter param;
-        param.name = identifier();
-        method.parameters.push_back(std::move(param));
-        require(")");
-        require(":");
-        require("int");
-        require("{");
         // The first compiler-lowered per-message owned value slice is
         // deliberately synchronous and immutable. Handler temporaries are
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (token_.text == "self")
+                fail("native receive self output/end requires actor output and lifecycle lowering");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -684,15 +702,20 @@ private:
             method.actor_field_writes.push_back(std::move(write));
         }
         require("return");
-        method.result = expression();
-        if (!method.locals.empty()) {
-            // This slice has one drop epilogue. No taken/moved or borrowed
-            // reference can escape the handler in its scalar return value.
-            if (!native_constructor_scalar_tree(*method.result))
-                fail("native actor owned temporary return requires pure scalar expression");
-            for (const auto& write : method.actor_field_writes)
-                if (!native_constructor_scalar_tree(*write.expression))
-                    fail("native actor owned temporary field write requires pure scalar expression");
+        if (method.returns_void) {
+            if (token_.text != ";")
+                fail("native receive(ActorMail<int>) must return void");
+        } else {
+            method.result = expression();
+            if (!method.locals.empty()) {
+                // This slice has one drop epilogue. No taken/moved or borrowed
+                // reference can escape the handler in its scalar return value.
+                if (!native_constructor_scalar_tree(*method.result))
+                    fail("native actor owned temporary return requires pure scalar expression");
+                for (const auto& write : method.actor_field_writes)
+                    if (!native_constructor_scalar_tree(*write.expression))
+                        fail("native actor owned temporary field write requires pure scalar expression");
+            }
         }
         require(";");
         require("}");
@@ -2963,7 +2986,7 @@ private:
                     throw std::runtime_error("cannot assign immutable or unknown actor field '" + write.field + "'");
                 validate_expression(*write.expression, fields, functions);
             }
-            validate_expression(*method.result, fields, functions);
+            if (method.result) validate_expression(*method.result, fields, functions);
             if (functions.count("oreslang_actor_" + actor.name + "_init") ||
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
