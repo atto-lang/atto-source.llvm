@@ -906,6 +906,8 @@ private:
         extension_offset_ = token_.offset;
         require("mtd");
         extension_method_name_ = identifier();
+        if (extension_method_name_ == "init" || extension_method_name_ == "main")
+            fail("EXTENSION_RESERVED_NAME: extension method cannot use a reserved lifecycle or entrypoint name");
         require("on");
         if (token_.text == "int" || token_.text == "bool")
             fail("EXTENSION_RECEIVER_REQUIRES_NAMED_ALIAS: primitive receivers are not extension identities");
@@ -2496,13 +2498,16 @@ private:
         return member != family->second.end() && member->second.count(arity) != 0;
     }
 
-    bool extension_name_arity_exists(const std::string& method,
-                                    std::size_t arity) const {
-        for (const auto& family : extension_methods_) {
-            const auto member = family.second.find(method);
-            if (member != family.second.end() && member->second.count(arity))
-                return true;
-        }
+    bool extension_method_exists(const std::string& receiver,
+                                 const std::string& method) const {
+        const auto family = extension_methods_.find(receiver);
+        return family != extension_methods_.end() &&
+               family->second.count(method) != 0;
+    }
+
+    bool extension_name_exists(const std::string& method) const {
+        for (const auto& family : extension_methods_)
+            if (family.second.count(method) != 0) return true;
         return false;
     }
 
@@ -2552,14 +2557,24 @@ private:
             return;
         }
 
-        if (extension_name_arity_exists(expr.name, explicit_arity) &&
-                receiver_binding != aliases.end()) {
+        if (receiver_binding != aliases.end()) {
             const std::string actual = receiver_binding->second == "$raw$"
                 ? "<raw-scalar>" : receiver_binding->second;
-            throw std::runtime_error(
-                "EXTENSION_RECEIVER_MISMATCH: method '" + expr.name +
-                "' is not defined for receiver alias '" + actual +
-                "' at byte " + std::to_string(expr.offset));
+            if (receiver_is_named_alias &&
+                    extension_method_exists(receiver_binding->second, expr.name)) {
+                throw std::runtime_error(
+                    "EXTENSION_ARITY_MISMATCH: method '" + expr.name +
+                    "' exists for receiver alias '" + actual +
+                    "' but not at explicit arity " +
+                    std::to_string(explicit_arity) + " at byte " +
+                    std::to_string(expr.offset));
+            }
+            if (extension_name_exists(expr.name)) {
+                throw std::runtime_error(
+                    "EXTENSION_RECEIVER_MISMATCH: method '" + expr.name +
+                    "' is not defined for receiver alias '" + actual +
+                    "' at byte " + std::to_string(expr.offset));
+            }
         }
     }
 
