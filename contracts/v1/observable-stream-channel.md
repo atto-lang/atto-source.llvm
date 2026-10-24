@@ -108,8 +108,11 @@ mechanics, not a retry loop and not another unbounded queue.
   fails with an explicit mailbox-full result; it never parks a carrier.
 - `send_async(message)` / selectable outbox admission may suspend the logical
   producer, but the runtime must retain only a finite number of producer
-  registrations. Pending-producer count is bounded independently of queued
-  message count, bytes, checked-out frames and select registrations.
+  admissions. The bound covers the whole pre-publication cohort — payload
+  preparation/freeze, registered waiters, transferred credits and committing
+  envelopes — not merely entries already visible in a waiter deque. This bound
+  is independent of queued message count, bytes, checked-out frames and select
+  registrations.
 - The payload's ownership/freeze/copy snapshot and retained-byte accounting are
   established before the producer can remain pending. A suspended producer may
   not retain an unaccounted mutable graph whose eventual contents differ from
