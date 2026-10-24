@@ -363,17 +363,18 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 #endif
 
     /*
-     * Match Java ActorRef.stop(): the reserved startup CONTROL turn survives
-     * mailbox sealing so lifecycle cleanup can finish, but if stop won before
-     * initialization begins, guest construction itself is skipped.
+     * Match Java ActorRef.stop(): startup admission and stop admission
+     * linearize under the same group mutex. The reserved initialization
+     * CONTROL turn survives mailbox sealing, but stop-before-start skips guest
+     * construction completely.
      */
+    group_lock();
     if (atomic_load_explicit(
             &instance->stop_requested, memory_order_acquire)) {
         atomic_store_explicit(
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
             memory_order_release);
-        group_lock();
         ReadyAwaitFrame* frame = group.pending_ready;
         if (frame && frame->actor == instance)
             settle_ready_if_admitted_locked(frame);
@@ -388,19 +389,22 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         ORES_SOURCE_ACTOR_STARTUP_INITIALIZING,
         memory_order_acq_rel,
         memory_order_acquire));
-
     atomic_store_explicit(
         &instance->constructor_started, 1, memory_order_release);
+    group_unlock();
+
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
 
     /*
-     * Stop may race an already-running constructor. Java permits that
-     * constructor turn to finish, but readiness still fails if stop won before
-     * readiness publication.
+     * Stop may race an already-running constructor. Re-enter the same group
+     * mutex before publishing readiness: if stop acquired it first, readiness
+     * fails; if this turn publishes READY first, a later stop cannot retroactively
+     * change the already-settled readiness observer.
      */
+    group_lock();
     if (atomic_load_explicit(
             &instance->stop_requested, memory_order_acquire)) {
         atomic_store_explicit(
@@ -416,12 +420,6 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
             memory_order_release);
     }
 
-    /*
-     * Registration may happen before or after initialization. The group mutex
-     * makes successful readiness completion one-shot without holding a
-     * scheduler lock across guest construction.
-     */
-    group_lock();
     ReadyAwaitFrame* frame = group.pending_ready;
     if (frame && frame->actor == instance)
         settle_ready_if_admitted_locked(frame);
@@ -772,6 +770,12 @@ void oreslang_source_actor_request_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
+    /*
+     * Stop admission shares the group mutex with startup/readiness publication
+     * so exactly one side wins the stop-vs-ready linearization point.
+     * This phase still never waits for physical completion.
+     */
+    group_lock();
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
@@ -780,12 +784,6 @@ void oreslang_source_actor_request_stop(void* opaque) {
         memory_order_acq_rel,
         memory_order_acquire));
 
-    /*
-     * Stop admission is serialized with group metadata, but this phase never
-     * waits for physical completion. A future source get_done continuation
-     * must be able to observe the actor between requested and quiescent.
-     */
-    group_lock();
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
