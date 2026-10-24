@@ -176,6 +176,11 @@ struct ActorCapabilitySend {
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
 };
+struct ActorHandlerAction {
+    enum class Kind { CapabilitySend, Output, End };
+    Kind kind;
+    std::size_t index = 0;
+};
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
@@ -254,6 +259,9 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     std::vector<ActorCapabilitySend> actor_capability_sends;
+    std::vector<std::unique_ptr<Expression>> actor_outputs;
+    std::vector<ActorHandlerAction> actor_handler_actions;
+    bool actor_end_requested = false;
     bool actor_mail_parameter = false; // receive(ActorMail<int> mail) aliases mail.value to payload
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
