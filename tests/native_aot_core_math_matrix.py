@@ -108,13 +108,28 @@ def must_run(argv, *, timeout=60, cwd=None):
     return result.stdout
 
 
+def ores_i64_literal(value):
+    """Render signed i64 without a positive token outside the lexer range.
+
+    Native Parser.cpp parses a unary negative expression *after* parsing its
+    positive Integer token via std::from_chars<int64_t>. Consequently, the
+    literal '-9223372036854775808' would fail before unary negation. Encode
+    i64::MIN from individually representable, non-overflowing expressions.
+    """
+    if type(value) is not int or not MIN_I64 <= value <= MAX_I64:
+        raise ValueError("not a representable Oreslang signed-i64 literal")
+    if value == MIN_I64:
+        return "(-9223372036854775807 - 1)"
+    return str(value)
+
+
 def one_execution(compiler, clang, source, fn, args, expected, working, label, level):
     # An Oreslang comparison is checked in the *guest*; only its Boolean 0/1
     # result is returned as process status, avoiding i64 exit-code truncation.
-    call = fn + "(" + ", ".join(map(str, args)) + ")"
+    call = fn + "(" + ", ".join(map(ores_i64_literal, args)) + ")"
     main = ("\nfnc main(): int {\n"
             + "  const actual: int = " + call + ";\n"
-            + "  if (actual eq " + str(expected) + ") "
+            + "  if (actual eq " + ores_i64_literal(expected) + ") "
             + "{ return 0; } fi\n"
             + "  return 1;\n}\n")
     source_path = working / (label + ".ores")
