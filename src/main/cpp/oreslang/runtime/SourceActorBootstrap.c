@@ -373,6 +373,11 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
             &instance->startup_state,
             ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
             memory_order_release);
+        group_lock();
+        ReadyAwaitFrame* frame = group.pending_ready;
+        if (frame && frame->actor == instance)
+            settle_ready_if_admitted_locked(frame);
+        group_unlock();
         return;
     }
 
