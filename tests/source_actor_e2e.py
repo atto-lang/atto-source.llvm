@@ -51,6 +51,7 @@ def main():
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
+        ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
@@ -78,6 +79,10 @@ def main():
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
+        "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
+        "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
+        "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
+        "source-actor-await-two-lifecycle.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -116,6 +121,7 @@ def main():
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
+                "source-actor-await-done.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-scoped-owned-i64.ores":
@@ -132,6 +138,11 @@ def main():
             if name == "source-actor-await-ready.ores":
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
+            if name == "source-actor-await-done.ores":
+                assert "oreslang_source_actor_request_stop" in guest.stdout, name
+                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "done_continuation" in guest.stdout, name
+                assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -171,6 +182,11 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-await-done.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
