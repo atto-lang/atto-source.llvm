@@ -3255,6 +3255,22 @@ endif()
 # host-side terminal ACK and heap-reclamation barrier.
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-actor-sealed-stop-test
+        tests/native_actor_sealed_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-sealed-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-sealed-stop-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-sealed-stop-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-sealed-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_sealed_stop_abandons_queued_data
+        COMMAND oreslang-native-actor-sealed-stop-test)
+    set_tests_properties(native_actor_sealed_stop_abandons_queued_data
+        PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-source-actor-stop-join-split-test
         tests/source_actor_stop_join_split_test.c
         src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
