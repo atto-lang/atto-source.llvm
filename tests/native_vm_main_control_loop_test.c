@@ -74,8 +74,6 @@ int main(void) {
     require(vm != NULL);
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         counters[i].vm = vm;
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
-        counters[i].vm = vm;
     require(!ores_native_vm_main_control_loop_started(vm));
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         require(ores_native_vm_started_carriers(
