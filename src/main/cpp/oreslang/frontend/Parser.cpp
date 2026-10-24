@@ -2997,7 +2997,18 @@ private:
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
             }
-            if (!fn.ready_await_actor.empty()) {
+            if (fn.ready_await_actor.empty()) {
+                if (!fn.throws_types.empty())
+                    throw std::runtime_error(
+                        "throws ActorTerminated requires direct await ActorRef.get_ready");
+            } else {
+                if (fn.throws_types.size() != 1
+                        || fn.throws_types.front() != "ActorTerminated")
+                    throw std::runtime_error(
+                        "await get_ready requires throws ActorTerminated");
+                if (fn.has_declared_effects)
+                    throw std::runtime_error(
+                        "await get_ready typed lifecycle effect cannot be combined with using effects");
                 /*
                  * First executable suspension is deliberately tiny: one actor
                  * capability, no scalar/class/array owner crossing suspension,
