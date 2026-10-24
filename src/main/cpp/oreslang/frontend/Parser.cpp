@@ -1629,19 +1629,27 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty())
-                    fail("native source supports only one await get_ready continuation");
-                if (!value.actor_actions.empty() || !value.statements.empty())
-                    fail("await get_ready must precede post-await actor effects");
-                value.ready_await_actor = identifier();
+                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
+                    fail("native source supports only one direct ActorRef lifecycle await");
+                const std::string actor = identifier();
                 if (token_.text != ".")
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready is lowered");
-                value.ready_await_offset = await_offset;
+                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
                 require(".");
-                require("get_ready");
+                const std::string lifecycle = identifier();
                 require("(");
                 require(")");
                 require(";");
+                if (lifecycle == "get_ready") {
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("await get_ready must precede post-await actor effects");
+                    value.ready_await_actor = actor;
+                    value.ready_await_offset = await_offset;
+                } else if (lifecycle == "get_done") {
+                    value.done_await_actor = actor;
+                    value.done_await_offset = await_offset;
+                } else {
+                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
+                }
                 continue;
             }
             if (token_.text != "defer" && exceptional_control(token_.text))
@@ -1667,6 +1675,8 @@ private:
                 continue;
             }
             if (accept("stop")) {
+                if (!value.done_await_actor.empty())
+                    fail("actor effects after await get_done are unsupported");
                 value.actor_stops.push_back(identifier());
                 require(";");
                 value.actor_actions.push_back({ActorAction::Kind::Stop,
@@ -1707,6 +1717,8 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
+                if (!value.done_await_actor.empty())
+                    fail("actor effects after await get_done are unsupported");
                 // Nested class receivers cannot alias unrelated ActorRef names.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
                     fail("native actor send requires direct named ActorRef receiver");
@@ -2953,6 +2965,7 @@ private:
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
+                    || !fn.done_await_actor.empty()
                     || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
@@ -2988,6 +3001,23 @@ private:
                 if (contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
                         "await get_ready requires side-effect-free scalar return");
+            }
+            if (!fn.done_await_actor.empty()) {
+                /*
+                 * First get_done slice deliberately carries no guest locals
+                 * across the terminal boundary. The opaque ActorRef remains
+                 * runtime-owned until the trusted host reclaims it after the
+                 * root CONTROL continuation completes.
+                 */
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "await get_done requires one source actor without suspended locals");
+                if (!references.count(fn.done_await_actor))
+                    throw std::runtime_error(
+                        "await get_done requires a direct ActorRef receiver");
+                if (contains_callable_invocation(fn.result.get()))
+                    throw std::runtime_error(
+                        "await get_done requires side-effect-free scalar return");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
@@ -3110,6 +3140,8 @@ private:
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
             }
+            if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
+                throw std::runtime_error("await get_done requires stop before await");
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
             if (fn.caught_throw_value) {
