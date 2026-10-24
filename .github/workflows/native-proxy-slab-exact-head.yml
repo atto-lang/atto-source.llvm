@@ -100,21 +100,7 @@ jobs:
                      oreslang-native-proxy-arena-pages-test \
                      oreslang-native-actor-proxy-slab-owner-test
           ctest --test-dir /tmp/ores-proxy-ctest --output-on-failure \
-            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota)        shell: bash
-        run: |
-          set -euo pipefail
-          "$CC" -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
-            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
-            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
-            -o /tmp/proxy-scheduler-sanitized.o
-          "$CXX" -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
-            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
-            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
-            /tmp/proxy-scheduler-sanitized.o /tmp/proxy-actor-arena-sanitized.o \
-            -o /tmp/proxy-native-owner-sanitized
-          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
-            /tmp/proxy-native-owner-sanitized
-
+            -R '^(native_proxy_request_slab_host_only|native_proxy_slab_arena_pages_and_zeroization|native_actor_proxy_slab_generation_and_quota)$'
       - name: Exercise exact native actor and arena under ASan/UBSan
         shell: bash
         run: |
