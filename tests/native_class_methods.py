@@ -117,6 +117,13 @@ def main():
             source=directory/'main.ores'
             result=run([a.compiler,str(source)])
             if result.returncode:raise AssertionError((name,result.stderr))
+            if name == 'explicit-arity-slots':
+                # Overloaded instance-method symbols use source-visible arity.
+                # Hidden self is an ABI receiver and must not shift $arityN.
+                if 'Box.read$arity0' not in result.stdout or 'Box.read$arity1' not in result.stdout:
+                    raise AssertionError((name,'missing source-arity method slot',result.stdout[:2000]))
+                if 'Box.read$arity2' in result.stdout:
+                    raise AssertionError((name,'hidden self leaked into method slot identity'))
             (directory/'main.ll').write_text(result.stdout)
             command=[a.clang,'-O1',str(directory/'main.ll'),'-o',str(directory/'main')]
             if a.sanitize:command[1:1]=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
