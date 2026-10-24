@@ -110,6 +110,40 @@ int main(void) {
     check(!ores_native_continuation_store_finish_resume(continuations, pending));
     check(ores_native_continuation_store_release(continuations, pending));
 
+    /*
+     * A child can release its last continuation ref while an ancestor is
+     * CLAIMED. The child's release is committed and must report success,
+     * while the claimed parent's final physical pin remains protected
+     * until the owner explicitly finishes the guest turn.
+     */
+    OresNativeContinuationHandle claimed_parent = publish(
+        continuations, execution);
+    check(ores_native_continuation_store_notify_ready(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_try_claim_ready_resume(
+        continuations, claimed_parent, &record));
+    OresNativeContinuationHandle nested = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, execution, claimed_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 101, &nested));
+    check(ores_native_continuation_store_release(
+        continuations, claimed_parent)); /* drop original owning pin */
+    check(ores_native_continuation_store_release(
+        continuations, nested)); /* cascades toward CLAIMED ancestor */
+    check(!ores_native_continuation_store_get(
+        continuations, nested, &record));
+    check(ores_native_continuation_store_get(
+        continuations, claimed_parent, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
+    check(!ores_native_continuation_store_release(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_finish_resume(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_release(
+        continuations, claimed_parent));
+    check(!ores_native_continuation_store_get(
+        continuations, claimed_parent, &record));
+
     /* Cancellation before Future readiness is irrevocable. */
     OresNativeContinuationHandle cancelled = publish(continuations, execution);
     check(ores_native_continuation_store_cancel(continuations, cancelled));
