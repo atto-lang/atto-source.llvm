@@ -96,9 +96,11 @@ int ores_native_actor_scheduler_wait_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
-/* One reserved CONTROL message per actor, independent of normal-mail
- * capacity; only an admitted actor lane may invoke the CONTROL handler.
- * CONTROL callbacks never run on a failed child's carrier by direct call.
+/* One ordinary CONTROL message per actor remains reserved independently of
+ * normal-mail capacity. Typed terminal child failures use a separate bounded
+ * scheduler-owned receipt lane: at most one durable receipt per child slot.
+ * All CONTROL callbacks still run only on the parent's exclusive actor lane,
+ * never directly on the failed child's carrier.
  */
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
@@ -107,15 +109,18 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
-/* A failed/retired child publishes a typed control envelope (encoded in
- * payload) to the parent. Returns 0 if the reserved slot is full or if the
- * target is stale/stopped; caller must retry or explicitly escalate.
+/* Ordinary host CONTROL retains its single reserved slot. It may reject while
+ * that slot is occupied; terminal child failure durability is provided by the
+ * typed publish_failure API below, not by this payload channel.
  */
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
 /* Child must be a valid actor in the same scheduler, distinct from parent.
- * Returns 0 on reserved CONTROL saturation, stale refs or parent retirement.
- * Never invokes on_panic directly on the publishing child's carrier.
+ * First publication consumes that child's bounded terminal receipt and binds it
+ * to the exact parent+generation. Exact retries are idempotent while pending,
+ * dispatching or delivered; conflicting rewrites, stale refs and retired
+ * parents reject. Distinct children do not contend for the ordinary CONTROL
+ * slot. Never invokes on_panic directly on the publishing child's carrier.
  */
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
