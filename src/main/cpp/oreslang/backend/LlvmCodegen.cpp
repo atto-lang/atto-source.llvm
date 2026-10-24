@@ -2241,6 +2241,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
         builder.CreateStore(incoming, pslot);
         values.emplace(param, pslot);
+        if (actor.on_message.actor_mail_parameter)
+            emptyFields.emplace(param + ".value", pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
             llvm::Value* value = builder.CreateCall(fieldRead, {
@@ -2299,8 +2301,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::ConstantInt::get(i64, index), value});
             builder.CreateStore(value, values.at(write.field));
         }
-        llvm::Value* result = lower(*actor.on_message.result, builder, i64, values,
-            emptyFields, declarations);
+        llvm::Value* result = actor.on_message.returns_void
+            ? llvm::ConstantInt::get(i64, 0)
+            : lower(*actor.on_message.result, builder, i64, values,
+                emptyFields, declarations);
         // The native actor scheduler admits no next message until the current
         // synchronous handler has dropped all temporary owners in LIFO order.
         for (auto it = actor_owned_tokens.rbegin();
