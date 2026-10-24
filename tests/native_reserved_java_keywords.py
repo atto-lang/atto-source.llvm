@@ -12,9 +12,9 @@ CASES = {
         "pub fnc enum(): int { return 42; }",
         "expected non-keyword identifier",
     ),
-    "pattern-function": (
-        "pub fnc pattern(): int { return 42; }",
-        "expected non-keyword identifier",
+    "pattern-nominal": (
+        "define class pattern as val int value;end pub fnc main():int{return 0;}",
+        "contextual pattern keyword cannot declare a native nominal type",
     ),
     "enum-parameter": (
         "pub fnc main(int enum): int { return 42; }",
@@ -22,7 +22,7 @@ CASES = {
     ),
     "pattern-parameter": (
         "pub fnc main(int pattern): int { return 42; }",
-        "expected non-keyword identifier",
+        "native main() must have zero arguments",
     ),
     # Host/device scopes are currently reserved, never interpreted as i64
     # expressions or silently executed on the CPU. The same applies at

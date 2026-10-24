@@ -87,8 +87,10 @@ and byte limits, failure recovery and unsupported regular-file output.
 This milestone does **not** establish full Spin parity. Strings currently require
 a synchronous host `main`; actor, suspension and exception-frame integration
 are rejected until their ownership and cleanup boundaries are lowered. String
-fields, collections, mixed-type concatenation, string equality, unpaired UTF-16
-surrogates and the full standard-library API remain parity gaps. General local
+fields, equality, typed arrays, and nested owning results have subsequent
+native implementations; see [sum values and current lifetime limits](NATIVE_SCALAR_SUMS.md).
+Mixed-type concatenation, unpaired UTF-16 surrogates and the full
+standard-library API remain parity gaps. General local
 declarations after arbitrary control-flow statements remain unsupported.
 Allocation and console I/O are visible to effect analysis and are not silently
 admitted as allocation-free hard realtime work.
