@@ -797,7 +797,7 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d ready=%d released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
         atomic_load_explicit(
             &instance->constructor_started, memory_order_acquire),
         startup_state == ORES_SOURCE_ACTOR_STARTUP_READY,
