@@ -94,8 +94,12 @@ static void on_data(void* opaque, size_t actor, uint64_t payload) {
 }
 
 static void on_control(void* opaque, size_t actor, uint64_t payload) {
-    (void)opaque; (void)actor; (void)payload;
-    abort();
+    State* s = (State*)opaque;
+    require(actor == 0 && payload == 77);
+    start_parent_turn(s);
+    require(s->count < 8);
+    s->trace[s->count++] = 77;
+    end_parent_turn(s);
 }
 
 static void on_panic(void* opaque, size_t actor, OresNativeActorTerminalFailure failure) {
@@ -133,6 +137,9 @@ static void two_child_case(void) {
     require(ores_native_actor_scheduler_send(s.scheduler, s.parent, 13));
     require(ores_native_actor_scheduler_try_send(s.scheduler, s.parent, 14)
             == ORES_NATIVE_SEND_MAILBOX_FULL);
+    /* Occupy the independent ordinary CONTROL slot before terminal failures. */
+    require(ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 77));
+    require(!ores_native_actor_scheduler_publish_control(s.scheduler, s.parent, 78));
 
     const OresNativeActorTerminalFailure a =
         {ORES_NATIVE_CONTROL_PANIC, s.child_a, 99, 101};
@@ -154,17 +161,17 @@ static void two_child_case(void) {
 
     /* Both terminal failures outrank already-admitted USER work, stay FIFO,
      * and never overlap the parent's active DATA turn. */
-    require(s.count == 5);
+    require(s.count == 6);
     require(s.trace[0] == 11 && s.trace[1] == 101 && s.trace[2] == 102
-            && s.trace[3] == 12 && s.trace[4] == 13);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
+            && s.trace[3] == 77 && s.trace[4] == 12 && s.trace[5] == 13);
+    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 3);
     require(atomic_load(&s.peak_parent_active) == 1);
 
     /* Delivered exact retry remains idempotent and creates no new callback. */
     require(ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
     require(ores_native_actor_scheduler_drain(s.scheduler));
-    require(s.count == 5);
-    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 2);
+    require(s.count == 6);
+    require(ores_native_actor_scheduler_control_completed(s.scheduler) == 3);
 
     require(ores_native_actor_scheduler_stop(s.scheduler, s.parent));
     require(!ores_native_actor_scheduler_publish_failure(s.scheduler, s.parent, a));
