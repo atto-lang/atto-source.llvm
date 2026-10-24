@@ -83,6 +83,39 @@ int main() {
     check(reported_failure == 1, "failure result not delivered once");
     check(!failed->complete(failed->id(), 42), "failed future resurrected");
 
+    // Once the CONTROL callback has actually started, cancellation is too
+    // late. The frame stays RUNNING until the callback exits, then COMPLETED.
+    auto running = NativeScalarFutureAwait::open(owner, 20);
+    check(running->complete(running->id(), 23), "running future not settled");
+    std::atomic<int> callback_started{0};
+    std::atomic<int> callback_release{0};
+    std::atomic<int> callback_finished{0};
+    check(running->try_schedule(running->id(), group, owner,
+        [&](const NativeScalarFutureAwait::Result& outcome) {
+            check(outcome.success && outcome.value == 23, "running result corrupt");
+            callback_started.store(1, std::memory_order_release);
+            while (!callback_release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            callback_finished.store(1, std::memory_order_release);
+        }), "running CONTROL not queued");
+    std::thread control_runner([&] {
+        check(group.run_control_turn(owner)
+              == NativeActorGroup::ControlTurn::executed,
+              "running CONTROL turn failed");
+    });
+    while (!callback_started.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    check(running->phase() == NativeScalarFutureAwait::Phase::running,
+          "callback did not publish running phase");
+    check(!running->cancel(running->id()),
+          "started callback was incorrectly revoked");
+    callback_release.store(1, std::memory_order_release);
+    control_runner.join();
+    check(callback_finished.load(std::memory_order_acquire) == 1,
+          "running callback did not finish");
+    check(running->phase() == NativeScalarFutureAwait::Phase::completed,
+          "running callback did not complete");
+
     // Three terminal contenders race. Exactly one wins and no duplicate
     // resumption is accepted, regardless of scheduling order.
     for (std::uint64_t n = 1; n <= 256; ++n) {
