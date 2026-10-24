@@ -24,7 +24,7 @@ def parse_actor_receipt(line):
         key, sep, value = field.partition("=")
         assert sep and key in expected and key not in fields, (
             "invalid actor receipt field", field)
-        assert value and (value.isdecimal() or (
+        assert value and value.isascii() and (value.isdecimal() or (
             key == "last" and value.startswith("-") and value[1:].isdecimal()
         )), ("invalid integer actor receipt", field)
         fields[key] = int(value)
