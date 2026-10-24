@@ -47,6 +47,16 @@ void oreslang_source_actor_send_capability(
     OresActorI64Heap* heap, uint64_t slot, int64_t payload);
 int oreslang_source_actor_try_send_capability(
     OresActorI64Heap* heap, uint64_t slot, int64_t payload);
+/* Constructor-only structured child binding. The current actor must own heap,
+ * slot must be the next dense capability slot, and the child is retained only
+ * by trusted runtime metadata plus its generation-fenced capability identity.
+ */
+void oreslang_source_actor_spawn_child_capability(
+    OresActorI64Heap* heap,
+    uint64_t slot,
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields);
 void oreslang_source_actor_stop(void* actor);
 
 /*
