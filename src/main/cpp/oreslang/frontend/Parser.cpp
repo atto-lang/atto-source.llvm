@@ -3003,6 +3003,27 @@ private:
         for (const auto& actor : program.actors)
             visit_actor_capabilities(actor);
 
+        std::unordered_map<std::string, std::size_t> actor_spawn_footprints;
+        std::function<std::size_t(const ActorDecl&)> actor_spawn_footprint;
+        actor_spawn_footprint = [&](const ActorDecl& actor) -> std::size_t {
+            const auto cached = actor_spawn_footprints.find(actor.name);
+            if (cached != actor_spawn_footprints.end()) return cached->second;
+            std::size_t total = 1;
+            for (const auto& capability : actor.capability_fields) {
+                const std::size_t child =
+                    actor_spawn_footprint(*actor_types.at(capability.actor_type));
+                if (child > 63 || total > 63 - child)
+                    throw std::runtime_error(
+                        "native actor capability spawn tree exceeds 63 guest actor slots at '" +
+                        actor.name + "'");
+                total += child;
+            }
+            actor_spawn_footprints.emplace(actor.name, total);
+            return total;
+        };
+        for (const auto& actor : program.actors)
+            (void)actor_spawn_footprint(actor);
+
         // Same-file contracts are compile-time structural checks. Requiring
         // matching *public* members prevents accidental admission through
         // private functions that external callers cannot invoke.
@@ -3051,6 +3072,7 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
+            std::size_t static_actor_slots = 0;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                     || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
@@ -3064,6 +3086,11 @@ private:
                     throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+                const std::size_t footprint = actor_spawn_footprints.at(spawn.actor_type);
+                if (footprint > 63 || static_actor_slots > 63 - footprint)
+                    throw std::runtime_error(
+                        "source actor bootstrap statically exceeds 63 guest actor slots");
+                static_actor_slots += footprint;
                 references.emplace(spawn.name, it->second);
             }
             if (!fn.ready_await_actor.empty()) {
