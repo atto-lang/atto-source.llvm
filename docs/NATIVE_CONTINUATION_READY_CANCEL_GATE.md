@@ -161,3 +161,22 @@ partial mirror can qualify this source head. Only an authorized full tree
 with identical source tree SHA, or direct checkout in a funded/available
 source-org runner, is eligible for the strict exact-head evidence claim.
 
+
+## Third audit: authority binding and capability separation
+
+`TaskContinuationGate` now requires the caller to supply a trusted
+`expected_code_generation` and complete
+`OresNativeAllocationDomainRef` (kind/domain/owner/generation) in addition
+to the store-backed suspension link. It rejects mismatched code versions,
+actor/task heap owners, and any boundary other than AWAIT. This prevents
+accidental reuse of a valid generation-checked logical execution from a
+different owner or a supervisor CONTROL/spawn/mail boundary.
+
+Negative tests cover forged source execution IDs and handles; a mismatched
+code generation; a mismatched actor-owned heap; and CONTROL, SPAWN, and
+ACTOR_MESSAGE boundaries. Positive tests pass explicit generation=11 and
+the originating ACTOR allocation. A Task authority remains a host-side
+capability: the scheduler must derive its expected code/allocation identity
+from the trusted suspended execution, never from arbitrary guest input.
+
+The hosted adapter and these tests remain unverified by executed CI.
