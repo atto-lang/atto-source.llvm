@@ -3290,3 +3290,26 @@ if(BUILD_TESTING)
     set_tests_properties(native_task_cancellation_tree_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Task authority <-> generation-checked continuation integration, with
+# producer-ready/cancel and scheduler-claim/cancel adversarial races.
+# Tests a real shared host admission primitive, not arbitrary guest Task syntax.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-continuation-gate-test
+        tests/native_task_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-native-task-continuation-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-continuation-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-continuation-gate-test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_continuation_cancel_ready_races
+        COMMAND oreslang-native-task-continuation-gate-test)
+    set_tests_properties(native_task_continuation_cancel_ready_races
+        PROPERTIES TIMEOUT 60)
+endif()
