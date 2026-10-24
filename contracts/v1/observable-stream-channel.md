@@ -201,7 +201,14 @@ the caller's domain rather than escaping accounting because it has no Channel
 arm. Runtime-owned actor infrastructure (mailbox USER/CONTROL lanes, actor
 output streams, group Mailman outboxes, event-bus subscriptions, and equivalent
 backend-internal Channel users) must be charged to the owning runtime/domain,
-not silently to a process host-default bucket. Domain teardown atomically
+not silently to a process host-default bucket. Source Channels created inside
+an actor turn are actor-local capabilities (raw Channel handles do not cross
+actor mailboxes) and must receive an actor-local normal admission budget rather
+than sharing the entire context/runtime budget with sibling actors. Actor
+termination fences that source domain outside actor lifecycle locks; physical
+actor finalization waits for the fence. A graceful guest teardown retains the
+domain through its final teardown turn and fences it immediately afterward.
+Domain teardown atomically
 detaches/fails its pending selections and refunds both domain and process
 accounting exactly once. Structured channel-specific terminal publication
 happens before a residual runtime-domain fence so shutdown does not replace a
