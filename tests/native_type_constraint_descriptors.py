@@ -124,6 +124,22 @@ end
 """,
             "acme.api.Code", contract, "acme.api.Code")
 
+        mixed = compile_source(
+            compiler,
+            root / "mixed_scope.ores",
+            """declare type RootCode = int with min 0 and max 5;
+define module api as
+  declare type ModuleCode = int with min 0 and max 5;
+end
+""",
+            "--constraint-descriptors",
+        )
+        require(mixed.returncode == 0 and mixed.stderr == b"",
+                "mixed root/module descriptor source rejected: " + repr(mixed.stderr[:1200]))
+        mixed_rows = descriptor_rows(mixed.stdout)
+        require([row["name"] for row in mixed_rows] == ["RootCode", "api.ModuleCode"],
+                "descriptor ownership drifted across root/module declaration sites")
+
         min_only = require_descriptor(
             compiler, root, "min_only",
             "declare type Floor = int with min -9223372036854775808;\n",
@@ -215,7 +231,7 @@ define mtd double on Code(): int { return self + self; }
                     label + " wrong diagnostic: " + repr(rejected.stderr[:1200]))
 
     print(
-        "PASS native constraint descriptor parity: 6 positive metadata cases, "
+        "PASS native constraint descriptor parity: 7 positive metadata cases, "
         "3 shared golden vectors, and 11 fail-closed negatives"
     )
     return 0
