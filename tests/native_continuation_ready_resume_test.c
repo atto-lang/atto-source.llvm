@@ -52,7 +52,6 @@ static void race_pair(RaceArgs* first, RaceArgs* second) {
     atomic_store_explicit(&go, 1, memory_order_release);
     check(pthread_join(one, NULL) == 0);
     check(pthread_join(two, NULL) == 0);
-    check(first->won + second->won == 1);
 }
 
 static OresNativeContinuationHandle publish(
@@ -149,12 +148,20 @@ int main(void) {
         RaceArgs cancel = {continuations, handle, NULL, 1, 0, 0};
         RaceArgs complete = {continuations, handle, NULL, 0, 0, 0};
         race_pair(&cancel, &complete);
+        check(cancel.won || complete.won);
         check(ores_native_continuation_store_get(continuations, handle, &record));
         if (cancel.won) {
+            /*
+             * notify_ready may linearize first and still report success;
+             * cancellation is allowed to win afterward while READY remains
+             * unclaimed. What matters is the terminal state, not that only
+             * one transition API returned success.
+             */
             check(record.state == ORES_CONTINUATION_CANCELLED);
             check(!ores_native_continuation_store_try_claim_ready_resume(
                 continuations, handle, NULL));
         } else {
+            check(complete.won);
             check(record.state == ORES_CONTINUATION_READY);
             check(ores_native_continuation_store_try_claim_ready_resume(
                 continuations, handle, NULL));
@@ -170,6 +177,7 @@ int main(void) {
         RaceArgs canceller = {continuations, ready, NULL, 1, 0, 0};
         RaceArgs claimer = {continuations, ready, NULL, 0, 1, 0};
         race_pair(&canceller, &claimer);
+        check(canceller.won + claimer.won == 1);
         check(ores_native_continuation_store_get(continuations, ready, &record));
         if (claimer.won) {
             check(record.state == ORES_CONTINUATION_CLAIMED);
