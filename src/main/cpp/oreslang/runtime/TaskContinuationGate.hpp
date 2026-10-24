@@ -29,6 +29,7 @@ class TaskContinuationGate final {
         OresNativeContinuationStore* continuations;
         OresNativeSuspensionLink link;
         bool open = true;
+        bool owns_claim = false;
 
         bool revoke() noexcept {
             std::lock_guard<std::mutex> guard(mutex);
@@ -121,17 +122,24 @@ public:
         // Holding Task authority admission across the claim means a retiring
         // or cancelled Task cannot be marked inactive and still enter guest.
         return shared_->authority->with_active_authority([&]() {
-            return ores_native_await_trace_ready_resume_begin(
+            const bool claimed = ores_native_await_trace_ready_resume_begin(
                 shared_->executions, shared_->continuations,
                 physical_execution, shared_->link, out_execution, out_context) != 0;
+            if (claimed) shared_->owns_claim = true;
+            return claimed;
         });
     }
 
     bool finish_resume() noexcept {
         std::lock_guard<std::mutex> guard(shared_->mutex);
-        // A previously admitted guest turn still owns cleanup after close().
-        return ores_native_await_trace_resume_finish(
-            shared_->continuations, shared_->link) != 0;
+        // An unrelated binding must never finish another Task's claimed
+        // continuation. The original claiming gate retains physical cleanup
+        // authority even if close() has revoked future admission.
+        if (!shared_->owns_claim) return false;
+        if (!ores_native_await_trace_resume_finish(
+                shared_->continuations, shared_->link)) return false;
+        shared_->owns_claim = false;
+        return true;
     }
 
     void close() noexcept {
