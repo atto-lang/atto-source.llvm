@@ -33,6 +33,7 @@ typedef struct {
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
+    unsigned user_mailbox_suspended;
     uint64_t generation;
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
@@ -175,6 +176,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
      * after that the round-robin cursor gets priority. */
     if (recent_actor < s->actor_count && consecutive < 2
         && !s->actors[recent_actor].active
+        && !s->actors[recent_actor].user_mailbox_suspended
         && s->actors[recent_actor].queued != 0) {
         *actor = recent_actor;
         *control = 0;
@@ -183,7 +185,9 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
     }
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
-        if (!s->actors[i].active && s->actors[i].queued != 0) {
+        if (!s->actors[i].active
+                && !s->actors[i].user_mailbox_suspended
+                && s->actors[i].queued != 0) {
             *actor = i;
             *control = 0;
             s->next_actor = (i + 1) % s->actor_count;
@@ -309,14 +313,18 @@ static void* carrier(void* raw) {
             if (lane->processed_user_messages == UINT64_MAX) abort();
             ++lane->processed_user_messages;
         }
-        /* A lane contributes at most one runnable turn regardless of how
-         * many DATA/CONTROL messages it owns. */
-        if (!lane->queued && !lane->has_control) {
+        /* A lane contributes at most one runnable/active turn. Suspended
+         * DATA remains admitted/outstanding but is not runnable until CONTROL
+         * resumes this logical actor turn. */
+        const int runnable_after =
+            lane->has_control ||
+            (lane->queued && !lane->user_mailbox_suspended);
+        if (!runnable_after) {
             if (!s->runnable_lanes) abort();
             --s->runnable_lanes;
         }
         if (control) ++s->control_completed;
-        if (lane->queued || lane->has_control) pthread_cond_signal(&s->ready);
+        if (runnable_after) pthread_cond_signal(&s->ready);
         if (lane->retired && !lane->active && !lane->queued && !lane->has_control) {
             if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
                 && !ores_execution_retired(&lane->authority, lane->generation))
@@ -529,8 +537,11 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     ActorLane* a = &s->actors[i];
-    const int new_lane = !a->active && !a->queued && !a->has_control;
-    if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
+    const int new_lane =
+        !a->user_mailbox_suspended &&
+        !a->active && !a->queued && !a->has_control;
+    if (!a->user_mailbox_suspended &&
+            !ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
         if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
     }
@@ -543,7 +554,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
-    pthread_cond_signal(&s->ready);
+    if (!a->user_mailbox_suspended) pthread_cond_signal(&s->ready);
     return 1;
 }
 int ores_native_actor_scheduler_configure_turn_gate(
@@ -648,7 +659,8 @@ int ores_native_actor_scheduler_publish_control(
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
-        const int new_lane = !lane->active && !lane->queued;
+        const int new_lane = !lane->active
+            && (lane->queued == 0 || lane->user_mailbox_suspended);
         if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
             if (s->rejected != UINT64_MAX) ++s->rejected;
             unlock(s);
@@ -682,7 +694,8 @@ int ores_native_actor_scheduler_publish_failure(
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
-        const int new_lane = !a->active && !a->queued;
+        const int new_lane = !a->active
+            && (a->queued == 0 || a->user_mailbox_suspended);
         if (!ensure_workers_locked(s, s->runnable_lanes + (size_t)new_lane)) {
             if (s->rejected != UINT64_MAX) ++s->rejected;
             unlock(s);
@@ -715,9 +728,15 @@ int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
         unlock(s); return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
+    const int was_counted = lane->active || lane->has_control
+        || (lane->queued && !lane->user_mailbox_suspended);
+    lane->user_mailbox_suspended = 0;
+    const int now_counted = lane->active || lane->has_control || lane->queued;
+    if (!was_counted && now_counted) ++s->runnable_lanes;
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
+    if (now_counted && !lane->active) pthread_cond_signal(&s->ready);
     if (!lane->active && !lane->queued && !lane->has_control) {
         if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
         publish_terminal_locked(s, (size_t)actor.actor_slot);
@@ -777,6 +796,11 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     s->retired = 1;
     for (size_t i = 0; i < s->actor_count; ++i) {
         ActorLane* lane = &s->actors[i];
+        const int was_counted = lane->active || lane->has_control
+            || (lane->queued && !lane->user_mailbox_suspended);
+        lane->user_mailbox_suspended = 0;
+        const int now_counted = lane->active || lane->has_control || lane->queued;
+        if (!was_counted && now_counted) ++s->runnable_lanes;
         if (lane->spawned && !lane->retired)
             lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_RUNTIME_RETIRED;
         lane->retired = 1;
@@ -819,6 +843,34 @@ int ores_native_actor_scheduler_current_execution_context(
         return 0;
     *out = executing_context;
     return 1;
+}
+int ores_native_actor_scheduler_suspend_current_user_mailbox(
+        OresNativeActorScheduler* s) {
+    if (!s || executing != s || !executing_actor.scheduler_domain) return 0;
+    lock(s);
+    const int ok = matching(s, executing_actor)
+        && !s->retired
+        && !s->actors[executing_actor.actor_slot].retired
+        && s->actors[executing_actor.actor_slot].active
+        && !s->actors[executing_actor.actor_slot].user_mailbox_suspended;
+    if (ok)
+        s->actors[executing_actor.actor_slot].user_mailbox_suspended = 1;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_resume_current_user_mailbox(
+        OresNativeActorScheduler* s) {
+    if (!s || executing != s || !executing_actor.scheduler_domain) return 0;
+    lock(s);
+    const int ok = matching(s, executing_actor)
+        && !s->retired
+        && !s->actors[executing_actor.actor_slot].retired
+        && s->actors[executing_actor.actor_slot].active
+        && s->actors[executing_actor.actor_slot].user_mailbox_suspended;
+    if (ok)
+        s->actors[executing_actor.actor_slot].user_mailbox_suspended = 0;
+    unlock(s);
+    return ok;
 }
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
