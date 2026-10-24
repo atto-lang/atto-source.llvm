@@ -572,8 +572,8 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
         ),
         (
             "explicit-call-site-receiver-is-not-erased",
-            "define class X as\n  pub foo(self,int n):int{return n;}\n\\
-             pub wrong(self):int{return self.foo(self,5);}\nend\n\\
+            "define class X as\n  pub foo(self,int n):int{return n;}\n\
+             pub wrong(self):int{return self.foo(self,5);}\nend\n\
              pub fnc main():int {let X x=new X();return x.wrong();}\n",
             "unknown method or wrong explicit call arity 'foo'",
         ),
