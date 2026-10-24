@@ -204,3 +204,41 @@ isolated local container and Actions jobs are not admitted.
 Use an actual private exact-tree mirror only after verifying the source and
 destination `git rev-parse HEAD^{tree}` match. No success receipt may cite a
 partial source mirror or any run with zero executed steps.
+
+
+## Claim-owner authorization and cross-organization native CI attempt
+
+An additional review found that the host Task gate exposed a no-argument
+`finish_resume()` method to *any* gate bound to the same underlying
+continuation handle. Another binding could therefore finish and release a
+CLAIMED frame it had not admitted. The gate now records whether its own
+`try_resume()` won the READY-to-CLAIMED transition and refuses
+`finish_resume()` from non-claiming gates. This is a runtime-host gate-level
+fence, not an exposed guest TaskHandle completion API. Its native regression
+tests also check the completion path after `close()` for a legitimately
+admitted frame.
+
+The October 24 CI attempt used a private alternate organization:
+`streempilot-test/mcp-contract-e2e`, branch
+`ci/oreslang-llvm-task-pr935-20261024`, commit
+`4f771bd9bb4e67ac7ce73985cb91c6e8c928bbe6`.
+The 14 source blobs required for the standalone C11/C++17 host native
+test were byte-identical by Git blob SHA to LLVM PR #935 at
+`f9e87bed2d93e4b56d0637c6823bef255519f358`.
+This was intentionally a **component-exact subset, not a full-tree
+mirror**. Workflow run `40132500787` triggered, but its normal and
+sanitizer jobs both failed with **zero executed steps**. No native test
+was run and no green source result was established. The later head
+including the claim-owner fix has not been mirrored or tested.
+
+A separate private candidate, `zed-pkg-test/java-app`, received a
+source-free runner-capacity canary on branch
+`ci/oreslang-pr935-runner-capacity-20261024`, commit
+`2797a6947e334ea0445d3045d092b9401de08e04`; at initial
+inspection no corresponding Actions run was visible. It therefore
+cannot be treated as proven available capacity.
+
+Before any merge, require a running private CI environment, a complete
+exact-tree mirror (including full source-tree SHA equality, not only 14
+matching input blobs) for a **full-tree** parity claim, and explicit,
+executed regression and sanitizer logs on the final source head.
