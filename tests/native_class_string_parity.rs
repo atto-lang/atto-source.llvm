@@ -62,7 +62,8 @@ fn main() {
             r#"define class Value as pub val int code;end
               fnc fresh():Value{return new Value(42);}
               fnc choose_record(bool use_new):Value{return use_new?new Value(42):fresh();}
-              pub routine main():int{val Value a=choose_record(true);val Value b=choose_record(false);return a.code==42&&b.code==42?0:1;}"#,
+              fnc same_owner(bool first):Value{val Value value=new Value(42);return first?value:value;}
+              pub routine main():int{val Value a=choose_record(true);val Value b=choose_record(false);val Value c=same_owner(true);val Value d=same_owner(false);return a.code==42&&b.code==42&&c.code==42&&d.code==42?0:1;}"#,
             "",
         ),
         (
@@ -315,6 +316,29 @@ fn main() {
     }
     let mut standalone_runs = 0;
     if let Some(driver) = &aot_driver {
+        #[cfg(unix)] {
+            use std::os::unix::{fs::PermissionsExt, fs::symlink};
+            let source = scratch.0.join("protected.ores");
+            fs::write(&source, "pub fnc main():int{return 0;}").unwrap();
+            let fake_compiler = scratch.0.join("compiler");
+            let fake_clang = scratch.0.join("clang");
+            let sentinel = b"#!/bin/sh\necho 'must not execute' >&2\nexit 99\n";
+            for path in [&fake_compiler, &fake_clang] {
+                fs::write(path, sentinel).unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let symbolic = scratch.0.join("compiler-symlink");
+            symlink(&fake_compiler, &symbolic).unwrap();
+            let hard = scratch.0.join("clang-hardlink");
+            fs::hard_link(&fake_clang, &hard).unwrap();
+            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+                let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
+                    .env("CLANG", &fake_clang).arg(&source).arg(destination));
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
+                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                assert_eq!(fs::read(destination).unwrap(), sentinel);
+            }
+        }
         let scalar_record = r#"define class Number as pub val int code;end
           fnc create():Number{return new Number(42);}
           pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
@@ -338,6 +362,7 @@ fn main() {
         }
     }
     let negatives = [
+        ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-mutable-identity", "define class Item as pub let int code=42;end fnc bad():Item{return new Item();}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),

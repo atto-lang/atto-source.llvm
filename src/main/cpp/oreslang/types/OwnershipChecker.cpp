@@ -1116,6 +1116,27 @@ void validate_i64_ownership(const Program& program) {
         };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);
+        // Record returns can move an owner in either lazy arm. Preserve those
+        // terminal edges instead of flattening both arms into sequential reads.
+        std::function<void(const Expression*, std::size_t)> append_return_path;
+        append_return_path = [&](const Expression* expr, std::size_t block) {
+            if (expr && !function.return_class.empty() && expr->kind == Expression::Kind::Conditional) {
+                if (expr->condition) add_effects(*expr->condition, cfg.blocks[block].operations);
+                else {
+                    add_effects(*expr->condition_lhs, cfg.blocks[block].operations);
+                    add_effects(*expr->condition_rhs, cfg.blocks[block].operations);
+                }
+                const std::size_t yes = cfg.blocks.size(), no = yes + 1;
+                cfg.blocks.resize(no + 1);
+                cfg.blocks[block].successors = {yes, no};
+                append_return_path(expr->when_true.get(), yes);
+                append_return_path(expr->when_false.get(), no);
+                return;
+            }
+            if (expr) add_return_effects(*expr, cfg.blocks[block].operations);
+            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
+                add_cleanup_effects(**it, cfg.blocks[block].operations);
+        };
         for (std::size_t i = 0; i < guard_count; ++i) {
             const auto& guard = function.early_returns[i];
             auto& condition = cfg.blocks[2 * i];
@@ -1126,15 +1147,9 @@ void validate_i64_ownership(const Program& program) {
                 add_effects(*guard.rhs, condition.operations);
             }
             condition.successors = {2 * i + 1, 2 * i + 2};
-            add_return_effects(*guard.result, cfg.blocks[2 * i + 1].operations);
-            // Preserve deferred call inputs after each early-return value.
-            for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-                add_cleanup_effects(**it, cfg.blocks[2 * i + 1].operations);
+            append_return_path(guard.result.get(), 2 * i + 1);
         }
-        if (function.result)
-            add_return_effects(*function.result, cfg.blocks[guard_count * 2].operations);
-        for (auto it = deferred_effects.rbegin(); it != deferred_effects.rend(); ++it)
-            add_cleanup_effects(**it, cfg.blocks[guard_count * 2].operations);
+        append_return_path(function.result.get(), guard_count * 2);
         // Every reachable terminal CFG path must end with an explicit
         // conditional drop of the experimental heap-owned places. The
         // emitter backs each DropIfOwned with a runtime live flag; scalar

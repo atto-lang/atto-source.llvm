@@ -14,6 +14,8 @@ container. No pointer into a callee frame or closed array region escapes. Call
 results bound to a named class local materialize readonly fields for the existing
 borrowed-method ABI. Owned local returns participate in ownership/move checks;
 incoming class loans cannot be returned through this owned-value ABI.
+Lazy return arms have distinct ownership CFG paths, including their moves and
+deferred cleanup checks. A deferred call cannot reuse the returned owner.
 
 Record snapshots allocate bounded native storage and are recorded as allocating
 effects. The region uses deterministic destruction and no tracing GC. It remains
@@ -25,6 +27,8 @@ declarations occur in generated IR, in addition to the String runtime. Rust
 CTest coverage builds both scalar-only and record/String/array programs with
 this public driver, deletes the entry source, then executes with an empty PATH
 and environment. The executable does not invoke Java, a compiler or source code.
+The driver rejects output aliases of the source/compiler/Clang by file identity;
+Rust tests check direct paths, symlinks and hard links without touching real tools.
 
 Mutable object identity, nested array-owning return values, by-value owning
 parameters, returned loan lifetimes, actors, suspension and exception-frame

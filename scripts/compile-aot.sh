@@ -13,7 +13,13 @@ output_file="$output_dir/$(basename "$2")"
 [[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
-command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
+clang_path="$(command -v "$clang")" || { echo 'Install Clang or set CLANG.' >&2; exit 69; }
+# Compare identities, not just spellings: a symlink or hard link must not let
+# publication replace the source compiler or native toolchain executable.
+if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" || "$output_file" -ef "$clang_path" ]]; then
+  echo 'Output must not alias the source, Oreslang compiler or Clang.' >&2
+  exit 64
+fi
 # Build beside the output so publication is atomic and errors preserve old output.
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
