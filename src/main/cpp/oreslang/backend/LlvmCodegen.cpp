@@ -865,9 +865,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
     llvm::FunctionCallee sourceSpawnChildCapability, sourceSendCapability;
-    llvm::FunctionCallee sourceEmitOutput, sourceRequestEnd;
+    llvm::FunctionCallee sourceEmitOutput, sourceRequestEnd, sourceAwaitChildOutput;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
+    std::unordered_map<std::string, llvm::Function*> actorOutputContinuations;
     const auto nativeActorHeapCapacity = [](const ActorDecl& actor) -> std::size_t {
         const std::size_t required =
             actor.fields.size() + actor.on_message.locals.size();
@@ -902,6 +903,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceRequestEnd = module.getOrInsertFunction(
             "oreslang_source_actor_request_end",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceAwaitChildOutput = module.getOrInsertFunction(
+            "oreslang_source_actor_await_child_output",
+            llvm::FunctionType::get(
+                voidTy, {native_ptr, i64, i64, native_ptr, i64}, false));
         sourceSpawnChildCapability = module.getOrInsertFunction(
             "oreslang_source_actor_spawn_child_capability",
             llvm::FunctionType::get(
@@ -919,6 +924,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             actorHandlers.emplace(actor.name, llvm::Function::Create(
                 llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false),
                 llvm::Function::ExternalLinkage, prefix + "on_message", module));
+            if (actor.on_message.actor_output_await) {
+                actorOutputContinuations.emplace(actor.name, llvm::Function::Create(
+                    llvm::FunctionType::get(
+                        i64, {native_ptr, i64, i64, i64, i64}, false),
+                    llvm::Function::InternalLinkage,
+                    prefix + "output_continuation", module));
+            }
         }
     }
     std::unordered_map<std::string, llvm::Function*> declarations;
@@ -2219,7 +2231,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 [&](const ActorDecl& candidate) {
                     return candidate.name == capability.actor_type;
                 });
-            if (target == source.actors.end() || target->fields.empty())
+            if (target == source.actors.end())
                 throw std::runtime_error("invalid source actor capability target lowering");
             llvm::Value* childInit=init.CreatePointerCast(
                 actorInits.at(capability.actor_type), native_ptr);
