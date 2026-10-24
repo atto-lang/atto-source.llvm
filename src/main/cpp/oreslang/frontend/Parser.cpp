@@ -464,7 +464,7 @@ private:
 
     ModuleContract contract() {
         ModuleContract result;
-        result.name = identifier();
+        result.name = nominal_declaration_name();
         require("as");
         const bool braced = accept("{");
         std::unordered_set<std::string> seen;
@@ -512,7 +512,7 @@ private:
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
-        actor.name = identifier();
+        actor.name = nominal_declaration_name();
         if (callable_nominal_name(actor.name))
             fail("callable signatures cannot be declared as nominal actor types");
         if (entry_builtin_name(actor.name))
@@ -641,7 +641,7 @@ private:
 
     ClassDecl class_declaration() {
         ClassDecl result;
-        result.name = identifier();
+        result.name = nominal_declaration_name();
         if (callable_nominal_name(result.name))
             fail("callable signatures cannot be declared as nominal class types");
         if (entry_builtin_name(result.name))
@@ -2109,6 +2109,14 @@ private:
     std::string type_identifier() {
         auto name = identifier();
         if (module_names_.count(name) && accept(".")) name += "." + identifier();
+        return name;
+    }
+
+    std::string nominal_declaration_name() {
+        // '_' is reserved for wildcard/inference-hole use, never a
+        // stable runtime nominal identity or module contract name.
+        std::string name = identifier();
+        if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
     }
 
