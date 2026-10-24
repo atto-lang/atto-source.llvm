@@ -43,8 +43,12 @@ public:
             TaskCancellation::Ptr authority,
             OresNativeExecutionContextStore* executions,
             OresNativeContinuationStore* continuations,
-            OresNativeSuspensionLink link) {
+            OresNativeSuspensionLink link,
+            uint64_t expected_code_generation,
+            OresNativeAllocationDomainRef expected_allocation) {
         if (!authority || !executions || !continuations ||
+                expected_code_generation == 0 ||
+                expected_allocation.kind == ORES_ALLOCATION_DOMAIN_NONE ||
                 !ores_native_store_handle_valid(link.parent) ||
                 !ores_native_store_handle_valid(link.continuation))
             throw std::invalid_argument("invalid native task continuation binding");
@@ -58,6 +62,15 @@ public:
                  * spawn, actor-mail or unrelated completion boundaries.
                  */
                 record.boundary != ORES_CONTINUATION_BOUNDARY_AWAIT ||
+                /*
+                 * Reject a cross-code-reload or cross-actor/task reuse even
+                 * when the logical execution handle itself is valid.
+                 */
+                record.code_generation != expected_code_generation ||
+                record.allocation.kind != expected_allocation.kind ||
+                record.allocation.domain != expected_allocation.domain ||
+                record.allocation.owner != expected_allocation.owner ||
+                record.allocation.generation != expected_allocation.generation ||
                 record.execution.slot != link.parent.slot ||
                 record.execution.generation != link.parent.generation ||
                 record.execution_id.runtime_domain != link.execution_id.runtime_domain ||
