@@ -6,6 +6,9 @@ The `NativeScalarFutureAwait` frame carries one signed 64-bit scalar value or
 a positive failure code. It is pinned in a shared allocation, qualified by a
 four-part `(runtime_id, actor_id, generation, future_id)` ticket. Competing
 completion, failure and cancellation transitions have exactly one winner.
+A scheduled callback transitions to an explicit `running` phase at CONTROL
+entry; cancellation is rejected from that point onward, and the frame becomes
+`completed` only after the callback exits (including exceptional exit).
 A producer thread may settle the frame but may **never execute a guest
 continuation**. Only the owning `NativeActorGroup` parent CONTROL lane may
 consume the terminal outcome. When CONTROL is full, the outcome remains ready
