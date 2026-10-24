@@ -2291,7 +2291,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             values.emplace(local.name, slot);
             actor_owned_tokens.push_back(token);
         }
-        for (const auto& action : actor.on_message.actor_handler_actions) {
+        auto emitActorAction = [&](llvm::IRBuilder<>& out,
+                                   llvm::Value* heapValue,
+                                   const std::unordered_map<std::string, llvm::Value*>& actionValues,
+                                   const std::unordered_map<std::string, llvm::Value*>& actionFields,
+                                   const ActorHandlerAction& action) {
             if (action.kind == ActorHandlerAction::Kind::CapabilitySend) {
                 if (action.index >= actor.on_message.actor_capability_sends.size())
                     throw std::runtime_error("invalid actor capability action index");
@@ -2305,53 +2309,146 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (capability == actor.capability_fields.end())
                     throw std::runtime_error("invalid actor capability send lowering");
                 llvm::Value* payload = lower(
-                    *send.payload, builder, i64, values, emptyFields, declarations);
+                    *send.payload, out, i64, actionValues, actionFields, declarations);
                 const std::size_t capability_index =
                     std::distance(actor.capability_fields.begin(), capability);
-                builder.CreateCall(sourceSendCapability, {
-                    actorHeap,
+                out.CreateCall(sourceSendCapability, {
+                    heapValue,
                     llvm::ConstantInt::get(i64, capability_index),
                     payload
                 });
-                continue;
+                return;
             }
             if (action.kind == ActorHandlerAction::Kind::Output) {
                 if (action.index >= actor.on_message.actor_outputs.size())
                     throw std::runtime_error("invalid actor output action index");
                 llvm::Value* payload=lower(
                     *actor.on_message.actor_outputs[action.index],
-                    builder, i64, values, emptyFields, declarations);
-                builder.CreateCall(sourceEmitOutput,{actorHeap,payload});
-                continue;
+                    out, i64, actionValues, actionFields, declarations);
+                out.CreateCall(sourceEmitOutput,{heapValue,payload});
+                return;
             }
             if (action.kind == ActorHandlerAction::Kind::End) {
-                builder.CreateCall(sourceRequestEnd,{actorHeap});
-                continue;
+                out.CreateCall(sourceRequestEnd,{heapValue});
+                return;
             }
             throw std::runtime_error("invalid actor handler action");
+        };
+
+        const std::size_t initialActionLimit =
+            actor.on_message.actor_output_await
+                ? actor.on_message.actor_output_await_action_index
+                : actor.on_message.actor_handler_actions.size();
+        for (std::size_t actionIndex=0;
+                actionIndex<initialActionLimit; ++actionIndex)
+            emitActorAction(
+                builder, actorHeap, values, emptyFields,
+                actor.on_message.actor_handler_actions[actionIndex]);
+
+        if (actor.on_message.actor_output_await) {
+            if (!actor.on_message.actor_field_writes.empty()
+                    || !actor.on_message.locals.empty())
+                throw std::runtime_error(
+                    "child-output await reached codegen with uncaptured actor state");
+            const auto capability=std::find_if(
+                actor.capability_fields.begin(), actor.capability_fields.end(),
+                [&](const ActorCapabilityField& field) {
+                    return field.name == actor.on_message.actor_output_await_field;
+                });
+            if (capability == actor.capability_fields.end())
+                throw std::runtime_error("invalid awaited actor capability lowering");
+            const std::size_t capabilityIndex =
+                std::distance(actor.capability_fields.begin(), capability);
+            llvm::Value* continuation = builder.CreatePointerCast(
+                actorOutputContinuations.at(actor.name), native_ptr);
+            builder.CreateCall(sourceAwaitChildOutput, {
+                actorHeap,
+                llvm::ConstantInt::get(i64, capabilityIndex),
+                incoming,
+                continuation,
+                llvm::ConstantInt::get(
+                    i64, actor.on_message.actor_output_await_offset)
+            });
+            for (auto it = actor_owned_tokens.rbegin();
+                 it != actor_owned_tokens.rend(); ++it)
+                builder.CreateCall(actorScopedDrop,
+                    {actorHeap, currentDomain, currentEpoch, *it});
+            builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+        } else {
+            for (const auto& write : actor.on_message.actor_field_writes) {
+                auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
+                    [&](const LocalBinding& f) { return f.name == write.field; });
+                if (field == actor.fields.end() || !field->field_mutable)
+                    throw std::runtime_error("invalid actor field write lowering");
+                llvm::Value* value = lower(
+                    *write.expression, builder, i64, values, emptyFields, declarations);
+                const std::size_t index = std::distance(actor.fields.begin(), field);
+                builder.CreateCall(fieldWrite, {
+                    actorHeap, currentDomain, currentEpoch,
+                    llvm::ConstantInt::get(i64, index), value});
+                builder.CreateStore(value, values.at(write.field));
+            }
+            llvm::Value* result = actor.on_message.returns_void
+                ? llvm::ConstantInt::get(i64, 0)
+                : lower(*actor.on_message.result, builder, i64, values,
+                    emptyFields, declarations);
+            for (auto it = actor_owned_tokens.rbegin();
+                 it != actor_owned_tokens.rend(); ++it)
+                builder.CreateCall(actorScopedDrop,
+                    {actorHeap, currentDomain, currentEpoch, *it});
+            builder.CreateRet(result);
         }
-        for (const auto& write : actor.on_message.actor_field_writes) {
-            auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                [&](const LocalBinding& f) { return f.name == write.field; });
-            if (field == actor.fields.end() || !field->field_mutable)
-                throw std::runtime_error("invalid actor field write lowering");
-            llvm::Value* value = lower(*write.expression, builder, i64, values, emptyFields, declarations);
-            const std::size_t index = std::distance(actor.fields.begin(), field);
-            builder.CreateCall(fieldWrite, {actorHeap, currentDomain, currentEpoch,
-                llvm::ConstantInt::get(i64, index), value});
-            builder.CreateStore(value, values.at(write.field));
+
+        if (actor.on_message.actor_output_await) {
+            auto* continuation = actorOutputContinuations.at(actor.name);
+            llvm::BasicBlock* resumedEntry =
+                llvm::BasicBlock::Create(context, "entry", continuation);
+            llvm::IRBuilder<> resumed(resumedEntry);
+            auto resumedArgs=continuation->arg_begin();
+            llvm::Value* resumedHeap=&*resumedArgs++;
+            llvm::Value* resumedDomain=&*resumedArgs++;
+            llvm::Value* resumedEpoch=&*resumedArgs++;
+            llvm::Value* originalMail=&*resumedArgs++;
+            llvm::Value* awaitedOutput=&*resumedArgs++;
+
+            std::unordered_map<std::string, llvm::Value*> resumedValues;
+            std::unordered_map<std::string, llvm::Value*> resumedFields;
+            llvm::Value* resumedMailSlot =
+                resumed.CreateAlloca(i64, nullptr, param + ".resumed.slot");
+            resumed.CreateStore(originalMail, resumedMailSlot);
+            resumedValues.emplace(param, resumedMailSlot);
+            if (actor.on_message.actor_mail_parameter)
+                resumedFields.emplace(param + ".value", resumedMailSlot);
+
+            llvm::Value* awaitedSlot = resumed.CreateAlloca(
+                i64, nullptr,
+                actor.on_message.actor_output_await_local + ".value.slot");
+            resumed.CreateStore(awaitedOutput, awaitedSlot);
+            resumedFields.emplace(
+                actor.on_message.actor_output_await_local + ".value",
+                awaitedSlot);
+
+            for (std::size_t i=0; i<actor.fields.size(); ++i) {
+                const auto& field=actor.fields[i];
+                llvm::Value* value=resumed.CreateCall(fieldRead, {
+                    resumedHeap, resumedDomain, resumedEpoch,
+                    llvm::ConstantInt::get(i64,i)},
+                    field.name + ".resumed.read");
+                llvm::Value* slot=resumed.CreateAlloca(
+                    i64, nullptr, field.name + ".resumed.slot");
+                resumed.CreateStore(value,slot);
+                resumedValues.emplace(field.name,slot);
+            }
+
+            for (std::size_t actionIndex =
+                    actor.on_message.actor_output_await_action_index;
+                    actionIndex < actor.on_message.actor_handler_actions.size();
+                    ++actionIndex)
+                emitActorAction(
+                    resumed, resumedHeap, resumedValues, resumedFields,
+                    actor.on_message.actor_handler_actions[actionIndex]);
+            resumed.CreateRet(llvm::ConstantInt::get(i64,0));
         }
-        llvm::Value* result = actor.on_message.returns_void
-            ? llvm::ConstantInt::get(i64, 0)
-            : lower(*actor.on_message.result, builder, i64, values,
-                emptyFields, declarations);
-        // The native actor scheduler admits no next message until the current
-        // synchronous handler has dropped all temporary owners in LIFO order.
-        for (auto it = actor_owned_tokens.rbegin();
-             it != actor_owned_tokens.rend(); ++it)
-            builder.CreateCall(actorScopedDrop,
-                {actorHeap, currentDomain, currentEpoch, *it});
-        builder.CreateRet(result);
     }
 
     // Compiler-generated Wasm guest actor v0. One module instance belongs
