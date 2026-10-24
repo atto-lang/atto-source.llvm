@@ -5,9 +5,10 @@ bootstrap now opens the real four-domain native OresVM, not an unrelated
 private `OresNativeActorScheduler`.
 
 * A trusted zero-argument `main` allocates one OresVM per live compiled
-  source-actor group. Every domain initializes metadata with **zero threads**;
-  MAIN receives 64 bounded actor slots, mailbox budget 128 and up to four
-  lazy carriers. The other three domains remain dormant, with one metadata
+  source-actor group. Every domain initializes metadata with **zero actor
+  carrier threads**; one separate VM-owned CONTROL loop is eagerly started
+  before root actor admission. MAIN receives 64 bounded actor slots,
+  mailbox budget 128 and up to four lazy carriers. The other three domains remain dormant, with one metadata
   slot and no spawned guest actor.
 * Compiled actors spawn through `ores_native_vm_spawn(MAIN)`, receive the
   compiler-generated constructor as priority CONTROL via
