@@ -403,6 +403,18 @@ int ores_native_vm_current_execution_context(
         && ores_native_actor_scheduler_current_execution_context(
             vm->schedulers[domain], out);
 }
+int ores_native_vm_suspend_current_user_mailbox(
+        OresNativeVM* vm, enum OresNativeVMDomain domain) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_suspend_current_user_mailbox(
+            vm->schedulers[domain]);
+}
+int ores_native_vm_resume_current_user_mailbox(
+        OresNativeVM* vm, enum OresNativeVMDomain domain) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_resume_current_user_mailbox(
+            vm->schedulers[domain]);
+}
 
 static void control_lock(OresNativeVM* vm) {
     if (pthread_mutex_lock(&vm->control_lock) != 0) abort();
