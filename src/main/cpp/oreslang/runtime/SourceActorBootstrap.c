@@ -277,14 +277,6 @@ static void resume_output_turn(SourceActor* instance) {
     original_mail = instance->output_wait_mail;
     output_value = instance->output_wait_value;
     ensure(continuation != NULL);
-    instance->output_continuation = NULL;
-    instance->output_wait_child = NULL;
-    instance->output_wait_mail = 0;
-    instance->output_wait_value = 0;
-    instance->output_wait_source_token = 0;
-    instance->output_waiting = 0;
-    instance->output_wait_ready = 0;
-    instance->output_wait_link = (OresNativeSuspensionLink){0};
     group_unlock();
 
     /* CONTROL owns this actor lane, so DATA can be ungated now without
@@ -334,6 +326,19 @@ static void resume_output_turn(SourceActor* instance) {
         group.executions, resumed));
     ensure(ores_native_continuation_store_release(
         group.continuations, link.continuation));
+
+    group_lock();
+    ensure(instance->output_waiting && instance->output_wait_ready);
+    instance->output_continuation = NULL;
+    instance->output_wait_child = NULL;
+    instance->output_wait_mail = 0;
+    instance->output_wait_value = 0;
+    instance->output_wait_source_token = 0;
+    instance->output_waiting = 0;
+    instance->output_wait_ready = 0;
+    instance->output_wait_link = (OresNativeSuspensionLink){0};
+    ensure(pthread_cond_broadcast(&group.output_ready) == 0);
+    group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
         "SOURCE_ACTOR_OUTPUT_AWAIT_TRACE_PASS actor_slot=%llu fresh_resume=1\n",
@@ -845,6 +850,17 @@ void oreslang_source_actor_stop(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
+    while (instance->output_waiting) {
+        SourceActor* awaited_child=instance->output_wait_child;
+        if (awaited_child && ores_native_vm_poll_done(
+                group.vm, ORES_NATIVE_VM_MAIN, awaited_child->ref)
+                && !instance->output_wait_ready) {
+            group_unlock();
+            abort();
+        }
+        ensure(pthread_cond_wait(&group.output_ready, &group.mutex) == 0);
+        ensure(group.actors[slot] == instance);
+    }
     /* If self.end() already retired the lane, stop returns zero. The ref was
      * validated above, so either state is safe to hand to wait_done. */
     (void)ores_native_vm_stop(
