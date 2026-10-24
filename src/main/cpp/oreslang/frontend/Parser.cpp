@@ -982,10 +982,26 @@ private:
             Parameter receiver;
             receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
             if (accept("mut")) {
-                require("self"); require(")"); require("(");
+                require("self");
                 receiver.mode = Parameter::Mode::BorrowMut;
-            } else if (token_.text == "self") {
-                fail("native explicit read receiver type unsupported; omit self for a read method");
+                if (accept(",")) {
+                    if (token_.text == ")")
+                        fail("native explicit self receiver must be followed by a parameter after ','");
+                } else if (token_.text == ")" && peek_next().text == "(") {
+                    // Keep legacy method(mut self)(params) syntax.
+                    require(")"); require("(");
+                } else if (token_.text != ")") {
+                    fail("native explicitly typed mutable self receiver unsupported");
+                }
+            } else if (accept("self")) {
+                // The receiver already occupies the first hidden ABI parameter.
+                // A declaration-level self marker consumes no source argument.
+                if (accept(",")) {
+                    if (token_.text == ")")
+                        fail("native explicit self receiver must be followed by a parameter after ','");
+                } else if (token_.text != ")") {
+                    fail("native explicitly typed read self receiver unsupported");
+                }
             }
             value.parameters.push_back(std::move(receiver));
         }
@@ -1550,10 +1566,12 @@ private:
                 }
                 continue;
             }
-            // A void program entrypoint may fall through with success status 0.
-            // Other functions retain their existing explicit-return requirement.
+            // Instance void methods may have empty bodies or fall through,
+            // just as in the Java reference frontend. The native entrypoint
+            // also retains its existing implicit-success fallthrough. Non-void
+            // functions continue to require an explicit final return.
             if (token_.text == "}" && value.returns_void &&
-                    value.name == "main" && value.parameters.empty()) {
+                    ((!owner.empty()) || (value.name == "main" && value.parameters.empty()))) {
                 require("}");
                 return value;
             }
