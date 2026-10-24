@@ -61,12 +61,12 @@ fn main() {
 
     // Arithmetic unary plus must not launder bool/String into i64, and no
     // malformed or out-of-range program may emit even partial LLVM IR.
-    let invalid = [
-        "pub fnc main():int{return +true;}\n",
-        "pub fnc main():int{return +\"x\";}\n",
-        "pub fnc main():int{return +9223372036854775808;}\n",
-        "pub fnc main():int{return +;}\n",
-        &format!("pub fnc main():int{{return {}1;}}\n", "+".repeat(128)),
+    let invalid = vec![
+        "pub fnc main():int{return +true;}\n".to_string(),
+        "pub fnc main():int{return +\"x\";}\n".to_string(),
+        "pub fnc main():int{return +9223372036854775808;}\n".to_string(),
+        "pub fnc main():int{return +;}\n".to_string(),
+        format!("pub fnc main():int{{return {}1;}}\n", "+".repeat(128)),
     ];
     for (i, source) in invalid.iter().enumerate() {
         let result = compile(&compiler, &dir, valid.len() + i, source);
