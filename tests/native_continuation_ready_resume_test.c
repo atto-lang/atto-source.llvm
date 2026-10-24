@@ -240,7 +240,28 @@ int main(void) {
     check(!ores_native_await_trace_ready_resume_begin(
         executions, continuations, (OresNativeExecutionId){88, 10},
         link, &trace_origin, NULL));
+    /*
+     * Completion is a physical owner operation, not a free-form store state
+     * transition. A stale parent generation or forged execution identity
+     * must leave the actual CLAIMED frame untouched.
+     */
+    OresNativeSuspensionLink forged_finish = link;
+    ++forged_finish.parent.generation;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.execution_id.execution;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.execution_id.runtime_domain;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
     check(ores_native_await_trace_resume_finish(continuations, link));
+    check(!ores_native_await_trace_resume_finish(continuations, link));
     check(ores_native_execution_context_store_release(executions, resumed));
     check(ores_native_continuation_store_release(
         continuations, link.continuation));
