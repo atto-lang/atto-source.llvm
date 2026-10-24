@@ -332,16 +332,71 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 
     ensure(payload == 0);
     SourceActor* instance = lookup(slot);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (atomic_load_explicit(
+            &test_hold_initialization, memory_order_acquire)) {
+        atomic_store_explicit(
+            &test_initialization_entered, 1, memory_order_release);
+        while (atomic_load_explicit(
+                &test_hold_initialization, memory_order_acquire))
+            sched_yield();
+    }
+#endif
+
+    /*
+     * Match Java ActorRef.stop(): the reserved startup CONTROL turn survives
+     * mailbox sealing so lifecycle cleanup can finish, but if stop won before
+     * initialization begins, guest construction itself is skipped.
+     */
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
+            memory_order_release);
+        return;
+    }
+
+    int expected = ORES_SOURCE_ACTOR_STARTUP_PENDING;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->startup_state,
+        &expected,
+        ORES_SOURCE_ACTOR_STARTUP_INITIALIZING,
+        memory_order_acq_rel,
+        memory_order_acquire));
+
+    atomic_store_explicit(
+        &instance->constructor_started, 1, memory_order_release);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
-    atomic_store_explicit(&instance->initialized, 1, memory_order_release);
+
+    /*
+     * Stop may race an already-running constructor. Java permits that
+     * constructor turn to finish, but readiness still fails if stop won before
+     * readiness publication.
+     */
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
+            memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &instance->initialized, 1, memory_order_release);
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_READY,
+            memory_order_release);
+    }
 
     /*
      * Registration may happen before or after initialization. The group mutex
-     * makes completion one-shot without holding a scheduler lock across guest
-     * construction. source_actor_stop never waits while holding this mutex.
+     * makes successful readiness completion one-shot without holding a
+     * scheduler lock across guest construction.
      */
     group_lock();
     ReadyAwaitFrame* frame = group.pending_ready;
@@ -715,8 +770,11 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    ensure(atomic_load_explicit(
-        &instance->initialized, memory_order_acquire) == 1);
+    const int startup_state = atomic_load_explicit(
+        &instance->startup_state, memory_order_acquire);
+    ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
+        || startup_state
+            == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
     ensure(ores_native_vm_poll_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
@@ -739,7 +797,10 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d ready=%d released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        atomic_load_explicit(
+            &instance->constructor_started, memory_order_acquire),
+        startup_state == ORES_SOURCE_ACTOR_STARTUP_READY,
         (unsigned long long)terminal.accepted_user_messages,
         (unsigned long long)terminal.processed_user_messages,
         (unsigned long long)terminal.abandoned_user_messages,
