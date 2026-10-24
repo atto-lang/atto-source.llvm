@@ -84,6 +84,12 @@ def main():
             "native typed throws supports only ActorTerminated for ActorRef.get_ready",
         "source-actor-await-ready-extra-throws.ores":
             "native typed throws supports only one ActorTerminated type",
+        "source-actor-await-ready-duplicate-throws.ores":
+            "duplicate native typed throws declaration",
+        "source-actor-await-ready-using-throw.ores":
+            "await get_ready typed lifecycle effect cannot be combined with using effects",
+        "source-actor-await-ready-raises.ores":
+            "native typed exceptional effect declaration is not yet enabled",
         "source-actor-terminated-throws-without-ready.ores":
             "throws ActorTerminated requires direct await ActorRef.get_ready",
         "source-actor-await-done-terminated-throws.ores":
