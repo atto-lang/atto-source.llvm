@@ -47,6 +47,14 @@ void oreslang_source_actor_send_capability(
     OresActorI64Heap* heap, uint64_t slot, int64_t payload);
 int oreslang_source_actor_try_send_capability(
     OresActorI64Heap* heap, uint64_t slot, int64_t payload);
+/* Actor output is a separate bounded parent-observable stream, matching
+ * source self.send(...); it is not a self-mailbox enqueue. take_output is
+ * trusted-host blocking only and must never run on an actor carrier. */
+void oreslang_source_actor_emit_output(
+    OresActorI64Heap* heap, int64_t payload);
+int64_t oreslang_source_actor_take_output(void* actor);
+/* Handler-only nonblocking lifecycle request matching source self.end(). */
+void oreslang_source_actor_request_end(OresActorI64Heap* heap);
 /* Constructor-only structured child binding. The current actor must own heap,
  * slot must be the next dense capability slot, and the child is retained only
  * by trusted runtime metadata plus its generation-fenced capability identity.
