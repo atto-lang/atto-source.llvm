@@ -70,5 +70,20 @@ int main(void) {
     require(dispatched);
     require(ores_native_vm_control_pending(vm) == 0);
     require(ores_native_vm_close(vm));
+
+    /* The same injected EAGAIN during RT carrier preallocation is terminal
+     * for the RT bootstrap. It must not leave a backdoor for a late CONTROL
+     * pthread. The caller can still retire/close the failed cold VM. */
+    vm = ores_native_vm_open(&config);
+    require(vm != NULL);
+    atomic_store_explicit(&reject_once, 1, memory_order_relaxed);
+    require(!ores_native_vm_prepare_realtime(vm));
+    require(atomic_load(&create_calls) == 3);
+    require(!ores_native_vm_start_main_control_loop(vm));
+    require(!ores_native_vm_main_control_loop_started(vm));
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        require(ores_native_vm_started_carriers(
+            vm, (enum OresNativeVMDomain)i) == 0);
+    require(ores_native_vm_close(vm));
     return 0;
 }
