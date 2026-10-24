@@ -1994,6 +1994,20 @@ private:
             }
             return result;
         }
+        if (token_.text == "+") {
+            // Unary plus is an int-only identity, not a truthy or String
+            // coercion. Reuse typed addition with a side-effect-free zero
+            // operand: the existing scalar checker then rejects +bool and
+            // +String before any LLVM IR is published. Nested plus remains
+            // subject to the same expression-depth budget as unary minus.
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::Add, offset);
+            expr->left = make_expression(Expression::Kind::Integer, offset);
+            expr->left->integer = 0;
+            expr->right = unary();
+            return expr;
+        }
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
