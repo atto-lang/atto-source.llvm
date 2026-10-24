@@ -1,0 +1,80 @@
+// Native source-to-IR-to-Clang execution, not a parser-only or model test.
+// No new Python harnesses: this standalone executable uses Rust std only.
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+struct Workdir(PathBuf);
+impl Workdir {
+    fn new() -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH).expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "oreslang-unary-plus-{}-{}", std::process::id(), nonce));
+        fs::create_dir(&path).expect("create workdir");
+        Self(path)
+    }
+}
+impl Drop for Workdir {
+    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+}
+
+fn compile(compiler: &str, dir: &Workdir, id: usize, source: &str) -> std::process::Output {
+    let input = dir.0.join(format!("case-{id}.ores"));
+    fs::write(&input, source).expect("write source");
+    Command::new(compiler).arg(input).output().expect("run real Oreslang compiler")
+}
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let compiler = args.next().expect("usage: native-unary-plus compiler clang");
+    let clang = args.next().expect("missing clang");
+    assert!(args.next().is_none(), "unexpected arguments");
+    let dir = Workdir::new();
+
+    let valid = [
+        ("pub fnc main():int{return +42;}\n", 42),
+        ("pub fnc main():int{return ++(40+2);}\n", 42),
+        ("pub fnc main():int{return 2 * +(20+1);}\n", 42),
+        ("pub fnc main():int{return -+(0-42);}\n", 42),
+        ("pub fnc main():int{return +0;}\n", 0),
+    ];
+    for (i, (source, expected)) in valid.iter().enumerate() {
+        let result = compile(&compiler, &dir, i, source);
+        assert!(result.status.success(),
+            "source case {i} rejected: {}", String::from_utf8_lossy(&result.stderr));
+        let ir = dir.0.join(format!("case-{i}.ll"));
+        assert!(result.stdout.windows(6).any(|bytes| bytes == b"define"),
+            "case {i} did not emit LLVM function definitions");
+        fs::write(&ir, result.stdout).expect("write LLVM IR");
+        let executable = dir.0.join(format!("case-{i}.native"));
+        let built = Command::new(&clang)
+            .args(["-x", "ir"]).arg(&ir).arg("-o").arg(&executable)
+            .output().expect("run clang");
+        assert!(built.status.success(),
+            "Clang could not build case {i}: {}", String::from_utf8_lossy(&built.stderr));
+        let run = Command::new(executable).output().expect("execute AOT guest");
+        assert_eq!(run.status.code(), Some(*expected), "native AOT case {i}");
+    }
+
+    // Arithmetic unary plus must not launder bool/String into i64, and no
+    // malformed or out-of-range program may emit even partial LLVM IR.
+    let invalid = [
+        "pub fnc main():int{return +true;}\n",
+        "pub fnc main():int{return +\"x\";}\n",
+        "pub fnc main():int{return +9223372036854775808;}\n",
+        "pub fnc main():int{return +;}\n",
+        &format!("pub fnc main():int{{return {}1;}}\n", "+".repeat(128)),
+    ];
+    for (i, source) in invalid.iter().enumerate() {
+        let result = compile(&compiler, &dir, valid.len() + i, source);
+        assert!(!result.status.success(), "invalid unary plus case {i} compiled");
+        assert!(result.stdout.is_empty(),
+            "invalid unary plus case {i} leaked LLVM IR to stdout");
+        assert!(!result.stderr.is_empty(),
+            "invalid unary plus case {i} rejected without a diagnostic");
+    }
+    println!("five native executable unary-plus positives, five no-IR negatives");
+}
