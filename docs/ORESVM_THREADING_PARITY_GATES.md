@@ -23,10 +23,13 @@ own physical pthread.
 `ores_native_vm_open` continues to support legacy **manual host pumping**,
 with no eager pthread. Trusted bootstraps opting into the autonomous main
 CONTROL service call `ores_native_vm_start_main_control_loop` **before**
-spawning actors. This prestarts exactly one CONTROL worker, rejects late
-thread provisioning, and leaves all actor carrier counts at zero until a
-runnable actor turn is admitted. The compiled source-actor bootstrap takes
-this path.
+spawning actors **and before any real-time preallocation**. This prestarts
+exactly one CONTROL worker, rejects late thread provisioning, and leaves all
+actor carrier counts at zero until a runnable actor turn is admitted. Once
+`prepare_realtime()` has been attempted, success or failure, a new CONTROL
+thread is forbidden; hosts needing both services start CONTROL first, then
+prestart their RT carriers. The compiled source-actor bootstrap uses the
+ordinary non-RT path.
 
 The master CONTROL loop never calls user/guest callbacks, handles NIO
 readiness, or performs blocking socket I/O. It consumes coalesced per-domain
@@ -54,8 +57,12 @@ only the opt-in RT profile prestarts reactor pthreads.
 2. **Adversarial lifecycle**: repeated CONTROL start, rejected late start,
    early pending notifications, concurrent notify flood, actor mailbox
    isolation, retirement joining, cold NIO bootstrap exclusion, and
-   no guest callback on reactor/master threads. Inject pthread-create
-   failures and ASan/UBSan/TSan failures when supported.
+   no guest callback on reactor/master threads. Linux's
+   `native_vm_main_control_pthread_failure_retry` uses linker-wrapped
+   `pthread_create` to prove EAGAIN leaves a cold, retryable VM with
+   pending notifications intact. Exercise RT-first late-start rejection
+   and CONTROL-first-then-RT ordering. Run GCC/Clang ASan/UBSan and TSan
+   when supported; written tests alone are not proof of execution.
 3. **Compiler bridge**: extend beyond the current restricted source actor
    path, making ROOT/actor Future wakeups, timers, guest `await`,
    cancellation, `defer`, actor stop and restart generation-fenced and
