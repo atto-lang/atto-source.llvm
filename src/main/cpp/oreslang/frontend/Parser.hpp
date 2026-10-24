@@ -254,6 +254,7 @@ struct Function {
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     std::vector<ActorCapabilitySend> actor_capability_sends;
+    bool actor_mail_parameter = false; // receive(ActorMail<int> mail) aliases mail.value to payload
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
     std::string return_class; // immutable leaf record handle; never a stack pointer
