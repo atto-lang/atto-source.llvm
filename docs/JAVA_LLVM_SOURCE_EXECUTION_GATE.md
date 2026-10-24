@@ -16,7 +16,13 @@ The strict differential runner adds two independent Java executions per
 positive source program and byte-compares each to the expected native output.
 A Java launcher must be supplied; there is **no** skip or fallback when Java
 cannot execute a fixture. Both source trees must be checked out independently
-at known Git commits, with no tracked **or untracked** local edits.
+at known Git commits, with no tracked **or untracked** local edits. The gate additionally rejects
+Git `assume-unchanged` and `skip-worktree` index hints and ignored untracked
+inputs outside the designated generated-build directories. For every tracked
+source file, it validates an ordinary Git file mode (100644/100755), checks
+staged bytes against `HEAD`, and hashes on-disk bytes against the indexed Git
+blob before **and after** running the compilers. In this first strict profile,
+tracked symlinks and submodule gitlinks are rejected.
 The launcher and both source fixtures must be tracked by the pinned checkouts;
 the runner checks byte-for-byte fixture equality and performs fresh
 compiler/runtime builds. The JSON receipt records per-program native and Java
@@ -90,7 +96,8 @@ tests provide no real compiled source evidence.
 
 The first suite creates disposable **synthetic** Git repositories to
 exercise denial of untracked LLVM and Java sources, a modified tracked source,
-committed Java/LLVM fixture divergence, an untracked launcher, and **committed
+committed Java/LLVM fixture divergence, an untracked launcher, hidden worktree edits via `assume-unchanged`, ignored
+Java/LLVM sources, unrelated committed symlinks, and **committed
 symlinks to identical external fixture data**. Guest fixtures must be regular
 Git blobs (mode `100644`), and the Java launcher must be a tracked executable
 Git blob (mode `100755`); neither may be an escape through a tracked symlink. It also
