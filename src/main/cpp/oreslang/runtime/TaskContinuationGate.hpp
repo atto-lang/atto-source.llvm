@@ -53,6 +53,11 @@ public:
         if (!ores_native_continuation_store_get(
                 continuations, link.continuation, &record) ||
                 record.state != ORES_CONTINUATION_PENDING ||
+                /*
+                 * A Task Future waiter must not borrow supervisor CONTROL,
+                 * spawn, actor-mail or unrelated completion boundaries.
+                 */
+                record.boundary != ORES_CONTINUATION_BOUNDARY_AWAIT ||
                 record.execution.slot != link.parent.slot ||
                 record.execution.generation != link.parent.generation ||
                 record.execution_id.runtime_domain != link.execution_id.runtime_domain ||
