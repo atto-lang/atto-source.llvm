@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import hashlib
 import pathlib
 import subprocess
 import tempfile
@@ -21,6 +22,12 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    shared_fixture = fixtures / "shared-actorref-child-capability-v1.ores"
+    shared_bytes = shared_fixture.read_bytes()
+    assert len(shared_bytes) == 680, ("shared fixture byte length", len(shared_bytes))
+    assert hashlib.sha256(shared_bytes).hexdigest() == (
+        "599d1366b5926e5afc567cb7832d4769ebef6c43cd19b8010aeca22fdf83b585"
+    ), "shared fixture digest drifted from common-source ActorRef v1"
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
