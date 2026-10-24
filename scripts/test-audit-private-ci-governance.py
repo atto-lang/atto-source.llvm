@@ -33,9 +33,13 @@ class PolicyAuditTest(unittest.TestCase):
         protected = {"name": "main", "protected": True}
         protection = {
             "required_pull_request_reviews": {
-                "require_code_owner_reviews": True, "dismiss_stale_reviews": True
+                "require_code_owner_reviews": True, "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []},
             },
-            "enforce_admins": {"enabled": True}
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
         }
         audit.check_live_metadata(repo, protected, protection)
         invalids = [
@@ -48,6 +52,33 @@ class PolicyAuditTest(unittest.TestCase):
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)
+        # For private-source publication, branch protection must deny
+        # unreviewed updates even when CODEOWNERS and admin enforcement exist.
+        cases = [
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "required_approving_review_count": 0}},
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "required_approving_review_count": True}},
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "required_approving_review_count": -1}},
+            {"required_pull_request_reviews": {k: v for k, v in
+                 protection["required_pull_request_reviews"].items()
+                 if k != "required_approving_review_count"}},
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "bypass_pull_request_allowances": {"users": ["bypass"]}}},
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "bypass_pull_request_allowances": {"teams": ["bypass"]}}},
+            {"required_pull_request_reviews": {**protection["required_pull_request_reviews"],
+                                                 "bypass_pull_request_allowances": {"apps": ["bypass"]}}},
+            {"allow_force_pushes": {"enabled": True}},
+            {"allow_deletions": {"enabled": True}},
+            {"allow_force_pushes": None},
+            {"allow_deletions": None},
+        ]
+        for variant in cases:
+            with self.subTest(variant=variant), self.assertRaises(audit.GovernanceError):
+                audit.check_live_metadata(repo, protected, {**protection, **variant})
+
 
     def test_missing_codeowner_rule_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
