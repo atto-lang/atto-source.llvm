@@ -545,7 +545,7 @@ private:
             if (token_.text == "ActorRef") {
                 if (mutable_binding)
                     fail("native actor ActorRef field must be val/const; capability rebinding is unsupported");
-                if (actor.capability_fields.size() == ORES_SOURCE_ACTOR_CAPABILITY_SLOTS)
+                if (actor.capability_fields.size() == 8)
                     fail("native actor capability field limit exceeded (8)");
                 advance();
                 require("<");
