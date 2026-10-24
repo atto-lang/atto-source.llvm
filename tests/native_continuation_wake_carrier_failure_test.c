@@ -56,6 +56,41 @@ int main(void) {
     REQUIRE(ores_native_actor_scheduler_wait_done(f.scheduler, f.actor));
     ores_native_actor_scheduler_retire(f.scheduler);
     REQUIRE(ores_native_actor_scheduler_try_destroy(f.scheduler));
+    /* Execution ID exhaustion cannot allow ordinary DATA to consume a
+     * previously reserved wake's final execution/acceptance credit. */
+    Fixture exhausted = {0};
+    exhausted.scheduler = ores_native_actor_scheduler_open_with_wakes(
+        1, 2, 1, data, NULL, NULL, wake, &exhausted);
+    REQUIRE(exhausted.scheduler);
+    exhausted.actor = ores_native_actor_scheduler_spawn(exhausted.scheduler, 0);
+    REQUIRE(exhausted.actor.scheduler_domain);
+    REQUIRE(ores_native_actor_scheduler_test_set_next_execution(
+        exhausted.scheduler, UINT64_MAX));
+    OresNativeWakeTicket last = {0};
+    REQUIRE(ores_native_actor_scheduler_reserve_wake(
+        exhausted.scheduler, exhausted.actor, exhausted.actor,
+        11, 12, 13, 14, &last));
+    REQUIRE(ores_native_actor_scheduler_try_send(
+        exhausted.scheduler, exhausted.actor, 99)
+        == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    REQUIRE(ores_native_actor_scheduler_transfer_wake(
+        exhausted.scheduler, last));
+    REQUIRE(ores_native_actor_scheduler_publish_wake(
+        exhausted.scheduler, last, ORES_NATIVE_WAKE_READY)
+        == ORES_NATIVE_WAKE_PUBLISHED);
+    REQUIRE(ores_native_actor_scheduler_drain(exhausted.scheduler));
+    REQUIRE(atomic_load(&exhausted.wakes) == 1);
+    REQUIRE(!atomic_load(&exhausted.errors));
+    REQUIRE(!ores_native_actor_scheduler_reserve_wake(
+        exhausted.scheduler, exhausted.actor, exhausted.actor,
+        21, 22, 23, 24, &last));
+    REQUIRE(ores_native_actor_scheduler_stop(
+        exhausted.scheduler, exhausted.actor));
+    REQUIRE(ores_native_actor_scheduler_wait_done(
+        exhausted.scheduler, exhausted.actor));
+    ores_native_actor_scheduler_retire(exhausted.scheduler);
+    REQUIRE(ores_native_actor_scheduler_try_destroy(exhausted.scheduler));
+
     puts("NATIVE_WAKE_CARRIER_FAILURE_FENCE_PASS");
     return 0;
 }
