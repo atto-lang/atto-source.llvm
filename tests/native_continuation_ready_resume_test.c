@@ -127,6 +127,10 @@ int main(void) {
         check(!ores_native_continuation_store_get(continuations, stale, &record));
         check(ores_native_continuation_store_get(continuations, current, &record));
         check(record.state == ORES_CONTINUATION_PENDING);
+        if (current.slot == stale.slot) {
+            check(current.generation != stale.generation);
+            check(!ores_native_continuation_store_release(continuations, stale));
+        }
         check(ores_native_continuation_store_cancel(continuations, current));
         check(ores_native_continuation_store_release(continuations, current));
     }
