@@ -64,6 +64,17 @@ int ores_native_continuation_store_retain(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
 
+/*
+ * Release an owning pin; success means the requested pin was released,
+ * not necessarily that the entire ancestry was destroyed.
+ *
+ * An explicit last-pin release of a CLAIMED continuation fails until the
+ * physical guest turn calls finish_resume(). If child reclamation reaches
+ * a CLAIMED ancestor with its final pin, the child release still succeeds:
+ * the ancestor pin remains live for guest completion and an explicit final
+ * release afterwards. Callers must not treat successful child release as
+ * proof of ancestor quiescence.
+ */
 int ores_native_continuation_store_release(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
