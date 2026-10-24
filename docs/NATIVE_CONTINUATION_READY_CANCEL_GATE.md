@@ -122,3 +122,42 @@ these tests are committed test definitions, not independently verified passes.
 Release gates: run host CTest under ASan/UBSan and optionally TSAN; run
 source_actor_await_trace_runtime and source_actor_compiled_native_lifecycle;
 verify exact source-tree hash, executor identity, exit codes and test logs.
+
+## Safety audit follow-up: retirement and claimed-frame pins
+
+Two additional fail-closed fixes were implemented after the initial composed
+PR was opened:
+
+1. **Retirement is a revocation event** for runtime waiter subscriptions.
+   Previously `TaskCancellation::retire()` silently closed all revocation
+   subscriptions, so a native continuation bound to a retired Task could
+   remain PENDING/READY and be resumed. Retirement now invokes every pending
+   revoker outside the graph lock, drains all hooks even when one throws,
+   and only then reports a hook failure. A revoker registered after retirement
+   is synchronously delivered; an ordinary cancellation *observer* is not.
+   This closes retire-vs-registration and retire-vs-producer races.
+
+2. **Final release is forbidden while CLAIMED.** A `NativeContinuationStore`
+   record that has been claimed by a resumed physical guest turn cannot have
+   its last reference dropped before `finish_resume()` marks COMPLETED.
+   Nonfinal pin releases remain permitted. This prevents a stale executing
+   continuation handle from being recycled before its owner finishes.
+   Existing tests and the new Task bridge test assert the failed premature
+   last-release followed by successful finish and cleanup.
+
+The new retirement race adds 128 more iterations. The native host test corpus
+now also covers late revocation registration, throwing retirement callbacks,
+and stale/forged continuation handles. **These are committed regression
+definitions; they are not executed test evidence until CI actually runs.**
+
+### Alternate-organization execution limitation
+
+A separate writable private test repository with a history of executed Actions
+steps was identified and individual Git blobs could be copied there with the
+same SHA. A full exact-tree mirror was not completed: the source tree contains
+over a thousand blobs, the copy process was incomplete, and publishing the
+test workflow was blocked by a tooling safety check. No test result from that
+partial mirror can qualify this source head. Only an authorized full tree
+with identical source tree SHA, or direct checkout in a funded/available
+source-org runner, is eligible for the strict exact-head evidence claim.
+
