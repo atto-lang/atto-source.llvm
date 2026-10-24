@@ -229,17 +229,19 @@ def main():
          ) + "declare trait T0 as end\n" + main_fn,
          "TYPE_PARENT_DEPTH_BUDGET"),
     ])
-    negative.extend([
-        ("reject native root extension until checked alias ABI lowering",
+    positive.extend([
+        ("native root alias extension dispatch",
          "declare type Code = int;\n"
          "define mtd double on Code(): int { return self + self; }\n"
-         + main_fn, "EXTENSION_BACKEND_UNSUPPORTED"),
-        ("reject native module extension until checked alias ABI lowering",
+         "fnc apply(Code code): int { return code.double(); }\n"
+         "pub fnc main(): int { return apply(21); }\n"),
+        ("native module alias extension dispatch",
          "define module api as\n"
          " declare type Code = int;\n"
          " define mtd double on Code(): int { return self + self; }\n"
-         " pub fnc main(): int { return 0; }\nend\n",
-         "EXTENSION_BACKEND_UNSUPPORTED"),
+         " pub fnc main(): int { val code: Code = 21; return code.double(); }\nend\n"),
+    ])
+    negative.extend([
         ("declare alias requires full definition", "declare type Code;\n" + main_fn,
          "TYPE_ONLY_INCOMPLETE_DEFINITION"),
         ("define alias requires full definition", "define type Code;\n" + main_fn,
