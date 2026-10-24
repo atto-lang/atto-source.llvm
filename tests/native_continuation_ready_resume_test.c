@@ -112,6 +112,27 @@ int main(void) {
     check(!ores_native_continuation_store_get(continuations, cancelled, &record));
 
     /*
+     * ABA regression: a released handle must never affect a reused slot.
+     * Capacity two ensures repeated publication eventually reuses it.
+     */
+    OresNativeContinuationHandle stale = cancelled;
+    for (int reuse = 0; reuse < 8; ++reuse) {
+        OresNativeContinuationHandle current = publish(continuations, execution);
+        check(!ores_native_continuation_store_notify_ready(continuations, stale));
+        check(!ores_native_continuation_store_cancel(continuations, stale));
+        check(!ores_native_continuation_store_try_claim_ready_resume(
+            continuations, stale, NULL));
+        check(!ores_native_continuation_store_finish_resume(
+            continuations, stale));
+        check(!ores_native_continuation_store_get(continuations, stale, &record));
+        check(ores_native_continuation_store_get(continuations, current, &record));
+        check(record.state == ORES_CONTINUATION_PENDING);
+        check(ores_native_continuation_store_cancel(continuations, current));
+        check(ores_native_continuation_store_release(continuations, current));
+    }
+
+
+    /*
      * Stress two distinct linearization windows:
      * (1) completion-vs-cancel while PENDING;
      * (2) cancellation-vs-resume claim after READY.
