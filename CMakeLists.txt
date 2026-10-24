@@ -321,6 +321,15 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
+    # Source-to-LLVM-to-Clang execution: bare self is the hidden receiver,
+    # not part of caller-visible method overload arity. Rust harness only.
+    find_program(ORES_CLANG_EXECUTABLE NAMES clang REQUIRED)
+    add_test(NAME native_inline_self_receiver_arity_aot
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+            native-inline-self-arity
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORES_CLANG_EXECUTABLE}")
+    set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
