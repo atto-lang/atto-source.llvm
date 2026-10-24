@@ -74,12 +74,29 @@ through the copied generation-fenced scheduler reference; stale/terminated or
 otherwise invalid capabilities fail closed. The `try_send` form reports zero
 only for mailbox saturation.
 
-This is deliberately a **runtime ABI prerequisite**, not a source-language
-feature claim. Current LLVM source syntax does not yet bind ActorRef-valued actor
-state or expose these slots to `.ores` handlers. Java currently rejects actor
-startup arguments, so LLVM does not invent a backend-only `spawn Actor(peer)`
-surface here. Source lowering and cross-backend syntax remain a separate gate.
+The branch now also contains the first **compiler-lowered source slice** for
+constructor-owned child capabilities. In the current native actor grammar an
+immutable type-first field
 
-`source_actor_capability_runtime` proves a handler can deliver to a peer through
-a copied capability after the caller-owned capability array is overwritten,
-without storing a raw target pointer in guest scalar state.
+```ores
+val ActorRef<Consumer> child = spawn Consumer();
+```
+
+is lowered by the generated actor initializer to
+`oreslang_source_actor_spawn_child_capability`. A synchronous native
+`on_message(int)` handler may then call `child.send(value)`, which lowers to
+the generation-fenced capability slot rather than an integer/pointer field.
+Mutable ActorRef fields, recursive self-spawn, mismatched `ActorRef<T>`/spawn
+types, unknown target actors and Wasm32 capability fields fail closed.
+
+This is **not yet full Java/LLVM shared-source parity**. Java executes the richer
+actor surface using `receive(ActorMail<T>)`, and common-source issue #141 tracks
+the unchanged cross-backend fixture and suspension/lifecycle semantics. LLVM
+does not invent actor startup arguments such as `spawn Actor(peer)`; child
+ownership comes from an actor-private field initializer, matching Java's
+existing nested-spawn model.
+
+`source_actor_capability_runtime` proves both externally copied capability
+identity and constructor-owned child drain. The compiler-produced
+`source-actor-child-capability.ores` fixture additionally checks that generated
+IR contains the child-spawn/send capability ABI and contains no `ptrtoint`.
