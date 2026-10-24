@@ -813,6 +813,13 @@ int ores_native_actor_scheduler_transfer_wake(
     WakeCredit* w = matching_wake_locked(s, ticket);
     int ok = w && w->state == WAKE_RESERVED && !s->retired
         && !s->actors[ticket.producer.actor_slot].retired;
+    /* For a same-scheduler target, transfer is the irreversible mailbox-credit
+     * handoff boundary. Revalidate the target incarnation here so a STOP that
+     * won after reservation cannot be converted into a fabricated admission.
+     * Cross-scheduler targets require their separate verified bridge authority. */
+    if (ok && ticket.target.scheduler_domain == s->domain)
+        ok = matching(s, ticket.target)
+            && !s->actors[ticket.target.actor_slot].retired;
     if (ok) w->state = WAKE_TRANSFERRED;
     unlock(s);
     return ok;
