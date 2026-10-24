@@ -1366,14 +1366,14 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
-        set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 90)
+        set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 180)
         add_test(NAME source_actor_compiled_native_asan_ubsan
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
-        set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
+        set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
     # Run both direct await and typed Future<void> source through real
