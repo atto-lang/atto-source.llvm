@@ -30,7 +30,7 @@ static int safe(const Model *m) {
     return 1;
 }
 static void scenario(int fail_reservation, int fail_publish,
-                     int cancel_first, int physical_exit) {
+                     int cancel_first, int physical_exit, int cancel_ready) {
     Model m = {0};
     m.state = PENDING;
     m.frame_loan = 1;
@@ -54,6 +54,10 @@ static void scenario(int fail_reservation, int fail_publish,
         }
     }
     assert(safe(&m));
+    if (m.state == READY && cancel_ready) {
+        m.state = CANCELLED; /* READY loses arbitration to cancellation. */
+        assert(safe(&m));
+    }
     if (m.state == READY) {
         m.state = CLAIMED;
         assert(safe(&m));
@@ -87,8 +91,9 @@ int main(void) {
     for (int reservation = 0; reservation < 2; ++reservation)
     for (int publication = 0; publication < 2; ++publication)
     for (int cancellation = 0; cancellation < 2; ++cancellation)
-    for (int physical_exit = 0; physical_exit < 2; ++physical_exit) {
-        scenario(reservation, publication, cancellation, physical_exit);
+    for (int physical_exit = 0; physical_exit < 2; ++physical_exit)
+    for (int cancel_ready = 0; cancel_ready < 2; ++cancel_ready) {
+        scenario(reservation, publication, cancellation, physical_exit, cancel_ready);
         ++count;
     }
     printf("wake transaction oracle: %d model cases passed\n", count);
