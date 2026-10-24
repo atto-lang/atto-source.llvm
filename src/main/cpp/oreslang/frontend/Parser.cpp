@@ -5,12 +5,16 @@
 #include <charconv>
 #include <functional>
 #include <cctype>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SHA256.h"
 
 namespace oreslang {
 namespace {
@@ -284,6 +288,10 @@ public:
     Program parse() {
         Program program;
         bool wrapped_module = false;
+        if (accept("namespace")) {
+            program.namespace_name = identifier();
+            require(";");
+        }
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
         while (token_.text == "define" || token_.text == "declare" ||
@@ -403,6 +411,13 @@ public:
         // A type declaration is always complete: verify the entire alias
         // catalog before publishing ABI signatures or ownership metadata.
         validate_type_only_declarations(program);
+        if (!program.namespace_name.empty() &&
+                (!program.functions.empty() || !program.classes.empty() ||
+                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.cooperative_loops.empty())) {
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
+        }
+        compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
         validate(program);
@@ -469,6 +484,119 @@ private:
         fail("TYPE_ONLY_UNSUPPORTED_TYPE: alias target must name int, bool or another alias");
     }
 
+    std::int64_t constraint_i64() {
+        const bool negative = accept("-");
+        if (token_.kind != Kind::Integer)
+            fail("CONSTRAINT_I64_REQUIRED: constraint operand must be signed i64");
+        std::string digits(token_.text);
+        if (digits.front() == '_' || digits.back() == '_' ||
+                digits.find("__") != std::string::npos)
+            fail("CONSTRAINT_I64_MALFORMED: malformed integer separator");
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        std::uint64_t magnitude = 0;
+        const auto parsed = std::from_chars(
+            digits.data(), digits.data() + digits.size(), magnitude);
+        const std::uint64_t negative_limit = (std::uint64_t{1} << 63);
+        const std::uint64_t positive_limit =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        const std::uint64_t limit = negative ? negative_limit : positive_limit;
+        if (parsed.ec != std::errc{} ||
+                parsed.ptr != digits.data() + digits.size() ||
+                magnitude > limit)
+            fail("CONSTRAINT_I64_OVERFLOW: constraint operand exceeds signed i64");
+        advance();
+        if (!negative) return static_cast<std::int64_t>(magnitude);
+        if (magnitude == negative_limit)
+            return std::numeric_limits<std::int64_t>::min();
+        return -static_cast<std::int64_t>(magnitude);
+    }
+
+    void type_alias_constraints(TypeOnlyDecl& decl) {
+        if (!accept("with")) return;
+        if (decl.alias_target != "int")
+            fail("CONSTRAINT_REPRESENTATION_UNSUPPORTED: descriptor v1 requires direct int/i64 alias");
+
+        bool have_min = false;
+        bool have_max = false;
+        std::int64_t minimum = 0;
+        std::int64_t maximum = 0;
+        for (;;) {
+            if (accept("min")) {
+                if (have_min) fail("CONSTRAINT_DUPLICATE_MIN");
+                minimum = constraint_i64();
+                have_min = true;
+            } else if (accept("max")) {
+                if (have_max) fail("CONSTRAINT_DUPLICATE_MAX");
+                maximum = constraint_i64();
+                have_max = true;
+            } else {
+                fail("CONSTRAINT_PREDICATE_UNSUPPORTED: with admits min/max inclusive i64 only");
+            }
+            if (!accept("and")) break;
+            if (token_.text == ";")
+                fail("CONSTRAINT_PREDICATE_REQUIRED: expected constraint after and");
+        }
+        if (have_min && have_max && minimum > maximum)
+            fail("CONSTRAINT_EMPTY_RANGE: min exceeds max");
+
+        if (have_min) {
+            TypeOnlyDecl::Constraint constraint;
+            constraint.kind = TypeOnlyDecl::Constraint::Kind::MinInclusive;
+            constraint.value = minimum;
+            decl.constraints.push_back(constraint);
+        }
+        if (have_max) {
+            TypeOnlyDecl::Constraint constraint;
+            constraint.kind = TypeOnlyDecl::Constraint::Kind::MaxInclusive;
+            constraint.value = maximum;
+            decl.constraints.push_back(constraint);
+        }
+    }
+
+    static std::string sha256_hex(const std::string& canonical) {
+        llvm::SHA256 hash;
+        hash.update(llvm::StringRef(canonical));
+        const auto digest = hash.final();
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string result;
+        result.reserve(digest.size() * 2);
+        for (std::uint8_t value : digest) {
+            result.push_back(digits[(value >> 4) & 0x0f]);
+            result.push_back(digits[value & 0x0f]);
+        }
+        return result;
+    }
+
+    void compile_type_constraint_descriptors(Program& program) const {
+        program.type_constraint_descriptors.clear();
+        for (const auto& decl : program.type_only_declarations) {
+            if (decl.kind != TypeOnlyDecl::Kind::Alias || decl.constraints.empty())
+                continue;
+            TypeConstraintDescriptor descriptor;
+            descriptor.schema_id = "ores.type-constraint.v1";
+            descriptor.representation = "i64";
+            const std::string local_name = program.module.empty()
+                ? decl.name : program.module + "." + decl.name;
+            descriptor.qualified_type_name = program.namespace_name.empty()
+                ? local_name : program.namespace_name + "." + local_name;
+            descriptor.canonical = descriptor.schema_id +
+                "|type=" + descriptor.qualified_type_name + "|repr=i64";
+            for (const auto& constraint : decl.constraints) {
+                if (constraint.kind == TypeOnlyDecl::Constraint::Kind::MinInclusive) {
+                    descriptor.canonical += "|min_inclusive_i64=" +
+                        std::to_string(constraint.value) +
+                        "|error=ORES_CONSTRAINT_MIN_INCLUSIVE_I64";
+                } else {
+                    descriptor.canonical += "|max_inclusive_i64=" +
+                        std::to_string(constraint.value) +
+                        "|error=ORES_CONSTRAINT_MAX_INCLUSIVE_I64";
+                }
+            }
+            descriptor.fingerprint = sha256_hex(descriptor.canonical);
+            program.type_constraint_descriptors.push_back(std::move(descriptor));
+        }
+    }
+
     void type_only_declaration(Program& program, bool already_defined = false,
                                bool before_public = false) {
         bool exported = before_public;
@@ -506,8 +634,10 @@ private:
                      " both require '= <type>'");
             require("=");
             decl.alias_target = type_alias_target();
+            type_alias_constraints(decl);
             require(";");
             scalar_alias_targets_.emplace(decl.name, decl.alias_target);
+            if (!decl.constraints.empty()) constrained_aliases_.insert(decl.name);
         } else {
             type_only_nominals_.insert(decl.name);
             if (accept("extends")) {
@@ -2645,6 +2775,13 @@ private:
     }
 
     void resolve_alias_uses(Program& program) const {
+        auto reject_unvalidated_runtime_alias = [&](const std::string& name) {
+            if (constrained_aliases_.count(name)) {
+                throw std::runtime_error(
+                    "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED: constrained alias '" +
+                    name + "' cannot enter a runtime value path before checked provenance");
+            }
+        };
         // Complete type aliases in trait/interface signatures never create
         // executable instances, but require validated scalar ABI types.
         for (auto& declaration : program.type_only_declarations) {
@@ -2667,6 +2804,7 @@ private:
         }
         std::function<void(Statement&)> check_statement = [&](Statement& stmt) {
             if (stmt.branch_local && !stmt.branch_local->pending_scalar_alias.empty()) {
+                reject_unvalidated_runtime_alias(stmt.branch_local->pending_scalar_alias);
                 stmt.branch_local->scalar_type = resolve_scalar_alias(
                     stmt.branch_local->pending_scalar_alias);
                 stmt.branch_local->pending_scalar_alias.clear();
@@ -2677,6 +2815,7 @@ private:
         for (auto& fn : program.functions) {
             for (auto& param : fn.parameters) {
                 if (param.pending_scalar_alias.empty()) continue;
+                reject_unvalidated_runtime_alias(param.pending_scalar_alias);
                 param.scalar_type = resolve_scalar_alias(param.pending_scalar_alias);
                 param.pending_scalar_alias.clear();
                 if (param.scalar_type == ScalarType::Bool &&
@@ -2685,11 +2824,13 @@ private:
                                              " scalar alias cannot bypass value-only bool");
             }
             if (!fn.pending_return_alias.empty()) {
+                reject_unvalidated_runtime_alias(fn.pending_return_alias);
                 fn.return_type = resolve_scalar_alias(fn.pending_return_alias);
                 fn.pending_return_alias.clear();
             }
             for (auto& local : fn.locals) {
                 if (local.pending_scalar_alias.empty()) continue;
+                reject_unvalidated_runtime_alias(local.pending_scalar_alias);
                 local.scalar_type = resolve_scalar_alias(local.pending_scalar_alias);
                 local.pending_scalar_alias.clear();
                 if (local.heap_owned && local.scalar_type == ScalarType::Bool)
@@ -3236,6 +3377,7 @@ private:
     // happens before LLVM IR generation.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
     std::unordered_set<std::string> type_only_nominals_;
+    std::unordered_set<std::string> constrained_aliases_;
     std::unordered_map<std::string,
         std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
     std::unordered_set<std::string> extension_public_slots_;
