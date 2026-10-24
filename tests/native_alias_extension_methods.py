@@ -2,6 +2,7 @@
 """Exact-head native alias extension-method compiler/LLVM/Clang execution gate."""
 
 import argparse
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,40 @@ def run(argv):
         timeout=30,
         check=False,
     )
+
+
+def load_golden_contract(path):
+    values = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        require("=" in line, "malformed golden contract line: " + line)
+        key, value = line.split("=", 1)
+        require(key and key not in values, "duplicate golden contract key: " + key)
+        values[key] = value
+    return values
+
+
+def verify_golden_contract(values):
+    require(values.get("schema") == "ores.alias-extension-constraint.v1",
+            "unexpected alias/extension golden schema")
+    require(values.get("extension.reserved_names") == "init,main",
+            "reserved extension-name parity drift")
+    require(values.get("extension.overload_identity") == "name+explicit-arity",
+            "extension overload identity parity drift")
+    require(values.get("constraint.schema") == "ores.type-constraint.v1",
+            "constraint schema parity drift")
+    require(values.get("constraint.representation") == "i64",
+            "constraint representation parity drift")
+    for identity in ("root.Code", "api.Code", "acme.api.Code"):
+        canonical = values.get("constraint." + identity + ".canonical")
+        expected = values.get("constraint." + identity + ".fingerprint")
+        require(canonical is not None and expected is not None,
+                "missing constraint golden vector for " + identity)
+        observed = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        require(observed == expected,
+                "constraint golden fingerprint mismatch for " + identity)
 
 
 def compile_source(compiler, source_path, source_text):
@@ -62,6 +97,15 @@ def main():
     clang = args.clang.resolve()
     require(compiler.is_file(), "native compiler unavailable")
     require(clang.is_file(), "clang unavailable")
+
+    contract = load_golden_contract(
+        Path(__file__).resolve().parents[1]
+        / "contracts" / "v1" / "type-alias-extension-constraint-v1.properties"
+    )
+    verify_golden_contract(contract)
+    receiver_diag = contract["extension.diagnostic.receiver"]
+    arity_diag = contract["extension.diagnostic.arity"]
+    reserved_diag = contract["extension.diagnostic.reserved"]
 
     positives = [
         (
@@ -138,7 +182,7 @@ pub fnc main(): int {
   return code.double();
 }
 """,
-            "EXTENSION_RECEIVER_MISMATCH",
+            receiver_diag,
         ),
         (
             "other_alias_cannot_inherit",
@@ -150,7 +194,7 @@ pub fnc main(): int {
   return other.double();
 }
 """,
-            "EXTENSION_RECEIVER_MISMATCH",
+            receiver_diag,
         ),
         (
             "primitive_receiver_declaration_rejected",
@@ -184,7 +228,7 @@ pub fnc main(): int {
   return code.plus();
 }
 """,
-            "EXTENSION_ARITY_MISMATCH",
+            arity_diag,
         ),
         (
             "reserved_main_rejected",
@@ -192,7 +236,7 @@ pub fnc main(): int {
 define mtd main on Code(): int { return self; }
 pub fnc entry(): int { return 0; }
 """,
-            "EXTENSION_RESERVED_NAME",
+            reserved_diag,
         ),
         (
             "reserved_init_rejected",
@@ -200,7 +244,7 @@ pub fnc entry(): int { return 0; }
 define mtd init on Code(): int { return self; }
 pub fnc main(): int { return 0; }
 """,
-            "EXTENSION_RESERVED_NAME",
+            reserved_diag,
         ),
     ]
 
