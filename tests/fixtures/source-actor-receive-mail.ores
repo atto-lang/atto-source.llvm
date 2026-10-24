@@ -1,0 +1,12 @@
+define actor Worker as
+  receive(ActorMail<int> mail): void {
+    return;
+  }
+end
+
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(41);
+  stop worker;
+  return 43;
+}
