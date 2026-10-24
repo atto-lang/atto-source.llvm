@@ -19,7 +19,8 @@ typedef enum {
     ORES_CONTINUATION_PENDING = 1,
     ORES_CONTINUATION_CLAIMED = 2,
     ORES_CONTINUATION_COMPLETED = 3,
-    ORES_CONTINUATION_CANCELLED = 4
+    ORES_CONTINUATION_CANCELLED = 4,
+    ORES_CONTINUATION_READY = 5
 } OresNativeContinuationState;
 
 typedef struct {
@@ -67,6 +68,20 @@ int ores_native_continuation_store_release(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
 
+/*
+ * Future-backed suspension gate. A terminal producer outcome (success or
+ * failure) publishes scheduler-resumability as READY before any CONTROL turn
+ * may claim the continuation. Cancellation competes with PENDING and READY.
+ */
+int ores_native_continuation_store_notify_ready(
+    OresNativeContinuationStore* store,
+    OresNativeContinuationHandle handle);
+int ores_native_continuation_store_try_claim_ready_resume(
+    OresNativeContinuationStore* store,
+    OresNativeContinuationHandle handle,
+    OresNativeContinuationRecord* out);
+
+/* Legacy direct trace-resume path; not valid for unresolved Future awaits. */
 /* Exactly one resume owner may claim a pending continuation. */
 int ores_native_continuation_store_try_claim_resume(
     OresNativeContinuationStore* store,
