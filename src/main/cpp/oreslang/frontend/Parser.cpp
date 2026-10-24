@@ -3296,11 +3296,16 @@ private:
             std::unordered_map<std::string, const ActorDecl*> references;
             std::size_t static_actor_slots = 0;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
-                    || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
-                if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
-                        !fn.early_returns.empty() || !fn.statements.empty())
+                    || !fn.actor_sends.empty() || !fn.actor_stops.empty()
+                    || fn.async_actor_root) {
+                if (fn.name != "main" || !fn.parameters.empty()
+                        || (!fn.async_actor_root && fn.returns_void)
+                        || !fn.early_returns.empty() || !fn.statements.empty())
                     throw std::runtime_error(
-                        "source actor bootstrap requires zero-argument int main without early returns");
+                        "source actor bootstrap requires zero-argument main without early returns");
+                if (fn.async_actor_root && !fn.returns_void)
+                    throw std::runtime_error(
+                        "native async actor root requires void main");
             }
             for (const auto& spawn : fn.actor_spawns) {
                 const auto it = actor_types.find(spawn.actor_type);
@@ -3333,7 +3338,7 @@ private:
                  * movement observationally inert until stop itself can be
                  * lowered into nonblocking continuation cleanup.
                  */
-                if (contains_callable_invocation(fn.result.get()))
+                if (fn.result && contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
                         "await get_ready requires side-effect-free scalar return");
             }
@@ -3457,6 +3462,28 @@ private:
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
+            }
+            if (fn.async_actor_root) {
+                if (fn.actor_spawns.size() != 1
+                        || fn.ready_await_actor.empty()
+                        || fn.root_output_await_actor.empty()
+                        || !fn.root_stdout_write_output
+                        || fn.done_await_actor.empty()
+                        || fn.actor_sends.size() != 1
+                        || fn.actor_stops.size() != 0
+                        || fn.actor_actions.size() != 1
+                        || fn.actor_actions.front().kind != ActorAction::Kind::Send)
+                    throw std::runtime_error(
+                        "native async root requires spawn, ready, one send, output, stdout, done");
+                const std::string& actor=fn.ready_await_actor;
+                if (fn.root_output_await_actor != actor
+                        || fn.done_await_actor != actor
+                        || fn.actor_sends.front().reference != actor)
+                    throw std::runtime_error(
+                        "native async root lifecycle operations must use one ActorRef");
+                if (!live_actors.erase(actor))
+                    throw std::runtime_error(
+                        "native async root done barrier requires live ActorRef");
             }
             if (!live_actors.empty())
                 throw std::runtime_error("actor reference must be stopped before return");
