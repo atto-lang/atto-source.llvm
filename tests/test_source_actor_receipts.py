@@ -48,7 +48,7 @@ class ActorReceiptParserTest(unittest.TestCase):
             parse(self.good.replace(" processed=4", ""))
 
     def test_non_decimal_count_is_denied(self):
-        for value in ("4junk", "4.0", "+4", ""):
+        for value in ("4junk", "4.0", "+4", "", "４", "٤"):
             with self.subTest(value=value), self.assertRaises(AssertionError):
                 parse(self.good.replace("processed=4", "processed=" + value))
 
