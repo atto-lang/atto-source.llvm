@@ -77,4 +77,16 @@ make_repos
 printf 'local mutation\n' >> "$temp/java/tests/fixtures/native-class-string/main.ores"
 expect_rejected "tracked source mutation" 65 "source checkout has tracked or untracked changes" "$launcher"
 
+# Two committed symlinks to the same external file can pass cmp byte-equality
+# while their contents are not covered by either reported Git commit.
+make_repos
+printf 'pub fnc main():int{return 0;}\\n' > "$temp/external-main.ores"
+for kind in llvm java; do
+  rm "$temp/$kind/tests/fixtures/native-class-string/main.ores"
+  ln -s "$temp/external-main.ores" "$temp/$kind/tests/fixtures/native-class-string/main.ores"
+  git -C "$temp/$kind" add tests/fixtures/native-class-string/main.ores
+  git -C "$temp/$kind" -c user.name=ParityAdmission -c user.email=parity@invalid.example commit -qm symlink-fixture
+done
+expect_rejected "committed external fixture symlinks" 65 "expected regular tracked guest source fixture" "$launcher"
+
 echo "PASS: synthetic fail-closed parity gate admissions; no runtime parity inferred"
