@@ -134,6 +134,29 @@ static void lock(OresNativeActorScheduler* s) {
 static void unlock(OresNativeActorScheduler* s) {
     if (pthread_mutex_unlock(&s->lock) != 0) abort();
 }
+static void publish_terminal_locked(
+        OresNativeActorScheduler* s, size_t actor_index) {
+    ActorLane* lane = &s->actors[actor_index];
+    if (!lane->spawned || lane->terminal_valid
+            || !lane->retired || lane->active || lane->queued || lane->has_control)
+        return;
+    if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
+        return;
+    if (lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_STOPPED
+            && lane->requested_terminal_kind != ORES_NATIVE_TERMINATION_RUNTIME_RETIRED)
+        abort();
+    if (lane->processed_user_messages > lane->accepted_user_messages)
+        abort();
+    lane->terminal = (OresNativeActorTerminalState){
+        .actor = {s->domain, (uint64_t)actor_index, lane->generation},
+        .kind = lane->requested_terminal_kind,
+        .accepted_user_messages = lane->accepted_user_messages,
+        .processed_user_messages = lane->processed_user_messages,
+        .abandoned_user_messages = 0,
+        .abandoned_control_messages = 0,
+    };
+    lane->terminal_valid = 1;
+}
 #ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
 int ores_native_actor_scheduler_test_set_next_execution(
         OresNativeActorScheduler* s, uint64_t next_execution) {
@@ -187,6 +210,7 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* control,
      * The parent still owns its exclusive logical lane. */
     for (size_t offset = 0; offset < s->actor_count; ++offset) {
         size_t i = (s->next_actor + offset) % s->actor_count;
+        if (!!s->actors[i].active != !!s->actors[i].carrier_owner_valid) abort();
         if (!s->actors[i].active && s->actors[i].has_control) {
             *actor = i;
             *control = 1;
@@ -275,6 +299,7 @@ static void* carrier(void* raw) {
             lane->head = (lane->head + 1) % s->per_actor_capacity;
             lane->queued--;
         }
+        if (lane->active || lane->carrier_owner_valid) abort();
         if (!s->reserved_executions || !s->next_execution) abort();
         --s->reserved_executions;
         const uint64_t execution_id = s->next_execution;
@@ -286,6 +311,8 @@ static void* carrier(void* raw) {
                 (uint64_t)(uintptr_t)&carrier_identity, 1, &execution_claim))
             abort();
         lane->active = 1;
+        lane->carrier_owner = pthread_self();
+        lane->carrier_owner_valid = 1;
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
@@ -307,7 +334,9 @@ static void* carrier(void* raw) {
         executing = NULL;
 
         lock(s);
-        if (!lane->active || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (!lane->active || !lane->carrier_owner_valid
+            || !pthread_equal(lane->carrier_owner, pthread_self())
+            || !s->outstanding || s->completed == UINT64_MAX) abort();
         /* Leave the generation-checked guest execution claim first, but
          * keep lane.active/outstanding until the gate has completed its
          * cross-domain wakeup. Otherwise drain() may report quiescence and
@@ -532,6 +561,10 @@ int ores_native_actor_scheduler_prestart_carriers(
     int ok = pristine && ensure_workers_locked(s, s->worker_count);
     unlock(s);
     return ok;
+}
+int ores_native_actor_scheduler_prestart_realtime(
+        OresNativeActorScheduler* s) {
+    return ores_native_actor_scheduler_prestart_carriers(s);
 }
 int ores_native_actor_scheduler_all_carriers_started(
         OresNativeActorScheduler* s) {
