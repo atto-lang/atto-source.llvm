@@ -76,6 +76,16 @@ int64_t oreslang_source_actor_await_ready(
     OresSourceActorContinuation continuation,
     uint64_t source_token);
 
+/* Host/runtime projection of the same readiness observer. Returns READY or
+ * TERMINATED_BEFORE_READY; the continuation runs only on READY. The compiler
+ * wrapper above remains fail-closed until typed ActorTerminated propagation is
+ * lowered for source await. */
+int oreslang_source_actor_await_ready_checked(
+    void* actor,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+
 /*
  * Restricted compiler-generated terminal await slice:
  *   stop actor;
