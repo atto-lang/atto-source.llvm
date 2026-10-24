@@ -24,6 +24,10 @@ typedef struct {
 static void no_op_data(void* raw, size_t actor, uint64_t payload) {
     (void)raw; (void)actor; (void)payload;
 }
+static void no_op_wake(void* raw, size_t actor, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    (void)raw; (void)actor; (void)ticket; (void)outcome;
+}
 
 static void event(Fixture* f, int code) {
     pthread_mutex_lock(&f->lock);
@@ -180,6 +184,27 @@ int main(void) {
         plain, plain_actor) == 0);
     ores_native_actor_scheduler_retire(plain);
     CHECK(ores_native_actor_scheduler_try_destroy(plain));
+
+    /* A local target that stops after reservation must lose before the
+     * irreversible transfer boundary. The reserved producer ticket remains
+     * cancellable and cannot become a false mailbox-admission receipt. */
+    OresNativeActorScheduler* local = ores_native_actor_scheduler_open_with_wakes(
+        2, 1, 1, no_op_data, NULL, NULL, no_op_wake, NULL);
+    CHECK(local);
+    OresNativeActorRef producer = ores_native_actor_scheduler_spawn(local, 0);
+    OresNativeActorRef target = ores_native_actor_scheduler_spawn(local, 1);
+    CHECK(producer.scheduler_domain && target.scheduler_domain);
+    OresNativeWakeTicket target_ticket = {0};
+    CHECK(ores_native_actor_scheduler_reserve_wake(
+        local, producer, target, 1, 1, 1, 1, &target_ticket));
+    CHECK(ores_native_actor_scheduler_stop(local, target));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_cancel_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_stop(local, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(local, target));
+    CHECK(ores_native_actor_scheduler_wait_done(local, producer));
+    ores_native_actor_scheduler_retire(local);
+    CHECK(ores_native_actor_scheduler_try_destroy(local));
 
     Fixture f = {0};
     setup(&f);
