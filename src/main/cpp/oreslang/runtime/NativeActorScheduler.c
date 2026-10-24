@@ -70,6 +70,7 @@ struct OresNativeActorScheduler {
 };
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
+static _Thread_local int executing_control;
 static _Thread_local OresExecutionClaim executing_claim;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local int carrier_identity;
@@ -281,9 +282,11 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
+        executing_control = control;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (control) s->control_callback(s->context, i, payload);
         else s->callback(s->context, i, payload);
+        executing_control = 0;
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
         executing_context = (OresNativeExecutionContext){0};
@@ -846,7 +849,8 @@ int ores_native_actor_scheduler_current_execution_context(
 }
 int ores_native_actor_scheduler_suspend_current_user_mailbox(
         OresNativeActorScheduler* s) {
-    if (!s || executing != s || !executing_actor.scheduler_domain) return 0;
+    if (!s || executing != s || !executing_actor.scheduler_domain
+            || executing_control) return 0;
     lock(s);
     const int ok = matching(s, executing_actor)
         && !s->retired
@@ -860,7 +864,8 @@ int ores_native_actor_scheduler_suspend_current_user_mailbox(
 }
 int ores_native_actor_scheduler_resume_current_user_mailbox(
         OresNativeActorScheduler* s) {
-    if (!s || executing != s || !executing_actor.scheduler_domain) return 0;
+    if (!s || executing != s || !executing_actor.scheduler_domain
+            || !executing_control) return 0;
     lock(s);
     const int ok = matching(s, executing_actor)
         && !s->retired
