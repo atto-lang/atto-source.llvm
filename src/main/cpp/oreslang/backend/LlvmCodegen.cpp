@@ -863,7 +863,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceAwaitReady;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
+        sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -888,8 +889,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceRequestStop = module.getOrInsertFunction(
+            "oreslang_source_actor_request_stop",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceAwaitReady = module.getOrInsertFunction(
             "oreslang_source_actor_await_ready",
+            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceAwaitDone = module.getOrInsertFunction(
+            "oreslang_source_actor_await_done",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
@@ -1677,10 +1684,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
 
         /*
-         * A readiness await splits trusted-main execution at one verified point.
-         * Post-await sends and the scalar result execute on the reserved root
-         * actor CONTROL lane. Blocking source_stop remains outside the carrier
-         * and runs only after the traced continuation has completed.
+         * A lifecycle await splits trusted-main execution at one verified point.
+         * get_ready resumes before stop; get_done requests stop first and resumes
+         * only after the scheduler's physical terminal acknowledgement. Neither
+         * path blocks an actor carrier.
          */
         llvm::Value* awaited_result = nullptr;
         if (!fn.ready_await_actor.empty()) {
@@ -1744,6 +1751,75 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
             }
+        } else if (!fn.done_await_actor.empty()) {
+            /*
+             * get_done is a terminal lifecycle await. All observable actor
+             * effects occur before the boundary; stop itself is only a
+             * nonblocking scheduler request. The trusted runtime waits for
+             * physical quiescence and resumes this scalar continuation.
+             */
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        builder,
+                        i64,
+                        storage,
+                        field_storage,
+                        declarations,
+                        &region_moves);
+                    builder.CreateCall(
+                        sourceSend,
+                        {actorRefs.at(send.reference), payload});
+                } else {
+                    const auto& stopped = fn.actor_stops.at(action.index);
+                    if (stopped != fn.done_await_actor)
+                        throw std::runtime_error(
+                            "get_done continuation references unexpected ActorRef");
+                    builder.CreateCall(
+                        sourceRequestStop,
+                        {actorRefs.at(stopped)});
+                }
+            }
+
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".done_continuation",
+                module);
+            auto* admitted =
+                llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumed(admitted);
+            auto* resumed_actor = &*resume->arg_begin();
+            resumed_actor->setName(fn.done_await_actor);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            llvm::Value* continuation_result = lower(
+                *fn.result,
+                resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            resumed.CreateRet(continuation_result);
+
+            llvm::Value* continuation_ptr =
+                builder.CreatePointerCast(resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitDone,
+                {
+                    actorRefs.at(fn.done_await_actor),
+                    continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.done_await_offset))
+                },
+                "future.await.done.result");
         } else {
             // Emit observable actor effects in source order. Reordering all
             // sends ahead of all stops executes stopped workers' messages.
