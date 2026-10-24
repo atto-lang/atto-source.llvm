@@ -12,6 +12,27 @@ if not __debug__:
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
+
+def parse_actor_receipt(line):
+    """Strictly parse a complete native stop receipt, without prefix matches."""
+    parts = line.split()
+    marker = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED"
+    assert parts and parts[0] == marker, ("missing actor receipt marker", line)
+    expected = {"constructor_on_worker", "released", "processed", "last"}
+    fields = {}
+    for field in parts[1:]:
+        key, sep, value = field.partition("=")
+        assert sep and key in expected and key not in fields, (
+            "invalid actor receipt field", field)
+        assert value and (value.isdecimal() or (
+            key == "last" and value.startswith("-") and value[1:].isdecimal()
+        )), ("invalid integer actor receipt", field)
+        fields[key] = int(value)
+    assert set(fields) == expected, ("missing actor receipt fields", fields)
+    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
+        "native actor constructor/release not verified", fields)
+    return fields
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -160,26 +181,22 @@ def main():
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
-            for i, line in enumerate(lines):
-                assert "constructor_on_worker=1 released=1" in line, line
+            receipts = [parse_actor_receipt(line) for line in lines]
+            for i, receipt in enumerate(receipts):
                 if name == "source-actor-interleaved-stop.ores":
                     expected = [(1, 1), (2, 7)][i]
-                    assert f"processed={expected[0]}" in line, line
-                    assert f"last={expected[1]}" in line, line
+                    assert (receipt["processed"], receipt["last"]) == expected, (
+                        name, receipt, expected)
                 else:
-                    assert f"processed={count}" in line, line
+                    assert receipt["processed"] == count, (name, receipt, count)
                     if last is not None:
-                        assert f"last={last}" in line, line
+                        assert receipt["last"] == last, (name, receipt, last)
             if name == "source-actor-two-owned-heaps.ores":
                 # Two independent heap owners must report different results.
                 # This is an executed-native-runtime assertion, not IR grep.
-                values = []
-                for line in lines:
-                    fields = [word[5:] for word in line.split()
-                              if word.startswith("last=")]
-                    assert len(fields) == 1, (name, line)
-                    values.append(int(fields[0]))
-                assert sorted(values) == [52, 172], (name, lines)
+                assert sorted(receipt["last"] for receipt in receipts) == [
+                    52, 172
+                ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
