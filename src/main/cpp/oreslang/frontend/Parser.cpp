@@ -1314,6 +1314,7 @@ private:
                     std::string type;
                     if (accept(":")) { statement.branch_local->name = first; type = scoped_type_name(); }
                     else { type = first; statement.branch_local->name = identifier(); }
+                    if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
                     if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
                     else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
                     else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
