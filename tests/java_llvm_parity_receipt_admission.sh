@@ -55,13 +55,15 @@ llvm_sha="$(git -C "$tmp/llvm" rev-parse HEAD)"
 java_sha="$(git -C "$tmp/java" rev-parse HEAD)"
 
 names='["exact-user-program","string-content-equality","string-equality-embedded-nul-and-unicode","http-string-routing-primitives","source-effect-order","parameters-and-return","lazy-conditional","escaped-unicode","empty-and-embedded-nul"]'
+# Expected hexadecimal stdout is independent of the mocked harness.
+expected='{"exact-user-program":"68656c6c6f20776f726c640a686969696920326869696969","string-content-equality":"657175616c0a646966666572656e740a656d7074790a","string-equality-embedded-nul-and-unicode":"6e756c0a6c656e6774680a756e69636f64650a","http-string-routing-primitives":"6865616c74680a6d697373696e670a6d6574686f640a","source-effect-order":"6265666f72653b6d6574686f643b61667465723b6d6574686f643b6161","parameters-and-return":"6c65667472696768740a","lazy-conditional":"796573","escaped-unicode":"c3a9f09f98800a09225c","empty-and-embedded-nul":"610062"}'
 make_receipt() {
-  jq -n --arg llvm "$llvm_sha" --arg java "$java_sha" --argjson names "$names" '{
+  jq -n --arg llvm "$llvm_sha" --arg java "$java_sha" --argjson names "$names" --argjson expected "$expected" '{
     schema:"oreslang.java-llvm.source-parity.v1",status:"passed",
     llvm_revision:$llvm,java_revision:$java,positive_programs:9,
     native_executions:45,java_executions:18,llvm_only_negative_rejections:16,
     sanitized:false,cases:[$names[] | {
-      name:.,native_stdout_hex:"6162",java_stdout_hex:"6162",
+      name:.,native_stdout_hex:$expected[.],java_stdout_hex:$expected[.],
       native_exit:0,java_exit:0,native_runs:5,java_runs:2
     }]
   }' > "$MOCK_RECEIPT"
@@ -105,4 +107,20 @@ make_receipt
 jq '.cases[0].native_stdout_hex="0"' "$MOCK_RECEIPT" > "$tmp/new.json"
 mv "$tmp/new.json" "$MOCK_RECEIPT"
 expect_bad_receipt 'malformed hex bytes'
-echo 'PASS: six forged receipts rejected without publication (no real compiler execution)'
+make_receipt
+jq '.cases |= map(.native_stdout_hex="6162" | .java_stdout_hex="6162")' "$MOCK_RECEIPT" > "$tmp/new.json"
+mv "$tmp/new.json" "$MOCK_RECEIPT"
+expect_bad_receipt 'identically incorrect guest output'
+
+# A fully correct synthetic receipt must be accepted by schema validation;
+# this does NOT mean the synthetic compilers executed any Oreslang source.
+make_receipt
+bash "$tmp/llvm/scripts/verify-java-llvm-source-parity.sh" \\
+  "$tmp/build" "$tmp/java" "$tmp/java/scripts/run-source-parity.sh" clang \\
+  > "$tmp/run.stdout" 2> "$tmp/run.stderr"
+if ! jq -e '.status == "passed" and (.cases | length) == 9' \\
+  "$tmp/build/java-llvm-source-parity.json" >/dev/null; then
+  echo 'FAIL complete synthetic receipt was not admitted' >&2
+  exit 1
+fi
+echo 'PASS: seven forged receipts rejected; valid synthetic schema admitted (no real compiler execution)'
