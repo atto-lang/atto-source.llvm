@@ -673,9 +673,12 @@ void validate_i64_ownership(const Program& program) {
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
-                entry.record_view = true;
-                entry.mode = Mode::Borrow;
-                entry.mutable_owner = false;
+                const bool owning = !class_arrays.at(binding.class_name).empty();
+                if (owning && !binding.owner_mutable)
+                    throw std::runtime_error("owning class result requires val or let mut owner");
+                entry.record_view = !owning;
+                entry.mode = owning ? Mode::Value : Mode::Borrow;
+                entry.mutable_owner = owning && binding.owner_mutable;
                 entry.class_fields = class_fields.at(binding.class_name);
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
@@ -971,18 +974,40 @@ void validate_i64_ownership(const Program& program) {
                 throw std::runtime_error("native caught throw binding shadows live local");
         }
         const Locals cfg_entry = locals;
-        // Immutable leaf records are returned by value into the root record
-        // region. This exception never exports a stack address or array owner.
+        const bool owning_return = class_arrays.count(function.return_class) &&
+            !class_arrays.at(function.return_class).empty();
+        // Leaf records snapshot into root storage. Owning aggregates instead
+        // move their array owners into a caller-provided region before cleanup.
         std::function<void(const Expression&, Locals&)> check_return;
         check_return = [&](const Expression& expr, Locals& state) {
             if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable) {
                 auto& owner = local(expr, state);
                 if (owner.class_name != function.return_class || owner.moved || owner.exclusive_loan ||
-                        (owner.mode != Mode::Value && !owner.record_view) || owner.shared_loans ||
-                        !owner.moved_fields.empty() || !owner.class_array_fields.empty() ||
-                        owner.final_fields.size() != owner.class_fields.size())
-                    reject(expr, "record return requires a live immutable leaf value without active exclusive loans");
+                        (owner.mode != Mode::Value && (!owner.record_view || owning_return)) || owner.shared_loans ||
+                        !owner.moved_fields.empty() || (!owning_return && (!owner.class_array_fields.empty() ||
+                        owner.final_fields.size() != owner.class_fields.size())))
+                    reject(expr, "record return requires a live transferable owner or immutable leaf without active loans");
                 if (owner.mode == Mode::Value) owner.moved = true;
+                return;
+            }
+            if (owning_return && expr.kind == Expression::Kind::RecordConstruct) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& c) { return c.name == expr.name; });
+                if (cls == program.classes.end() || cls->name != function.return_class ||
+                        expr.arguments.size() != cls->constructor_parameters.size())
+                    reject(expr, "owning return constructor type/arity mismatch");
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto* field = constructor_field(*cls, i);
+                    const auto& arg = *expr.arguments[i];
+                    if (!field || !field->int_array) { check_value(arg, state, functions); continue; }
+                    const auto& source = arg.kind == Expression::Kind::Take && arg.left ? *arg.left : arg;
+                    if (source.kind != Expression::Kind::Variable)
+                        reject(arg, "owning return constructor requires a named lexical array");
+                    auto& owner = local(source, state);
+                    if (!owner.int_array || owner.mode != Mode::Value || owner.moved || owner.shared_loans || owner.exclusive_loan)
+                        reject(arg, "owning return constructor requires a live unique array");
+                    owner.moved = true;
+                }
                 return;
             }
             if (!function.return_class.empty() && expr.kind == Expression::Kind::Conditional) {
@@ -1112,7 +1137,18 @@ void validate_i64_ownership(const Program& program) {
             if (!function.return_class.empty() && expr.kind == Expression::Kind::Variable &&
                     cfg_entry.at(expr.name).mode == Mode::Value)
                 operations.push_back({OpKind::MoveObject, expr.name});
-            else add_effects(expr, operations);
+            else if (owning_return && expr.kind == Expression::Kind::RecordConstruct) {
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& c) { return c.name == expr.name; });
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const auto* field = constructor_field(*cls, i);
+                    const auto& arg = *expr.arguments[i];
+                    if (field && field->int_array) {
+                        const auto& source = arg.kind == Expression::Kind::Take ? *arg.left : arg;
+                        operations.push_back({OpKind::Move, source.name});
+                    } else add_effects(arg, operations);
+                }
+            } else add_effects(expr, operations);
         };
         const std::size_t guard_count = function.early_returns.size();
         cfg.blocks.resize(guard_count * 2 + 1);

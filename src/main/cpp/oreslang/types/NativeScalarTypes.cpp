@@ -51,6 +51,12 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
+    auto owns_arrays = [&](const std::string& name) {
+        auto found = classes.find(name);
+        if (found == classes.end()) return false;
+        for (const auto& field : found->second->fields) if (field.int_array) return true;
+        return false;
+    };
     auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
         auto found = classes.find(name);
         if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
@@ -143,11 +149,14 @@ void validate_native_scalar_types(const Program& program) {
                 return e.name == "get" ? element : scalar(false);
             }
             case E::RecordConstruct: {
-                const auto& cls = immutable_record(e.name);
+                const bool owning = owns_arrays(e.name);
+                const auto& cls = owning ? *classes.at(e.name) : immutable_record(e.name);
+                if (owning) for (const auto& field : cls.fields)
+                    if (field.int_array && !field.constructor_argument)
+                        fail(e.offset, "owning return constructor requires explicit array arguments");
                 if (e.arguments.size() != cls.constructor_parameters.size()) fail(e.offset, "record constructor argument arity mismatch");
                 for (std::size_t i = 0; i < e.arguments.size(); ++i)
-                    require(expression(*e.arguments[i], locals), scalar(cls.constructor_parameter_types.empty()
-                        ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), e.offset, "record constructor argument type mismatch");
+                    require(expression(*e.arguments[i], locals), constructor_parameter_type(cls, i), e.offset, "record constructor argument type mismatch");
                 return {Kind::Class, cls.name};
             }
             case E::Call: {
@@ -199,10 +208,19 @@ void validate_native_scalar_types(const Program& program) {
     }
     std::function<void(const Function&, Locals)> function;
     function = [&](const Function& fn, Locals locals) {
-        if (!fn.return_class.empty()) (void)immutable_record(fn.return_class);
+        if (!fn.return_class.empty() && !owns_arrays(fn.return_class)) (void)immutable_record(fn.return_class);
         for (const auto& parameter : fn.parameters) locals.emplace(parameter.name, parameter_type(parameter));
         for (const auto& binding : fn.locals) {
-            if (binding.record_view) (void)immutable_record(binding.class_name);
+            if (binding.record_view) {
+                if (owns_arrays(binding.class_name)) {
+                    std::function<bool(const Expression&)> owning_call_tree = [&](const Expression& e) {
+                        return e.kind == Expression::Kind::Call ||
+                            (e.kind == Expression::Kind::Conditional && owning_call_tree(*e.when_true) && owning_call_tree(*e.when_false));
+                    };
+                    if (!binding.initializer || !owning_call_tree(*binding.initializer))
+                        fail(binding.offset, "owning class result requires a named call binding");
+                } else (void)immutable_record(binding.class_name);
+            }
             if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
