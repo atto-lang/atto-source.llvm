@@ -69,6 +69,23 @@ public:
         return true;
     }
 
+    /*
+     * Group close may revoke a queued CONTROL slot. Convert that explicit
+     * generation-fenced delivery-loss signal into terminal Future cancellation
+     * so a dropped callback cannot leave the frame permanently scheduled.
+     */
+    bool cancel_if_control_lost(
+            NativeScalarFutureId ticket,
+            const NativeActorRef& parent_ref) noexcept {
+        if (!valid(ticket)
+                || parent_ref.runtime_id() != id_.runtime_id
+                || parent_ref.actor_id() != id_.actor_id
+                || parent_ref.generation() != id_.generation
+                || !parent_ref.control_delivery_lost())
+            return false;
+        return cancel(ticket);
+    }
+
     Phase phase() const noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
         return phase_;
