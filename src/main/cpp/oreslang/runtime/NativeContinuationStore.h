@@ -36,6 +36,9 @@ typedef struct {
 
 typedef struct OresNativeContinuationStore OresNativeContinuationStore;
 
+/* Runs under the continuation-store lock; must not re-enter this store. */
+typedef int (*OresNativeContinuationReadyCommit)(void* context);
+
 /*
  * The continuation store pins each originating execution and parent
  * continuation by logical reference. Records are pointer-free AoSoA lanes.
@@ -74,6 +77,17 @@ int ores_native_continuation_store_release(
  * the scheduler claims it. Both operations serialize against the same store
  * lock. These are host primitives, not source-level await/select lowering.
  */
+/*
+ * Atomically relative to cancellation: require PENDING, run the fallible
+ * producer commit while holding the store lock, then publish READY with a
+ * non-failing in-memory state transition. If commit returns false, the
+ * continuation remains PENDING. The callback must not re-enter this store.
+ */
+int ores_native_continuation_store_commit_ready(
+    OresNativeContinuationStore* store,
+    OresNativeContinuationHandle handle,
+    OresNativeContinuationReadyCommit commit,
+    void* context);
 int ores_native_continuation_store_notify_ready(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
