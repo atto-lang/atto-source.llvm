@@ -40,6 +40,8 @@ fn main() {
         ("pub fnc main():int{return 2 * +(20+1);}\n", 42),
         ("pub fnc main():int{return -+(0-42);}\n", 42),
         ("pub fnc main():int{return +0;}\n", 0),
+        ("pub fnc main():int{return +(4_0+2);}\n", 42),
+        ("pub fnc main():int{return + (40_0 - 35_8);}\n", 42),
     ];
     for (i, (source, expected)) in valid.iter().enumerate() {
         let result = compile(&compiler, &dir, i, source);
@@ -67,6 +69,10 @@ fn main() {
         "pub fnc main():int{return +9223372036854775808;}\n".to_string(),
         "pub fnc main():int{return +;}\n".to_string(),
         format!("pub fnc main():int{{return {}1;}}\n", "+".repeat(128)),
+        "pub fnc main():int{return 1__0;}\n".to_string(),
+        "pub fnc main():int{return 1_;}\n".to_string(),
+        "pub fnc main():int{return 1_+2;}\n".to_string(),
+        "pub fnc main():int{return 9_223_372_036_854_775_808;}\n".to_string(),
     ];
     for (i, source) in invalid.iter().enumerate() {
         let result = compile(&compiler, &dir, valid.len() + i, source);
@@ -76,5 +82,5 @@ fn main() {
         assert!(!result.stderr.is_empty(),
             "invalid unary plus case {i} rejected without a diagnostic");
     }
-    println!("five native executable unary-plus positives, five no-IR negatives");
+    println!("seven native executable unary-plus positives, nine no-IR negatives");
 }
