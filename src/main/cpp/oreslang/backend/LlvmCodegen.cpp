@@ -946,8 +946,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name));
+        // Method overload identity is source-visible value arity: the hidden
+        // compiler-owned self receiver is an ABI detail and must never shift
+        // the deterministic slot number. Keep internal declaration lookup
+        // below keyed by the fully lowered ABI argument count.
+        const std::size_t source_value_arity = native_source_value_arity(
+            fn.parameters.size(), !fn.method_owner.empty());
         const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, fn.parameters.size())
+            ? native_function_slot(base_symbol, source_value_arity)
             : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
