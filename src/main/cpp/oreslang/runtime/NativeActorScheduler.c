@@ -411,10 +411,11 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
-    s->wake_slots = (WakeCredit*)calloc(
+    if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || !s->wake_slots || !s->threads)
+    if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
+            || !s->threads)
         goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
@@ -429,8 +430,8 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
         s->actors[i].messages = s->slots + i * capacity;
-        s->actors[i].wakes = s->wake_slots
-            + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR;
+        s->actors[i].wakes = wake_callback
+            ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
