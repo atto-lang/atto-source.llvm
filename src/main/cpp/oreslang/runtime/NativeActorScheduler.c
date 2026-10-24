@@ -609,7 +609,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
-        || s->accepted == UINT64_MAX
+        || s->accepted >= UINT64_MAX - s->reserved_wakes
         || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
@@ -688,7 +688,7 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted == UINT64_MAX
+        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                 || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
@@ -853,7 +853,7 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     }
     /* Admission/execution identifiers were reserved before the Future could
      * suspend. Publication is an allocation-free in-memory state change. */
-    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
+    if (!s->reserved_wakes || s->accepted >= UINT64_MAX - s->reserved_wakes) abort();
     const int new_lane = !lane->active && !lane_has_work(lane);
     --s->reserved_wakes;
     w->outcome = outcome;
@@ -905,7 +905,7 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX
+        && s->accepted < UINT64_MAX - s->reserved_wakes
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
@@ -939,7 +939,7 @@ int ores_native_actor_scheduler_publish_failure(
         && failure.kind <= ORES_NATIVE_CONTROL_STOPPED
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted != UINT64_MAX
+        && s->accepted < UINT64_MAX - s->reserved_wakes
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* a = &s->actors[parent.actor_slot];
