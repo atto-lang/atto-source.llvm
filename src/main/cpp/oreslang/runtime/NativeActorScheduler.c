@@ -628,6 +628,7 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     a->messages[a->tail] = payload;
     a->tail = (a->tail + 1) % s->per_actor_capacity;
     a->queued++;
+    if (a->accepted_user_messages == UINT64_MAX) abort();
     s->reserved_executions++;
     ++a->accepted_user_messages;
     s->accepted++;
