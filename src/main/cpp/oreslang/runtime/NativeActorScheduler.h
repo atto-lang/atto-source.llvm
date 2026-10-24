@@ -157,7 +157,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
  * occupy the supervisor CONTROL slot or the USER mailbox.
  *
  * The mailbox-accounting lock must serialize TRANSFER with mailbox credit
- * handoff and cancellation. No guest/user callback runs in these functions.
+ * handoff and cancellation. For same-scheduler targets, TRANSFER revalidates
+ * the exact live target incarnation so STOP cannot become a false admission.
+ * Wake mutation APIs fail closed when invoked on a scheduler created without
+ * wake support. No guest/user callback runs in these functions.
  */
 int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer,
