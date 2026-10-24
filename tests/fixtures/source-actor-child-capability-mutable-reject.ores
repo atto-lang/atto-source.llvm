@@ -1,0 +1,15 @@
+define actor Child as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+define actor Parent as {
+  let total: int = 0;
+  let ActorRef<Child> child = spawn Child();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+pub fnc main(): int { return 43; }
