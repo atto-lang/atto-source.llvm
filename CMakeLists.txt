@@ -2462,6 +2462,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-vm-control-plane-test)
     set_tests_properties(native_vm_master_control_wake_coalescing PROPERTIES TIMEOUT 25)
 
+    # Opt-in native main CONTROL service prestarted before source guest work.
+    # No actor callbacks on this thread; actor carriers remain lazy.
+    add_executable(oreslang-native-vm-main-control-loop-test
+        tests/native_vm_main_control_loop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-vm-main-control-loop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-vm-main-control-loop-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-vm-main-control-loop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_vm_main_control_bootstrap_and_shutdown
+        COMMAND oreslang-native-vm-main-control-loop-test)
+    set_tests_properties(native_vm_main_control_bootstrap_and_shutdown
+        PROPERTIES TIMEOUT 25)
+
     # VM-level ownership: four independent scheduler domains, five carriers
     # by default; cross-domain ActorRefs cannot be admitted by another pool.
     add_executable(oreslang-native-ores-vm-test
