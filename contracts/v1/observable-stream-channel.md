@@ -130,6 +130,10 @@ mechanics, not a retry loop and not another unbounded queue.
   registrations atomically. Future settlement and continuation wakeup occur
   only after mailbox/accounting/lifecycle locks are released; runtime callbacks
   may re-enter actor APIs and therefore cannot run under those locks.
+- A pending producer that retains target-owned payload bytes or a transferred
+  mailbox credit is a physical transport loan. Actor DONE, arena/heap release
+  and code-generation reclamation must remain fenced until that loan either
+  publishes an envelope or returns all retained resources exactly once.
 - An actor holding the serial logical lifetime must not await capacity in its
   own mailbox when only that same lifetime can release the required credit.
   Detect this dependency and fail with a structured would-deadlock diagnostic.
