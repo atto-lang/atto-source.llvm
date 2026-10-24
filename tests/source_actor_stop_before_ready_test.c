@@ -10,6 +10,7 @@ static atomic_int constructor_calls;
 static atomic_int constructor_entered;
 static atomic_int constructor_release;
 static atomic_int readiness_continuation_calls;
+static atomic_int done_continuation_calls;
 
 static void check(int condition) {
     if (!condition) abort();
@@ -47,6 +48,13 @@ static int64_t readiness_continuation(void* actor) {
     return 77;
 }
 
+static int64_t done_continuation(void* actor) {
+    (void)actor;
+    atomic_fetch_add_explicit(
+        &done_continuation_calls, 1, memory_order_acq_rel);
+    return 88;
+}
+
 static void check_failed_readiness(void* actor) {
     int64_t result = INT64_C(99);
     const int outcome = oreslang_source_actor_await_ready_checked(
@@ -70,6 +78,8 @@ static void reset_constructor(void) {
         &constructor_release, 0, memory_order_release);
     atomic_store_explicit(
         &readiness_continuation_calls, 0, memory_order_release);
+    atomic_store_explicit(
+        &done_continuation_calls, 0, memory_order_release);
 }
 
 static void stop_before_constructor(void) {
@@ -99,7 +109,11 @@ static void stop_before_constructor(void) {
         &constructor_calls, memory_order_acquire) == 0);
     check_failed_readiness(actor);
 
-    oreslang_source_actor_join_done(actor);
+    const int64_t done_result = oreslang_source_actor_await_done(
+        actor, done_continuation, UINT64_C(0x6262));
+    check(done_result == 88);
+    check(atomic_load_explicit(
+        &done_continuation_calls, memory_order_acquire) == 1);
 }
 
 static void stop_during_constructor(void) {
