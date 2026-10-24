@@ -76,7 +76,7 @@ static void revokes_pending_and_drains_children() {
         [&] { ++quiesced; }));
     {
         TaskContinuationGate gate(child, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         assert(parent->cancel("parent-shutdown"));
         assert(child->is_cancelled());
         assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
@@ -100,7 +100,7 @@ static void late_task_cancel_cannot_reenter_claimed_guest() {
     const auto link = stores.suspend(200);
     {
         TaskContinuationGate gate(child, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         OresNativeExecutionHandle resumed{};
         OresNativeExecutionContext context{};
         assert(!gate.try_resume(physical(201), &resumed));
@@ -137,7 +137,7 @@ static void already_cancelled_authority_closes_registration_race() {
     const auto link = stores.suspend(300);
     {
         TaskContinuationGate gate(child, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
         assert(!gate.notify_ready());
         OresNativeExecutionHandle resumed{};
@@ -157,7 +157,7 @@ static void rejects_forged_and_recycled_await_links() {
     bool rejected = false;
     try {
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, forged);
+                                  stores.continuations, forged, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -169,7 +169,7 @@ static void rejects_forged_and_recycled_await_links() {
     rejected = false;
     try {
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, forged);
+                                  stores.continuations, forged, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -178,14 +178,14 @@ static void rejects_forged_and_recycled_await_links() {
 
     {
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         gate.close();
     }
     stores.release(link);
     rejected = false;
     try {
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -205,7 +205,7 @@ static void rejects_non_await_control_and_spawn_boundaries() {
         bool rejected = false;
         try {
             TaskContinuationGate gate(task, stores.executions,
-                                      stores.continuations, link);
+                                      stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
@@ -224,7 +224,7 @@ static void retirement_is_a_strict_waiter_revocation_barrier() {
         auto task = TaskCancellation::root();
         const auto link = stores.suspend(500);
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         assert(gate.notify_ready());
         task->retire(); // Without Task.cancel(), still revoke READY!
         assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
@@ -238,7 +238,7 @@ static void retirement_is_a_strict_waiter_revocation_barrier() {
         task->retire();
         const auto link = stores.suspend(502);
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
         assert(!gate.notify_ready());
         gate.close();
@@ -248,7 +248,7 @@ static void retirement_is_a_strict_waiter_revocation_barrier() {
         auto task = TaskCancellation::root();
         const auto link = stores.suspend(8000 + i);
         TaskContinuationGate gate(task, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         std::atomic<bool> go{false};
         std::thread producer([&] {
             while (!go.load(std::memory_order_acquire))
@@ -277,7 +277,7 @@ static void retirement_and_ready_resume_claim_are_linearized() {
         auto authority = TaskCancellation::root();
         const auto link = stores.suspend(10000 + i);
         TaskContinuationGate gate(authority, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         assert(gate.notify_ready());
         OresNativeExecutionHandle resumed{};
         std::atomic<bool> go{false};
@@ -318,7 +318,7 @@ static void completion_cancel_and_resume_cancel_races() {
             auto child = parent->child();
             const auto link = stores.suspend(1000 + i);
             TaskContinuationGate gate(child, stores.executions,
-                                      stores.continuations, link);
+                                      stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
             std::atomic<bool> go{false};
             std::atomic<bool> accepted{false};
             std::thread producer([&] {
@@ -349,7 +349,7 @@ static void completion_cancel_and_resume_cancel_races() {
             auto child = parent->child();
             const auto link = stores.suspend(4000 + i);
             TaskContinuationGate gate(child, stores.executions,
-                                      stores.continuations, link);
+                                      stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
             assert(gate.notify_ready());
             std::atomic<bool> go{false};
             std::atomic<bool> claimed{false};
@@ -395,7 +395,7 @@ static void close_disarms_concurrent_revocation() {
         auto child = parent->child();
         const auto link = stores.suspend(7000 + i);
         TaskContinuationGate gate(child, stores.executions,
-                                  stores.continuations, link);
+                                  stores.continuations, link, 11, {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
         std::thread cancellation([&] { (void)parent->cancel("shutdown"); });
         gate.close();
         cancellation.join();
