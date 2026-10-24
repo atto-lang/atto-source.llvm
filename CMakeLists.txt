@@ -3254,7 +3254,8 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-continuation-ready-resume-test
         tests/native_continuation_ready_resume_test.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
-        src/main/cpp/oreslang/runtime/NativeContinuationStore.c)
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
     set_target_properties(oreslang-native-continuation-ready-resume-test PROPERTIES
         C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_include_directories(oreslang-native-continuation-ready-resume-test PRIVATE
