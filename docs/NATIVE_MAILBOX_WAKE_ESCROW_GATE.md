@@ -55,9 +55,14 @@ scheduler; cross-scheduler targets need separate verified bridge authority.
 The scheduling primitive does not itself validate cross-VM message ownership.
 
 A RESERVED ticket may be cancelled; TRANSFERRED may only publish or abort as a
-terminal failure. READY becomes claimed by a single actor worker; physical
-DONE remains fenced while RESERVED, TRANSFERRED, READY or EXECUTING.
-At STOP, a later transferred wake is terminalized without running guest code.
+terminal failure. For a target in the same scheduler, TRANSFER revalidates the
+exact live target generation; a target STOP which wins after reservation makes
+TRANSFER fail while leaving the producer ticket cancellable. Wake mutation
+calls against a scheduler opened without wake support fail closed rather than
+touching an absent wake table. READY becomes claimed by a single actor worker;
+physical DONE remains fenced while RESERVED, TRANSFERRED, READY or EXECUTING.
+At producer STOP, a later transferred wake is terminalized without running
+guest code.
 
 ### Existing runtime integration work
 
