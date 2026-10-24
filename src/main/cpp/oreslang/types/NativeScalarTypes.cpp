@@ -107,7 +107,14 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), scalar(ScalarType::String), e.offset, "stdio requires string");
                 return {Kind::Void, {}};
             case E::Variable: return locals.at(e.name);
-            case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
+            case E::Field: {
+                if (e.left && e.left->kind == E::Variable) {
+                    const auto synthetic =
+                        locals.find(e.left->name + "." + e.name);
+                    if (synthetic != locals.end()) return synthetic->second;
+                }
+                return field_type(expression(*e.left, locals), e.name, e.offset);
+            }
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
             case E::Negate:
@@ -327,6 +334,14 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*field.initializer, fields), scalar(false), field.offset, "actor initializer requires int");
             fields.emplace(field.name, scalar(false));
         }
+        if (actor.on_message.actor_mail_parameter) {
+            const std::string& mail=actor.on_message.parameters.at(0).name;
+            fields.emplace(mail + ".value", scalar(false));
+        }
+        if (actor.on_message.actor_output_await)
+            fields.emplace(
+                actor.on_message.actor_output_await_local + ".value",
+                scalar(false));
         function(actor.on_message, std::move(fields));
     }
 }
