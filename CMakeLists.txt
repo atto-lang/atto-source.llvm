@@ -1788,6 +1788,7 @@ if(BUILD_TESTING)
                 tests/fixtures/native-class-string/string-array.ores
                 tests/fixtures/native-class-string/path-segment.ores
                 tests/fixtures/native-class-string/record-array.ores
+                tests/fixtures/native-class-string/owned-path-pattern.ores
             VERBATIM)
         add_custom_target(oreslang-native-class-string-parity-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-class-string-parity")

@@ -100,6 +100,8 @@ struct ClassField {
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
     bool constructor_argument = false; // declaration-only field supplied by implicit positional constructor
+    ScalarType array_element_type = ScalarType::I64;
+    std::string array_record_class;
 };
 
 struct ClassMethod {
@@ -121,6 +123,13 @@ struct ClassDecl {
     std::vector<std::string> constructor_parameters;
     std::vector<ScalarType> constructor_parameter_types;
 };
+
+inline const ClassField* constructor_field(const ClassDecl& cls, std::size_t parameter) {
+    if (parameter >= cls.constructor_parameters.size()) return nullptr;
+    for (const auto& field : cls.fields)
+        if (field.constructor_argument && field.name == cls.constructor_parameters[parameter]) return &field;
+    return nullptr;
+}
 
 // Native source value categories. Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.

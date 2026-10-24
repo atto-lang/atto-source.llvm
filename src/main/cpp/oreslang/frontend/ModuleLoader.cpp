@@ -62,7 +62,10 @@ public:
             for (auto& cls : unit.program.classes) {
                 binding_name(unit, cls.name);
                 for (const auto& name : cls.constructor_parameters) binding_name(unit, name);
-                for (auto& field : cls.fields) expression(unit, field.initializer_expression.get());
+                for (auto& field : cls.fields) {
+                    if (!field.array_record_class.empty()) field.array_record_class = class_type(unit, field.array_record_class);
+                    expression(unit, field.initializer_expression.get());
+                }
                 cls.name = unit.prefix + cls.name;
                 linked.classes.push_back(std::move(cls));
             }

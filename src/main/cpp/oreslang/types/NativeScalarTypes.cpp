@@ -15,6 +15,16 @@ struct Type {
 using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
+Type declared_field_type(const ClassField& field) {
+    if (!field.int_array) return scalar(field.scalar_type);
+    return {Kind::Array, !field.array_record_class.empty() ? field.array_record_class :
+        field.array_element_type == ScalarType::String ? "String" : "int"};
+}
+Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
+    const auto* field = constructor_field(cls, index);
+    return field ? declared_field_type(*field) : scalar(cls.constructor_parameter_types.empty()
+        ? ScalarType::I64 : cls.constructor_parameter_types.at(index));
+}
 Type parameter_type(const Parameter& p) {
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
@@ -54,7 +64,7 @@ void validate_native_scalar_types(const Program& program) {
         const auto cls = classes.find(owner.name);
         if (cls == classes.end()) fail(offset, "unknown class");
         for (const auto& field : cls->second->fields)
-            if (field.name == name) return field.int_array ? Type{Kind::Array, "int"} : scalar(field.scalar_type);
+            if (field.name == name) return declared_field_type(field);
         fail(offset, "unknown class field");
     };
     std::function<Type(const Expression&, const Locals&)> expression;
@@ -170,15 +180,16 @@ void validate_native_scalar_types(const Program& program) {
     // Constructor slots currently have explicit int types. Bool literals can
     // initialize bool fields; integer bit patterns cannot become boolean storage.
     for (const auto& cls : program.classes) {
+        for (const auto& field : cls.fields)
+            if (!field.array_record_class.empty()) (void)immutable_record(field.array_record_class);
         Locals parameters;
         if (!cls.constructor_parameter_types.empty() && cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
             throw std::runtime_error("native constructor type/parameter arity mismatch");
         for (std::size_t i = 0; i < cls.constructor_parameters.size(); ++i)
-            parameters.emplace(cls.constructor_parameters[i], scalar(cls.constructor_parameter_types.empty()
-                ? ScalarType::I64 : cls.constructor_parameter_types[i]));
+            parameters.emplace(cls.constructor_parameters[i], constructor_parameter_type(cls, i));
         for (const auto& field : cls.fields)
             if (field.initializer_expression)
-                require(expression(*field.initializer_expression, parameters), scalar(field.scalar_type),
+                require(expression(*field.initializer_expression, parameters), declared_field_type(field),
                         field.initializer_expression->offset, "class field initializer type");
     }
     std::function<void(const Function&, Locals)> function;
@@ -194,8 +205,7 @@ void validate_native_scalar_types(const Program& program) {
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                 const auto& cls = *classes.at(binding.class_name);
                 const auto& arg = binding.constructor_arguments[i];
-                require(expression(*arg, locals), scalar(cls.constructor_parameter_types.empty()
-                    ? ScalarType::I64 : cls.constructor_parameter_types.at(i)), arg->offset, "constructor parameter type mismatch");
+                require(expression(*arg, locals), constructor_parameter_type(cls, i), arg->offset, "constructor parameter type mismatch");
             }
             locals.emplace(binding.name, local_type(binding));
         }

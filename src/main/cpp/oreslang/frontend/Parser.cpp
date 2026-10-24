@@ -719,14 +719,29 @@ private:
             if (mutable_referent && accept("Array")) {
                 // 'mut Array<int>' is canonical: mut is the referent
                 // capability, independent of whether the slot is final.
-                require("<"); require("int"); require(">");
+                require("<");
+                if (accept("String") || accept("string")) field.array_element_type = ScalarType::String;
+                else if (!accept("int")) field.array_record_class = type_identifier();
+                require(">");
                 field.int_array = true;
                 field.name = identifier();
                 if (!seen.insert(field.name).second)
                     fail("duplicate class field '" + field.name + "'");
+                if (accept(";")) {
+                    if (!field.final_field) fail("declaration-only collection field requires val or final");
+                    field.constructor_argument = true;
+                    result.fields.push_back(std::move(field));
+                    continue;
+                }
                 if (!accept(":")) require("=");
                 require("new"); require("Array");
-                require("<"); require("int"); require(">");
+                require("<");
+                if (!field.array_record_class.empty()) {
+                    if (type_identifier() != field.array_record_class) fail("array field constructor type mismatch");
+                } else if (field.array_element_type == ScalarType::String) {
+                    if (!accept("String")) require("string");
+                } else require("int");
+                require(">");
                 require("(");
                 const std::size_t initializer_end = token_.offset + token_.text.size();
                 require(")");
@@ -1061,6 +1076,7 @@ private:
                             (type.kind == Kind::Identifier && look.next().kind == Kind::Identifier); }()) {
                 const bool mutable_value = accept("val");
                 if (!mutable_value) require("const");
+                binding.owner_mutable = mutable_value;
                 const std::string type = type_identifier();
                 binding.name = identifier();
                 require("=");
@@ -2823,7 +2839,14 @@ private:
                         if (binding.constructor_arguments.size() != cls->constructor_parameters.size())
                             throw std::runtime_error("native class constructor argument arity mismatch for '" +
                                                      cls->name + "'");
-                        for (const auto& arg : binding.constructor_arguments) {
+                        for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                            const auto& arg = binding.constructor_arguments[i];
+                            const auto* field = constructor_field(*cls, i);
+                            if (field && field->int_array && arg->kind == Expression::Kind::Take &&
+                                    arg->left && arg->left->kind == Expression::Kind::Variable) {
+                                validate_expression(*arg, params, functions);
+                                continue;
+                            }
                             if (!native_constructor_scalar_tree(*arg))
                                 throw std::runtime_error("native scalar constructor argument requires pure integer expression");
                             validate_expression(*arg, params, functions);
@@ -2928,8 +2951,10 @@ private:
             TypeMap scalar_types;
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
                 for (const auto& cls : program.classes) if (cls.name == type)
-                    for (const auto& field : cls.fields)
+                    for (const auto& field : cls.fields) {
                         scalar_types.emplace(owner + "." + field.name, field.scalar_type);
+                        if (field.int_array) scalar_types.emplace(owner + "." + field.name + ".$element", field.array_element_type);
+                    }
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
