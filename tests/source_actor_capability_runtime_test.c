@@ -3,11 +3,12 @@
 #endif
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
-static unsigned sender_messages;
-static unsigned target_messages;
-static int64_t target_last;
+static atomic_uint sender_messages;
+static atomic_uint target_messages;
+static atomic_int_fast64_t target_last;
 
 static void init_zero(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
     ores_actor_i64_heap_field_init_mutable(heap,domain,epoch,0,0);
@@ -19,8 +20,8 @@ static int64_t target_handler(
         ores_actor_i64_heap_field_read(heap,domain,epoch,0);
     const int64_t next = prior + payload;
     ores_actor_i64_heap_field_write(heap,domain,epoch,0,next);
-    target_messages++;
-    target_last=next;
+    atomic_fetch_add_explicit(&target_messages,1,memory_order_relaxed);
+    atomic_store_explicit(&target_last,next,memory_order_relaxed);
     return next;
 }
 
@@ -30,7 +31,7 @@ static int64_t sender_handler(
         ores_actor_i64_heap_field_read(heap,domain,epoch,0);
     const int64_t next = prior + payload;
     ores_actor_i64_heap_field_write(heap,domain,epoch,0,next);
-    sender_messages++;
+    atomic_fetch_add_explicit(&sender_messages,1,memory_order_relaxed);
     /* Capability slot 0 is runtime-owned. The source handler never receives
      * a target pointer or casts an ActorRef into scalar state. */
     assert(oreslang_source_actor_try_send_capability(heap,0,payload+1)==1);
@@ -52,10 +53,10 @@ int main(void) {
 
     assert(oreslang_source_actor_try_send(sender,4)==1);
     oreslang_source_actor_stop(sender);
-    assert(sender_messages==1);
+    assert(atomic_load_explicit(&sender_messages,memory_order_relaxed)==1);
 
     oreslang_source_actor_stop(target);
-    assert(target_messages==1);
-    assert(target_last==5);
+    assert(atomic_load_explicit(&target_messages,memory_order_relaxed)==1);
+    assert(atomic_load_explicit(&target_last,memory_order_relaxed)==5);
     return 0;
 }
