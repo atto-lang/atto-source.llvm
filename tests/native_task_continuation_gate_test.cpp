@@ -152,6 +152,27 @@ static void rejects_forged_and_recycled_await_links() {
     Stores stores;
     auto task = TaskCancellation::root();
     const auto link = stores.suspend(400);
+    // An otherwise valid link must not cross reload or actor-owned heaps.
+    bool wrong_code_rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link, 12,
+                                  {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+    } catch (const std::invalid_argument&) {
+        wrong_code_rejected = true;
+    }
+    assert(wrong_code_rejected);
+    bool wrong_allocation_rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, link, 11,
+                                  {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 4, 4});
+    } catch (const std::invalid_argument&) {
+        wrong_allocation_rejected = true;
+    }
+    assert(wrong_allocation_rejected);
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+
     OresNativeSuspensionLink forged = link;
     forged.execution_id.execution += 1;
     bool rejected = false;
