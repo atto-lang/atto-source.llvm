@@ -26,7 +26,10 @@ struct Stores {
         assert(ores_native_execution_context_store_close(executions));
     }
 
-    OresNativeSuspensionLink suspend(std::uint64_t id) {
+    OresNativeSuspensionLink suspend(
+            std::uint64_t id,
+            OresNativeContinuationBoundary boundary =
+                ORES_CONTINUATION_BOUNDARY_AWAIT) {
         OresNativeExecutionContext context{};
         context.id.runtime_domain = 88;
         context.id.execution = id;
@@ -41,7 +44,7 @@ struct Stores {
         assert(ores_native_await_trace_suspend(
             executions, continuations, origin,
             OresNativeContinuationHandle{},
-            ORES_CONTINUATION_BOUNDARY_AWAIT, 11, id, &link));
+            boundary, 11, id, &link));
         assert(ores_native_execution_context_store_release(executions, origin));
         return link;
     }
@@ -187,6 +190,31 @@ static void rejects_forged_and_recycled_await_links() {
         rejected = true;
     }
     assert(rejected);
+    task->retire();
+}
+
+static void rejects_non_await_control_and_spawn_boundaries() {
+    Stores stores;
+    auto task = TaskCancellation::root();
+    for (const auto boundary : {
+            ORES_CONTINUATION_BOUNDARY_SPAWN,
+            ORES_CONTINUATION_BOUNDARY_SUPERVISOR_CONTROL,
+            ORES_CONTINUATION_BOUNDARY_ACTOR_MESSAGE}) {
+        const auto link = stores.suspend(450 + static_cast<int>(boundary),
+                                         boundary);
+        bool rejected = false;
+        try {
+            TaskContinuationGate gate(task, stores.executions,
+                                      stores.continuations, link);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        assert(rejected);
+        assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+        assert(ores_native_continuation_store_cancel(
+            stores.continuations, link.continuation));
+        stores.release(link);
+    }
     task->retire();
 }
 
@@ -383,6 +411,7 @@ int main() {
     late_task_cancel_cannot_reenter_claimed_guest();
     already_cancelled_authority_closes_registration_race();
     rejects_forged_and_recycled_await_links();
+    rejects_non_await_control_and_spawn_boundaries();
     retirement_is_a_strict_waiter_revocation_barrier();
     retirement_and_ready_resume_claim_are_linearized();
     completion_cancel_and_resume_cancel_races();
