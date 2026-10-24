@@ -521,6 +521,15 @@ fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String>
             out.status.success() && stdout(&out).starts_with("; ModuleID"),
             format!("{name}: compiler rejected source or did not emit IR: {}", stderr(&out)),
         )?;
+        if name == "mixed-method-arities" {
+            let symbols = stdout(&out);
+            require(
+                symbols.contains("Counter.read$arity0")
+                    && symbols.contains("Counter.read$arity1")
+                    && !symbols.contains("Counter.read$arity2"),
+                "overloaded method symbols must use caller-visible 0/1 arity, not hidden-ABI 1/2",
+            )?;
+        }
         fs::write(&ir, &out.stdout).map_err(|e| e.to_string())?;
         let linked = run(
             clang,
