@@ -289,8 +289,15 @@ int ores_native_continuation_store_release(
          */
         if (block->refs[lane] == 1
                 && block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+            /*
+             * An explicit last-pin release of CLAIMED is forbidden. But a
+             * cascading child release has already freed that child; do not
+             * report failure or falsely roll back its release. Retain the
+             * ancestor's final pin for the executing guest to finish and
+             * release after finish_resume().
+             */
             unlock_store(store);
-            return 0;
+            return released_any;
         }
         released_any = 1;
         if (block->refs[lane] > 1) {
