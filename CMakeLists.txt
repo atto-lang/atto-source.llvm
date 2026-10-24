@@ -3510,3 +3510,79 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 60)
     endif()
 endif()
+
+# Future-backed continuation arbitration. This is shared by source actor
+# readiness and get_done lifecycle resumes; neither may claim PENDING work.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-continuation-ready-resume-test
+        tests/native_continuation_ready_resume_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    set_target_properties(oreslang-native-continuation-ready-resume-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-continuation-ready-resume-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-continuation-ready-resume-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-continuation-ready-resume-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_continuation_ready_cancel_resume_race
+        COMMAND oreslang-native-continuation-ready-resume-test)
+    set_tests_properties(native_continuation_ready_cancel_resume_race PROPERTIES TIMEOUT 45)
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-continuation-ready-resume-asan-ubsan-test
+            tests/native_continuation_ready_resume_test.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+        set_target_properties(
+            oreslang-native-continuation-ready-resume-asan-ubsan-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_include_directories(
+            oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            Threads::Threads)
+        target_compile_options(
+            oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-native-continuation-ready-resume-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_continuation_ready_cancel_resume_race_asan_ubsan
+            COMMAND oreslang-native-continuation-ready-resume-asan-ubsan-test)
+        set_tests_properties(
+            native_continuation_ready_cancel_resume_race_asan_ubsan PROPERTIES TIMEOUT 60)
+
+        add_executable(oreslang-native-continuation-ready-resume-tsan-test
+            tests/native_continuation_ready_resume_test.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+        set_target_properties(
+            oreslang-native-continuation-ready-resume-tsan-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+        target_include_directories(
+            oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            Threads::Threads)
+        target_compile_options(
+            oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-native-continuation-ready-resume-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        add_test(NAME native_continuation_ready_cancel_resume_race_tsan
+            COMMAND oreslang-native-continuation-ready-resume-tsan-test)
+        set_tests_properties(
+            native_continuation_ready_cancel_resume_race_tsan PROPERTIES TIMEOUT 60)
+    endif()
+endif()
