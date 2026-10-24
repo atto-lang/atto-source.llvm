@@ -41,6 +41,7 @@ def main():
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-child-capability.ores", 2, None, None),
         ("source-actor-receive-await-child-output.ores", 2, None, None),
+        ("shared-actorref-child-capability-v1.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -91,8 +92,6 @@ def main():
             "native actor capability spawn graph contains a cycle",
         "source-actor-child-capability-footprint-reject.ores":
             "native actor capability spawn tree exceeds 63 guest actor slots",
-        "shared-actorref-child-capability-v1.ores":
-            "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -144,6 +143,15 @@ def main():
                 assert "oreslang_source_actor_emit_output" in guest.stdout, name
                 assert "ptrtoint" not in guest.stdout, (
                     name, "suspended ActorRef capability must not lower through guest integer state")
+            if name == "shared-actorref-child-capability-v1.ores":
+                assert "async_root_ready_continuation" in guest.stdout, name
+                assert "oreslang_source_actor_await_child_output" in guest.stdout, name
+                assert "output_continuation" in guest.stdout, name
+                assert "oreslang_source_actor_take_output" in guest.stdout, name
+                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "oreslang_source_actor_stdout_i64" in guest.stdout, name
+                assert "ptrtoint" not in guest.stdout, (
+                    name, "ActorRef capability must not lower through guest integer state")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -172,7 +180,11 @@ def main():
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
-            assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+            expected_exit = 0 if name == "shared-actorref-child-capability-v1.ores" else 43
+            assert executed.returncode == expected_exit, (
+                name, executed.returncode, expected_exit, executed.stderr)
+            if name == "shared-actorref-child-capability-v1.ores":
+                assert executed.stdout == "42", (name, executed.stdout)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
             assert len(vm_lines) == 1 and (
@@ -183,7 +195,9 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            if name == "source-actor-receive-await-child-output.ores":
+            if name in {
+                    "source-actor-receive-await-child-output.ores",
+                    "shared-actorref-child-capability-v1.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_ACTOR_OUTPUT_AWAIT_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
@@ -208,6 +222,11 @@ def main():
                     expected_outputs = [0, 1][i]
                     assert "processed=1" in line and "last=0" in line, line
                     assert f"outputs={expected_outputs}" in line, line
+                elif name == "shared-actorref-child-capability-v1.ores":
+                    assert "processed=1" in line and "last=0" in line, line
+                    assert "outputs=0" in line, line
+                    if i == 1:
+                        assert "requested_stop=0" in line, line
                 else:
                     assert f"processed={count}" in line, line
                     if last is not None:
