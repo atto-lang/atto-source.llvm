@@ -458,8 +458,12 @@ int ores_native_vm_start_main_control_loop(OresNativeVM* vm) {
     control_lock(vm);
     /* The startup barrier is host-owned: never create CONTROL threads from a
      * guest actor turn, or race an in-progress NIO bootstrap or retirement. */
+    /* A real-time bootstrap is a one-way thread provisioning barrier.
+     * Starting this pthread after prepare_realtime() would violate the
+     * no-late-thread contract, including after a failed prestart attempt.
+     * A host that needs both services must start CONTROL before RT prestart. */
     if (vm->control_retired || vm->guest_actor_admitted
-            || vm->nio_bootstrap_in_progress) {
+            || vm->nio_bootstrap_in_progress || vm->realtime_bootstrap_attempted) {
         control_unlock(vm);
         return 0;
     }
