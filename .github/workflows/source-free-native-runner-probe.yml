@@ -1,0 +1,31 @@
+# Source-free admission canary. No checkout, private source export, secrets, caches or artifacts.
+name: Native source-free runner admission probe
+on:
+  push:
+    branches:
+      - ci/probe-native-runner-admission-20261024
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gcc-and-clang-toolchain-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Prove a runner actually executes commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNNER_ADMISSION_EXECUTED"
+          test "${{ github.ref_name }}" = 'ci/probe-native-runner-admission-20261024'
+      - name: Check source-free native compiler presence
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+          clang --version | head -n 1
+          clang++ --version | head -n 1
+          cmake --version | head -n 1
+          ctest --version | head -n 1
+          printf '%s\n' 'SOURCE_FREE_NATIVE_COMPILERS_OK'
