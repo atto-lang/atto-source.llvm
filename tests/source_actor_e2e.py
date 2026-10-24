@@ -87,6 +87,8 @@ def main():
             "native actor capability spawn graph contains a cycle",
         "source-actor-child-capability-footprint-reject.ores":
             "native actor capability spawn tree exceeds 63 guest actor slots",
+        "shared-actorref-child-capability-v1.ores":
+            "native actor currently requires at least one scalar int field",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
