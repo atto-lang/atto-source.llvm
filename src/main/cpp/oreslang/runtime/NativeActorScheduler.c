@@ -718,6 +718,179 @@ int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
     unlock(s);
     return ok;
 }
+/* Bind each escrow credit to the producer's exact incarnation and native
+ * continuation, target generation, code image and send descriptor. A stale
+ * ticket cannot reclaim a newly reused slot. Only the scheduler authorizes
+ * execution when its worker claims a READY wake. */
+static WakeCredit* matching_wake_locked(
+        OresNativeActorScheduler* s, OresNativeWakeTicket t) {
+    if (!matching(s, t.producer) || t.slot >= ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
+        return NULL;
+    WakeCredit* w = &s->actors[t.producer.actor_slot].wakes[t.slot];
+    const OresNativeWakeTicket* old = &w->ticket;
+    if (w->state == WAKE_EMPTY || !t.slot_generation
+            || w->generation != t.slot_generation
+            || old->target.scheduler_domain != t.target.scheduler_domain
+            || old->target.actor_slot != t.target.actor_slot
+            || old->target.generation != t.target.generation
+            || old->continuation_slot != t.continuation_slot
+            || old->continuation_generation != t.continuation_generation
+            || old->code_generation != t.code_generation
+            || old->descriptor_generation != t.descriptor_generation)
+        return NULL;
+    return w;
+}
+int ores_native_actor_scheduler_reserve_wake(
+        OresNativeActorScheduler* s, OresNativeActorRef producer,
+        OresNativeActorRef target, uint64_t continuation_slot,
+        uint64_t continuation_generation, uint64_t code_generation,
+        uint64_t descriptor_generation, OresNativeWakeTicket* out) {
+    if (!s || !out) return 0;
+    *out = (OresNativeWakeTicket){0};
+    if (!target.scheduler_domain || !target.generation || !continuation_slot
+            || !continuation_generation || !code_generation || !descriptor_generation)
+        return 0;
+    lock(s);
+    int ok = !s->retired && s->wake_callback && matching(s, producer)
+        && !s->actors[producer.actor_slot].retired
+        && s->reserved_wakes < UINT64_MAX
+        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && execution_slot_available_locked(s);
+    WakeCredit* w = NULL;
+    ActorLane* lane = NULL;
+    if (ok) {
+        lane = &s->actors[producer.actor_slot];
+        for (size_t i = 0; i < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++i) {
+            if (lane->wakes[i].state == WAKE_EMPTY
+                    && lane->wakes[i].generation != UINT64_MAX) {
+                w = &lane->wakes[i];
+                break;
+            }
+        }
+        /* Guarantee worker availability up front, including for an actor
+         * that has not yet received ordinary USER or CONTROL work.
+         * This intentionally moves potentially failing pthread_create into
+         * RESERVE, not the irrevocable transfer/publish path. */
+        ok = w && ensure_workers_locked(s, s->worker_count);
+    }
+    if (ok) {
+        ++w->generation;
+        const size_t slot = (size_t)(w - lane->wakes);
+        w->ticket = (OresNativeWakeTicket){
+            .producer = producer, .target = target,
+            .slot = slot, .slot_generation = w->generation,
+            .continuation_slot = continuation_slot,
+            .continuation_generation = continuation_generation,
+            .code_generation = code_generation,
+            .descriptor_generation = descriptor_generation
+        };
+        w->state = WAKE_RESERVED;
+        ++s->reserved_wakes;
+        ++lane->wake_live;
+        *out = w->ticket;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_transfer_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    int ok = w && w->state == WAKE_RESERVED && !s->retired
+        && !s->actors[ticket.producer.actor_slot].retired;
+    if (ok) w->state = WAKE_TRANSFERRED;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_cancel_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    int ok = w && w->state == WAKE_RESERVED;
+    if (ok) release_wake_locked(s, (size_t)ticket.producer.actor_slot, w);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_abort_transferred_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    int ok = w && w->state == WAKE_TRANSFERRED;
+    if (ok) release_wake_locked(s, (size_t)ticket.producer.actor_slot, w);
+    unlock(s);
+    return ok;
+}
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    if (!s || (outcome != ORES_NATIVE_WAKE_READY
+            && outcome != ORES_NATIVE_WAKE_CANCELLED
+            && outcome != ORES_NATIVE_WAKE_FAILED))
+        return ORES_NATIVE_WAKE_INVALID;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    if (!w || w->state != WAKE_TRANSFERRED) {
+        unlock(s);
+        return ORES_NATIVE_WAKE_INVALID;
+    }
+    ActorLane* lane = &s->actors[ticket.producer.actor_slot];
+    if (s->retired || lane->retired) {
+        /* STOP wins: consume the physical wake loan without executing guest
+         * code. Callers must settle the owning send descriptor as failed. */
+        release_wake_locked(s, (size_t)ticket.producer.actor_slot, w);
+        unlock(s);
+        return ORES_NATIVE_WAKE_PRODUCER_RETIRED;
+    }
+    /* Admission/execution identifiers were reserved before the Future could
+     * suspend. Publication is an allocation-free in-memory state change. */
+    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
+    const int new_lane = !lane->active && !lane_has_work(lane);
+    --s->reserved_wakes;
+    w->outcome = outcome;
+    w->state = WAKE_READY;
+    ++lane->wake_ready;
+    if (new_lane) ++s->runnable_lanes;
+    ++s->reserved_executions;
+    ++s->accepted;
+    ++s->outstanding;
+    pthread_cond_signal(&s->ready);
+    unlock(s);
+    return ORES_NATIVE_WAKE_PUBLISHED;
+}
+int ores_native_actor_scheduler_is_current_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s || executing != s || !executing_wake_valid
+            || !executing_claim.carrier
+            || executing_wake.slot != ticket.slot
+            || executing_wake.slot_generation != ticket.slot_generation
+            || executing_wake.continuation_slot != ticket.continuation_slot
+            || executing_wake.continuation_generation != ticket.continuation_generation
+            || executing_wake.code_generation != ticket.code_generation
+            || executing_wake.descriptor_generation != ticket.descriptor_generation
+            || executing_wake.target.scheduler_domain != ticket.target.scheduler_domain
+            || executing_wake.target.actor_slot != ticket.target.actor_slot
+            || executing_wake.target.generation != ticket.target.generation)
+        return 0;
+    return ores_native_actor_scheduler_is_current_actor(s, ticket.producer);
+}
+size_t ores_native_actor_scheduler_outstanding_wake_loans(
+        OresNativeActorScheduler* s, OresNativeActorRef producer) {
+    if (!s) return 0;
+    lock(s);
+    size_t n = matching(s, producer) ? s->actors[producer.actor_slot].wake_live : 0;
+    unlock(s);
+    return n;
+}
+uint64_t ores_native_actor_scheduler_wakes_completed(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    uint64_t n = s->wakes_completed;
+    unlock(s);
+    return n;
+}
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* s, OresNativeActorRef parent, uint64_t payload) {
     if (!s) return 0;
