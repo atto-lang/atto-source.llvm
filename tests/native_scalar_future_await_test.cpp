@@ -161,5 +161,27 @@ int main() {
           "detached owner still pinned");
     check(detached_finalizer.finalized(), "detached owner finalization failed");
 
+    // A detached old generation must never revoke a Future owned by a newer
+    // generation reusing the same runtime/actor identity.
+    NativeActorGroup next_group(9802, 1);
+    auto next_owner = next_group.adopt(9802, 1, 2, [] {});
+    check(next_group.mark_ready(next_owner), "next generation not ready");
+    auto next_finalizer = next_group.runtime_finalizer(next_owner);
+    auto next_future = NativeScalarFutureAwait::open(next_owner, 80);
+    check(next_future->complete(next_future->id(), 11),
+          "next generation Future not settled");
+    check(!next_future->cancel_if_owner_detached(
+              next_future->id(), detached_owner),
+          "stale detached ref revoked newer generation");
+    check(next_future->phase() == NativeScalarFutureAwait::Phase::ready,
+          "newer generation phase changed through stale ref");
+    next_group.close();
+    check(next_future->cancel_if_owner_detached(
+              next_future->id(), next_owner),
+          "current detached owner did not revoke Future");
+    check(next_finalizer.ready_for_resource_reclamation(),
+          "next generation still pinned after revoke");
+    check(next_finalizer.finalized(), "next generation finalization failed");
+
     return 0;
 }
