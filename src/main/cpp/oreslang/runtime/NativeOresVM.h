@@ -145,6 +145,12 @@ OresNativeActorFuture* ores_native_vm_actor_future_open(
 int ores_native_vm_current_execution_context(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeExecutionContext* out);
+/* Current-actor continuation gate. DATA remains bounded/admitted while
+ * suspended; only CONTROL can resume the logical actor turn. */
+int ores_native_vm_suspend_current_user_mailbox(
+    OresNativeVM* vm, enum OresNativeVMDomain domain);
+int ores_native_vm_resume_current_user_mailbox(
+    OresNativeVM* vm, enum OresNativeVMDomain domain);
 
 /* Metadata-only VM master CONTROL coordinator. Coalesces one host wake bit
  * per domain. The host event loop explicitly pumps it; no master pthread or
