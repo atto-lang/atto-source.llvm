@@ -82,6 +82,11 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 
+static int commit_source_ready_future(void* raw) {
+    return ores_native_actor_future_complete(
+        (OresNativeActorFuture*)raw, ORES_NATIVE_FUTURE_READY);
+}
+
 static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
     if (!frame->suspend_recorded
@@ -91,16 +96,18 @@ static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_PENDING) {
-        ensure(ores_native_actor_future_complete(
-            frame->ready_future, ORES_NATIVE_FUTURE_READY));
         /*
-         * The Future has committed its terminal outcome and reserved root
-         * CONTROL wakeup. Our group mutex keeps the resumed root turn from
-         * entering before the continuation's READY record is visible.
-         * A failure must never silently strand the reserved wake.
+         * Cancellation and producer completion serialize on the continuation
+         * store. The fallible Future/CONTROL commit happens first while that
+         * lock is held; READY publication is then a non-failing memory store.
+         * Thus there is no post-commit window in which cancellation can make
+         * READY publication fail and strand an already-reserved wake.
          */
-        ensure(ores_native_continuation_store_notify_ready(
-            group.continuations, frame->link.continuation));
+        ensure(ores_native_continuation_store_commit_ready(
+            group.continuations,
+            frame->link.continuation,
+            commit_source_ready_future,
+            frame->ready_future));
     }
 }
 
