@@ -113,5 +113,76 @@ class NativeControlReceiptParserTest(unittest.TestCase):
                        self.trace_expected, dynamic=("source_token",))
 
 
+
+class CanonicalNativeReceiptTest(unittest.TestCase):
+    def setUp(self):
+        self.actor = (
+            "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 "
+            "released=1 processed=4 last=52"
+        )
+        self.vm = "SOURCE_ACTOR_VM_ROUTING_VERIFIED domains=4 main=1 cold_carriers=0 root_slot=63"
+        self.vm_expected = {"domains": 4, "main": 1, "cold_carriers": 0, "root_slot": 63}
+        self.trace = (
+            "SOURCE_AWAIT_READY_TRACE_PASS execution_id_persisted=1 "
+            "fresh_resume=1 root_slot=63 source_token=1234"
+        )
+        self.trace_expected = {
+            "execution_id_persisted": 1, "fresh_resume": 1, "root_slot": 63
+        }
+
+    def test_c_int64_and_uint64_boundary_values(self):
+        parse = source_actor_e2e.parse_native_decimal
+        self.assertEqual((1 << 64) - 1, parse(str((1 << 64) - 1)))
+        self.assertEqual(-(1 << 63), parse(str(-(1 << 63)), signed=True))
+        self.assertEqual((1 << 63) - 1, parse(str((1 << 63) - 1), signed=True))
+
+    def test_noncanonical_or_out_of_range_actor_numbers_are_denied(self):
+        for old, new in (
+            ("processed=4", "processed=04"),
+            ("last=52", "last=052"),
+            ("last=52", "last=-0"),
+            ("processed=4", "processed=18446744073709551616"),
+            ("last=52", "last=9223372036854775808"),
+            ("last=52", "last=-9223372036854775809"),
+        ):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                source_actor_e2e.parse_actor_receipt(self.actor.replace(old, new))
+
+    def test_noncanonical_vm_and_continuation_numbers_are_denied(self):
+        for old, new in (
+            ("domains=4", "domains=04"),
+            ("root_slot=63", "root_slot=063"),
+            ("root_slot=63", "root_slot=18446744073709551616"),
+        ):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                source_actor_e2e.parse_native_control_receipt(
+                    self.vm.replace(old, new),
+                    "SOURCE_ACTOR_VM_ROUTING_VERIFIED", self.vm_expected)
+        for new in ("source_token=01234", "source_token=18446744073709551616"):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                source_actor_e2e.parse_native_control_receipt(
+                    self.trace.replace("source_token=1234", new),
+                    "SOURCE_AWAIT_READY_TRACE_PASS", self.trace_expected,
+                    dynamic=("source_token",))
+
+    def test_noncanonical_framing_and_field_order_are_denied(self):
+        for bad in (
+            self.actor.replace(" processed=4", "\tprocessed=4"),
+            self.actor.replace("processed=4", "processed=4  "),
+            self.actor.replace("processed=4 last=52", "last=52 processed=4"),
+            self.actor.replace(" processed=4", "\u2003processed=4"),
+        ):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                source_actor_e2e.parse_actor_receipt(bad)
+        for bad in (
+            self.vm.replace(" main=1", "  main=1"),
+            self.vm.replace("domains=4 main=1", "main=1 domains=4"),
+            self.vm.replace(" main=1", "\u2003main=1"),
+        ):
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                source_actor_e2e.parse_native_control_receipt(
+                    bad, "SOURCE_ACTOR_VM_ROUTING_VERIFIED", self.vm_expected)
+
+
 if __name__ == "__main__":
     unittest.main()
