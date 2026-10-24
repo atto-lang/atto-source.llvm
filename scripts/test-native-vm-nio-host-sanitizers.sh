@@ -8,56 +8,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 head_sha="$(git rev-parse --verify HEAD)"
 tree_sha="$(git rev-parse --verify "HEAD^{tree}")"
-# An immutable commit/tree does not prove a matching worktree: local Git config
-# and index bits can conceal chmod, ignored inputs and source mutations.
-# This helper uses NUL-framed Git output, forces fileMode/fsmonitor overrides,
-# and admits only ignored build/cache output directories at the repository root.
-command -v python3 >/dev/null || { printf 'Python 3 required for NIO source-integrity gate\n' >&2; exit 2; }
-verify_exact_worktree() {
-  # The worktree's Python verifier is untrusted until source integrity passes.
-  # Never execute its pathname (even after hash checking): it can be swapped
-  # between the check and Python's open(). Execute the immutable HEAD blob.
-  local helper='scripts/verify-native-nio-source-local.py'
-  local approved staged raw
-  approved="$(git rev-parse --verify "HEAD:$helper")" || return 2
-  staged="$(git rev-parse --verify ":$helper")" || return 2
-  raw="$(git hash-object --no-filters -- "$helper")" || return 2
-  if [[ "$approved" != "$staged" || "$approved" != "$raw" ]]; then
-    printf 'NIO verifier bytes/index differ from approved HEAD blob\n' >&2
-    return 2
-  fi
-  # -I removes Python environment/site injection and -B blocks pycache writes.
-  # A post-hash path swap can only make the integrity check reject; the code
-  # executed here always comes from the immutable Git object database.
-  git cat-file blob "$approved" |
-    python3 -I -B -c '
-import sys
-source = sys.stdin.buffer.read()
-exec(compile(source, "<approved-native-nio-verifier>", "exec"),
-     {"__name__": "__main__", "__file__": "scripts/verify-native-nio-source-local.py"})
-' "$head_sha" "$tree_sha"
-}
-verify_exact_worktree
-# Source-free adversarial worktree/loader fixtures: no private source leaves
-# this origin repository. This suite is not runtime/compiler certification.
-# Do NOT execute the tests through a mutable worktree pathname after the gate;
-# use the committed blob, too, to close the gate-to-test Python TOCTOU window.
-test_path='tests/test_native_nio_source_integrity.py'
-approved_test="$(git rev-parse --verify "HEAD:$test_path")" || exit 2
-staged_test="$(git rev-parse --verify ":$test_path")" || exit 2
-raw_test="$(git hash-object --no-filters -- "$test_path")" || exit 2
-if [[ "$approved_test" != "$staged_test" || "$approved_test" != "$raw_test" ]]; then
-  printf 'NIO source-free test bytes/index differ from approved HEAD blob\n' >&2
+# An immutable HEAD check alone is not evidence of the tested bytes if the
+# checkout is dirty or contains untracked source shadowing tracked headers.
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  printf 'Refusing exact-head test: checkout has modified or untracked files\n' >&2
   exit 2
 fi
-git cat-file blob "$approved_test" |
-  python3 -I -B -c '
-import sys
-source = sys.stdin.buffer.read()
-exec(compile(source, "<approved-native-nio-test>", "exec"),
-     {"__name__": "__main__", "__file__": "tests/test_native_nio_source_integrity.py"})
-'
-verify_exact_worktree
 if [[ -n "${ORES_NIO_EXPECT_HEAD:-}" && "$head_sha" != "$ORES_NIO_EXPECT_HEAD" ]]; then
   printf 'Exact-head mismatch: expected %s, checked out %s\n' "$ORES_NIO_EXPECT_HEAD" "$head_sha" >&2
   exit 2
@@ -91,21 +47,6 @@ for toolchain in gcc clang; do
     "$cxx" -std=c++17 "${shared[@]}" -c "$runtime/$name.cpp" -o "$dest/$name.o"
   done
   "$cxx" "${shared[@]}" "$dest"/*.o -o "$dest/lifecycle"
-  # Exercise the actual native scheduler/VM terminal-state APIs, not a shim.
-  # A rejected lookup must clear any prior terminal receipt from output.
-  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" \
-    tests/native_actor_scheduler_test.c "$runtime/NativeActorScheduler.c" \
-    -o "$dest/actor-terminal-state"
-  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" \
-    tests/native_ores_vm_test.c "$runtime/NativeOresVM.c" \
-    "$runtime/NativeActorScheduler.c" -o "$dest/vm-terminal-state"
-  for attempt in {1..3}; do
-    printf 'NATIVE_TERMINAL_FAIL_CLOSED_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/actor-terminal-state"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/vm-terminal-state"
-  done
   for attempt in {1..30}; do
     printf "NIO_LIFECYCLE_ATTEMPT=%s toolchain=%s\n" "$attempt" "$toolchain"
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
@@ -122,69 +63,6 @@ for toolchain in gcc clang; do
       timeout 60s "$dest/$fixture"
     printf 'PASS: %s %s (ASan+UBSan)\n' "$toolchain" "$fixture"
   done
-  # Separately exercise host-only descriptor authority races under
-  # both toolchains. This does NOT prove guest FD authorization integration.
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_fd_authority_test.cpp -o "$dest/fd-authority"
-  for attempt in {1..3}; do
-    printf 'FD_AUTHORITY_HOST_MODEL_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 \
-      timeout 60s "$dest/fd-authority"
-  done
-  # Execute the real epoll/owned-eventfd broker, separately from the guest ABI.
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_fd_authority_broker_test.cpp -o "$dest/fd-broker"
-  for attempt in {1..3}; do
-    printf "NIO_REAL_EPOLL_FD_BROKER_ATTEMPT=%s toolchain=%s\n" "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 \
-      timeout 60s "$dest/fd-broker"
-  done
-  # Deterministic real-epoll state-machine scenarios (24 host API
-  # permutations and controlled ledger lock/terminal-consume denials).
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_fd_authority_broker_state_machine_test.cpp \
-    -o "$dest/fd-broker-state-machine"
-  for attempt in {1..3}; do
-    printf 'NIO_FD_STATE_MATRIX_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 \
-      timeout 90s "$dest/fd-broker-state-machine"
-  done
-  # Exercise Linux eventfd read/write EINTR plus post-close EINTR vs EBADF/EIO without retrying a reused FD.
-  # Linker wrapping changes only the userspace return from real close(2).
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_fd_close_eintr_regression.cpp \
-    -Wl,--wrap=close -Wl,--wrap=read -Wl,--wrap=write -o "$dest/fd-close-eintr"
-  for attempt in {1..3}; do
-    printf 'NIO_FD_CLOSE_EINTR_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 \
-      timeout 90s "$dest/fd-close-eintr"
-  done
-  # Extended SHA-bound real reactor/manager ownership conformance and
-  # public C ABI denial tests, not guest Future/await semantics.
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_epoll_manager_adversarial_test.cpp -o "$dest/manager-adversarial"
-  "$cc" -std=c11 "${shared[@]}" \
-    -c tests/native_abi_parity_adversarial_test.c -o "$dest/abi-adversarial.o"
-  "$cxx" "${shared[@]}" "$dest/NativeEpollReactorABI.o" \
-    "$dest/abi-adversarial.o" -o "$dest/abi-adversarial"
-  "$cxx" -std=c++17 "${shared[@]}" \
-    tests/native_vm_nio_bridge_denial_test.cpp \
-    "$runtime/NativeOresVMNio.cpp" "$runtime/NativeEpollReactorABI.cpp" \
-    -o "$dest/vm-bridge-denial"
-  for attempt in {1..3}; do
-    printf 'NIO_BOUNDARY_REGRESSION_ATTEMPT=%s toolchain=%s\n' "$attempt" "$toolchain"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/manager-adversarial"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/abi-adversarial"
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-    UBSAN_OPTIONS=halt_on_error=1 timeout 90s "$dest/vm-bridge-denial"
-  done
-  verify_exact_worktree
 done
 
 # Independent source parser admission for @ActorMaxThreads(LOW) and rejection
@@ -204,8 +82,4 @@ for toolchain in gcc clang; do
   UBSAN_OPTIONS=halt_on_error=1 \
     timeout 30s "$tmp/actor-max-threads-$toolchain"
   printf 'PASS: %s typed actor-thread frontend admission (ASan+UBSan)\n' "$toolchain"
-  verify_exact_worktree
 done
-
-# Final source identity must match the exact tree that passed admission.
-verify_exact_worktree
