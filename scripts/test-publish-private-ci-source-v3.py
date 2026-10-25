@@ -451,130 +451,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 669, "ci/test-plans/llvm-pr669.json"
             )
 
-    def _source_review_fixture(self, *, author_id=424242,
-                               state="APPROVED", review_commit=None,
-                               drift_path=None):
-        main_sha = "2" * 40
-        head_sha = "3" * 40
-        review_commit = head_sha if review_commit is None else review_commit
-        source_codeowners = (
-            b"/.github/ @ORESoftware\n"
-            b"/scripts/ @ORESoftware\n"
-            b"/CMakeLists.txt @ORESoftware\n"
-            b"/.github/CODEOWNERS @ORESoftware\n"
-            b"/.github/workflows/* @ORESoftware\n"
-            b"/.github/private-ci-approved-repositories.txt @ORESoftware\n"
-            b"/.github/private-ci-carrier-contracts.json @ORESoftware\n"
-            b"/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware\n"
-            b"/scripts/run-in-private-ci-destination.sh @ORESoftware\n"
-            b"/scripts/publish-private-ci-source.py @ORESoftware\n"
-            b"/scripts/publish-private-ci-source-v3.py @ORESoftware\n"
-            b"/scripts/test-publish-private-ci-source-v3.py @ORESoftware\n"
-            b"/scripts/test-private-ci-destination.sh @ORESoftware\n"
-            b"/scripts/test-publish-private-ci-source.py @ORESoftware\n"
-            b"/scripts/audit-private-ci-governance.py @ORESoftware\n"
-            b"/scripts/test-audit-private-ci-governance.py @ORESoftware\n"
-        )
-        blobs = {}
-        for path in v3.REVIEWED_GOVERNANCE_PATHS:
-            raw = source_codeowners if path == v3.CODEOWNERS_PATH else (path + "\n").encode()
-            blobs[path] = (raw, v3.git_blob_sha(raw))
-
-        def api(route, method="GET", payload=None):
-            if route == f"repos/{v3.SOURCE_REPO}":
-                return {
-                    "id": v3.SOURCE_REPO_ID,
-                    "full_name": v3.SOURCE_REPO,
-                    "private": True,
-                    "visibility": "private",
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
-                return {
-                    "name": v3.SOURCE_BRANCH,
-                    "protected": False,
-                    "commit": {"sha": main_sha},
-                }
-            if route == f"repos/{v3.SOURCE_REPO}/pulls/{v3.REVIEW_AUTHORITY_PR}":
-                return {
-                    "number": v3.REVIEW_AUTHORITY_PR,
-                    "state": "closed",
-                    "merged_at": "2026-10-25T15:00:00Z",
-                    "user": {"id": author_id, "login": "authority-author"},
-                    "head": {
-                        "sha": head_sha,
-                        "repo": {
-                            "full_name": v3.SOURCE_REPO,
-                            "id": v3.SOURCE_REPO_ID,
-                        },
-                    },
-                    "base": {
-                        "ref": v3.SOURCE_BRANCH,
-                        "repo": {
-                            "full_name": v3.SOURCE_REPO,
-                            "id": v3.SOURCE_REPO_ID,
-                        },
-                    },
-                }
-            raise AssertionError((method, route))
-
-        review = {
-            "id": 91,
-            "state": state,
-            "commit_id": review_commit,
-            "submitted_at": "2026-10-25T14:59:00Z",
-            "user": {
-                "id": v3.REVIEW_AUTHORITY_USER_ID,
-                "login": v3.REVIEW_AUTHORITY_LOGIN,
-            },
-        }
-
-        def entries(repository, commit, paths, label):
-            out = {}
-            for path in paths:
-                sha = blobs[path][1]
-                if commit == main_sha and path == drift_path:
-                    sha = "9" * 40
-                out[path] = ("100644", "blob", sha)
-            return out
-
-        def remote(path, ref, max_bytes):
-            raw, sha = blobs[path]
-            if ref == main_sha and path == drift_path:
-                changed = raw + b"drift\n"
-                return changed, v3.git_blob_sha(changed)
-            return raw, sha
-
-        return main_sha, api, review, entries, remote
-
-    def test_unprotected_source_accepts_exact_independent_review(self):
-        main_sha, api, review, entries, remote = self._source_review_fixture()
-        with (
-            patch.object(v3, "gh_api", side_effect=api),
-            patch.object(v3, "_latest_review", return_value=review),
-            patch.object(v3, "_reviewed_tree_entries", side_effect=entries),
-            patch.object(v3, "remote_source_file", side_effect=remote),
-        ):
-            self.assertEqual(v3.review_attested_source_main_sha(), main_sha)
-
-    def test_unprotected_source_rejects_stale_author_or_governance_drift(self):
-        for kwargs, message in (
-            ({"state": "CHANGES_REQUESTED"}, "stale, late, or not approved"),
-            ({"author_id": v3.REVIEW_AUTHORITY_USER_ID}, "independent merged"),
-            ({"author_id": 0}, "independent merged"),
-            ({"drift_path": v3.CONTRACT_PATH}, "drifted"),
-        ):
-            with self.subTest(kwargs=kwargs):
-                main_sha, api, review, entries, remote = self._source_review_fixture(**kwargs)
-                with (
-                    patch.object(v3, "gh_api", side_effect=api),
-                    patch.object(v3, "_latest_review", return_value=review),
-                    patch.object(v3, "_reviewed_tree_entries", side_effect=entries),
-                    patch.object(v3, "remote_source_file", side_effect=remote),
-                ):
-                    with self.assertRaisesRegex(v3.Denied, message):
-                        v3.review_attested_source_main_sha()
-
-    def test_authorized_source_main_uses_review_fallback_when_unprotected(self):
+    def test_authorized_source_main_rejects_unprotected_main(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
                 return {
@@ -585,11 +462,28 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
         with (
             patch.object(v3, "gh_api", side_effect=api),
-            patch.object(v3, "review_attested_source_main_sha",
-                         return_value="2" * 40) as fallback,
+            patch.object(v3, "source_protection") as protected,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "not protected"):
+                v3.authorized_source_main_sha()
+        protected.assert_not_called()
+
+    def test_authorized_source_main_uses_protected_origin_only(self):
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": True,
+                    "commit": {"sha": "2" * 40},
+                }
+            raise AssertionError(route)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "source_protection",
+                         return_value="2" * 40) as protected,
         ):
             self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
-        fallback.assert_called_once_with()
+        protected.assert_called_once_with()
 
     def _carrier_review_fixture(self, *, author_id=424242,
                                 state="APPROVED", review_commit=None):
