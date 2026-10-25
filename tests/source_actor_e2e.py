@@ -26,6 +26,12 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-two-owned-heaps.ores":
+        value = 0
+        start = 1 if actor_index == 0 else 5
+        for n in range(start, start + processed):
+            value = 2 * (value + n)
+        return value
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -51,9 +57,13 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["released"] == 1, ("native actor release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1), fields
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    # Immediate stop can win before initialization begins. It must never
+    # claim readiness or execute DATA in that canceled startup incarnation.
+    if fields["constructor_on_worker"] == 0:
+        assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
 def main():
@@ -103,20 +113,20 @@ def main():
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
-        "source-actor-await-get-done.ores": "expected 'get_ready'",
-        "source-actor-await-worker-twice.ores": "native source supports only one await get_ready continuation",
+        "source-actor-await-get-done.ores": "actor effects after await get_done are unsupported",
+        "source-actor-await-worker-twice.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
         "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
         "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
         "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-double-await.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-double-await.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
         "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
         "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
         "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
         "source-actor-future-void-send.ores": "unknown parameter",
         "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-await-again.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-await-again.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
@@ -282,8 +292,9 @@ def main():
                     name, i, processed), (
                     name, i, processed, observed_last)
             if name == "source-actor-two-owned-heaps.ores":
-                assert sorted(receipt["last"] for receipt in receipts) == [
-                    52, 172
+                assert [r["last"] for r in receipts] == [
+                    expected_prefix_last(name, i, r["processed"])
+                    for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
