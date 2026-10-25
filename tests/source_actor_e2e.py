@@ -192,6 +192,8 @@ def main():
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
+        "source-actor-await-ready-post-call-reject.ores":
+            "await get_ready does not yet lower post-await non-actor statements",
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
