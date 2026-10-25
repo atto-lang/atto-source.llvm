@@ -962,6 +962,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_value_dispatch_type_mismatch_rejected
         dispatch-value-arm-type-mismatch.ores
         --diagnostic "ternary arms require a common scalar type")
+    oreslang_contract_test(native_dispatch_replay_unsafe_subject_rejected
+        dispatch-replay-unsafe-subject.ores
+        --diagnostic "native value switch subject must be a replay-safe scalar expression")
     oreslang_contract_test(native_dispatch_async_arm_not_yet_lowered
         dispatch-async-arm-unsupported.ores
         --diagnostic "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering")
