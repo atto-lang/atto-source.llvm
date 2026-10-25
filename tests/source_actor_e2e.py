@@ -157,6 +157,7 @@ def main():
     ]
     if sys.platform.startswith("linux"):
         positives.append(("source-actor-await-readable.ores", 1, 1, 1))
+        positives.append(("source-actor-await-readable-outcome.ores", 1, 1, 1))
     negatives = {
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
@@ -225,6 +226,14 @@ def main():
             "await readable requires one source actor without suspended locals",
         "source-actor-await-readable-post-call-reject.ores":
             "await readable does not yet lower post-await non-actor statements",
+        "source-actor-await-readable-outcome-int-compare-reject.ores":
+            "equality operands require the same scalar type",
+        "source-actor-await-readable-outcome-arithmetic-reject.ores":
+            "arithmetic requires int, got ReadableOutcome",
+        "source-actor-await-readable-outcome-shadow-reject.ores":
+            "ReadableOutcome binding cannot shadow an ActorRef",
+        "source-actor-await-readable-outcome-variant-reject.ores":
+            "ReadableOutcome supports only Ready, Cancelled, or Failed",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -280,12 +289,21 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
-            if name == "source-actor-await-readable.ores":
+            if name in {
+                "source-actor-await-readable.ores",
+                "source-actor-await-readable-outcome.ores",
+            }:
                 assert "oreslang_source_actor_await_readable" in guest.stdout, name
                 assert "readable_continuation" in guest.stdout, name
                 calls = [line for line in guest.stdout.splitlines()
                          if "call i64 @oreslang_source_actor_await_readable(" in line]
                 assert len(calls) == 1, (name, "expected one guest readable await", calls)
+                definitions = [line for line in guest.stdout.splitlines()
+                               if "define internal i64 @main.readable_continuation" in line]
+                assert len(definitions) == 1 and definitions[0].count("i64") >= 2, (
+                    name, "typed readable continuation must carry outcome", definitions)
+                if name == "source-actor-await-readable-outcome.ores":
+                    assert "readable.outcome" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -297,7 +315,10 @@ def main():
             exe = pathlib.Path(temp, name + ".guest")
             flags = (["-O1", "-g", "-fno-omit-frame-pointer", "-fsanitize=address,undefined"]
                      if args.sanitize else ["-O1"])
-            if name == "source-actor-await-readable.ores":
+            if name in {
+                "source-actor-await-readable.ores",
+                "source-actor-await-readable-outcome.ores",
+            }:
                 link_nio_source_actor(
                     args, runtime, source_dirs, ll, exe, flags)
                 executed = run(
@@ -340,7 +361,10 @@ def main():
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            if name == "source-actor-await-readable.ores":
+            if name in {
+                "source-actor-await-readable.ores",
+                "source-actor-await-readable-outcome.ores",
+            }:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READABLE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
