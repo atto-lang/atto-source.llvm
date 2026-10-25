@@ -42,8 +42,15 @@ public:
         }
         Program linked;
         linked.module = units.front()->program.module;
+        linked.namespace_name = units.front()->program.namespace_name;
         for (std::size_t index = 0; index < units.size(); ++index) {
             auto& unit = *units[index];
+            if (!unit.program.type_only_declarations.empty() ||
+                    !unit.program.type_constraint_descriptors.empty() ||
+                    !unit.program.namespace_name.empty()) {
+                fail(unit,
+                    "native linked type-only declarations/namespaces require checked cross-unit type identity lowering");
+            }
             if (!unit.program.contracts.empty() || !unit.program.conforms.empty())
                 fail(unit, "native linked contract conformance requires checked cross-unit contract identity lowering");
             // An init hook has observable ordering/once-only behavior in Java.

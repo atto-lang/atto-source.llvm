@@ -1,3 +1,5 @@
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
@@ -437,22 +439,37 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
+        if (accept("namespace")) {
+            program.namespace_name = identifier();
+            require(";");
+        }
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");
-        while (token_.text == "define" || (token_.text == "pub" && peek_next().text == "define")) {
+        while (token_.text == "define" || token_.text == "declare" ||
+                (token_.text == "pub" &&
+                 (peek_next().text == "define" || peek_next().text == "declare"))) {
+            if (at_type_only_introducer()) {
+                type_only_declaration(program);
+                continue;
+            }
             bool exported = accept("pub");
             require("define");
             if (accept("pub")) {
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
-            if (accept("type")) {
-                parse_scalar_type_alias(exported);
+            if (token_.text == "mtd") {
+                program.functions.push_back(extension_method(exported));
                 continue;
             }
-            if (token_.text == "trait" || token_.text == "interface")
-                fail("native trait/interface definitions require a verified type-level linker and lowering");
+            if (token_.text == "type" || token_.text == "trait" ||
+                    token_.text == "interface") {
+                type_only_declaration(program, true, exported);
+                continue;
+            }
+            if (token_.text == "model")
+                fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
                     fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
@@ -492,12 +509,8 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
-            if (accept("declare")) {
-                parse_type_forward();
-                continue;
-            }
-            if (accept("type")) {
-                parse_scalar_type_alias(false);
+            if (at_type_only_introducer()) {
+                type_only_declaration(program);
                 continue;
             }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
@@ -514,12 +527,17 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
-                if (accept("type")) {
-                    parse_scalar_type_alias(public_class);
+                if (token_.text == "mtd") {
+                    program.functions.push_back(extension_method(public_class));
                     continue;
                 }
-                if (token_.text == "trait" || token_.text == "interface")
-                    fail("native trait/interface definitions require a verified type-level linker and lowering");
+                if (token_.text == "type" || token_.text == "trait" ||
+                        token_.text == "interface") {
+                    type_only_declaration(program, true, public_class);
+                    continue;
+                }
+                if (token_.text == "model")
+                    fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -545,20 +563,19 @@ public:
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
-        for (const auto& forward : forwards_) {
-            if (!defined_type_aliases_.count(forward.first))
-                throw std::runtime_error("unresolved native forward type '" + forward.first + "'");
+        validate_type_only_declarations(program);
+        if (!program.namespace_name.empty() &&
+                (!program.functions.empty() || !program.classes.empty() ||
+                 !program.actors.empty() || !program.contracts.empty() ||
+                 !program.cooperative_loops.empty())) {
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
         }
-        for (const auto& cls : program.classes)
-            if (defined_type_aliases_.count(cls.name))
-                throw std::runtime_error("native nominal class collides with type alias '" + cls.name + "'");
-        for (const auto& actor : program.actors)
-            if (defined_type_aliases_.count(actor.name))
-                throw std::runtime_error("native nominal actor collides with type alias '" + actor.name + "'");
-        resolve_scalar_type_aliases(program);
+        compile_type_constraint_descriptors(program);
+        lower_extension_calls(program);
+        resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
-                program.cooperative_loops.empty())
-            fail("expected at least one function or actor");
+                program.cooperative_loops.empty() && program.type_only_declarations.empty())
+            fail("expected at least one function, actor or type-only declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
@@ -576,6 +593,284 @@ private:
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
     }
     static bool sum_variant(std::string_view name) { return name == "Some" || name == "None" || name == "Ok" || name == "Err"; }
+
+    bool at_type_only_introducer() const {
+        return token_.text == "declare" ||
+               (token_.text == "pub" && peek_next().text == "declare");
+    }
+
+    // Aliases are compile-time spellings for the existing scalar ABI, never
+    // new native structs. Resolve through a bounded chain; a missing target or
+    // trait/interface name must fail instead of becoming a forged class.
+    ScalarType resolve_scalar_alias(const std::string& name) const {
+        std::unordered_set<std::string> seen;
+        std::string current = name;
+        for (std::size_t depth = 0; depth < 129; ++depth) {
+            if (current == "int") return ScalarType::I64;
+            if (current == "bool") return ScalarType::Bool;
+            if (!seen.insert(current).second)
+                throw std::runtime_error("TYPE_ALIAS_CYCLE: cyclic scalar alias '" + current + "'");
+            auto alias = scalar_alias_targets_.find(current);
+            if (alias == scalar_alias_targets_.end()) {
+                if (type_only_nominals_.count(current))
+                    throw std::runtime_error("TYPE_ALIAS_KIND_MISMATCH: alias '" + name
+                                             + "' names a trait/interface '" + current + "'");
+                throw std::runtime_error("TYPE_ALIAS_UNKNOWN_TARGET: alias '" + name
+                                         + "' targets unknown scalar type '" + current + "'");
+            }
+            current = alias->second;
+        }
+        throw std::runtime_error("TYPE_ALIAS_DEPTH_BUDGET: maximum alias depth is 128");
+    }
+
+    std::string type_only_scalar(bool allow_void) {
+        if (token_.text == "int" || token_.text == "bool" ||
+                (allow_void && token_.text == "void")) {
+            std::string type(token_.text);
+            advance();
+            return type;
+        }
+        // Type aliases are complete declarations. Canonicalize their
+        // underlying scalar ABI only after whole-catalog validation.
+        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
+                scalar_alias_targets_.count(std::string(token_.text))) {
+            return identifier();
+        }
+        fail("TYPE_ONLY_UNSUPPORTED_TYPE: native v1 admits only int/bool scalar"
+             " signatures and void results; nominal/generic lowering is not verified");
+    }
+
+    std::string type_alias_target() {
+        if (accept("int") || accept("i64")) return "int";
+        if (accept("bool")) return "bool";
+        if (token_.kind == Kind::Identifier && !reserved(token_.text))
+            return identifier();
+        fail("TYPE_ONLY_UNSUPPORTED_TYPE: alias target must name int/i64, bool or another alias");
+    }
+
+    std::int64_t constraint_i64() {
+        const bool negative = accept("-");
+        if (token_.kind != Kind::Integer)
+            fail("CONSTRAINT_I64_REQUIRED: constraint operand must be signed i64");
+        std::string digits(token_.text);
+        if (digits.front() == '_' || digits.back() == '_' ||
+                digits.find("__") != std::string::npos)
+            fail("CONSTRAINT_I64_MALFORMED: malformed integer separator");
+        digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        std::uint64_t magnitude = 0;
+        const auto parsed = std::from_chars(
+            digits.data(), digits.data() + digits.size(), magnitude);
+        const std::uint64_t negative_limit = (std::uint64_t{1} << 63);
+        const std::uint64_t positive_limit =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        const std::uint64_t limit = negative ? negative_limit : positive_limit;
+        if (parsed.ec != std::errc{} ||
+                parsed.ptr != digits.data() + digits.size() ||
+                magnitude > limit)
+            fail("CONSTRAINT_I64_OVERFLOW: constraint operand exceeds signed i64");
+        advance();
+        if (!negative) return static_cast<std::int64_t>(magnitude);
+        if (magnitude == negative_limit)
+            return std::numeric_limits<std::int64_t>::min();
+        return -static_cast<std::int64_t>(magnitude);
+    }
+
+    void type_alias_constraints(TypeOnlyDecl& decl) {
+        if (!accept("with")) return;
+        if (decl.alias_target != "int")
+            fail("CONSTRAINT_REPRESENTATION_UNSUPPORTED: descriptor v1 requires direct int/i64 alias");
+
+        bool have_min = false;
+        bool have_max = false;
+        std::int64_t minimum = 0;
+        std::int64_t maximum = 0;
+        for (;;) {
+            if (accept("min")) {
+                if (have_min) fail("CONSTRAINT_DUPLICATE_MIN");
+                minimum = constraint_i64();
+                have_min = true;
+            } else if (accept("max")) {
+                if (have_max) fail("CONSTRAINT_DUPLICATE_MAX");
+                maximum = constraint_i64();
+                have_max = true;
+            } else {
+                fail("CONSTRAINT_PREDICATE_UNSUPPORTED: with admits min/max inclusive i64 only");
+            }
+            if (!accept("and")) break;
+            if (token_.text == ";")
+                fail("CONSTRAINT_PREDICATE_REQUIRED: expected constraint after and");
+        }
+        if (have_min && have_max && minimum > maximum)
+            fail("CONSTRAINT_EMPTY_RANGE: min exceeds max");
+
+        if (have_min) {
+            TypeOnlyDecl::Constraint constraint;
+            constraint.kind = TypeOnlyDecl::Constraint::Kind::MinInclusive;
+            constraint.value = minimum;
+            decl.constraints.push_back(constraint);
+        }
+        if (have_max) {
+            TypeOnlyDecl::Constraint constraint;
+            constraint.kind = TypeOnlyDecl::Constraint::Kind::MaxInclusive;
+            constraint.value = maximum;
+            decl.constraints.push_back(constraint);
+        }
+    }
+
+    static std::string sha256_hex(const std::string& canonical) {
+        llvm::SHA256 hash;
+        hash.update(llvm::StringRef(canonical));
+        const auto digest = hash.final();
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string result;
+        result.reserve(digest.size() * 2);
+        for (std::uint8_t value : digest) {
+            result.push_back(digits[(value >> 4) & 0x0f]);
+            result.push_back(digits[value & 0x0f]);
+        }
+        return result;
+    }
+
+    void compile_type_constraint_descriptors(Program& program) const {
+        program.type_constraint_descriptors.clear();
+        for (const auto& decl : program.type_only_declarations) {
+            if (decl.kind != TypeOnlyDecl::Kind::Alias || decl.constraints.empty())
+                continue;
+            TypeConstraintDescriptor descriptor;
+            descriptor.schema_id = "ores.type-constraint.v1";
+            descriptor.representation = "i64";
+            const std::string local_name = decl.module_name.empty()
+                ? decl.name : decl.module_name + "." + decl.name;
+            descriptor.qualified_type_name = program.namespace_name.empty()
+                ? local_name : program.namespace_name + "." + local_name;
+            descriptor.canonical = descriptor.schema_id +
+                "|type=" + descriptor.qualified_type_name + "|repr=i64";
+            for (const auto& constraint : decl.constraints) {
+                if (constraint.kind == TypeOnlyDecl::Constraint::Kind::MinInclusive) {
+                    descriptor.canonical += "|min_inclusive_i64=" +
+                        std::to_string(constraint.value) +
+                        "|error=ORES_CONSTRAINT_MIN_INCLUSIVE_I64";
+                } else {
+                    descriptor.canonical += "|max_inclusive_i64=" +
+                        std::to_string(constraint.value) +
+                        "|error=ORES_CONSTRAINT_MAX_INCLUSIVE_I64";
+                }
+            }
+            descriptor.fingerprint = sha256_hex(descriptor.canonical);
+            program.type_constraint_descriptors.push_back(std::move(descriptor));
+        }
+    }
+
+    void type_only_declaration(Program& program, bool already_defined = false,
+                               bool before_public = false) {
+        bool exported = before_public;
+        if (already_defined) {
+            if (accept("pub")) {
+                if (exported) fail("TYPE_ONLY_DUPLICATE_VISIBILITY: duplicate pub");
+                exported = true;
+            }
+        } else {
+            const bool prefix_public = accept("pub");
+            require("declare");
+            const bool postfix_public = accept("pub");
+            if ((prefix_public && postfix_public) || token_.text == "pub")
+                fail("TYPE_ONLY_DUPLICATE_VISIBILITY: duplicate pub");
+            exported = prefix_public || postfix_public;
+        }
+
+        TypeOnlyDecl decl;
+        decl.module_name = program.module;
+        decl.exported = exported;
+        if (accept("type")) decl.kind = TypeOnlyDecl::Kind::Alias;
+        else if (accept("trait")) decl.kind = TypeOnlyDecl::Kind::Trait;
+        else if (accept("interface")) decl.kind = TypeOnlyDecl::Kind::Interface;
+        else fail("TYPE_ONLY_INVALID_KIND: declare admits type, trait or interface; "
+                  "define model is a runtime type and value");
+
+        decl.name = identifier();
+        if (callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
+            fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
+                 decl.name + "' cannot be redefined");
+        if (decl.kind == TypeOnlyDecl::Kind::Alias) {
+            if (token_.text == "<")
+                fail("TYPE_ONLY_GENERIC_UNSUPPORTED: native aliases are non-generic in descriptor v1");
+            // 'declare type' and 'define type' share this exact grammar.
+            // Incomplete 'declare type Code;' never creates an alias.
+            if (token_.text != "=")
+                fail("TYPE_ONLY_INCOMPLETE_DEFINITION: declare type and define type"
+                     " both require '= <type>'");
+            require("=");
+            decl.alias_target = type_alias_target();
+            type_alias_constraints(decl);
+            require(";");
+            scalar_alias_targets_.emplace(decl.name, decl.alias_target);
+            if (!decl.constraints.empty()) constrained_aliases_.insert(decl.name);
+        } else {
+            type_only_nominals_.insert(decl.name);
+            if (accept("extends")) {
+                do {
+                    if (decl.parents.size() >= 32)
+                        fail("TYPE_ONLY_PARENT_BUDGET: maximum 32 parent types");
+                    decl.parents.push_back(identifier());
+                } while (accept(","));
+            }
+            const bool braces = accept("{");
+            if (!braces) require("as");
+            std::unordered_set<std::string> member_names;
+            while (token_.kind != Kind::End &&
+                    token_.text != (braces ? "}" : "end")) {
+                if (decl.methods.size() >= 128)
+                    fail("TYPE_ONLY_MEMBER_BUDGET: maximum 128 method signatures");
+                require("fnc");
+                TypeOnlyDecl::Method method;
+                method.name = identifier();
+                require("(");
+                std::unordered_set<std::string> formal_names;
+                if (!accept(")")) {
+                    do {
+                        if (method.parameter_types.size() >= 32)
+                            fail("TYPE_ONLY_PARAM_BUDGET: maximum 32 method parameters");
+                        std::string type;
+                        if (token_.kind == Kind::Identifier && !reserved(token_.text) &&
+                                peek_next().text == ":") {
+                            const std::string name = identifier();
+                            if (!formal_names.insert(name).second)
+                                fail("TYPE_ONLY_DUPLICATE_PARAM: duplicate method parameter '" + name + "'");
+                            require(":");
+                            type = type_only_scalar(false);
+                        } else {
+                            type = type_only_scalar(false);
+                            const std::string name = identifier();
+                            if (!formal_names.insert(name).second)
+                                fail("TYPE_ONLY_DUPLICATE_PARAM: duplicate method parameter '" + name + "'");
+                        }
+                        method.parameter_types.push_back(std::move(type));
+                    } while (accept(","));
+                    require(")");
+                }
+                // Method overload identity is name + arity, not return type.
+                const std::string key = method.name + "/" +
+                    std::to_string(method.parameter_types.size());
+                if (!member_names.insert(key).second)
+                    fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate method slot '" + key + "'");
+                if (!accept(":")) {
+                    // '=' and '>' are separate lexer tokens: require adjacency.
+                    if (token_.text != "=" || peek_next().text != ">" ||
+                            peek_next().offset != token_.offset + 1)
+                        fail("TYPE_ONLY_BAD_ARROW: signature requires contiguous => or :");
+                    require("=");
+                    require(">");
+                }
+                method.return_type = type_only_scalar(true);
+                require(";");
+                decl.methods.push_back(std::move(method));
+            }
+            require(braces ? "}" : "end");
+        }
+        if (program.type_only_declarations.size() >= 1024)
+            fail("TYPE_ONLY_DECL_BUDGET: maximum 1024 type-only declarations");
+        program.type_only_declarations.push_back(std::move(decl));
+    }
 
     struct ForwardType {
         bool exported = false;
@@ -659,10 +954,10 @@ private:
     }
 
     bool accept_pending_scalar_alias(std::string& name) {
-        // Generic parameters and class types are not silently treated as
-        // scalar aliases. Forward evidence must exist in this module/file.
+        // Generic parameters, classes and type-only traits/interfaces are not
+        // silently erased to scalar aliases.
         const std::string candidate(token_.text);
-        if (!defined_type_aliases_.count(candidate) && !forwards_.count(candidate))
+        if (!scalar_alias_targets_.count(candidate))
             return false;
         name = identifier();
         return true;
@@ -1337,6 +1632,43 @@ private:
         return loop;
     }
 
+    static std::string extension_function_name(const std::string& receiver,
+                                               const std::string& method) {
+        // Dollar is not a guest identifier character, so source cannot forge
+        // or directly call this compiler-owned extension lowering slot.
+        return "$mtd$" + receiver + "$" + method;
+    }
+
+    Function extension_method(bool exported) {
+        extension_offset_ = token_.offset;
+        require("mtd");
+        extension_method_name_ = identifier();
+        if (extension_method_name_ == "init" || extension_method_name_ == "main")
+            fail("EXTENSION_RESERVED_NAME: extension method cannot use a reserved lifecycle or entrypoint name");
+        require("on");
+        if (token_.text == "int" || token_.text == "bool")
+            fail("EXTENSION_RECEIVER_REQUIRES_NAMED_ALIAS: primitive receivers are not extension identities");
+        extension_receiver_alias_ = identifier();
+        if (!scalar_alias_targets_.count(extension_receiver_alias_)) {
+            if (type_only_nominals_.count(extension_receiver_alias_))
+                fail("EXTENSION_RECEIVER_KIND: extension receiver must be a scalar type alias");
+            fail("EXTENSION_RECEIVER_UNKNOWN: extension receiver must name a declared scalar type alias");
+        }
+        extension_header_active_ = true;
+        Function value = function();
+        extension_header_active_ = false;
+        value.exported = false;
+        const std::size_t explicit_arity = value.parameters.empty()
+            ? 0 : value.parameters.size() - 1;
+        auto& slots = extension_methods_[extension_receiver_alias_][extension_method_name_];
+        if (!slots.insert(explicit_arity).second)
+            fail("EXTENSION_DUPLICATE_SLOT: duplicate receiver/method/arity");
+        if (exported) extension_public_slots_.insert(
+            extension_receiver_alias_ + "$" + extension_method_name_ + "$" +
+            std::to_string(explicit_arity));
+        return value;
+    }
+
     Function function(std::string owner = {}, bool visible = false) {
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
@@ -1344,8 +1676,16 @@ private:
         class_receivers_.clear();
         Function value;
         value.method_owner = owner;
-        value.offset = token_.offset;
-        value.exported = owner.empty() ? accept("pub") : visible;
+        const bool alias_extension = extension_header_active_;
+        value.offset = alias_extension ? extension_offset_ : token_.offset;
+        if (alias_extension) {
+            if (!owner.empty())
+                fail("extension method cannot also be a class method");
+            value.exported = false;
+            value.name = extension_function_name(
+                extension_receiver_alias_, extension_method_name_);
+        } else {
+            value.exported = owner.empty() ? accept("pub") : visible;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -1386,8 +1726,15 @@ private:
                     if (prior.name == slot.name)
                         fail("duplicate generic parameter '" + slot.name + "'");
                 if (accept("=")) {
-                    if (accept("int")) slot.default_type = "int";
-                    else {
+                    if (accept("int")) {
+                        slot.default_type = "int";
+                    } else if (token_.kind == Kind::Identifier &&
+                               scalar_alias_targets_.count(std::string(token_.text))) {
+                        const std::string alias = identifier();
+                        if (resolve_scalar_alias(alias) != ScalarType::I64)
+                            fail("native scalar generic default requires int ABI");
+                        slot.default_type = "int";
+                    } else {
                         const std::string dependency = identifier();
                         const bool earlier = std::any_of(value.generic_parameters.begin(),
                             value.generic_parameters.end(),
@@ -1402,7 +1749,15 @@ private:
         }
         if (value.name == "main" && !value.generic_parameters.empty())
             fail("native entrypoint main cannot be generic");
+        }
         require("(");
+        if (alias_extension) {
+            Parameter self;
+            self.name = "self";
+            self.pending_type_alias = extension_receiver_alias_;
+            self.mode = Parameter::Mode::Value;
+            value.parameters.push_back(std::move(self));
+        }
         if (!owner.empty()) {
             Parameter receiver;
             receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
@@ -1447,6 +1802,9 @@ private:
                     parameter.scalar_type = ScalarType::String;
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
+                } else if (token_.kind == Kind::Identifier &&
+                           type_only_nominals_.count(std::string(token_.text))) {
+                    fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar parameter");
                 } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = type_identifier();
@@ -1461,6 +1819,8 @@ private:
                 if (token_.text == "?")
                     fail("native optional type '?' requires versioned Option/default ABI lowering");
                 parameter.name = identifier();
+                if (alias_extension && parameter.name == "self")
+                    fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
                 if (token_.text == "?")
                     fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
                 value.parameters.push_back(std::move(parameter));
@@ -1481,6 +1841,9 @@ private:
                 value.return_type = ScalarType::String;
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
+            } else if (token_.kind == Kind::Identifier &&
+                       type_only_nominals_.count(std::string(token_.text))) {
+                fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar return type");
             } else {
                 const std::size_t type_offset = token_.offset;
                 const std::string type = type_identifier();
@@ -1768,8 +2131,14 @@ private:
                         } else if (accept("string") || accept("String")) {
                             if (binding.heap_owned) fail("owned string qualifier is unsupported");
                             binding.scalar_type = ScalarType::String;
+                        } else if (token_.kind == Kind::Identifier &&
+                                   scalar_alias_targets_.count(std::string(token_.text))) {
+                            binding.pending_type_alias = identifier();
+                        } else if (token_.kind == Kind::Identifier &&
+                                   type_only_nominals_.count(std::string(token_.text))) {
+                            fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar local");
                         } else {
-                            fail("native scalar local requires int or bool");
+                            fail("native scalar local requires int, bool or checked scalar alias");
                         }
                     }
                 }
@@ -1912,6 +2281,9 @@ private:
                     if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
                     else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
                     else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
+                    else if (scalar_alias_targets_.count(type)) statement.branch_local->pending_type_alias = type;
+                    else if (type_only_nominals_.count(type))
+                        fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar branch local");
                     else if (is_sum_name(type)) statement.branch_local->sum_type = type;
                     else { statement.branch_local->class_name = type; statement.branch_local->record_view = true; }
                     require("=");
@@ -2755,11 +3127,17 @@ private:
             token_.text == "ActorGroupJoinCapability")
             fail("native ActorGroup source lowering unsupported: "
                  "typed membership capabilities and lifecycle authority required");
-        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" && !sum_variant(token_.text) && !(token_.text == "self" && !method_scope_.empty()))) {
+        const bool extension_self = extension_header_active_ && token_.text == "self";
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern" &&
+                !sum_variant(token_.text) &&
+                !(token_.text == "self" && (!method_scope_.empty() || extension_self)))) {
             fail("expected int expression");
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
-        if (token_.text == "self" && !method_scope_.empty()) { expr->name = "self"; advance(); }
+        if (token_.text == "self" && (!method_scope_.empty() || extension_self)) {
+            expr->name = "self";
+            advance();
+        }
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
@@ -2782,7 +3160,13 @@ private:
                         fail("positional generic argument after named argument");
                     if (accept("_")) argument.infer = true;
                     else if (accept("int")) argument.type = "int";
-                    else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
+                    else if (token_.kind == Kind::Identifier &&
+                             scalar_alias_targets_.count(std::string(token_.text))) {
+                        std::string alias = identifier();
+                        if (resolve_scalar_alias(alias) != ScalarType::I64)
+                            fail("native scalar generic type requires int ABI");
+                        argument.type = "int";
+                    } else fail("native scalar generic type requires int or bare '_' (non-scalar generics unsupported)");
                     expr->type_arguments.push_back(std::move(argument));
                 } while (accept(","));
                 require(">");
@@ -2837,7 +3221,11 @@ private:
                 if (!accept(")")) {
                     do {
                         if (named_argument_ahead()) {
-                            fail("native array method arguments have no named parameter contract");
+                            std::string label = identifier();
+                            require(":");
+                            field->argument_names.push_back(std::move(label));
+                        } else {
+                            field->argument_names.emplace_back();
                         }
                         field->arguments.push_back(expression());
                     } while (accept(","));
@@ -3559,6 +3947,7 @@ private:
     }
 
     static void validate(const Program& program) {
+        validate_type_only_declarations(program);
         const NativeClassLayouts layouts(program);
         std::unordered_set<std::string> classes;
         for (const auto& cls : program.classes) {
@@ -4220,6 +4609,345 @@ private:
         }
     }
 
+    bool extension_slot_exists(const std::string& receiver,
+                               const std::string& method,
+                               std::size_t arity) const {
+        const auto family = extension_methods_.find(receiver);
+        if (family == extension_methods_.end()) return false;
+        const auto member = family->second.find(method);
+        return member != family->second.end() && member->second.count(arity) != 0;
+    }
+
+    bool extension_method_exists(const std::string& receiver,
+                                 const std::string& method) const {
+        const auto family = extension_methods_.find(receiver);
+        return family != extension_methods_.end() &&
+               family->second.count(method) != 0;
+    }
+
+    bool extension_name_exists(const std::string& method) const {
+        for (const auto& family : extension_methods_)
+            if (family.second.count(method) != 0) return true;
+        return false;
+    }
+
+    using AliasBindings = std::unordered_map<std::string, std::string>;
+
+    void lower_extension_expression(std::unique_ptr<Expression>& slot,
+                                    const AliasBindings& aliases) const {
+        if (!slot) return;
+        Expression& expr = *slot;
+        lower_extension_expression(expr.left, aliases);
+        lower_extension_expression(expr.right, aliases);
+        lower_extension_expression(expr.condition, aliases);
+        lower_extension_expression(expr.condition_lhs, aliases);
+        lower_extension_expression(expr.condition_rhs, aliases);
+        lower_extension_expression(expr.when_true, aliases);
+        lower_extension_expression(expr.when_false, aliases);
+        for (auto& argument : expr.arguments)
+            lower_extension_expression(argument, aliases);
+
+        if (expr.kind != Expression::Kind::ArrayCall || !expr.left ||
+                expr.left->kind != Expression::Kind::Variable)
+            return;
+
+        const std::size_t explicit_arity = expr.arguments.size();
+        const auto receiver_binding = aliases.find(expr.left->name);
+        const bool receiver_is_named_alias =
+                receiver_binding != aliases.end() && receiver_binding->second != "$raw$";
+        if (receiver_is_named_alias &&
+                extension_slot_exists(receiver_binding->second, expr.name,
+                                      explicit_arity)) {
+            auto call = make_expression(Expression::Kind::Call, expr.offset);
+            call->name = extension_function_name(receiver_binding->second, expr.name);
+            call->arguments.reserve(explicit_arity + 1);
+            call->argument_names.reserve(explicit_arity + 1);
+            call->arguments.push_back(std::move(expr.left));
+            call->argument_names.emplace_back();
+            for (auto& argument : expr.arguments)
+                call->arguments.push_back(std::move(argument));
+            if (expr.argument_names.empty()) {
+                for (std::size_t i = 0; i < explicit_arity; ++i)
+                    call->argument_names.emplace_back();
+            } else {
+                for (auto& name : expr.argument_names)
+                    call->argument_names.push_back(std::move(name));
+            }
+            slot = std::move(call);
+            return;
+        }
+
+        if (receiver_binding != aliases.end()) {
+            const std::string actual = receiver_binding->second == "$raw$"
+                ? "<raw-scalar>" : receiver_binding->second;
+            if (receiver_is_named_alias &&
+                    extension_method_exists(receiver_binding->second, expr.name)) {
+                throw std::runtime_error(
+                    "EXTENSION_ARITY_MISMATCH: method '" + expr.name +
+                    "' exists for receiver alias '" + actual +
+                    "' but not at explicit arity " +
+                    std::to_string(explicit_arity) + " at byte " +
+                    std::to_string(expr.offset));
+            }
+            if (extension_name_exists(expr.name)) {
+                throw std::runtime_error(
+                    "EXTENSION_RECEIVER_MISMATCH: method '" + expr.name +
+                    "' is not defined for receiver alias '" + actual +
+                    "' at byte " + std::to_string(expr.offset));
+            }
+        }
+    }
+
+    void lower_extension_statements(std::vector<Statement>& statements,
+                                    AliasBindings aliases) const {
+        for (auto& statement : statements) {
+            lower_extension_expression(statement.expression, aliases);
+            lower_extension_expression(statement.condition, aliases);
+            lower_extension_expression(statement.condition_lhs, aliases);
+            lower_extension_expression(statement.condition_rhs, aliases);
+            lower_extension_expression(statement.array_commit_length, aliases);
+            for (auto& item : statement.array_commit_values)
+                lower_extension_expression(item, aliases);
+            if (statement.branch_local) {
+                lower_extension_expression(statement.branch_local->initializer, aliases);
+                if (!statement.branch_local->pending_type_alias.empty()) {
+                    aliases[statement.branch_local->name] =
+                        statement.branch_local->pending_type_alias;
+                } else if (!statement.branch_local->int_array &&
+                           statement.branch_local->class_name.empty()) {
+                    aliases[statement.branch_local->name] = "$raw$";
+                }
+            }
+            if (!statement.then_statements.empty())
+                lower_extension_statements(statement.then_statements, aliases);
+            if (!statement.else_statements.empty())
+                lower_extension_statements(statement.else_statements, aliases);
+        }
+    }
+
+    void lower_extension_calls(Program& program) const {
+        for (auto& fn : program.functions) {
+            AliasBindings aliases;
+            for (const auto& parameter : fn.parameters) {
+                if (!parameter.pending_type_alias.empty()) {
+                    aliases[parameter.name] = parameter.pending_type_alias;
+                } else if (parameter.class_name.empty()) {
+                    // Generic/scalar parameters have no named alias identity.
+                    aliases[parameter.name] = "$raw$";
+                }
+            }
+            for (auto& local : fn.locals) {
+                for (auto& ctor : local.constructor_arguments)
+                    lower_extension_expression(ctor, aliases);
+                lower_extension_expression(local.initializer, aliases);
+                if (!local.pending_type_alias.empty()) {
+                    aliases[local.name] = local.pending_type_alias;
+                } else if (!local.int_array && local.class_name.empty()) {
+                    aliases[local.name] = "$raw$";
+                }
+            }
+            lower_extension_statements(fn.statements, aliases);
+            for (auto& guard : fn.early_returns) {
+                lower_extension_expression(guard.condition, aliases);
+                lower_extension_expression(guard.lhs, aliases);
+                lower_extension_expression(guard.rhs, aliases);
+                lower_extension_expression(guard.result, aliases);
+            }
+            for (auto& send : fn.actor_sends)
+                lower_extension_expression(send.payload, aliases);
+            for (auto& write : fn.actor_field_writes)
+                lower_extension_expression(write.expression, aliases);
+            lower_extension_expression(fn.caught_throw_value, aliases);
+            for (auto& deferred : fn.caught_throw_defers)
+                lower_extension_expression(deferred.expression, aliases);
+            lower_extension_expression(fn.result, aliases);
+        }
+    }
+
+    bool alias_requires_constraint_validation(const std::string& name) const {
+        std::unordered_set<std::string> seen;
+        std::string current = name;
+        for (std::size_t depth = 0; depth < 129; ++depth) {
+            if (constrained_aliases_.count(current)) return true;
+            if (!seen.insert(current).second) return false;
+            const auto target = scalar_alias_targets_.find(current);
+            if (target == scalar_alias_targets_.end()) return false;
+            current = target->second;
+            if (current == "int" || current == "bool") return false;
+        }
+        return false;
+    }
+
+    void resolve_alias_uses(Program& program) const {
+        auto reject_unvalidated_runtime_alias = [&](const std::string& name) {
+            if (alias_requires_constraint_validation(name)) {
+                throw std::runtime_error(
+                    "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED: constrained alias chain from '" +
+                    name + "' cannot enter a runtime value path before checked provenance");
+            }
+        };
+        // Complete type aliases in trait/interface signatures never create
+        // executable instances, but require validated scalar ABI types.
+        for (auto& declaration : program.type_only_declarations) {
+            if (declaration.kind == TypeOnlyDecl::Kind::Alias) continue;
+            for (auto& member : declaration.methods) {
+                for (auto& parameter_type : member.parameter_types) {
+                    if (parameter_type != "int" && parameter_type != "bool") {
+                        const std::string name = parameter_type;
+                        if (alias_requires_constraint_validation(name)) {
+                            throw std::runtime_error(
+                                "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED: constrained alias '" +
+                                name + "' cannot be erased in trait/interface parameter metadata");
+                        }
+                        parameter_type = resolve_scalar_alias(name) == ScalarType::Bool
+                            ? "bool" : "int";
+                    }
+                }
+                if (member.return_type != "int" &&
+                        member.return_type != "bool" && member.return_type != "void") {
+                    const std::string name = member.return_type;
+                    if (alias_requires_constraint_validation(name)) {
+                        throw std::runtime_error(
+                            "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED: constrained alias '" +
+                            name + "' cannot be erased in trait/interface return metadata");
+                    }
+                    member.return_type = resolve_scalar_alias(name) == ScalarType::Bool
+                        ? "bool" : "int";
+                }
+            }
+        }
+        std::function<void(Statement&)> check_statement = [&](Statement& stmt) {
+            if (stmt.branch_local && !stmt.branch_local->pending_type_alias.empty()) {
+                reject_unvalidated_runtime_alias(stmt.branch_local->pending_type_alias);
+                stmt.branch_local->scalar_type = resolve_scalar_alias(
+                    stmt.branch_local->pending_type_alias);
+                stmt.branch_local->pending_type_alias.clear();
+            }
+            for (auto& child : stmt.then_statements) check_statement(child);
+            for (auto& child : stmt.else_statements) check_statement(child);
+        };
+        for (auto& fn : program.functions) {
+            for (auto& param : fn.parameters) {
+                if (param.pending_type_alias.empty()) continue;
+                reject_unvalidated_runtime_alias(param.pending_type_alias);
+                param.scalar_type = resolve_scalar_alias(param.pending_type_alias);
+                param.pending_type_alias.clear();
+                if (param.scalar_type == ScalarType::Bool &&
+                        param.mode != Parameter::Mode::Value)
+                    throw std::runtime_error("native bool borrow ABI is not yet admitted;"
+                                             " scalar alias cannot bypass value-only bool");
+            }
+            if (!fn.pending_return_type_alias.empty()) {
+                reject_unvalidated_runtime_alias(fn.pending_return_type_alias);
+                fn.return_type = resolve_scalar_alias(fn.pending_return_type_alias);
+                fn.pending_return_type_alias.clear();
+            }
+            for (auto& local : fn.locals) {
+                if (local.pending_type_alias.empty()) continue;
+                reject_unvalidated_runtime_alias(local.pending_type_alias);
+                local.scalar_type = resolve_scalar_alias(local.pending_type_alias);
+                local.pending_type_alias.clear();
+                if (local.heap_owned && local.scalar_type == ScalarType::Bool)
+                    throw std::runtime_error("native owned bool region lowering is not admitted");
+            }
+            for (auto& statement : fn.statements) check_statement(statement);
+        }
+    }
+
+    static void validate_type_only_declarations(const Program& program) {
+        using TypeKind = TypeOnlyDecl::Kind;
+        std::unordered_map<std::string, std::size_t> declarations;
+        for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
+            const auto& decl = program.type_only_declarations[i];
+            // Both 'declare type' and 'define type' produce an identical,
+            // completed alias. Neither introduces a promise or an extra slot.
+            if (!declarations.emplace(decl.name, i).second)
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: duplicate type-only declaration '"
+                                         + decl.name + "'");
+        }
+        // Validate the complete catalog, including unused aliases
+        // and completed aliases that target other completed definitions.
+        // Native aliases are transparent i64/bool spellings, never
+        // nominal class layouts, trait objects, or runtime constructors.
+        std::vector<unsigned char> alias_state(program.type_only_declarations.size(), 0);
+        std::function<ScalarType(std::size_t, std::size_t)> resolve_alias =
+                [&](std::size_t index, std::size_t depth) -> ScalarType {
+            const auto& decl = program.type_only_declarations[index];
+            if (decl.kind != TypeKind::Alias)
+                throw std::runtime_error("TYPE_ALIAS_KIND_MISMATCH: non-alias scalar target '"
+                                         + decl.name + "'");
+            if (alias_state[index] == 1)
+                throw std::runtime_error("TYPE_ALIAS_CYCLE: cyclic type alias '" + decl.name + "'");
+            if (depth > 128)
+                throw std::runtime_error("TYPE_ALIAS_DEPTH_BUDGET: maximum alias depth is 128");
+            if (decl.alias_target == "int") return ScalarType::I64;
+            if (decl.alias_target == "bool") return ScalarType::Bool;
+            auto target = declarations.find(decl.alias_target);
+            if (target == declarations.end())
+                throw std::runtime_error("TYPE_ALIAS_UNKNOWN_TARGET: '" + decl.name +
+                                         "' names missing type '" + decl.alias_target + "'");
+            const auto& parent = program.type_only_declarations[target->second];
+            if (parent.kind != TypeKind::Alias)
+                throw std::runtime_error("TYPE_ALIAS_KIND_MISMATCH: alias '" + decl.name +
+                                         "' cannot refer to trait/interface '" + parent.name + "'");
+            alias_state[index] = 1;
+            ScalarType resolved = resolve_alias(target->second, depth + 1);
+            alias_state[index] = 2;
+            return resolved;
+        };
+        for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i) {
+            if (program.type_only_declarations[i].kind == TypeKind::Alias &&
+                    alias_state[i] == 0)
+                (void)resolve_alias(i, 1);
+        }
+        for (const auto& cls : program.classes) {
+            if (declarations.count(cls.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: class '" + cls.name
+                                         + "' collides with a type-only declaration");
+        }
+        for (const auto& actor : program.actors) {
+            if (declarations.count(actor.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: actor '" + actor.name
+                                         + "' collides with a type-only declaration");
+        }
+        for (const auto& contract : program.contracts) {
+            if (declarations.count(contract.name))
+                throw std::runtime_error("TYPE_DECL_NAME_COLLISION: contract '" + contract.name
+                                         + "' collides with a type-only declaration");
+        }
+        // Reject missing parents, interface/trait kind laundering and cycles
+        // before the LLVM backend sees any type metadata.
+        std::vector<unsigned char> state(program.type_only_declarations.size(), 0);
+        std::function<void(std::size_t, std::size_t)> visit =
+                [&](std::size_t index, std::size_t depth) {
+            if (state[index] == 2) return;
+            if (state[index] == 1)
+                throw std::runtime_error("TYPE_PARENT_CYCLE: cycle in trait/interface inheritance");
+            if (depth > 128)
+                throw std::runtime_error("TYPE_PARENT_DEPTH_BUDGET: maximum inheritance depth is 128");
+            state[index] = 1;
+            const auto& decl = program.type_only_declarations[index];
+            for (const auto& parent : decl.parents) {
+                auto found = declarations.find(parent);
+                if (found == declarations.end())
+                    throw std::runtime_error("TYPE_PARENT_UNKNOWN: '" + decl.name +
+                                             "' extends unknown type '" + parent + "'");
+                const auto& inherited = program.type_only_declarations[found->second];
+                if (inherited.kind != decl.kind ||
+                        inherited.kind == TypeKind::Alias)
+                    throw std::runtime_error("TYPE_PARENT_KIND_MISMATCH: '" + decl.name +
+                                             "' cannot extend a different type-only kind '" +
+                                             parent + "'");
+                visit(found->second, depth + 1);
+            }
+            state[index] = 2;
+        };
+        for (std::size_t i = 0; i < program.type_only_declarations.size(); ++i)
+            visit(i, 1);
+    }
+
+
+
     void advance() { token_ = lexer_.next(); }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
@@ -4266,6 +4994,18 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Type-only declarations retain source alias identity until checked
+    // catalog validation and extension-call rewriting complete.
+    std::unordered_map<std::string, std::string> scalar_alias_targets_;
+    std::unordered_set<std::string> type_only_nominals_;
+    std::unordered_set<std::string> constrained_aliases_;
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, std::unordered_set<std::size_t>>> extension_methods_;
+    std::unordered_set<std::string> extension_public_slots_;
+    bool extension_header_active_ = false;
+    std::string extension_receiver_alias_;
+    std::string extension_method_name_;
+    std::size_t extension_offset_ = 0;
     bool actor_threads_enum_seen_ = false;
     std::size_t expression_depth_ = 0;
     std::size_t conditional_depth_ = 0;
