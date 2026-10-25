@@ -1292,6 +1292,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_await_readable_post_call_reordering
         source-actor-await-readable-post-call-reject.ores
         --diagnostic "await readable does not yet lower post-await non-actor statements")
+    oreslang_contract_test(source_actor_await_readable_typed_outcome_ir
+        source-actor-await-readable-outcome.ores
+        --ir "readable_continuation")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_int_compare
+        source-actor-await-readable-outcome-int-compare-reject.ores
+        --diagnostic "equality operands require the same scalar type")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_arithmetic
+        source-actor-await-readable-outcome-arithmetic-reject.ores
+        --diagnostic "arithmetic requires int, got ReadableOutcome")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_shadow
+        source-actor-await-readable-outcome-shadow-reject.ores
+        --diagnostic "ReadableOutcome binding cannot shadow an ActorRef")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_variant
+        source-actor-await-readable-outcome-variant-reject.ores
+        --diagnostic "ReadableOutcome supports only Ready, Cancelled, or Failed")
     # ActorRef implements HasFuture: awaiting its capability directly
     # delegates to the same get_ready() root CONTROL continuation.
     oreslang_contract_test(source_actor_hasfuture_direct_await_ir
