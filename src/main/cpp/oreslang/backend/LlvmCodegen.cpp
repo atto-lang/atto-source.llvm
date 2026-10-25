@@ -219,7 +219,11 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* global = builder.CreateGlobalString(expr.name, "string.literal");
+            auto* zero = builder.getInt32(0);
+            llvm::Value* indices[] = {zero, zero};
+            auto* bytes = builder.CreateInBoundsGEP(
+                global->getValueType(), global, indices, "string.literal.ptr");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
