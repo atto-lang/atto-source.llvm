@@ -80,7 +80,7 @@ int main() {
     rejects(program("worker.send(9); "
                     "const Future<void> pending = worker.send_async(1); "
                     "await pending; stop worker; return 43;"),
-            "native send_async Future<void> declaration must precede actor effects");
+            "native Future<void> declaration must precede actor effects");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
             "native source supports only one async await boundary");
