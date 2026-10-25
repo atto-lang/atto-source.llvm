@@ -11,9 +11,11 @@ without accepting each other's settle/cancel/schedule tickets. Competing
 completion, failure and cancellation transitions have exactly one winner.
 The frame state is atomically arbitrated: `pending -> settling -> ready ->
 scheduled -> running -> completed`, with `cancelled` terminal from pending,
-ready, or scheduled. The transient `settling` state gives one producer sole
-write authority for the result before READY is published with release
-semantics. A scheduled callback claims RUNNING with acquire/release semantics,
+ready, or scheduled. Detach racing producer settlement uses the explicit
+`settling_cancelled` intermediate state on that same atomic; no second
+cross-atomic cancellation flag participates in the linearization. The
+transient `settling` state gives one producer sole write authority for the
+result before READY is published with release semantics. A scheduled callback claims RUNNING with acquire/release semantics,
 so the actor carrier never needs a Future mutex. Cancellation is rejected once
 RUNNING begins, and the frame becomes COMPLETED only after callback exit
 (including exceptional exit).

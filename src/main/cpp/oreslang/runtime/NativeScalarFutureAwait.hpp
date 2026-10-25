@@ -34,7 +34,8 @@ class NativeScalarFutureAwait final
         : public std::enable_shared_from_this<NativeScalarFutureAwait> {
 public:
     enum class Phase {
-        pending, settling, ready, scheduled, running, completed, cancelled
+        pending, settling, settling_cancelled, ready,
+        scheduled, running, completed, cancelled
     };
     struct Result {
         bool success = false;
@@ -83,7 +84,9 @@ public:
         if (!valid(ticket)) return false;
         Phase observed = phase_.load(std::memory_order_acquire);
         for (;;) {
-            if (observed == Phase::settling || observed == Phase::running
+            if (observed == Phase::settling
+                    || observed == Phase::settling_cancelled
+                    || observed == Phase::running
                     || observed == Phase::completed
                     || observed == Phase::cancelled)
                 return false;
@@ -111,16 +114,22 @@ public:
         /*
          * Detachment is authoritative even if a producer has already won the
          * PENDING->SETTLING transition but has not published READY yet.
-         * Publish a deferred teardown request first, then either cancel the
-         * currently visible cancellable phase or let settle() consume it.
+         * Arbitrate teardown on the same phase atomic instead of a second
+         * cross-atomic cancellation flag: this gives settle-vs-detach one
+         * linearization point under the C++ memory model.
          */
-        cancel_on_settle_.store(true, std::memory_order_release);
         Phase observed = phase_.load(std::memory_order_acquire);
         for (;;) {
-            if (observed == Phase::settling)
-                return true; // settle() will publish CANCELLED before returning.
-            if (observed == Phase::cancelled)
-                return true; // teardown is already reconciled.
+            if (observed == Phase::settling) {
+                if (phase_.compare_exchange_weak(
+                        observed, Phase::settling_cancelled,
+                        std::memory_order_acq_rel, std::memory_order_acquire))
+                    return true;
+                continue;
+            }
+            if (observed == Phase::settling_cancelled
+                    || observed == Phase::cancelled)
+                return true; // teardown is already reconciled or committed.
             if (observed == Phase::running || observed == Phase::completed)
                 return false;
             if (phase_.compare_exchange_weak(
@@ -239,20 +248,21 @@ private:
                 std::memory_order_acq_rel, std::memory_order_acquire))
             return false;
         result_ = outcome;
-        phase_.store(Phase::ready, std::memory_order_release);
-        if (cancel_on_settle_.load(std::memory_order_acquire)) {
-            expected = Phase::ready;
-            (void)phase_.compare_exchange_strong(
-                expected, Phase::cancelled,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+        expected = Phase::settling;
+        if (phase_.compare_exchange_strong(
+                expected, Phase::ready,
+                std::memory_order_release, std::memory_order_acquire))
+            return true;
+        if (expected == Phase::settling_cancelled) {
+            phase_.store(Phase::cancelled, std::memory_order_release);
+            return true;
         }
-        return true;
+        std::terminate();
     }
 
     const NativeActorRef owner_;
     const NativeScalarFutureId id_;
     std::atomic<Phase> phase_{Phase::pending};
-    std::atomic<bool> cancel_on_settle_{false};
     Result result_;
 };
 

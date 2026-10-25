@@ -221,8 +221,9 @@ int main() {
     }
 
     // Owner detachment is authoritative even when a producer has already
-    // entered the transient SETTLING state. A one-shot teardown cancellation
-    // must never leave a detached Future READY.
+    // entered the transient SETTLING state. SETTLING cancellation is encoded
+    // in the same phase atomic (SETTLING_CANCELLED), so teardown and producer
+    // publication have one linearization point and can never strand READY.
     for (int iteration = 0; iteration < 256; ++iteration) {
         NativeActorGroup settle_group(12000 + iteration, 1);
         auto settle_owner = settle_group.adopt(
