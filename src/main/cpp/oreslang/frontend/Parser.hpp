@@ -253,9 +253,10 @@ struct Function {
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
     /*
-     * Restricted lifecycle slice: one readiness barrier and one DONE barrier
-     * may each be observed repeatedly. Readiness->DONE composition remains
-     * unsupported until the general continuation state machine exists.
+     * Restricted lifecycle state machine: one ActorRef readiness barrier and
+     * the same ActorRef DONE barrier may each be observed repeatedly. A
+     * readiness->DONE sequence is two physical suspensions, with trusted-host
+     * stop admission between them; scalar/class locals still cannot cross.
      */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
