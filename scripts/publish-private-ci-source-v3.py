@@ -24,6 +24,14 @@ import tempfile
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
+BLOCKING_INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
+BLOCKING_INCIDENT_REPOSITORY_ID = 1413795502
+BLOCKING_INCIDENT_IDS = {
+    22: 5832921751,
+    77: 5904679716,
+    127: 5935338521,
+}
+BLOCKING_INCIDENTS = (22, 77, 127)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -261,6 +269,41 @@ def gh_api(route, method="GET", payload=None):
     if not isinstance(result, dict):
         raise Denied("unexpected GitHub API response shape")
     return result
+
+
+def require_resolved_blocking_incidents():
+    """Fail closed while any independently tracked private-source P0 is open."""
+    repo = gh_api("repos/" + BLOCKING_INCIDENT_REPO)
+    if (repo.get("id") != BLOCKING_INCIDENT_REPOSITORY_ID
+            or repo.get("full_name") != BLOCKING_INCIDENT_REPO
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"
+            or repo.get("archived") is not False
+            or repo.get("disabled") is not False
+            or repo.get("fork") is not False):
+        raise Denied("blocking incident repository identity/state invalid")
+    expected_repository_url = "https://api.github.com/repos/" + BLOCKING_INCIDENT_REPO
+    for number in BLOCKING_INCIDENTS:
+        issue = gh_api(
+            "repos/" + BLOCKING_INCIDENT_REPO + "/issues/" + str(number)
+        )
+        expected_issue_url = expected_repository_url + "/issues/" + str(number)
+        expected_html_url = (
+            "https://github.com/" + BLOCKING_INCIDENT_REPO
+            + "/issues/" + str(number)
+        )
+        if (issue.get("id") != BLOCKING_INCIDENT_IDS[number]
+                or issue.get("number") != number
+                or issue.get("repository_url") != expected_repository_url
+                or issue.get("url") != expected_issue_url
+                or issue.get("html_url") != expected_html_url
+                or "pull_request" in issue):
+            raise Denied("blocking P0 incident identity invalid")
+        if (issue.get("state") != "closed"
+                or issue.get("state_reason") != "completed"):
+            raise Denied(
+                "blocking P0 incident #" + str(number) + " remains unresolved"
+            )
 
 
 def decode_contents(item, path, max_bytes):
@@ -985,6 +1028,10 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     base_tree, plan_bytes = checked_destination(repository, contract)
     plan_meta = validate_test_plan(plan_bytes, source_pr)
+    # Source export remains quarantined until all independently tracked P0
+    # incidents are closed as completed. Check before reading the private PR
+    # tree, then again immediately before every carrier write/authorization.
+    require_resolved_blocking_incidents()
     source_tree, files, rows, manifest_sha256 = exact_source_tree(
         source_pr, source_commit
     )
@@ -994,6 +1041,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
 
     elements = []
     for path, mode, sha, data in files:
+        require_resolved_blocking_incidents()
         recheck_destination_identity(repository, contract)
         result = gh_api(
             f"repos/{repository}/git/blobs",
@@ -1010,6 +1058,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
             "path": path, "mode": mode, "type": "blob", "sha": uploaded
         })
 
+    require_resolved_blocking_incidents()
     recheck_destination_identity(repository, contract)
     isolated = gh_api(
         f"repos/{repository}/git/trees",
@@ -1050,6 +1099,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     receipt_bytes = canonical_bytes(receipt) + b"\n"
     receipt_digest = canonical_digest(receipt)
 
+    require_resolved_blocking_incidents()
     recheck_destination_identity(repository, contract)
     rb = gh_api(
         f"repos/{repository}/git/blobs",
@@ -1063,6 +1113,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     if receipt_blob != git_blob_sha(receipt_bytes):
         raise Denied("receipt blob digest mismatch")
 
+    require_resolved_blocking_incidents()
     recheck_destination_identity(repository, contract)
     root = gh_api(
         f"repos/{repository}/git/trees",
@@ -1077,6 +1128,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
     root_sha = valid_sha(root.get("sha"), "carrier root tree SHA")
 
+    require_resolved_blocking_incidents()
     recheck_destination_identity(repository, contract)
     commit = gh_api(
         f"repos/{repository}/git/commits",
@@ -1101,6 +1153,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     )
 
     # Full protected-source + immutable-carrier recheck before executable refs.
+    require_resolved_blocking_incidents()
     again_sha, again_contract = protected_authority(
         repository, source_pr, test_plan
     )
@@ -1121,6 +1174,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
     authorization_attempted = False
     try:
         payload_attempted = True
+        require_resolved_blocking_incidents()
         branch_ref = gh_api(
             f"repos/{repository}/git/refs",
             method="POST",
@@ -1138,6 +1192,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         )
 
         # Re-run mutable governance checks while the payload is still inert.
+        require_resolved_blocking_incidents()
         again_sha, again_contract = protected_authority(
             repository, source_pr, test_plan
         )
@@ -1150,6 +1205,7 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         verify_source_pr(source_pr, source_commit)
 
         authorization_attempted = True
+        require_resolved_blocking_incidents()
         auth_ref = gh_api(
             f"repos/{repository}/git/refs",
             method="POST",
