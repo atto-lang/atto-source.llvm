@@ -1397,6 +1397,8 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-source-actor-send-async-admission-test PRIVATE
         Threads::Threads)
     target_compile_features(oreslang-source-actor-send-async-admission-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-send-async-admission-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
     target_compile_options(oreslang-source-actor-send-async-admission-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
     add_test(NAME source_actor_send_async_real_mailbox_admission
