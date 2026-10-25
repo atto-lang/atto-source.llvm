@@ -1296,6 +1296,8 @@ if(BUILD_TESTING)
         --diagnostic "sealed actor state is the only guest-owned persistent instance storage")
     oreslang_contract_test(native_sealed_state_call_escape sealed-state-call-escape-reject.ores
         --diagnostic "state callback forbids calls, ownership operations, arrays and escaping references")
+    oreslang_contract_test(native_sealed_state_suspend_reject sealed-state-suspend-reject.ores
+        --diagnostic "sealed actor state suspension requires raw-view revoke/revalidate lowering")
     oreslang_contract_test(native_sealed_state_unknown_field sealed-state-unknown-field-reject.ores
         --diagnostic "unknown actor state field")
     oreslang_contract_test(wasm32_sealed_state_failclosed sealed-state-read-positive.ores
