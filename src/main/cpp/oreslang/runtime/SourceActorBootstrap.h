@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
+#include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeLogicalTrace.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -62,12 +63,14 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  * compiler projection. WOULD_DEADLOCK is source-runtime specific.
  */
 enum {
-    ORES_SOURCE_SEND_ASYNC_ACCEPTED = 0,
-    ORES_SOURCE_SEND_ASYNC_INVALID_REF = 1,
-    ORES_SOURCE_SEND_ASYNC_TERMINATED = 2,
-    ORES_SOURCE_SEND_ASYNC_MAILBOX_FULL = 3,
-    ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED = 4,
-    ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE = 5,
+    ORES_SOURCE_SEND_ASYNC_ACCEPTED = ORES_NATIVE_SEND_ACCEPTED,
+    ORES_SOURCE_SEND_ASYNC_INVALID_REF = ORES_NATIVE_SEND_INVALID_REF,
+    ORES_SOURCE_SEND_ASYNC_TERMINATED = ORES_NATIVE_SEND_TERMINATED,
+    ORES_SOURCE_SEND_ASYNC_MAILBOX_FULL = ORES_NATIVE_SEND_MAILBOX_FULL,
+    ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED =
+        ORES_NATIVE_SEND_RESOURCE_EXHAUSTED,
+    ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE =
+        ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE,
     ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK = 6
 };
 int oreslang_source_actor_await_send_async_checked(
