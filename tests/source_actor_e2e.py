@@ -221,6 +221,8 @@ def main():
             "native source supports only one trusted-main suspension",
         "source-actor-await-readable-no-actor.ores":
             "await readable requires one source actor without suspended locals",
+        "source-actor-await-readable-post-call-reject.ores":
+            "await readable does not yet lower post-await non-actor statements",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
