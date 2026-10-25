@@ -52,6 +52,11 @@ struct OresNativeActorScheduler {
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
+    /* One-way realtime bootstrap state. A failed RT prestart poisons only
+     * realtime/service admission for this scheduler instance; ordinary
+     * throughput prestart remains retryable until RT preparation is attempted. */
+    int realtime_preallocated;
+    int realtime_prestart_failed;
     uint64_t domain;
     uint64_t next_execution;
     uint64_t reserved_executions;
@@ -443,6 +448,12 @@ static int execution_slot_available_locked(OresNativeActorScheduler* s) {
 }
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
+    /* A failed realtime prestart is terminal for this scheduler instance.
+     * DATA/CONTROL admission must never heal it by creating a carrier later. */
+    if (s->realtime_prestart_failed) return 0;
+    /* Once RT bootstrap succeeds, every configured carrier already exists;
+     * live service may reuse them but may not create pthreads on demand. */
+    if (s->realtime_preallocated) return s->started_workers >= required;
     while (s->started_workers < required) {
         if (create_carrier(&s->threads[s->started_workers], s) != 0)
             break;
@@ -498,7 +509,27 @@ int ores_native_actor_scheduler_prestart_carriers(
 }
 int ores_native_actor_scheduler_prestart_realtime(
         OresNativeActorScheduler* s) {
-    return ores_native_actor_scheduler_prestart_carriers(s);
+    if (!s || executing == s) return 0;
+    lock(s);
+    int ok = 0;
+    /* RT is a cold, one-way profile transition. A throughput scheduler,
+     * including one left with a partial ordinary prestart, cannot be promoted
+     * after any pthread has already been created. */
+    if (!s->retired && !s->realtime_preallocated
+            && !s->realtime_prestart_failed
+            && s->started_workers == 0
+            && s->accepted == 0 && s->outstanding == 0
+            && s->runnable_lanes == 0) {
+        ok = ensure_workers_locked(s, s->worker_count);
+        if (ok) {
+            s->realtime_preallocated = 1;
+        } else {
+            /* A failed RT bootstrap is never retried on the hot path. */
+            s->realtime_prestart_failed = 1;
+        }
+    }
+    unlock(s);
+    return ok;
 }
 int ores_native_actor_scheduler_all_carriers_started(
         OresNativeActorScheduler* s) {
