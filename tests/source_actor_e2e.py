@@ -286,12 +286,15 @@ def main():
                         "source-actor-future-void-ready.ores",
                         "source-actor-future-void-double-await.ores",
                         "source-actor-future-void-await-again.ores",
-                        "source-actor-future-void-await-worker-instead.ores"}:
+                        "source-actor-future-void-await-worker-instead.ores",
+                        "source-actor-await-ready-done.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            if name == "source-actor-await-done.ores":
+            if name in {"source-actor-await-done.ores",
+                        "source-actor-await-done-twice.ores",
+                        "source-actor-await-ready-done.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
