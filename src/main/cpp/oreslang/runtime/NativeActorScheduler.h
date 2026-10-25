@@ -113,6 +113,46 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
  * try_send(), transient FULL observations are not counted as rejected sends. */
 OresNativeSendStatus ores_native_actor_scheduler_wait_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+
+/*
+ * Bounded nonblocking send_async Future substrate.
+ *
+ * submit_async begins admission immediately without parking a host thread.
+ * If target credit is unavailable, one generation-fenced descriptor is queued
+ * in target-local FIFO order. Physical credit release services pending async
+ * sends under the same scheduler mutex before a racing synchronous sender can
+ * steal that slot. STOP fails still-pending futures; already READY futures
+ * remain READY because mailbox admission was irrevocable.
+ */
+enum { ORES_NATIVE_ASYNC_SENDS_PER_ACTOR = 256 };
+typedef enum {
+    ORES_NATIVE_ASYNC_SEND_INVALID = 0,
+    ORES_NATIVE_ASYNC_SEND_PENDING = 1,
+    ORES_NATIVE_ASYNC_SEND_READY = 2,
+    ORES_NATIVE_ASYNC_SEND_FAILED = 3,
+    ORES_NATIVE_ASYNC_SEND_CANCELLED = 4
+} OresNativeAsyncSendState;
+typedef struct {
+    OresNativeActorRef target;
+    uint64_t slot;
+    uint64_t generation;
+} OresNativeAsyncSendTicket;
+OresNativeSendStatus ores_native_actor_scheduler_submit_async(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef target,
+    uint64_t payload, OresNativeAsyncSendTicket* out);
+int ores_native_actor_scheduler_async_send_status(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
+    OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
+/* External-host wait only. The Future itself progresses without this wait. */
+int ores_native_actor_scheduler_await_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
+    OresNativeSendStatus* outcome_out);
+int ores_native_actor_scheduler_cancel_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
+/* Release the Future descriptor after READY/FAILED/CANCELLED observation. */
+int ores_native_actor_scheduler_release_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
+
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
