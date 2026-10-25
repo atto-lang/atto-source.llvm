@@ -397,6 +397,43 @@ bool entry_builtin_name(std::string_view name) {
     return name == "Entry";
 }
 
+/*
+ * The async-only I/O contract names a closed set of future standard-library
+ * operations. Until the native frontend has typed I/O registry resolution,
+ * suspension-aware effects and continuation lowering, user declarations must
+ * not impersonate those spellings and thereby turn an unsupported I/O call
+ * into an ordinary synchronous native function. This is intentionally NOT a
+ * blanket "_async"/"_blocking" suffix reservation: ordinary user functions
+ * such as pure_math_blocking remain legal.
+ */
+bool native_reserved_io_callable_name(std::string_view name) {
+    const auto dot = name.rfind('.');
+    if (dot != std::string_view::npos) name.remove_prefix(dot + 1);
+    static constexpr std::string_view reserved[] = {
+        "read_text",
+        "write_text",
+        "read_text_blocking",
+        "read_text_async",
+        "write_text_blocking",
+        "write_text_async",
+        "connect_blocking",
+        "connect_async",
+        "read_line_blocking",
+        "read_line_async",
+        "socket_write_text_blocking",
+        "socket_write_text_async",
+        "http_get_text_blocking",
+        "http_get_text_async",
+        "http_post_text_blocking",
+        "http_post_text_async",
+        "println_blocking",
+        "println_async"
+    };
+    for (const auto candidate : reserved)
+        if (name == candidate) return true;
+    return false;
+}
+
 [[noreturn]] void reject_native_entry_boundary(std::size_t offset) {
     throw std::runtime_error(
         "native Entry<K,V> requires nominal product lowering and ownership parity"
@@ -1227,6 +1264,9 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (native_reserved_io_callable_name(value.name))
+            fail("native I/O callable name is compiler-owned until typed registry, "
+                 "nonblocking transport and continuation lowering are available");
         if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
