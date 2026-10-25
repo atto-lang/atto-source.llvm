@@ -2137,6 +2137,8 @@ if(BUILD_TESTING)
         entry-shadow-function-reject.ores --diagnostic "builtin Entry is compiler-owned")
     oreslang_contract_test(reject_native_entry_shadow_module
         entry-shadow-module-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_contract
+        entry-shadow-contract-reject.ores --diagnostic "builtin Entry is compiler-owned")
     oreslang_contract_test(reject_native_entry_shadow_generic_parameter
         entry-shadow-generic-parameter-reject.ores --diagnostic "builtin Entry is compiler-owned")
     if(ORE_CLANG)
