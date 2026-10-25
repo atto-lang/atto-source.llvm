@@ -182,10 +182,18 @@ def main():
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-send-async.ores":
-                calls = [line for line in guest.stdout.splitlines()
-                         if "call void @oreslang_source_actor_await_send_async(" in line]
-                assert len(calls) == 1, (name, "expected one awaited send_async admission", calls)
-                assert "call void @oreslang_source_actor_send(" not in guest.stdout, name
+                start_calls = [line for line in guest.stdout.splitlines()
+                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                await_calls = [line for line in guest.stdout.splitlines()
+                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
+                assert len(start_calls) == 1, (
+                    name, "expected direct send_async to submit one scheduler Future", start_calls)
+                assert len(await_calls) == 1, (
+                    name, "expected direct send_async to use logical Future await", await_calls)
+                assert ".send_async_continuation" in guest.stdout, (
+                    name, "missing generated direct send_async continuation")
+                assert "call void @oreslang_source_actor_await_send_async(" not in guest.stdout, (
+                    name, "legacy host-wait direct send_async ABI still emitted")
             if name == "source-actor-send-async-future.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call ptr @oreslang_source_actor_send_async_start(" in line]
@@ -277,6 +285,13 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-send-async.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert (
+                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
+                    in trace_lines[0]), trace_lines[0]
             if name == "source-actor-send-async-future.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
