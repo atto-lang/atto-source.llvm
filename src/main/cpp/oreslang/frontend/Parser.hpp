@@ -238,6 +238,11 @@ struct Function {
     /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    // Non-Copy lexical Future<void> from a previously spawned actor's
+    // get_ready(). The compiler consumes it into the existing CONTROL
+    // continuation; it is never represented as an untyped i64 guest value.
+    std::string ready_future_name;
+    std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop

@@ -32,6 +32,8 @@ def main():
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
+        ("source-actor-await-worker.ores", 1, 2, 3),
+        ("source-actor-future-void-ready.ores", 1, 2, 3),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
@@ -54,6 +56,21 @@ def main():
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
+        "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
+        "source-actor-await-get-done.ores": "expected 'get_ready'",
+        "source-actor-await-worker-twice.ores": "native source supports only one await get_ready continuation",
+        "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
+        "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
+        "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
+        "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
+        "source-actor-future-void-double-await.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
+        "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
+        "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
+        "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
+        "source-actor-future-void-send.ores": "unknown parameter",
+        "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
+        "source-actor-future-void-await-again.ores": "native source supports only one await get_ready continuation",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
@@ -109,9 +126,16 @@ def main():
                 # must fail if either compiler drop was omitted.
                 assert "i64 3" in guest.stdout, (
                     name, "actor heap needs bounded local slot reserve")
-            if name == "source-actor-await-ready.ores":
+            if name in {"source-actor-await-ready.ores",
+                        "source-actor-await-worker.ores",
+                        "source-actor-future-void-ready.ores"}:
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
+                # A runtime declaration or source text alone is not an await:
+                # require exactly one generated call to the CONTROL bridge.
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -146,7 +170,9 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
-            if name == "source-actor-await-ready.ores":
+            if name in {"source-actor-await-ready.ores",
+                        "source-actor-await-worker.ores",
+                        "source-actor-future-void-ready.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
