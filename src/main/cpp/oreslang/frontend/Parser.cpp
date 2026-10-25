@@ -2381,6 +2381,8 @@ private:
                     if (awaited != value.send_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared send_async token");
                     value.send_future_await_offset = await_offset;
+                    value.send_future_await_action_index =
+                        value.actor_actions.size();
                     require(";");
                     continue;
                 }
@@ -3931,7 +3933,7 @@ private:
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
-                    || !fn.done_await_actor.empty()
+                    || !fn.done_await_actor.empty() || !fn.send_future_name.empty()
                     || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
@@ -3961,6 +3963,27 @@ private:
                             }))
                     throw std::runtime_error(
                         "Future<void> readiness token shadows a live owner");
+            }
+            if (!fn.send_future_name.empty()) {
+                if (!fn.send_future_await_offset || !fn.send_future_payload)
+                    throw std::runtime_error(
+                        "Future<void> send_async token must be awaited exactly once");
+                if (params.count(fn.send_future_name)
+                        || live_actors.count(fn.send_future_name)
+                        || std::any_of(fn.locals.begin(), fn.locals.end(),
+                            [&](const LocalBinding& item) {
+                                return item.name == fn.send_future_name;
+                            }))
+                    throw std::runtime_error(
+                        "Future<void> send_async token shadows a live owner");
+                if (!live_actors.count(fn.send_future_actor)
+                        || !references.count(fn.send_future_actor))
+                    throw std::runtime_error(
+                        "Future<void> send_async requires a live direct ActorRef receiver");
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "Future<void> send_async requires one source actor without suspended locals");
+                validate_expression(*fn.send_future_payload, params, functions);
             }
             if (!fn.ready_await_actor.empty()) {
                 /*
@@ -4137,7 +4160,9 @@ private:
                 check_statement_names(stmt, params);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
-            for (const auto& action : fn.actor_actions) {
+            for (std::size_t action_position = 0;
+                    action_position < fn.actor_actions.size(); ++action_position) {
+                const auto& action = fn.actor_actions[action_position];
                 if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
                     if (!references.count(send.reference))
@@ -4147,6 +4172,11 @@ private:
                     validate_expression(*send.payload, params, functions);
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
+                    if (!fn.send_future_name.empty()
+                            && stop == fn.send_future_actor
+                            && action_position < fn.send_future_await_action_index)
+                        throw std::runtime_error(
+                            "send_async Future target stopped before await");
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
@@ -4303,6 +4333,9 @@ private:
                     require_scalar(*fn.actor_sends.at(action.index).payload,
                         ScalarType::I64, "native actor message payload", scalar_types);
             }
+            if (fn.send_future_payload)
+                require_scalar(*fn.send_future_payload, ScalarType::I64,
+                    "native send_async Future payload", scalar_types);
             if (fn.caught_throw_value)
                 require_scalar(*fn.caught_throw_value, ScalarType::I64,
                     "native thrown scalar", scalar_types);
