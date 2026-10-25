@@ -1,0 +1,3 @@
+pub fnc opaque_result(): unknown {
+  return 1;
+}
