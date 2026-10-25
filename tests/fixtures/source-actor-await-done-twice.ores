@@ -1,0 +1,16 @@
+// Repeated DONE observation is non-consuming. The compiler lowers one
+// physical-finalization continuation; the second observation is already settled.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  stop worker;
+  await worker.get_done();
+  await worker.get_done();
+  return 43;
+}
