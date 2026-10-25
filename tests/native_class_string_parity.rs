@@ -408,6 +408,39 @@ fn main() {
             "health\nmissing\nmethod\n",
         ),
         (
+            "template-quote-vectors",
+            r#"pub fnc main():int{
+                stdio.print("abc");stdio.print("|");
+                stdio.print("'abc'");stdio.print("|");
+                stdio.print('\"abc\"');stdio.print("|");
+                stdio.print(`'\"abc\"'`);return 0;}"#,
+            "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "template-two-parameter-interpolation",
+            r#"fnc render(string bar,string star):string{return `${bar} is ${star}`;}
+              pub fnc main():int{stdio.println(render("Mars","bright"));return 0;}"#,
+            "Mars is bright\n",
+        ),
+        (
+            "template-nested-expression-and-quotes",
+            r#"pub fnc main():int{val string word="ok";stdio.print(`before:${`inside:${word}`}:after`);
+              stdio.print("|");stdio.print(`${"}"+"{"}`);return 0;}"#,
+            "before:inside:ok:after|}{",
+        ),
+        (
+            "template-escapes",
+            r#"pub fnc main():int{stdio.print(`line\n\t\${literal}\`\u00e9`);return 0;}"#,
+            "line\n\t${literal}`é",
+        ),
+        (
+            "template-left-to-right-once",
+            r#"fnc first():string{stdio.print("1");return "A";}
+              fnc second():string{stdio.print("2");return "B";}
+              pub fnc main():int{stdio.print(`${first()}-${second()}`);return 0;}"#,
+            "12A-B",
+        ),
+        (
             "source-effect-order",
             r#"fnc mark():string{stdio.print("method;");return "a";}
           pub fnc main():int{stdio.print("before;");val string a=mark();stdio.print("after;");
@@ -773,6 +806,26 @@ fn main() {
             foo.to_owned(),
         ),
         (
+            "template-non-string-interpolation",
+            r#"pub fnc main():int{val string x=`${5}`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-empty-interpolation",
+            r#"pub fnc main():int{val string x=`${   }`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-invalid-escape",
+            r#"pub fnc main():int{val string x=`\q`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-unclosed-interpolation",
+            r#"pub fnc main():int{val string x=`${"x"`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
             "private-method",
             exact.replace("f.bar()", "f.foo()"),
             foo.to_owned(),
@@ -890,6 +943,39 @@ fn main() {
                 .to_lowercase()
                 .contains("internal"),
             "{name}: internal compiler failure"
+        );
+    }
+    let mut interpolation_bomb =
+        "pub fnc main():int{val string x=`".to_owned();
+    for _ in 0..1025 { interpolation_bomb.push_str("${\"x\"}"); }
+    interpolation_bomb.push_str("`;return 0;}");
+
+    let brace_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{}0{}}}`;return 0;}}",
+        "{".repeat(257),
+        "}".repeat(257),
+    );
+
+    let mut nested = "\"x\"".to_owned();
+    for _ in 0..34 { nested = format!("`${{{nested}}}`"); }
+    let nesting_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{nested}}}`;return 0;}}"
+    );
+
+    for (name, source, diagnostic) in [
+        ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
+        ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
+        ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
+    ] {
+        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        assert_eq!(rejected.status.code(), Some(1), "{name}: must fail closed");
+        assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(diagnostic),
+            "{name}: wrong diagnostic: {}",
+            String::from_utf8_lossy(&rejected.stderr)
         );
     }
     // Native module admission must bind to the opened regular-file inode.
