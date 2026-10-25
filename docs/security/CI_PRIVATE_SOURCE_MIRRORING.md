@@ -49,17 +49,17 @@ python3 scripts/audit-private-ci-governance.py
 
 The opt-in `--live` preflight reads source GitHub repository metadata,
 `branches/main`, and `branches/main/protection` using a read-capable
-`GITHUB_TOKEN`, failing closed for missing permissions, missing CODEOWNER
-approval enforcement, stale-review acceptance, or missing administrator
-enforcement. It is a *necessary condition*, never a source-export grant;
-the checked destination, independent approval, policy provenance, and
-publisher still require separate verification.
+`GITHUB_TOKEN`. It intentionally diagnoses only the classic protected-main
+mode; failure there does not authorize export and does not by itself reject the
+separate exact-review-attested V3 mode. The V3 publisher performs the actual
+review-history, reviewed-tree, governance-byte, destination, and source-head
+checks.
 
-**Observed governance blocker (2026-10-19):** GitHub returned
-`protected=false` for source `main`. Ruleset reads also returned a
-plan-related 403. No source transfer should occur while actual protected-main
-enforcement cannot be independently verified. Adding CODEOWNERS text alone
-does not turn on branch protection.
+At the current audit, GitHub reports `protected=false` for source `main` and
+private rulesets unavailable on the repository plan. Therefore any real V3
+export must use an exact independently reviewed source-authority PR until the
+repository protection state changes. CODEOWNERS text alone is never treated as
+enforced review.
 
 ## Provenance and cleanup
 
@@ -85,12 +85,28 @@ symlink/submodule/unsupported modes and unsafe paths, fetches each bounded Git
 blob by SHA, and verifies the blob bytes against the Git object ID before any
 destination write.
 
-Before reading or exporting source, the publisher self-attests its own script
-bytes plus the allowlist and carrier-contract bytes against the exact protected
-source `main` commit. Source `main` must enforce CODEOWNER review,
-stale-review dismissal, at least one approval, administrator enforcement, no
-force pushes/deletions, and no PR-review bypass actors. Missing API permission
-or `protected=false` fails closed.
+Before reading or exporting source, the publisher self-attests the complete
+export-critical source-governance surface against the current source `main`.
+V3 supports two fail-closed source authority modes:
+
+1. **Protected source main.** Requires CODEOWNER review, stale-review
+   dismissal, at least one approval, administrator enforcement, no review
+   bypasses, no force pushes, and no branch deletion.
+2. **Exact review-attested source main.** When private-repository protection is
+   unavailable, the publisher requires source authority PR #958 (and future
+   governance PRs that deliberately advance that authority constant) to be
+   same-repository, merged to `main`, authored by someone other than immutable
+   reviewer ID `11139560` / login `ORESoftware`, and approved by that
+   reviewer on the exact PR head before merge. It compares every reviewed
+   governance Git entry and file byte-for-byte between that head and current
+   `main`: CODEOWNERS, allowlist, carrier contracts, governance workflow,
+   security policy, governance audit, launcher, V3 publisher, and their
+   security tests.
+
+The review-attested mode does not trust unprotected `main` generally; it
+trusts only governance bytes that remain identical to the independently
+reviewed authority head. Any mode/type/blob, reviewer-state, repository-ID, or
+governance-byte drift fails closed.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
