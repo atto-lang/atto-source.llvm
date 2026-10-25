@@ -31,6 +31,10 @@ struct AutoType {
     std::vector<AutoType> parameters;
     std::set<AutoTrait> dyn_bounds;
     bool shareable_domain = false;
+    // Nominal auto traits are valid only after the compiler has traversed the
+    // complete instantiated field layout. Default false makes opaque/imported
+    // and unresolved nominal provenance fail closed.
+    bool complete_nominal_layout = false;
     std::set<AutoTrait> negative;
 };
 
@@ -67,6 +71,10 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         caps = {true, true, true};
         break;
     case AutoTypeKind::Nominal:
+        if (!type.complete_nominal_layout) {
+            caps = {false, false, false};
+            break;
+        }
         caps = {
             all_have(type.parameters, AutoTrait::Send),
             all_have(type.parameters, AutoTrait::Sync),

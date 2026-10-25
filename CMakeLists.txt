@@ -1309,6 +1309,42 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_exception_failure_precedence_and_diagnostics
              COMMAND oreslang-native-exception-policy-test)
+    # New Task borrow/capture regressions live in a Rust harness so this
+    # branch does not expand the repository's legacy Python test surface.
+    # CTest supplies the outer timeout; the harness itself requires rejection,
+    # empty stdout (no LLVM IR), and the exact fail-closed diagnostic.
+    find_program(ORE_RUSTC NAMES rustc REQUIRED)
+    set(ORE_NATIVE_TASK_BORROW_TEST
+        "${CMAKE_CURRENT_BINARY_DIR}/native_task_borrow_rejection")
+    add_custom_command(
+        OUTPUT "${ORE_NATIVE_TASK_BORROW_TEST}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_task_borrow_rejection.rs"
+            -o "${ORE_NATIVE_TASK_BORROW_TEST}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_task_borrow_rejection.rs"
+        VERBATIM)
+    add_custom_target(oreslang-native-task-borrow-rejection-rust ALL
+        DEPENDS "${ORE_NATIVE_TASK_BORROW_TEST}")
+    add_test(NAME native_task_borrow_rejection_no_ir
+        COMMAND "${ORE_NATIVE_TASK_BORROW_TEST}"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_task_borrow_rejection_no_ir PROPERTIES TIMEOUT 60)
+
+    # Production admission primitive for future positive Task lowering.
+    # This proves exact boundary/epoch/domain binding and shared auto-trait
+    # Send admission only; the source parser still rejects Task execution
+    # before LLVM IR until scheduler/continuation lowering exists.
+    add_executable(oreslang-native-task-capture-admission-test
+        tests/native_task_capture_admission_test.cpp)
+    target_include_directories(oreslang-native-task-capture-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-task-capture-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_capture_admission_host_only
+        COMMAND oreslang-native-task-capture-admission-test)
+    set_tests_properties(native_task_capture_admission_host_only
+        PROPERTIES TIMEOUT 20)
+
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"

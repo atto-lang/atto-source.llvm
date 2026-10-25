@@ -1275,18 +1275,31 @@ private:
         if (token_.text == "rt") {
             const auto offset = token_.offset;
             advance();
+
+            // Canonical mutable borrow is `rt mut borrow value`.
+            // `mut` is an ownership modifier, not a suffix on borrow.
+            const bool mutable_borrow = token_.text == "mut";
+            if (mutable_borrow) advance();
             const auto operation = token_.text;
+
             if (operation == "cooperate") {
+                if (mutable_borrow)
+                    fail("'rt mut' may only modify borrow; use 'rt mut borrow value'");
                 throw std::runtime_error(
                             "native rt cooperate requires verified heap-owned continuation lowering"
                             " at byte " + std::to_string(token_.offset));
+            }
+            if (mutable_borrow && operation != "borrow") {
+                fail("'rt mut' may only modify borrow; use 'rt mut borrow value'");
             }
             if (operation != "borrow" && operation != "copy" &&
                 operation != "take" && operation != "share") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            const bool mutable_borrow = operation == "borrow" && accept("mut");
+            if (!mutable_borrow && operation == "borrow" && token_.text == "mut") {
+                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
+            }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
@@ -1350,11 +1363,25 @@ private:
             }
         }
         // 'task' is contextual in Oreslang v2. Preserve ordinary identifiers
-        // named task, but fail closed when it opens a task block.
+        // named task. Stage-one native Task parsing admits only one scalar
+        // return expression; ownership admission runs after parsing and LLVM
+        // codegen still rejects the Task until scheduler/Future lowering exists.
         if (token_.text == "task") {
             Lexer lookahead = lexer_;
-            if (lookahead.next().text == "{")
-                fail("native execution task lowering unsupported: scheduler-owned Task/Future continuation required; no implicit inline execution");
+            if (lookahead.next().text == "{") {
+                advance(); // contextual task
+                require("{");
+                if (!accept("return")) {
+                    fail("native Task v1 body requires exactly one return expression");
+                }
+                auto task = make_expression(Expression::Kind::Task, offset);
+                task->left = expression();
+                require(";");
+                if (!accept("}")) {
+                    fail("native Task v1 body requires exactly one return expression");
+                }
+                return task;
+            }
         }
         // Opaque ActorGroup and join permits are runtime-affine capabilities.
         // Never silently admit a native scalar name or emit partial IR.

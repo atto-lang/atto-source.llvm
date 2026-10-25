@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/TaskCaptureAdmission.hpp"
 
 namespace oreslang {
 
@@ -22,7 +23,7 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Task, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -203,6 +204,11 @@ struct Program {
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
+    // Ownership-stage authority retained for future scheduler/codegen lowering.
+    // Expression identities remain stable because AST nodes are heap-owned by
+    // unique_ptr even if Program itself is moved.
+    std::uint64_t task_check_epoch = 0;
+    std::vector<types::TaskCaptureAdmission> task_admissions;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
