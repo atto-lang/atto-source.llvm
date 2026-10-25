@@ -1325,6 +1325,12 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_ready_future_as_message
         source-actor-future-void-send.ores
         --diagnostic "unknown parameter")
+    oreslang_contract_test(reject_source_actor_ready_future_mutable_val
+        source-actor-future-void-val-reject.ores
+        --diagnostic "Future<void> readiness token must be const")
+    oreslang_contract_test(reject_source_actor_ready_future_mutable_let
+        source-actor-future-void-let-reject.ores
+        --diagnostic "Future<void> readiness token must be const")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
