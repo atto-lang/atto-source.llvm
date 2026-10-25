@@ -2026,9 +2026,37 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
-                    fail("native source supports only one direct ActorRef lifecycle await");
+                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
+                        || value.readable_await)
+                    fail("native source supports only one trusted-main suspension");
                 const std::string awaited = identifier();
+
+                /*
+                 * First real native I/O source slice. This is compiler-owned
+                 * await syntax, not ordinary function resolution: a user
+                 * function named readable cannot impersonate the operation.
+                 * The fd must be a literal so no scalar owner/local crosses
+                 * suspension before general continuation frames are admitted.
+                 */
+                if (awaited == "readable" && token_.text == "(") {
+                    if (!value.ready_future_name.empty())
+                        fail("await readable cannot bypass a live Future<void> token");
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("await readable must precede post-await actor effects");
+                    require("(");
+                    if (token_.kind != Kind::Integer)
+                        fail("await readable requires an integer literal file descriptor");
+                    const std::int64_t fd = integer_literal();
+                    if (fd < 0 || fd > std::numeric_limits<int>::max())
+                        fail("await readable file descriptor is out of native int range");
+                    require(")");
+                    require(";");
+                    value.readable_await = true;
+                    value.readable_await_fd = fd;
+                    value.readable_await_offset = await_offset;
+                    continue;
+                }
+
                 if (!value.ready_future_name.empty()) {
                     if (awaited != value.ready_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared readiness token");
@@ -2068,7 +2096,7 @@ private:
                     value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
                 } else {
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
+                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done and await readable(literal-fd) are lowered");
                 }
                 continue;
             }
