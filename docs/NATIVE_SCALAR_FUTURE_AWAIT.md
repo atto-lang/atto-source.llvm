@@ -32,13 +32,18 @@ prevents an immediately dequeued CONTROL turn from parking a carrier behind
 Future bookkeeping. When CONTROL is full, the outcome remains READY for retry.
 An explicit cancellation after enqueue suppresses the queued guest callback.
 
-Group close and per-actor physical finalization publish the generation-fenced
-`NativeActorRef::delivery_closed()` barrier. `NativeScalarFutureAwait::open()`
-fails closed when that barrier is already visible, so a stale ActorRef cannot
-create fresh pending Future work for an incarnation that has left the delivery
-table. A close racing after successful frame creation is still handled by the
-existing detach reconciliation path. `try_schedule()` consumes an
-already-published barrier itself, so scheduling
+Group close publishes the generation-fenced
+`NativeActorRef::delivery_closed()` barrier. Per-actor physical finalization
+first seals `NativeActorRef::resource_admission_closed()`, then publishes the
+same delivery barrier when terminal settlement succeeds.
+`NativeScalarFutureAwait::open()` checks both signals before allocation and
+again after capability construction; the second check is the frame-admission
+linearization point against finalization. Thus a finalizer that sealed resource
+admission first makes the open fail closed, while an open that linearizes first
+is ordinary live work and must be reconciled if terminal lifecycle wins later.
+A close racing after successful frame creation is still handled by the existing
+detach reconciliation path. `try_schedule()` consumes an already-published
+barrier itself, so scheduling
 a detached PENDING or READY frame terminates it as CANCELLED instead of leaving
 a retryable Future behind. If close is observed during CONTROL admission, a
 still-SCHEDULED frame is likewise cancelled before scheduling reports success.
@@ -62,8 +67,9 @@ an unpinned actor-owned borrow or to execute a callback on the producer thread.
 
 The `native_scalar_future_single_winner_control` CTest covers stale
 generation, foreign owner, duplicate numeric Future-ID capability isolation,
-post-detach creation rejection, exactly-once completion, fail/cancel race,
-CONTROL backpressure, revocation before execution, and no inline resume.
+post-detach creation rejection, physical-resource admission sealing,
+open-vs-finalize races, exactly-once completion, fail/cancel race, CONTROL
+backpressure, revocation before execution, and no inline resume.
 The acceptance path to guest parity still requires:
 
 1. Typed source `Future<T>` and `async` admission with distinct guest ABIs.
