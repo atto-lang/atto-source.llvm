@@ -704,6 +704,20 @@ static void open_group_locked(void) {
 #endif
     ensure(group.vm != NULL);
 
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+    /*
+     * NIO bootstrap must occur before the first root/guest ActorRef admission:
+     * NativeOresVM intentionally seals backend attachment once any actor is
+     * spawned. Throughput mode remains cold; no reactor thread starts until
+     * the first readable watch is actually admitted.
+     */
+    ensure(ores_native_vm_enable_nio(group.vm, 1, 0, 1));
+    group.nio_enabled = 1;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    ensure(ores_native_vm_nio_started(group.vm) == 0);
+#endif
+#endif
+
     /*
      * The compiler-generated top-level continuation owns one reserved logical
      * actor lane. It is metadata-only until an await schedules CONTROL.
@@ -997,13 +1011,7 @@ int64_t oreslang_source_actor_await_readable(
         && group.pending_ready == NULL
         && group.pending_done == NULL
         && group.pending_readable == NULL);
-    if (!group.nio_enabled) {
-        ensure(ores_native_vm_enable_nio(group.vm, 1, 0, 1));
-        group.nio_enabled = 1;
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-        ensure(ores_native_vm_nio_started(group.vm) == 0);
-#endif
-    }
+    ensure(group.nio_enabled);
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef root = group.root_ref;
     group.pending_readable = &frame;
