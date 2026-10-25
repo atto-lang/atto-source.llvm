@@ -74,7 +74,7 @@ typedef struct {
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
 typedef struct {
     pthread_cond_t completed;
-    OresSourceActorContinuation continuation;
+    OresSourceActorReadableContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
     OresNativeActorNioAwait awaiting;
@@ -167,6 +167,22 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+int oreslang_source_actor_test_cancel_pending_readable(void) {
+    OresNativeVM* vm = NULL;
+    OresNativeActorNioWatch watch = {0};
+
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    if (frame && frame->admitted && !frame->done) {
+        vm = group.vm;
+        watch = frame->awaiting.watch;
+    }
+    group_unlock();
+
+    return vm ? ores_native_vm_nio_try_cancel_actor(vm, watch) : 0;
+}
+#endif
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -480,6 +496,26 @@ static void root_readable_suspend_turn(void) {
  * only publish a generation-fenced wake; compiled guest code resumes here on
  * the authenticated root actor lane, never on an epoll/completion thread.
  */
+static OresSourceReadableOutcome source_readable_outcome(
+        OresNativeWakeOutcome outcome) {
+    switch (outcome) {
+        case ORES_NATIVE_WAKE_READY:
+            return ORES_SOURCE_READABLE_READY;
+        case ORES_NATIVE_WAKE_CANCELLED:
+            return ORES_SOURCE_READABLE_CANCELLED;
+        case ORES_NATIVE_WAKE_FAILED:
+            return ORES_SOURCE_READABLE_FAILED;
+        default:
+            abort();
+    }
+}
+
+/*
+ * Scheduler wake callback for the source-root actor. Every admitted terminal
+ * NIO outcome resumes exactly once on this authenticated actor lane. Producer
+ * retirement is different: #994 consumes that wake before callback admission,
+ * so a retired root can never be resurrected just to report an outcome.
+ */
 static void source_root_wake(
         void* raw,
         size_t slot,
@@ -490,29 +526,21 @@ static void source_root_wake(
         group.vm, ORES_NATIVE_VM_MAIN, ticket));
 
     ReadableAwaitFrame* frame;
-    OresSourceActorContinuation continuation;
+    OresSourceActorReadableContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
+    const OresSourceReadableOutcome source_outcome =
+        source_readable_outcome(outcome);
 
     group_lock();
     frame = group.pending_readable;
     ensure(frame && frame->suspend_recorded && frame->admitted && !frame->done);
     ensure(same_wake_ticket(ticket, frame->awaiting.wake));
 
-    if (outcome != ORES_NATIVE_WAKE_READY) {
-        ensure(ores_native_continuation_store_cancel(
-            group.continuations, frame->link.continuation));
-        frame->outcome = outcome == ORES_NATIVE_WAKE_CANCELLED ? 2 : 3;
-        frame->done = 1;
-        ensure(pthread_cond_signal(&frame->completed) == 0);
-        group_unlock();
-        return;
-    }
-
     /*
-     * The scheduler wake proves producer/target/slot/generation authority.
-     * Only now make the persisted continuation READY. The strict ready-resume
-     * bridge below therefore cannot claim an unresolved continuation.
+     * READY/CANCELLED/FAILED are all terminal values of the same suspension.
+     * Publish the persisted logical continuation exactly once, then let the
+     * typed continuation decide how source code handles the outcome.
      */
     ensure(ores_native_continuation_store_notify_ready(
         group.continuations, frame->link.continuation));
@@ -540,7 +568,7 @@ static void source_root_wake(
     ensure(!ores_native_store_handle_valid(current_source_execution));
 
     current_source_execution = resumed;
-    const int64_t result = continuation(actor);
+    const int64_t result = continuation(actor, source_outcome);
     current_source_execution = (OresNativeExecutionHandle){0, 0};
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
@@ -549,7 +577,7 @@ static void source_root_wake(
 
     group_lock();
     ensure(frame == group.pending_readable && !frame->done);
-    frame->outcome = 1;
+    frame->outcome = (int)source_outcome;
     frame->result = result;
     frame->done = 1;
     ensure(pthread_cond_signal(&frame->completed) == 0);
@@ -1002,7 +1030,7 @@ int64_t oreslang_source_actor_await_done(
 int64_t oreslang_source_actor_await_readable(
         void* opaque,
         int64_t fd,
-        OresSourceActorContinuation continuation,
+        OresSourceActorReadableContinuation continuation,
         uint64_t source_token) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
@@ -1149,9 +1177,9 @@ int64_t oreslang_source_actor_await_readable(
         (unsigned long long)source_token);
 #endif
 
-    /* Typed cancellation/I/O error projection is deliberately not source
-     * lowered yet. The first slice fails closed unless readiness resumed once. */
-    ensure(outcome == 1);
+    ensure(outcome == ORES_SOURCE_READABLE_READY
+        || outcome == ORES_SOURCE_READABLE_CANCELLED
+        || outcome == ORES_SOURCE_READABLE_FAILED);
     return result;
 }
 #endif
