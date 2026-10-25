@@ -185,16 +185,16 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
     def test_parser_diagnostic_requires_a_single_compiler_error_line(self):
         expected = ("native opaque any/unknown unsupported: dynamic tag, "
                     "ownership and capability-safe lowering required")
-        correct = "oreslang-llvmc: " + expected + " at byte 27\\n"
+        correct = "oreslang-llvmc: " + expected + " at byte 27\n"
         cases = (
             (correct, True),
-            (expected + "\\n", False),
+            (expected + "\n", False),
             ("wrapper: " + correct, False),
-            (correct + "fatal: signal 11\\n", False),
-            ("oreslang-llvmc: " + expected + " at byte -1\\n", False),
+            (correct + "fatal: signal 11\n", False),
+            ("oreslang-llvmc: " + expected + " at byte -1\n", False),
             ("oreslang-llvmc: " + expected + " at byte 27", False),
-            ("oreslang-llvmc: " + expected + " at byte 27\\n"
-             "unrelated failure\\n", False),
+            ("oreslang-llvmc: " + expected + " at byte 27\n"
+             "unrelated failure\n", False),
         )
         for stderr, accepted in cases:
             with self.subTest(stderr=stderr):
