@@ -46,6 +46,39 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
 void oreslang_source_actor_send(void* actor, int64_t payload);
 
 /*
+ * First source send_async vertical slice.
+ *
+ * The checked form is trusted host/runtime glue for a direct
+ *   await actor.send_async(i64)
+ * from zero-argument main. MAILBOX_FULL is not returned: the outer host thread
+ * waits for an actual mailbox credit release and retries the exact scheduler
+ * ActorRef. No actor carrier may call this blocking bridge; such a call returns
+ * WOULD_DEADLOCK instead of parking a carrier.
+ *
+ * Values 0..5 deliberately preserve OresNativeSendStatus for future typed
+ * compiler projection. WOULD_DEADLOCK is source-runtime specific.
+ */
+enum {
+    ORES_SOURCE_SEND_ASYNC_ACCEPTED = 0,
+    ORES_SOURCE_SEND_ASYNC_INVALID_REF = 1,
+    ORES_SOURCE_SEND_ASYNC_TERMINATED = 2,
+    ORES_SOURCE_SEND_ASYNC_MAILBOX_FULL = 3,
+    ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED = 4,
+    ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE = 5,
+    ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK = 6
+};
+int oreslang_source_actor_await_send_async_checked(
+    void* actor, int64_t payload);
+void oreslang_source_actor_await_send_async(
+    void* actor, int64_t payload);
+
+/* Exact trusted identity projection for runtime integration/tests. This copies
+ * the scheduler-minted generation-fenced ActorRef stored in the opaque source
+ * handle; it never reconstructs identity from an actor id or numeric slot. */
+int oreslang_source_actor_exact_scheduler_ref(
+    void* actor, OresNativeActorRef* out);
+
+/*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
  * scheduler to terminate the actor. join_done is trusted host glue: it waits
  * for physical VM completion, retires/destroys the actor heap, releases the
