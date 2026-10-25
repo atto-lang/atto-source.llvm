@@ -142,11 +142,12 @@ static void capacity_release_admits_waiter(void) {
     atomic_init(&waiter.done, 0);
     pthread_t thread;
     CHECK(pthread_create(&thread, NULL, await_send, &waiter) == 0);
-    while (oreslang_source_actor_test_waiting_sends(actor) != 1)
+    while (oreslang_source_actor_test_pending_async_sends(actor) != 1)
         sched_yield();
 
-    /* The scheduler-mutex snapshot proves the waiter reached cond_wait
-     * while FULL. The blocked handler prevents capacity from changing. */
+    /* The scheduler-mutex snapshot proves a scheduler-owned Future is
+     * genuinely PENDING while FULL. The blocked handler prevents capacity
+     * from changing; no producer thread is required for Future progress. */
     CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
 
     atomic_store_explicit(&release_first, 1, memory_order_release);
@@ -157,6 +158,56 @@ static void capacity_release_admits_waiter(void) {
     oreslang_source_actor_stop(actor);
     fprintf(stderr,
         "SOURCE_SEND_ASYNC_CAPACITY_PASS queued=%zu exact_ref=1\n", queued);
+}
+
+static void stored_future_starts_before_await_and_progresses(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 901, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    /* Submission has returned to the caller while target admission remains
+     * pending. Releasing target capacity progresses the Future independently
+     * of any source await. */
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    while (oreslang_source_actor_test_pending_async_sends(actor) != 0)
+        sched_yield();
+
+    CHECK(oreslang_source_actor_await_send_future_checked(future)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_FUTURE_PASS eager_start=1 independent_progress=1\n");
+}
+
+static void stored_future_cancel_wins_only_while_pending(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 902, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+    CHECK(oreslang_source_actor_cancel_send_future(future));
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr, "SOURCE_SEND_ASYNC_CANCEL_PASS pending_only=1\n");
 }
 
 static void stop_wakes_full_waiter_as_terminated(void) {
@@ -172,7 +223,7 @@ static void stop_wakes_full_waiter_as_terminated(void) {
     atomic_init(&waiter.done, 0);
     pthread_t thread;
     CHECK(pthread_create(&thread, NULL, await_send, &waiter) == 0);
-    while (oreslang_source_actor_test_waiting_sends(actor) != 1)
+    while (oreslang_source_actor_test_pending_async_sends(actor) != 1)
         sched_yield();
     CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
 
@@ -315,6 +366,8 @@ int main(void) {
     atomic_init(&foreign_probe_status, -1);
 
     capacity_release_admits_waiter();
+    stored_future_starts_before_await_and_progresses();
+    stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
     bounded_waiter_cohort_rejects_before_pin();
     carrier_call_fails_would_deadlock();
