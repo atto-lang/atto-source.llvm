@@ -186,6 +186,32 @@ static void rejects_forged_and_recycled_await_links() {
     assert(stores.state(link) == ORES_CONTINUATION_PENDING);
 
     forged = link;
+    forged.parent.slot += 1;
+    rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, forged, 11,
+                                  {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+
+    forged = link;
+    forged.continuation.generation += 1;
+    rejected = false;
+    try {
+        TaskContinuationGate gate(task, stores.executions,
+                                  stores.continuations, forged, 11,
+                                  {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    assert(rejected);
+    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+
+    forged = link;
     forged.parent.generation += 1;
     rejected = false;
     try {
@@ -220,7 +246,8 @@ static void rejects_non_await_control_and_spawn_boundaries() {
     for (const auto boundary : {
             ORES_CONTINUATION_BOUNDARY_SPAWN,
             ORES_CONTINUATION_BOUNDARY_SUPERVISOR_CONTROL,
-            ORES_CONTINUATION_BOUNDARY_ACTOR_MESSAGE}) {
+            ORES_CONTINUATION_BOUNDARY_ACTOR_MESSAGE,
+            ORES_CONTINUATION_BOUNDARY_TASK_JOIN}) {
         const auto link = stores.suspend(450 + static_cast<int>(boundary),
                                          boundary);
         bool rejected = false;
