@@ -253,8 +253,6 @@ private:
     }
 
     void cleanup_noexcept() noexcept {
-        if (!loan_owned_ && !payload_) return;
-
         auto descriptor = admission_->descriptor_state(handle_);
         if (descriptor == DescriptorState::Waiting) {
             if (!admission_->cancel(handle_)) {
