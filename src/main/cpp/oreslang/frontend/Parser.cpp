@@ -153,7 +153,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "ReadableOutcome", "pure",
         "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -2050,6 +2050,10 @@ private:
                     if (fd < 0 || fd > std::numeric_limits<int>::max())
                         fail("await readable file descriptor is out of native int range");
                     require(")");
+                    if (accept("as")) {
+                        require("ReadableOutcome");
+                        value.readable_outcome_name = identifier();
+                    }
                     require(";");
                     value.readable_await = true;
                     value.readable_await_fd = fd;
@@ -2577,6 +2581,19 @@ private:
             advance();
             return expr;
         }
+        if (token_.text == "ReadableOutcome") {
+            advance();
+            require(".");
+            const std::string variant = identifier();
+            auto expr = make_expression(
+                Expression::Kind::ReadableOutcomeLiteral, offset);
+            if (variant == "Ready") expr->integer = 1;
+            else if (variant == "Cancelled") expr->integer = 2;
+            else if (variant == "Failed") expr->integer = 3;
+            else fail("ReadableOutcome supports only Ready, Cancelled, or Failed");
+            expr->resolved_type = ScalarType::ReadableOutcome;
+            return expr;
+        }
         // Explicit brace tuples and nominal Entry values have no LLVM native
         // product ABI. Do not lower them as scalars, and do not steal ordinary
         // calls to a user function named tuple(...).
@@ -2968,6 +2985,7 @@ private:
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
+            case Expression::Kind::ReadableOutcomeLiteral:
                 return;
             case Expression::Kind::Console:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
@@ -3120,7 +3138,10 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
+        if (type == ScalarType::String) return "string";
+        if (type == ScalarType::Bool) return "bool";
+        if (type == ScalarType::ReadableOutcome) return "ReadableOutcome";
+        return "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -3148,6 +3169,8 @@ private:
                 return ScalarType::Bool;
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
+            case Expression::Kind::ReadableOutcomeLiteral:
+                return expr.resolved_type = ScalarType::ReadableOutcome;
             case Expression::Kind::Console:
                 require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
                 return ScalarType::I64;
