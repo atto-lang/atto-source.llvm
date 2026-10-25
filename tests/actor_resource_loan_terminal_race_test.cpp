@@ -73,6 +73,31 @@ static void live_group_rejects_outstanding_loan() {
     CHECK(rejected);
 }
 
+static void stop_seals_new_loans_but_existing_loans_can_drain() {
+    NativeActorGroup group(191007, 1);
+    int stops = 0;
+    auto actor = group.adopt(191007, 204, 1, [&] { ++stops; });
+    CHECK(group.mark_ready(actor));
+
+    actor.retain_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 1);
+    group.stop_workers();
+    CHECK(stops == 1);
+
+    bool rejected = false;
+    try { actor.retain_resource_loan(); }
+    catch (const std::logic_error&) { rejected = true; }
+    CHECK(rejected);
+    CHECK(actor.outstanding_resource_loans() == 1);
+
+    actor.release_resource_loan();
+    CHECK(actor.outstanding_resource_loans() == 0);
+    CHECK(group.finalized(actor));
+    actor.get_done().get();
+    group.close();
+    CHECK(stops == 1);
+}
+
 static void close_seals_new_loans_but_existing_loans_can_drain() {
     NativeActorGroup group(191006, 1);
     auto actor = group.adopt(191006, 203, 1, [] {});
@@ -352,6 +377,7 @@ static void every_finalization_allocation_failure_is_retryable() {
 
 int main() {
     live_group_rejects_outstanding_loan();
+    stop_seals_new_loans_but_existing_loans_can_drain();
     close_seals_new_loans_but_existing_loans_can_drain();
     close_and_resource_registration_have_one_winner();
     recycled_numeric_ref_cannot_inspect_next_control_slot();
