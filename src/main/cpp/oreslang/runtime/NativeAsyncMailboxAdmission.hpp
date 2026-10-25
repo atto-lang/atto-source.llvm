@@ -43,6 +43,13 @@ public:
         Failed,
         Rejected
     };
+    enum class DescriptorState {
+        Inactive,
+        Preparing,
+        Waiting,
+        Transferred,
+        Publishing
+    };
 
     NativeAsyncMailboxAdmission(
             std::size_t max_frames,
@@ -375,9 +382,23 @@ public:
     }
 
     bool transferred(Handle handle) const {
+        return descriptor_state(handle) == DescriptorState::Transferred;
+    }
+
+    DescriptorState descriptor_state(Handle handle) const {
         std::lock_guard<std::mutex> guard(mutex_);
         const Slot* entry = matching_locked(handle);
-        return entry && entry->state == State::Transferred;
+        if (!entry) return DescriptorState::Inactive;
+        switch (entry->state) {
+            case State::Preparing: return DescriptorState::Preparing;
+            case State::Waiting: return DescriptorState::Waiting;
+            case State::Transferred: return DescriptorState::Transferred;
+            case State::Publishing: return DescriptorState::Publishing;
+            case State::Empty:
+            case State::Cancelled:
+                return DescriptorState::Inactive;
+        }
+        std::terminate();
     }
 
     std::size_t used_frames() const {
