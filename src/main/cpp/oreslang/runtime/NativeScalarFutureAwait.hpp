@@ -189,9 +189,10 @@ public:
         // still only scheduled; the queued CONTROL then drains as a no-op.
         if (parent_ref.delivery_closed()) {
             expected = Phase::scheduled;
-            (void)phase_.compare_exchange_strong(
-                expected, Phase::cancelled,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+            if (phase_.compare_exchange_strong(
+                    expected, Phase::cancelled,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return false;
         }
         return true;
     }
