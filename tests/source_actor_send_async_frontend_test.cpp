@@ -46,7 +46,7 @@ int main() {
     CHECK(main.actor_actions[3].kind == oreslang::ActorAction::Kind::Stop);
 
     rejects(program("worker.send_async(1); stop worker; return 43;"),
-            "native send_async requires direct await");
+            "native send_async statement must be awaited directly or bound to Future<void>");
     rejects(program("await missing.send_async(1); stop worker; return 43;"),
             "unknown actor message receiver");
     rejects(program("stop worker; await worker.send_async(1); return 43;"),
@@ -55,8 +55,27 @@ int main() {
             "native actor message payload");
     rejects(program("await worker.send_async(worker); stop worker; return 43;"),
             "unknown parameter");
+    auto stored = oreslang::parse_program(program(
+        "const Future<void> pending = worker.send_async(1); "
+        "await pending; worker.send(2); stop worker; return 43;"));
+    CHECK(stored.functions.size() == 1);
+    const auto& stored_main = stored.functions.front();
+    CHECK(stored_main.send_future_name == "pending");
+    CHECK(stored_main.send_future_actor == "worker");
+    CHECK(stored_main.send_future_payload != nullptr);
+    CHECK(stored_main.send_future_await_offset != 0);
+    CHECK(stored_main.send_future_await_action_index == 0);
+    CHECK(stored_main.actor_sends.size() == 1);
+    CHECK(stored_main.actor_actions.size() == 2);
+    CHECK(stored_main.actor_actions[0].kind == oreslang::ActorAction::Kind::Send);
+    CHECK(stored_main.actor_actions[1].kind == oreslang::ActorAction::Kind::Stop);
+
     rejects(program("const Future<void> pending = worker.send_async(1); "
-                    "stop worker; return 43;"), "get_ready");
+                    "stop worker; return 43;"),
+            "Future<void> send_async token must be awaited exactly once");
+    rejects(program("const Future<void> pending = worker.send_async(1); "
+                    "stop worker; await pending; return 43;"),
+            "send_async Future target stopped before await");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
             "native source supports only one direct ActorRef lifecycle await");
@@ -81,5 +100,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=1 negative=14\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=15\n";
 }
