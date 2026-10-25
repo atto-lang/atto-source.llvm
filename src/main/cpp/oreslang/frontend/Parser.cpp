@@ -3670,6 +3670,26 @@ private:
                     throw std::runtime_error(
                         "await get_done requires side-effect-free scalar return");
             }
+            if (fn.readable_await) {
+                /*
+                 * The initial I/O suspension reuses the trusted source-root
+                 * actor continuation. No user local, borrowed owner, class,
+                 * array or generic Future value may cross this frame.
+                 */
+                if (fn.name != "main" || !fn.exported || !fn.parameters.empty())
+                    throw std::runtime_error(
+                        "await readable is restricted to exported zero-argument main");
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "await readable requires one source actor without suspended locals");
+                if (fn.readable_await_fd < 0 ||
+                        fn.readable_await_fd > std::numeric_limits<int>::max())
+                    throw std::runtime_error(
+                        "await readable requires a native int file descriptor");
+                if (contains_callable_invocation(fn.result.get()))
+                    throw std::runtime_error(
+                        "await readable requires side-effect-free scalar return");
+            }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
                 if (binding.int_array) {
