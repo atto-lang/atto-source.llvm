@@ -93,7 +93,7 @@ V3 supports two fail-closed source authority modes:
    dismissal, at least one approval, administrator enforcement, no review
    bypasses, no force pushes, and no branch deletion.
 2. **Exact review-attested source main.** When private-repository protection is
-   unavailable, the publisher requires source authority PR #958 (and future
+   unavailable, the publisher requires source authority PR #972 (and future
    governance PRs that deliberately advance that authority constant) to be
    same-repository, merged to `main`, authored by someone other than immutable
    reviewer ID `11139560` / login `ORESoftware`, and approved by that
