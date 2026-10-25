@@ -1648,6 +1648,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-async-mailbox-admission-test)
     set_tests_properties(native_async_mailbox_credit_wake_linearization PROPERTIES TIMEOUT 90)
 
+    # Scheduler-owned nonblocking send_async Future. The descriptor begins
+    # admission immediately, queues without parking a host thread, and is
+    # serviced before racing synchronous sends at physical credit release.
+    add_executable(oreslang-native-async-send-future-test
+        tests/native_actor_async_send_future_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-send-future-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-send-future-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-async-send-future-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-async-send-future-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_async_send_future_fifo_and_lifecycle
+        COMMAND oreslang-native-async-send-future-test)
+    set_tests_properties(native_actor_async_send_future_fifo_and_lifecycle
+        PROPERTIES TIMEOUT 90)
+
     # Frozen payload + exact target resource loan + transferred real envelope.
     # Host runtime only; source send_async lowering remains separately gated.
     add_executable(oreslang-native-async-envelope-ownership-test
