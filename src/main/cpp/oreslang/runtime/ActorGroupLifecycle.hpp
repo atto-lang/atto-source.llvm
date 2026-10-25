@@ -436,11 +436,18 @@ public:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t unsealed = 0;
+            std::uint64_t resource_state = 0;
             if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    unsealed, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire))
-                return false;
+                    resource_state, NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                // A prior serialized finalization attempt may already have
+                // sealed resource admission before settlement threw. Keep the
+                // seal sticky so late loans cannot resurrect physical state,
+                // but allow this owner to retry unfinished terminal settlement.
+                if (resource_state != NativeActorRef::terminal_resource_bit
+                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
+                    return false;
+            }
             try {
                 // Close may settle readiness after detaching the worker table,
                 // outside the group lock. The ticket mutex decides the winner.
@@ -459,15 +466,10 @@ public:
                 // Settle done ONLY on acknowledged physical finalization.
                 done_callbacks = settle_done(ref, failure);
             } catch (...) {
-                // The terminal resource bit is an admission fence, not a
-                // one-way state transition until readiness/DONE settlement
-                // succeeds. Roll it back on allocation/settlement failure so
-                // a later physical-finalization retry is possible.
-                std::uint64_t sealed = NativeActorRef::terminal_resource_bit;
-                if (!ref.ticket_->resource_state.compare_exchange_strong(
-                        sealed, 0, std::memory_order_acq_rel,
-                        std::memory_order_acquire))
-                    std::terminate();
+                // Keep the terminal resource-admission fence sticky. A later
+                // serialized finalization call recognizes the sealed state and
+                // resumes settlement; reopening loans here would permit late
+                // physical-resource resurrection after logical termination.
                 throw;
             }
             ref.ticket_->physically_done.store(true, std::memory_order_release);
@@ -642,11 +644,18 @@ private:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t unsealed = 0;
+            std::uint64_t resource_state = 0;
             if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    unsealed, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire))
-                return false;
+                    resource_state, NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                // A prior serialized finalization attempt may already have
+                // sealed resource admission before settlement threw. Keep the
+                // seal sticky so late loans cannot resurrect physical state,
+                // but allow this owner to retry unfinished terminal settlement.
+                if (resource_state != NativeActorRef::terminal_resource_bit
+                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
+                    return false;
+            }
             try {
                 ActorReadyResult rejected{false,
                     failure.empty() ? "actor terminated before ready" : failure};
@@ -658,11 +667,10 @@ private:
                 }
                 done_callbacks = settle_done(ref, failure);
             } catch (...) {
-                std::uint64_t sealed = NativeActorRef::terminal_resource_bit;
-                if (!ref.ticket_->resource_state.compare_exchange_strong(
-                        sealed, 0, std::memory_order_acq_rel,
-                        std::memory_order_acquire))
-                    std::terminate();
+                // Keep the terminal resource-admission fence sticky. A later
+                // serialized finalization call recognizes the sealed state and
+                // resumes settlement; reopening loans here would permit late
+                // physical-resource resurrection after logical termination.
                 throw;
             }
             ref.ticket_->physically_done.store(true, std::memory_order_release);
