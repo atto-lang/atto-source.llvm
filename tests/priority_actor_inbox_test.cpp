@@ -835,28 +835,30 @@ static void owned_handle_admission_never_steals_on_rejection_or_constructor_faul
     FailOnceMove::fail_move = false;
     inbox.close();
 
-    // Generation-fenced unique-ownership path must reject a restarted actor
-    // without touching the sender's still-owned object.
+    // Drain the old incarnation before replacement admission. A restarted
+    // actor must not steal the sender's object through the old inbox ticket.
     NativeActorGroup original(751, 1), replacement(751, 1);
     auto original_ref = original.adopt(751, 11, 1, [] {});
-    auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
-    CHECK(original.mark_ready(original_ref) && replacement.mark_ready(replacement_ref));
+    CHECK(original.mark_ready(original_ref));
     Inbox target({1, 8}, {1, 8}, {1, 8});
     target.bind_target(original_ref);
     auto owned = std::make_unique<int>(7);
-    bool invalid = false;
-    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
-    catch (const std::logic_error&) { invalid = true; }
-    CHECK(invalid && owned && *owned == 7);
-    CHECK(target.snapshot() == 0);
     CHECK(target.offer_owned_to(original_ref, Lane::Urgent, owned, 8));
     CHECK(!owned);
     auto accepted = target.try_receive();
     CHECK(accepted && accepted->value() == 7 && accepted->acknowledge_released());
     CHECK(target.completed_through(1));
     CHECK(original.finalized(original_ref));
-    CHECK(replacement.finalized(replacement_ref));
     original_ref.get_done().get();
+    auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
+    CHECK(replacement.mark_ready(replacement_ref));
+    owned = std::make_unique<int>(17);
+    bool invalid = false;
+    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
+    catch (const std::logic_error&) { invalid = true; }
+    CHECK(invalid && owned && *owned == 17);
+    CHECK(target.snapshot() == 1);
+    CHECK(replacement.finalized(replacement_ref));
     replacement_ref.get_done().get();
     target.close();
 }

@@ -79,3 +79,15 @@ an immutable snapshot would change how graph mutations behave.
 The actual Spin server still requires that ownership work, class-payload sums,
 typed HTTP mailboxes, request-scoped storage and await frames. This milestone
 does not establish server parity or a latency result.
+
+Current-main integration also retains the direct `get_done` lifecycle boundary
+and linear `Future<void>` readiness declarations. The latter remain distinct
+from ordered scalar storage. Native continuation storage rejects final-reference
+release while a frame is CLAIMED; its claimant must finish execution first.
+
+The regression gates use canonical `rt mut borrow` spelling and complete scalar
+alias declarations. Incomplete legacy forward declarations stay rejected.
+Immediate `stop()` may cancel startup or abandon queued DATA: execution receipts
+must account for every accepted message and verify the processed FIFO prefix,
+rather than assuming graceful draining. Exclusive incarnation ownership and
+physical reclamation fences remain required before reusing an actor ID.

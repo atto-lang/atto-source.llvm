@@ -788,7 +788,7 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
-        if (callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
+        if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
         if (decl.kind == TypeOnlyDecl::Kind::Alias) {
@@ -1782,13 +1782,13 @@ private:
             require("get_ready");
             require("(");
             require(")");
-            require(";");
             const bool bound = std::any_of(value.actor_spawns.begin(),
                 value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
                     return spawn.name == value.ready_future_actor;
                 });
             if (!bound)
                 fail("Future<void> requires previously spawned ActorRef.get_ready");
+            require(";");
             return true;
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
@@ -2764,6 +2764,8 @@ private:
                     token_.text == "mut") {
                 fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
             }
+            if (mutable_borrow && token_.text == "mut")
+                fail("duplicate mutable borrow qualifier");
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
