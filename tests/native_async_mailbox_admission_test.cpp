@@ -91,14 +91,20 @@ static void fifo_transfer_prevents_sync_credit_steal() {
     CHECK(admission.used_frames() == 1);
     CHECK(admission.used_bytes() == 8);
     CHECK(admission.pending_waiters() == 1);
-    CHECK(admission.pending_bytes() == 8);
+    CHECK(admission.active_descriptors() == 2);
+    // Retained-byte quota covers both the transferred first descriptor and
+    // the still-waiting second descriptor until commit/cancel.
+    CHECK(admission.pending_bytes() == 16);
     CHECK(!admission.try_acquire(1));
     CHECK(!admission.cancel(first));
     CHECK(admission.cancel(second));
     CHECK(admission.pending_waiters() == 0);
-    CHECK(admission.pending_bytes() == 0);
+    CHECK(admission.active_descriptors() == 1);
+    CHECK(admission.pending_bytes() == 8);
 
     CHECK(admission.commit(first) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(admission.active_descriptors() == 0);
+    CHECK(admission.pending_bytes() == 0);
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(f.ready.load() == 1);
     CHECK(f.failed.load() == 0);
@@ -207,15 +213,70 @@ static void aborted_transfer_hands_credit_to_next_waiter() {
     admission.release_acquired(8);
     CHECK(admission.transferred(first));
     CHECK(!admission.transferred(second));
+    CHECK(admission.active_descriptors() == 2);
+    CHECK(admission.pending_bytes() == 16);
     CHECK(admission.abort_transferred(first));
     CHECK(!admission.transferred(first));
     CHECK(admission.transferred(second));
     CHECK(admission.pending_waiters() == 0);
+    CHECK(admission.active_descriptors() == 1);
+    CHECK(admission.pending_bytes() == 8);
     CHECK(admission.used_frames() == 1);
     CHECK(admission.commit(second) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(admission.active_descriptors() == 0);
+    CHECK(admission.pending_bytes() == 0);
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(f.ready.load() == 1);
     CHECK(f.failed.load() == 0);
+    admission.release_acquired(8);
+    finish(f);
+}
+
+static void preparation_quota_bounds_work_before_payload_freeze() {
+    Fixture f;
+    setup(f);
+    NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
+
+    NativeAsyncMailboxAdmission::Handle first, second, rejected;
+    CHECK(admission.begin_preparation(&first));
+    CHECK(admission.begin_preparation(&second));
+    CHECK(admission.active_descriptors() == 2);
+    CHECK(!admission.begin_preparation(&rejected));
+
+    // Releasing one preparation allows exactly one new generation-fenced
+    // descriptor before any payload graph traversal or wake reservation.
+    CHECK(admission.cancel_preparation(first));
+    NativeAsyncMailboxAdmission::Handle reused;
+    CHECK(admission.begin_preparation(&reused));
+    CHECK(reused.slot == first.slot);
+    CHECK(reused.generation != first.generation);
+    CHECK(admission.active_descriptors() == 2);
+
+    // Arm one descriptor after preparation. Retained bytes stay charged after
+    // immediate transfer until commit.
+    auto wake = reserve(f, 71);
+    CHECK(admission.register_prepared(reused, 8, f.scheduler, wake)
+          == Registration::Transferred);
+    CHECK(admission.transferred(reused));
+    CHECK(admission.pending_waiters() == 0);
+    CHECK(admission.pending_bytes() == 8);
+    CHECK(admission.active_descriptors() == 2);
+
+    // Sealing cancels an in-progress preparation but cannot revoke the
+    // already-transferred descriptor.
+    admission.seal();
+    CHECK(admission.sealed());
+    CHECK(admission.active_descriptors() == 1);
+    CHECK(admission.pending_bytes() == 8);
+    CHECK(admission.register_prepared(
+        second, 8, f.scheduler, OresNativeWakeTicket{}) == Registration::Rejected);
+    CHECK(!admission.cancel_preparation(second));
+
+    CHECK(admission.commit(reused) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(admission.active_descriptors() == 0);
+    CHECK(admission.pending_bytes() == 0);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(f.ready.load() == 1);
     admission.release_acquired(8);
     finish(f);
 }
@@ -304,6 +365,7 @@ int main() {
     cancelled_slot_reuse_is_generation_fenced();
     cancelled_fifo_tombstone_cannot_hide_free_credit();
     aborted_transfer_hands_credit_to_next_waiter();
+    preparation_quota_bounds_work_before_payload_freeze();
     cancel_and_credit_release_have_exactly_one_winner();
     seal_fails_waiters_but_not_irrevocable_transfers();
     return 0;
