@@ -144,6 +144,10 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-send-async-unawaited-reject.ores":
+            "native send_async requires direct await; storable Future<void> lowering is not implemented",
+        "source-actor-send-async-method-reject.ores":
+            "native send_async direct await requires trusted zero-argument main",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
