@@ -220,6 +220,46 @@ static void stale_source_future_pointer_never_aliases_new_future(void) {
     fprintf(stderr, "SOURCE_SEND_ASYNC_STALE_HANDLE_PASS nonrecycled=1\n");
 }
 
+static atomic_int logical_send_resume_seen;
+
+static int64_t stored_send_resume_probe(void* actor) {
+    CHECK(actor != NULL);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    OresNativeExecutionHandle execution = {0, 0};
+    CHECK(oreslang_source_actor_current_execution_handle(&execution));
+    CHECK(ores_native_store_handle_valid(execution));
+    CHECK(oreslang_source_actor_try_send_checked(actor, 913)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    atomic_store_explicit(
+        &logical_send_resume_seen, 1, memory_order_release);
+    return 1234;
+}
+
+static void stored_future_await_resumes_fresh_root_continuation(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 912, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    atomic_store_explicit(
+        &logical_send_resume_seen, 0, memory_order_release);
+
+    const int64_t result = oreslang_source_actor_await_send_future(
+        future, stored_send_resume_probe, UINT64_C(0x5eed));
+    CHECK(result == 1234);
+    CHECK(atomic_load_explicit(
+        &logical_send_resume_seen, memory_order_acquire) == 1);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_LOGICAL_RESUME_PASS fresh_root_turn=1 trace_handle=1\n");
+}
+
 static void stored_future_cancel_wins_only_while_pending(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -395,10 +435,12 @@ int main(void) {
     atomic_init(&carrier_probe_actor, (uintptr_t)0);
     atomic_init(&carrier_probe_status, -1);
     atomic_init(&foreign_probe_status, -1);
+    atomic_init(&logical_send_resume_seen, 0);
 
     capacity_release_admits_waiter();
     stored_future_starts_before_await_and_progresses();
     stale_source_future_pointer_never_aliases_new_future();
+    stored_future_await_resumes_fresh_root_continuation();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
     bounded_waiter_cohort_rejects_before_pin();
