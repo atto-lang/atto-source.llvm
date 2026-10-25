@@ -175,9 +175,9 @@ int ores_native_actor_scheduler_terminal_state(
     OresNativeActorScheduler* scheduler,
     OresNativeActorRef actor,
     OresNativeActorTerminalState* output);
-/* Trusted external supervisor barrier: block only the host caller until
- * the selected stopped actor drains. This is NOT a guest await/Future;
- * never invoke it on a scheduler worker/actor carrier. */
+/* Trusted external supervisor barrier: block only a non-carrier host caller
+ * until the selected stopped actor drains. This is NOT a guest await/Future;
+ * carriers of ANY scheduler are rejected, including foreign schedulers. */
 int ores_native_actor_scheduler_wait_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Handler runs on the scheduler worker pool, never on the submitting carrier.
@@ -278,7 +278,8 @@ int ores_native_actor_scheduler_submit(
     OresNativeActorScheduler* scheduler, size_t actor_index, uint64_t payload);
 /* No new tasks after retirement, but previously accepted tasks drain. */
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
-/* Wait for every accepted callback to complete; may not be called from its worker. */
+/* Wait for every accepted callback to complete; external host threads only.
+ * Any scheduler's actor carrier is rejected to prevent cross-pool deadlocks. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
@@ -298,6 +299,7 @@ int ores_native_actor_scheduler_current_execution_context(
  * Caller must fence the scheduler's lifetime. */
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
+ * May join OS workers: no scheduler's actor carrier may invoke this API.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
