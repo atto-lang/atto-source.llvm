@@ -122,6 +122,14 @@ int ores_native_vm_stop(
  * an already-active turn and lifecycle CONTROL. */
 int ores_native_vm_stop_sealed(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Trusted runtime physical-resource loan for the exact VM ActorRef. A retain
+ * that wins before STOP delays poll_done()/wait_done(); STOP winning first
+ * rejects the retain. Release is valid after STOP and is generation-fenced.
+ * These are runtime plumbing hooks, not guest-callable ActorRef methods. */
+int ores_native_vm_actor_resource_retain(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+int ores_native_vm_actor_resource_release(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */
