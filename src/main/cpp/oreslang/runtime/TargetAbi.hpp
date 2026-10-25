@@ -23,6 +23,9 @@ public:
             return {"x86_64-unknown-linux-gnu", 64, "little", "sysv", "unimplemented"};
         if (triple == "aarch64-unknown-linux-gnu")
             return {"aarch64-unknown-linux-gnu", 64, "little", "aapcs64", "unimplemented"};
+        if (triple == "aarch64-unknown-linux-android24")
+            return {"aarch64-unknown-linux-android24", 64, "little", "aapcs64",
+                    "experimental-android-aarch64-scalar-ir"};
         if (triple == "i686-unknown-linux-gnu")
             return {"i686-unknown-linux-gnu", 32, "little", "sysv", "unimplemented"};
         if (triple == "armv7-unknown-linux-gnueabihf")
@@ -40,6 +43,10 @@ public:
 
     bool experimental_wasm32_ir() const noexcept {
         return emission_ == "experimental-wasm32-ir";
+    }
+
+    bool experimental_android_aarch64_scalar_ir() const noexcept {
+        return emission_ == "experimental-android-aarch64-scalar-ir";
     }
 
     std::uint64_t max_contiguous_bytes() const noexcept {
