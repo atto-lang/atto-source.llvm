@@ -129,6 +129,21 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+
+int oreslang_source_actor_test_set_async_waiters(
+        void* opaque, size_t waiters) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || waiters > ORES_SOURCE_SEND_ASYNC_MAX_WAITERS) return 0;
+    group_lock();
+    const int ok = instance->magic == SOURCE_ACTOR_MAGIC
+        && group.vm
+        && instance->ref.actor_slot < group.next_slot
+        && group.actors[instance->ref.actor_slot] == instance
+        && instance->async_waiters == 0;
+    if (ok) instance->async_waiters = waiters;
+    group_unlock();
+    return ok;
+}
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -673,6 +688,15 @@ int oreslang_source_actor_await_send_async_checked(
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
     }
 
+    /*
+     * The interim source bridge parks an outer host thread per pending
+     * producer, so keep the cohort bounded exactly like the Java runtime.
+     * Refuse before pinning the actor or entering scheduler wait_send.
+     */
+    if (instance->async_waiters >= ORES_SOURCE_SEND_ASYNC_MAX_WAITERS) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
     ++instance->async_waiters;
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = instance->ref;
