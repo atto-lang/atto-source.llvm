@@ -221,6 +221,24 @@ define mtd double on Code(): int { return self + self; }
 """,
                 "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED",
             ),
+            (
+                "trait_parameter_erasure",
+                """declare type Code = int with min 0 and max 5;
+declare trait Api as
+  fnc read(Code value): int;
+end
+""",
+                "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED",
+            ),
+            (
+                "interface_return_erasure",
+                """declare type Code = int with min 0 and max 5;
+declare interface Api as
+  fnc read(): Code;
+end
+""",
+                "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED",
+            ),
         ]
         negative_path = root / "negative.ores"
         for label, source, diagnostic in negatives:
@@ -232,7 +250,7 @@ define mtd double on Code(): int { return self + self; }
 
     print(
         "PASS native constraint descriptor parity: 7 positive metadata cases, "
-        "3 shared golden vectors, and 11 fail-closed negatives"
+        "3 shared golden vectors, and 13 fail-closed negatives"
     )
     return 0
 
