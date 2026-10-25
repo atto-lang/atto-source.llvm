@@ -13,7 +13,15 @@ namespace oreslang {
 template <typename ActorContainer>
 void verify_sealed_actor_state_shape(const ActorContainer& actors) {
     for (const auto& actor : actors) {
-        if (!actor.sealed_state) continue;
+        // A parser-bypassing AST must not route a sealed-state capability
+        // through the legacy handler, whose return is dereferenced directly.
+        if (!actor.sealed_state) {
+            const auto& legacy = actor.on_message;
+            if (legacy.actor_state_loan || legacy.parameters.size() != 1 ||
+                    !legacy.result || legacy.returns_void)
+                throw std::runtime_error("legacy actor contains invalid sealed-state authority or return");
+            continue;
+        }
         const auto& method = actor.on_message;
         if (method.name != "on_message" || !method.exported ||
                 method.returns_void ||
