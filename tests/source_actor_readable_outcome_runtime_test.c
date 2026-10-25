@@ -99,26 +99,22 @@ static void run_cancelled(void) {
 }
 
 static void run_failed_admission(void) {
-    int pipefd[2] = {-1, -1};
-    check(pipe(pipefd) == 0);
-    const int flags = fcntl(pipefd[0], F_GETFL);
-    check(flags >= 0);
-    check(fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK) == 0);
-    const int closed_fd = pipefd[0];
-    close(pipefd[0]);
-
     void* actor = oreslang_source_actor_spawn(
         actor_init, actor_message, 1);
     check(actor != NULL);
 
+    /*
+     * INT32_MAX is admitted by the source ABI but cannot be a live process FD
+     * here. Unlike a recently closed low fd, lazy reactor startup cannot reuse
+     * it and accidentally turn the failure test into a valid watch.
+     */
     const int64_t result = oreslang_source_actor_await_readable(
-        actor, closed_fd, resumed_failed, UINT64_C(0x7171));
+        actor, INT32_MAX, resumed_failed, UINT64_C(0x7171));
     check(result == 45);
 
     OresNativeExecutionHandle outside = {0, 0};
     check(!oreslang_source_actor_current_execution_handle(&outside));
 
-    close(pipefd[1]);
     oreslang_source_actor_stop(actor);
 }
 
