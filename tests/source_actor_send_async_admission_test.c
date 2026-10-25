@@ -12,7 +12,7 @@
 static atomic_int first_entered;
 static atomic_int release_first;
 static atomic_int block_first;
-static void* carrier_probe_actor;
+static atomic_uintptr_t carrier_probe_actor;
 static atomic_int carrier_probe_status;
 
 static void init_actor(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
@@ -35,9 +35,11 @@ static int64_t carrier_probe_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
         int64_t payload) {
     (void)heap; (void)domain; (void)epoch;
-    CHECK(carrier_probe_actor != NULL);
+    void* actor = (void*)atomic_load_explicit(
+        &carrier_probe_actor, memory_order_acquire);
+    CHECK(actor != NULL);
     const int status = oreslang_source_actor_await_send_async_checked(
-        carrier_probe_actor, payload + 1);
+        actor, payload + 1);
     atomic_store_explicit(
         &carrier_probe_status, status, memory_order_release);
     return payload;
@@ -171,13 +173,14 @@ static void stop_wakes_full_waiter_as_terminated(void) {
 }
 
 static void carrier_call_fails_would_deadlock(void) {
-    carrier_probe_actor = NULL;
+    atomic_store_explicit(&carrier_probe_actor, (uintptr_t)0, memory_order_release);
     atomic_store_explicit(&carrier_probe_status, -1, memory_order_release);
     void* actor = oreslang_source_actor_spawn(
         init_actor, carrier_probe_message, 1);
     CHECK(actor != NULL);
     wait_ready(actor);
-    carrier_probe_actor = actor;
+    atomic_store_explicit(
+        &carrier_probe_actor, (uintptr_t)actor, memory_order_release);
 
     CHECK(oreslang_source_actor_try_send_checked(actor, 5)
         == ORES_NATIVE_SEND_ACCEPTED);
@@ -189,7 +192,8 @@ static void carrier_call_fails_would_deadlock(void) {
         &carrier_probe_status, memory_order_acquire)
         == ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK);
     oreslang_source_actor_stop(actor);
-    carrier_probe_actor = NULL;
+    atomic_store_explicit(
+        &carrier_probe_actor, (uintptr_t)0, memory_order_release);
     fprintf(stderr, "SOURCE_SEND_ASYNC_DEADLOCK_PASS carrier_rejected=1\n");
 }
 
@@ -197,6 +201,7 @@ int main(void) {
     atomic_init(&first_entered, 0);
     atomic_init(&release_first, 0);
     atomic_init(&block_first, 0);
+    atomic_init(&carrier_probe_actor, (uintptr_t)0);
     atomic_init(&carrier_probe_status, -1);
 
     capacity_release_admits_waiter();
