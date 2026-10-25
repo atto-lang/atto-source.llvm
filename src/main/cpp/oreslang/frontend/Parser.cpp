@@ -2110,6 +2110,10 @@ private:
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "send_async" && token_.text == "(") {
+                fail("native send_async requires direct await; storable Future<void> lowering is not implemented");
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
                 if (!value.done_await_actor.empty())
