@@ -36,6 +36,7 @@ typedef struct {
     uint64_t generation;
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
+    uint64_t abandoned_user_messages;
     OresNativeActorTerminationKind requested_terminal_kind;
     unsigned terminal_valid;
     OresNativeActorTerminalState terminal;
@@ -134,12 +135,18 @@ static void publish_terminal_locked(
         abort();
     if (lane->processed_user_messages > lane->accepted_user_messages)
         abort();
+    if (lane->abandoned_user_messages
+            > lane->accepted_user_messages - lane->processed_user_messages)
+        abort();
+    if (lane->processed_user_messages + lane->abandoned_user_messages
+            != lane->accepted_user_messages)
+        abort();
     lane->terminal = (OresNativeActorTerminalState){
         .actor = {s->domain, (uint64_t)actor_index, lane->generation},
         .kind = lane->requested_terminal_kind,
         .accepted_user_messages = lane->accepted_user_messages,
         .processed_user_messages = lane->processed_user_messages,
-        .abandoned_user_messages = 0,
+        .abandoned_user_messages = lane->abandoned_user_messages,
         .abandoned_control_messages = 0,
     };
     lane->terminal_valid = 1;
@@ -707,24 +714,73 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     unlock(s);
     return n;
 }
-int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
-                                     OresNativeActorRef actor) {
-    if (!s) return 0;
-    lock(s);
-    if (!matching(s, actor) || s->actors[actor.actor_slot].retired) {
-        unlock(s); return 0;
-    }
+static int stop_locked(
+        OresNativeActorScheduler* s,
+        OresNativeActorRef actor,
+        int abandon_queued_data) {
+    if (!matching(s, actor) || s->actors[actor.actor_slot].retired)
+        return 0;
+
     ActorLane* lane = &s->actors[actor.actor_slot];
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
+
+    if (abandon_queued_data && lane->queued) {
+        const size_t abandoned = lane->queued;
+        if (s->reserved_executions < abandoned || s->outstanding < abandoned)
+            abort();
+        if (lane->abandoned_user_messages > UINT64_MAX - abandoned)
+            abort();
+
+        /*
+         * A lane remains counted as runnable while an active turn or CONTROL
+         * envelope exists. Only an idle DATA-only lane disappears from the
+         * runnable-lane set when its queued user mail is sealed away.
+         */
+        if (!lane->active && !lane->has_control) {
+            if (!s->runnable_lanes) abort();
+            --s->runnable_lanes;
+        }
+
+        lane->head = lane->tail;
+        lane->queued = 0;
+        lane->abandoned_user_messages += (uint64_t)abandoned;
+        s->reserved_executions -= abandoned;
+        s->outstanding -= abandoned;
+    }
+
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
     if (!lane->active && !lane->queued && !lane->has_control) {
         if (!ores_execution_retired(&lane->authority, lane->generation)) abort();
         publish_terminal_locked(s, (size_t)actor.actor_slot);
         pthread_cond_broadcast(&s->drained);
+    } else if (!s->outstanding) {
+        /*
+         * Defensive wake for accounting bugs: CONTROL/active work should keep
+         * outstanding nonzero, but never strand a waiter if the invariant is
+         * strengthened later.
+         */
+        pthread_cond_broadcast(&s->drained);
     }
-    unlock(s);
     return 1;
+}
+
+int ores_native_actor_scheduler_stop(OresNativeActorScheduler* s,
+                                     OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const int ok = stop_locked(s, actor, 0);
+    unlock(s);
+    return ok;
+}
+
+int ores_native_actor_scheduler_stop_sealed(OresNativeActorScheduler* s,
+                                            OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const int ok = stop_locked(s, actor, 1);
+    unlock(s);
+    return ok;
 }
 int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {

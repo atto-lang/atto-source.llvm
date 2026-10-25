@@ -51,6 +51,11 @@ static int64_t resumed(void* actor) {
     check(continuations[0].record.boundary
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     check(continuations[0].record.source_token == UINT64_C(0x1234));
+    /* A real actor Future must commit READY before the root continuation
+     * can claim its physical CONTROL turn. Legacy PENDING trace claims are
+     * deliberately insufficient for this guest await execution path. */
+    check(continuations[0].record.state == ORES_CONTINUATION_CLAIMED);
+    check(continuations[0].record.code_generation == 1);
 
     oreslang_source_actor_send(actor, 1);
     oreslang_source_actor_send(actor, 2);
