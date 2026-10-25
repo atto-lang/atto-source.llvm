@@ -10,6 +10,17 @@ namespace {
  * pinned backend remains alive across concurrent retirement and host close.
  * No dynamically allocated operation frame or guest callback is involved.
  */
+static bool on_vm_actor_carrier(OresNativeVM* vm) noexcept {
+    if (!vm) return false;
+    OresNativeExecutionContext current{};
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        if (ores_native_vm_current_execution_context(
+                vm, static_cast<enum OresNativeVMDomain>(i), &current))
+            return true;
+    }
+    return false;
+}
+
 class NioBackendLease final {
 public:
     explicit NioBackendLease(OresNativeVM* vm)
@@ -55,25 +66,31 @@ extern "C" size_t ores_native_vm_nio_started(OresNativeVM* vm) {
 }
 extern "C" int ores_native_vm_nio_try_watch(
     OresNativeVM* vm, int fd, uint32_t events, OresNativeNioWatch* output) {
+    // Bare VM NIO is trusted outer-host plumbing. Actor/source lowering must
+    // use an actor-owned resource-loan bridge; fail closed if a carrier tries
+    // to bypass physical DONE ownership through this host-only entry point.
+    if (on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     return backend ? ores_native_nio_try_watch(backend, fd, events, output) : 0;
 }
 extern "C" int ores_native_vm_nio_try_cancel(
     OresNativeVM* vm, OresNativeNioWatch watch) {
+    if (on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     return backend ? ores_native_nio_try_cancel(backend, watch) : 0;
 }
 extern "C" int ores_native_vm_nio_try_pop(
     OresNativeVM* vm, OresNativeNioCompletion* output) {
+    if (on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     return backend ? ores_native_nio_try_pop(backend, output) : 0;
 }
 extern "C" size_t ores_native_vm_nio_try_pop_batch(
     OresNativeVM* vm, OresNativeNioCompletion* output, size_t capacity) {
-    if (!output || capacity == 0) return 0;
+    if (!output || capacity == 0 || on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
@@ -95,6 +112,7 @@ extern "C" int ores_native_vm_nio_completion_fd(
 }
 extern "C" void ores_native_vm_nio_drain_signal(
     OresNativeVM* vm, size_t reactor) {
+    if (on_vm_actor_carrier(vm)) return;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (backend) ores_native_nio_drain_completion_signal(backend, reactor);
