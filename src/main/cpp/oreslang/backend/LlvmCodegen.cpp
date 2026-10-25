@@ -707,6 +707,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         for (const auto& s : fn.caught_throw_defers) scan_statement(s);
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        scan_string(fn.send_future_payload.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
         scan_string(fn.result.get());
@@ -865,6 +866,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
+        sourceSendAsyncStart, sourceAwaitSendFuture,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -891,6 +893,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceSendAsyncAwait = module.getOrInsertFunction(
             "oreslang_source_actor_await_send_async",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceSendAsyncStart = module.getOrInsertFunction(
+            "oreslang_source_actor_send_async_start",
+            llvm::FunctionType::get(native_ptr, {native_ptr, i64}, false));
+        sourceAwaitSendFuture = module.getOrInsertFunction(
+            "oreslang_source_actor_await_send_future",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
@@ -1074,6 +1082,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
+
+        llvm::Value* send_future_ref = nullptr;
+        if (!fn.send_future_name.empty()) {
+            if (!fn.send_future_payload)
+                throw std::runtime_error("send_async Future payload missing at codegen");
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            llvm::Value* payload = lower(
+                *fn.send_future_payload,
+                builder,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            send_future_ref = builder.CreateCall(
+                sourceSendAsyncStart,
+                {actorRefs.at(fn.send_future_actor), payload},
+                fn.send_future_name + ".future.ref");
+        }
+
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
@@ -1697,7 +1726,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
          * path blocks an actor carrier.
          */
         llvm::Value* awaited_result = nullptr;
-        if (!fn.ready_await_actor.empty()) {
+        if (!fn.send_future_name.empty()) {
+            if (!send_future_ref || !fn.send_future_await_offset
+                    || fn.send_future_await_action_index > fn.actor_actions.size())
+                throw std::runtime_error("invalid send_async Future lowering state");
+
+            auto emit_actor_action = [&](const ActorAction& action) {
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        builder,
+                        i64,
+                        storage,
+                        field_storage,
+                        declarations,
+                        &region_moves);
+                    builder.CreateCall(
+                        send.await_admission ? sourceSendAsyncAwait : sourceSend,
+                        {actorRefs.at(send.reference), payload});
+                } else {
+                    builder.CreateCall(
+                        sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+                }
+            };
+
+            for (std::size_t i = 0; i < fn.send_future_await_action_index; ++i)
+                emit_actor_action(fn.actor_actions[i]);
+
+            builder.CreateCall(sourceAwaitSendFuture, {send_future_ref});
+
+            for (std::size_t i = fn.send_future_await_action_index;
+                    i < fn.actor_actions.size(); ++i)
+                emit_actor_action(fn.actor_actions[i]);
+        } else if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
                 llvm::FunctionType::get(i64, {native_ptr}, false);
             auto* resume = llvm::Function::Create(
