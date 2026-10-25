@@ -189,6 +189,33 @@ static void stored_future_starts_before_await_and_progresses(void) {
         "SOURCE_SEND_ASYNC_FUTURE_PASS eager_start=1 independent_progress=1\n");
 }
 
+static void stale_source_future_pointer_never_aliases_new_future(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    void* first = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 911, &first) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(first != NULL);
+    CHECK(oreslang_source_actor_await_send_future_checked(first)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+
+    void* second = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 912, &second) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(second != NULL);
+    CHECK(second != first);
+    CHECK(oreslang_source_actor_await_send_future_checked(first)
+        == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    CHECK(oreslang_source_actor_await_send_future_checked(second)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr, "SOURCE_SEND_ASYNC_STALE_HANDLE_PASS nonrecycled=1\n");
+}
+
 static void stored_future_cancel_wins_only_while_pending(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -367,6 +394,7 @@ int main(void) {
 
     capacity_release_admits_waiter();
     stored_future_starts_before_await_and_progresses();
+    stale_source_future_pointer_never_aliases_new_future();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
     bounded_waiter_cohort_rejects_before_pin();
