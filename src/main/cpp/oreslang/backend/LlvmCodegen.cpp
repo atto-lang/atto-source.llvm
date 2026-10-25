@@ -947,8 +947,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name));
+        // Overloaded source selectors erase the hidden receiver. Keep the
+        // internal ABI parameter list and lookup count unchanged.
+        const std::size_t source_arity = native_source_value_arity(
+            fn.parameters.size(), !fn.method_owner.empty());
         const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, fn.parameters.size())
+            ? native_function_slot(base_symbol, source_arity)
             : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
