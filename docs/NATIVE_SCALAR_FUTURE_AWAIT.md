@@ -3,8 +3,11 @@
 **Status: host-only prerequisite; guest `Future<T>`, `async fnc`, and `await` remain compiler-rejected.**
 
 The `NativeScalarFutureAwait` frame carries one signed 64-bit scalar value or
-a positive failure code. It is pinned in a shared allocation, qualified by a
-four-part `(runtime_id, actor_id, generation, future_id)` ticket. Competing
+a positive failure code. It is pinned in a shared allocation and carries four
+numeric routing/debug labels `(runtime_id, actor_id, generation, future_id)`
+plus an opaque per-frame capability. The numeric tuple is deliberately not
+authority: two simultaneously live frames may reuse the same `future_id`
+without accepting each other's settle/cancel/schedule tickets. Competing
 completion, failure and cancellation transitions have exactly one winner.
 The frame state is atomically arbitrated: `pending -> settling -> ready ->
 scheduled -> running -> completed`, with `cancelled` terminal from pending,
@@ -52,8 +55,9 @@ This host-only API must never be interpreted as permission to suspend with
 an unpinned actor-owned borrow or to execute a callback on the producer thread.
 
 The `native_scalar_future_single_winner_control` CTest covers stale
-generation, foreign owner, exactly-once completion, fail/cancel race,
-CONTROL backpressure, revocation before execution, and no inline resume.
+generation, foreign owner, duplicate numeric Future-ID capability isolation,
+exactly-once completion, fail/cancel race, CONTROL backpressure, revocation
+before execution, and no inline resume.
 The acceptance path to guest parity still requires:
 
 1. Typed source `Future<T>` and `async` admission with distinct guest ABIs.

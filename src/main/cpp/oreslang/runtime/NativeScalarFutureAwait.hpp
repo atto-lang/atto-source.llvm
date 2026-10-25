@@ -17,6 +17,10 @@ struct NativeScalarFutureId {
     std::uint64_t actor_id;
     std::uint64_t generation;
     std::uint64_t future_id;
+    // Opaque host-only frame capability. Numeric identity is routing/debug
+    // metadata, not authority: two live frames may accidentally reuse the
+    // same future_id and must still reject each other's tickets.
+    std::shared_ptr<const void> frame_capability;
 };
 
 // No waiting on a carrier, no guest callback on a producer thread. The only
@@ -200,15 +204,20 @@ public:
     }
 
 private:
+    struct Capability final {};
+
     NativeScalarFutureAwait(const NativeActorRef& owner, std::uint64_t future_id)
         : owner_(owner),
-          id_{owner.runtime_id(), owner.actor_id(), owner.generation(), future_id} {}
+          id_{owner.runtime_id(), owner.actor_id(), owner.generation(), future_id,
+              std::make_shared<Capability>()} {}
 
-    bool valid(NativeScalarFutureId ticket) const noexcept {
+    bool valid(const NativeScalarFutureId& ticket) const noexcept {
         return ticket.runtime_id == id_.runtime_id
             && ticket.actor_id == id_.actor_id
             && ticket.generation == id_.generation
-            && ticket.future_id == id_.future_id;
+            && ticket.future_id == id_.future_id
+            && ticket.frame_capability
+            && ticket.frame_capability == id_.frame_capability;
     }
 
     bool settle(NativeScalarFutureId ticket, Result outcome) noexcept {

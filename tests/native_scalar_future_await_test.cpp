@@ -63,6 +63,46 @@ int main() {
           "cancelled CONTROL not drained");
     check(resumed == 1, "cancelled guest callback executed");
 
+    // Numeric Future IDs are routing/debug labels, not capabilities. Two
+    // simultaneously live frames may accidentally reuse the same numeric ID;
+    // a ticket issued by one frame must not settle, cancel, or schedule the
+    // other frame.
+    auto duplicate_a = NativeScalarFutureAwait::open(owner, 21);
+    auto duplicate_b = NativeScalarFutureAwait::open(owner, 21);
+    const auto duplicate_a_ticket = duplicate_a->id();
+    const auto duplicate_b_ticket = duplicate_b->id();
+    check(duplicate_a_ticket.runtime_id == duplicate_b_ticket.runtime_id
+              && duplicate_a_ticket.actor_id == duplicate_b_ticket.actor_id
+              && duplicate_a_ticket.generation == duplicate_b_ticket.generation
+              && duplicate_a_ticket.future_id == duplicate_b_ticket.future_id,
+          "duplicate Future numeric identity setup failed");
+    check(!duplicate_b->complete(duplicate_a_ticket, 91),
+          "duplicate numeric Future ticket settled another frame");
+    check(!duplicate_b->cancel(duplicate_a_ticket),
+          "duplicate numeric Future ticket cancelled another frame");
+    check(duplicate_b->complete(duplicate_b_ticket, 92),
+          "own frame ticket did not settle duplicate-id Future");
+    int duplicate_resumed = 0;
+    check(!duplicate_b->try_schedule(
+              duplicate_a_ticket, group, owner,
+              [&](const auto&) { ++duplicate_resumed; }),
+          "duplicate numeric Future ticket scheduled another frame");
+    check(duplicate_b->try_schedule(
+              duplicate_b_ticket, group, owner,
+              [&](const NativeScalarFutureAwait::Result& outcome) {
+                  check(outcome.success && outcome.value == 92,
+                        "duplicate-id own result corrupt");
+                  ++duplicate_resumed;
+              }),
+          "own duplicate-id Future ticket did not schedule");
+    check(group.run_control_turn(owner)
+              == NativeActorGroup::ControlTurn::executed,
+          "duplicate-id CONTROL did not run");
+    check(duplicate_resumed == 1,
+          "duplicate-id Future did not resume exactly once");
+    check(duplicate_a->cancel(duplicate_a_ticket),
+          "unused duplicate-id Future did not cancel with own ticket");
+
     // A failed value must be delivered (not treated as cancellation), and
     // a future ID from the same actor must not authorize an unrelated frame.
     auto failed = NativeScalarFutureAwait::open(owner, 19);
