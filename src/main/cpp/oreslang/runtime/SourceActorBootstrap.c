@@ -968,6 +968,170 @@ int64_t oreslang_source_actor_await_done(
     return result;
 }
 
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+int64_t oreslang_source_actor_await_readable(
+        void* opaque,
+        int64_t fd,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(continuation != NULL && fd >= 0 && fd <= INT32_MAX);
+    ensure(source_token != UINT64_MAX);
+
+    /* Trusted top-level glue may block on the reactor completion signal. */
+    OresNativeExecutionContext carrier = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+
+    ReadableAwaitFrame frame = {
+        .continuation = continuation,
+        .actor = instance,
+        .source_token = source_token,
+        .fd = (int)fd
+    };
+    ensure(pthread_cond_init(&frame.completed, NULL) == 0);
+
+    group_lock();
+    ensure(group.vm && group.root_ref.scheduler_domain
+        && group.pending_ready == NULL
+        && group.pending_done == NULL
+        && group.pending_readable == NULL);
+    if (!group.nio_enabled) {
+        ensure(ores_native_vm_enable_nio(group.vm, 1, 0, 1));
+        group.nio_enabled = 1;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        ensure(ores_native_vm_nio_started(group.vm) == 0);
+#endif
+    }
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorRef root = group.root_ref;
+    group.pending_readable = &frame;
+
+    /*
+     * First root turn persists the logical continuation frame. Kernel
+     * readiness is not admitted until this generation-checked link exists.
+     */
+    ensure(ores_native_vm_publish_control(
+        vm,
+        ORES_NATIVE_VM_MAIN,
+        root,
+        SOURCE_ROOT_CONTROL_READABLE_SUSPEND));
+    while (!frame.suspend_recorded)
+        ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
+
+    ensure(ores_native_store_handle_valid(frame.link.continuation));
+    const uint64_t continuation_slot = frame.link.continuation.slot;
+    const uint64_t continuation_generation = frame.link.continuation.generation;
+    const uint64_t descriptor_generation = source_token + UINT64_C(1);
+    group_unlock();
+
+    /*
+     * #994 reserves the scheduler wake first, then the exact root ActorRef NIO
+     * loan. The source offset + 1 is a nonzero descriptor generation for this
+     * first one-site compiler slice; the continuation store contributes the
+     * independent slot/generation capability.
+     */
+    const int admitted = ores_native_vm_nio_try_watch_actor_await(
+        vm,
+        ORES_NATIVE_VM_MAIN,
+        root,
+        (int)fd,
+        EPOLLIN,
+        continuation_slot,
+        continuation_generation,
+        SOURCE_READABLE_CODE_GENERATION,
+        descriptor_generation,
+        &frame.awaiting);
+
+    if (!admitted) {
+        group_lock();
+        ensure(group.pending_readable == &frame);
+        ensure(ores_native_continuation_store_cancel(
+            group.continuations, frame.link.continuation));
+        group.pending_readable = NULL;
+        ensure(ores_native_continuation_store_release(
+            group.continuations, frame.link.continuation));
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        ensure(0 && "source readable await admission failed");
+    }
+    frame.admitted = 1;
+
+    const int completion_fd = ores_native_vm_nio_completion_fd(
+        vm, (size_t)frame.awaiting.watch.watch.reactor);
+    ensure(completion_fd >= 0);
+
+    OresNativeActorNioCompletion completion = {0};
+    for (;;) {
+        if (ores_native_vm_nio_try_pop_actor(vm, &completion))
+            break;
+
+        struct pollfd ready = {
+            .fd = completion_fd,
+            .events = POLLIN,
+            .revents = 0
+        };
+        int status;
+        do {
+            status = poll(&ready, 1, -1);
+        } while (status < 0 && errno == EINTR);
+        ensure(status == 1);
+        ensure((ready.revents & (POLLERR | POLLNVAL)) == 0);
+        ores_native_vm_nio_drain_signal(
+            vm, (size_t)frame.awaiting.watch.watch.reactor);
+    }
+
+    const OresNativeActorNioAwaitDispatchStatus dispatched =
+        ores_native_vm_nio_dispatch_actor_await(vm, completion);
+    if (dispatched != ORES_NATIVE_NIO_AWAIT_PUBLISHED) {
+        /* STOP-before-transfer has no wake callback. Retire the persisted
+         * continuation here so trusted-main never waits forever. */
+        group_lock();
+        ensure(group.pending_readable == &frame && !frame.done);
+        ensure(ores_native_continuation_store_cancel(
+            group.continuations, frame.link.continuation));
+        frame.outcome = 3;
+        frame.done = 1;
+        ensure(pthread_cond_signal(&frame.completed) == 0);
+        group_unlock();
+    }
+
+    group_lock();
+    while (!frame.done)
+        ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
+
+    ensure(group.pending_readable == &frame);
+    group.pending_readable = NULL;
+    const int outcome = frame.outcome;
+    const int64_t result = frame.result;
+    ensure(ores_native_continuation_store_release(
+        group.continuations, frame.link.continuation));
+    ensure(ores_native_execution_context_store_live(group.executions) == 0);
+    ensure(ores_native_continuation_store_live(group.continuations) == 0);
+    group_unlock();
+
+    ensure(pthread_cond_destroy(&frame.completed) == 0);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_AWAIT_READABLE_TRACE_PASS outcome=%d fd=%d continuation_slot=%u continuation_generation=%u wake_slot=%llu wake_generation=%llu root_slot=%u source_token=%llu\n",
+        outcome,
+        (int)fd,
+        frame.link.continuation.slot,
+        frame.link.continuation.generation,
+        (unsigned long long)frame.awaiting.wake.slot,
+        (unsigned long long)frame.awaiting.wake.slot_generation,
+        SOURCE_GROUP_ROOT_SLOT,
+        (unsigned long long)source_token);
+#endif
+
+    /* Typed cancellation/I/O error projection is deliberately not source
+     * lowered yet. The first slice fails closed unless readiness resumed once. */
+    ensure(outcome == 1);
+    return result;
+}
+#endif
+
 int oreslang_source_actor_current_execution_handle(
         OresNativeExecutionHandle* out) {
     if (!out || !ores_native_store_handle_valid(current_source_execution))
