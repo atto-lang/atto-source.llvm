@@ -3841,6 +3841,23 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 60)
 endif()
 
+# #769: host-only synchronous logical snapshot of typed failure ancestry.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-failure-trace-test
+        tests/native_failure_trace_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
+    target_include_directories(oreslang-native-failure-trace-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-failure-trace-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-failure-trace-test PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_failure_trace_capture_and_render COMMAND oreslang-native-failure-trace-test)
+    set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
+endif()
+
 # #170: independently check atomic nested actor adoption, host-only.
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
