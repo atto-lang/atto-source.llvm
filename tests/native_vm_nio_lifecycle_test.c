@@ -141,6 +141,9 @@ typedef struct {
     atomic_int wakes;
     atomic_int wake_outcome;
     atomic_int wake_errors;
+    atomic_int rearm_attempted;
+    atomic_int rearm_accepted;
+    OresNativeActorNioWatch rearm_watch;
     OresNativeActorNioAwait await;
 } OwnedActorNioAwaitProbe;
 
@@ -248,6 +251,18 @@ static void on_owned_actor_nio_wake(
     if (ores_native_vm_actor_is_current_wake(
             probe->vm, probe->domain, forged))
         ++errors;
+
+    if (outcome == ORES_NATIVE_WAKE_READY) {
+        OresNativeActorNioWatch rearm = {0};
+        const int accepted = ores_native_vm_nio_try_watch_actor(
+            probe->vm, probe->domain, probe->actor,
+            probe->fd, EPOLLIN, &rearm);
+        if (accepted) probe->rearm_watch = rearm;
+        atomic_store_explicit(
+            &probe->rearm_accepted, accepted, memory_order_release);
+        atomic_store_explicit(
+            &probe->rearm_attempted, 1, memory_order_release);
+    }
 
     atomic_store_explicit(
         &probe->wake_outcome, (int)outcome, memory_order_release);
@@ -477,6 +492,9 @@ int main(void) {
             .wakes = ATOMIC_VAR_INIT(0),
             .wake_outcome = ATOMIC_VAR_INIT(0),
             .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
             .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
@@ -541,8 +559,25 @@ int main(void) {
         check(atomic_load_explicit(&probe.wake_errors, memory_order_acquire) == 0);
         check(atomic_load_explicit(&probe.wake_outcome, memory_order_acquire)
             == ORES_NATIVE_WAKE_READY);
+        check(atomic_load_explicit(
+            &probe.rearm_attempted, memory_order_acquire));
+        check(atomic_load_explicit(
+            &probe.rearm_accepted, memory_order_acquire));
+        check(probe.rearm_watch.claim_slot != 0);
         check(ores_native_vm_actor_outstanding_wake_loans(
             actor_vm, ORES_NATIVE_VM_MAIN, probe.actor) == 0);
+
+        // The original pipe byte is still readable, so the callback's rearm
+        // should produce a second one-shot READY. Settle its ordinary actor
+        // resource claim explicitly before STOP.
+        OresNativeActorNioCompletion rearmed =
+            await_actor_completion(actor_vm);
+        check(rearmed.io.outcome == ORES_NATIVE_NIO_READY);
+        check(rearmed.io.fd == actor_pipe[0]);
+        check(rearmed.owner.claim_generation
+            == probe.rearm_watch.claim_generation);
+        check(ores_native_vm_nio_ack_actor_completion(
+            actor_vm, rearmed));
 
         check(ores_native_vm_stop_sealed(
             actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
@@ -570,6 +605,9 @@ int main(void) {
             .wakes = ATOMIC_VAR_INIT(0),
             .wake_outcome = ATOMIC_VAR_INIT(0),
             .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
             .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
@@ -644,6 +682,9 @@ int main(void) {
             .wakes = ATOMIC_VAR_INIT(0),
             .wake_outcome = ATOMIC_VAR_INIT(0),
             .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
             .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
@@ -713,6 +754,9 @@ int main(void) {
             .wakes = ATOMIC_VAR_INIT(0),
             .wake_outcome = ATOMIC_VAR_INIT(0),
             .wake_errors = ATOMIC_VAR_INIT(0),
+            .rearm_attempted = ATOMIC_VAR_INIT(0),
+            .rearm_accepted = ATOMIC_VAR_INIT(0),
+            .rearm_watch = {0},
             .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
