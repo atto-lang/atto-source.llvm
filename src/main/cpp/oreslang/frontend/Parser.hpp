@@ -261,6 +261,7 @@ struct Function {
     std::unique_ptr<Expression> send_future_payload;
     std::size_t send_future_submit_offset = 0;
     std::size_t send_future_await_offset = 0;
+    std::size_t send_future_await_action_index = 0;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
