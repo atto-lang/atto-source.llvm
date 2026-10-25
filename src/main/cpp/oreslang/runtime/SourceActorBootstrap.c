@@ -151,6 +151,18 @@ int oreslang_source_actor_ready_status(void* opaque) {
         &instance->startup_state, memory_order_acquire);
 }
 
+typedef struct {
+    OresNativeActorFuture* future;
+    int status;
+} SourceReadyFutureCommit;
+
+static int commit_source_ready_future(void* raw) {
+    SourceReadyFutureCommit* commit = (SourceReadyFutureCommit*)raw;
+    return commit
+        && commit->future
+        && ores_native_actor_future_complete(commit->future, commit->status);
+}
+
 static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
     if (!frame->suspend_recorded) return;
@@ -169,8 +181,21 @@ static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_PENDING) {
-        ensure(ores_native_actor_future_complete(
-            frame->ready_future, future_status));
+        /*
+         * Serialize the fallible Future outcome commit and continuation READY
+         * publication against cancellation under the continuation-store lock.
+         * Both successful readiness and TERMINATED_BEFORE_READY must wake the
+         * root CONTROL lane exactly once; only the Future outcome differs.
+         */
+        SourceReadyFutureCommit commit = {
+            .future = frame->ready_future,
+            .status = future_status
+        };
+        ensure(ores_native_continuation_store_commit_ready(
+            group.continuations,
+            frame->link.continuation,
+            commit_source_ready_future,
+            &commit));
     }
 }
 
@@ -237,7 +262,7 @@ static void root_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin(
         group.executions,
         group.continuations,
         physical.id,

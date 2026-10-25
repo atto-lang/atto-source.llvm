@@ -51,13 +51,14 @@ int ores_native_await_trace_suspend(
     return 1;
 }
 
-int ores_native_await_trace_resume_begin(
+static int resume_begin_checked(
         OresNativeExecutionContextStore* executions,
         OresNativeContinuationStore* continuations,
         OresNativeExecutionId resumed_execution_id,
         OresNativeSuspensionLink link,
         OresNativeExecutionHandle* out_execution,
-        OresNativeExecutionContext* out_context) {
+        OresNativeExecutionContext* out_context,
+        int requires_ready) {
     if (!executions || !continuations || !out_execution
             || resumed_execution_id.runtime_domain == 0
             || resumed_execution_id.execution == 0
@@ -95,8 +96,12 @@ int ores_native_await_trace_resume_begin(
      * which also drops the retained parent; only the claim winner survives.
      */
     OresNativeContinuationRecord claimed;
-    if (!ores_native_continuation_store_try_claim_resume(
-            continuations, link.continuation, &claimed)) {
+    const int claim_ok = requires_ready
+        ? ores_native_continuation_store_try_claim_ready_resume(
+            continuations, link.continuation, &claimed)
+        : ores_native_continuation_store_try_claim_resume(
+            continuations, link.continuation, &claimed);
+    if (!claim_ok) {
         (void)ores_native_execution_context_store_release(
             executions, execution);
         return 0;
@@ -105,6 +110,30 @@ int ores_native_await_trace_resume_begin(
     *out_execution = execution;
     if (out_context) *out_context = context;
     return 1;
+}
+
+int ores_native_await_trace_resume_begin(
+        OresNativeExecutionContextStore* executions,
+        OresNativeContinuationStore* continuations,
+        OresNativeExecutionId resumed_execution_id,
+        OresNativeSuspensionLink link,
+        OresNativeExecutionHandle* out_execution,
+        OresNativeExecutionContext* out_context) {
+    /* Direct host trace bootstrap, not a permission to wake an unresolved Future. */
+    return resume_begin_checked(executions, continuations,
+        resumed_execution_id, link, out_execution, out_context, 0);
+}
+
+int ores_native_await_trace_ready_resume_begin(
+        OresNativeExecutionContextStore* executions,
+        OresNativeContinuationStore* continuations,
+        OresNativeExecutionId resumed_execution_id,
+        OresNativeSuspensionLink link,
+        OresNativeExecutionHandle* out_execution,
+        OresNativeExecutionContext* out_context) {
+    /* A scheduler wake must never claim PENDING or CANCELLED work. */
+    return resume_begin_checked(executions, continuations,
+        resumed_execution_id, link, out_execution, out_context, 1);
 }
 
 int ores_native_await_trace_resume_finish(
