@@ -289,9 +289,9 @@ int ores_native_continuation_store_release(
             unlock_store(store);
             return 0;
         }
-        released_any = 1;
         if (block->refs[lane] > 1) {
             --block->refs[lane];
+            released_any = 1;
             unlock_store(store);
             break;
         }
@@ -303,6 +303,7 @@ int ores_native_continuation_store_release(
             unlock_store(store);
             return released_any;
         }
+        released_any = 1;
 
         const OresNativeExecutionHandle execution = {
             block->execution_slot[lane],
