@@ -40,15 +40,6 @@ static void on_wake(
     }
 }
 
-static Fixture make_fixture() {
-    Fixture f;
-    f.scheduler = ores_native_actor_scheduler_open_with_wakes(
-        2, 1, 1, on_data, nullptr, nullptr, on_wake, &f);
-    // make_fixture returns by value, so callback context cannot point at f.
-    // Callers replace the context by constructing in-place instead.
-    return f;
-}
-
 static void setup(Fixture& f) {
     f.scheduler = ores_native_actor_scheduler_open_with_wakes(
         2, 1, 1, on_data, nullptr, nullptr, on_wake, &f);
