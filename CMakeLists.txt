@@ -1459,6 +1459,24 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_mailbox_completion_model
         COMMAND oreslang-actor-mailbox-completion-model-test)
     set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
+
+    # Bounded send_async admission substrate. This composes mailbox USER credit
+    # with the generation-fenced wake escrow from #939. It is host runtime only:
+    # source payload freezing/lowering and actor-local ownership integration
+    # remain separate gates.
+    add_executable(oreslang-native-async-mailbox-admission-test
+        tests/native_async_mailbox_admission_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-mailbox-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-mailbox-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-async-mailbox-admission-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-async-mailbox-admission-test PRIVATE Threads::Threads)
+    add_test(NAME native_async_mailbox_credit_wake_linearization
+        COMMAND oreslang-native-async-mailbox-admission-test)
+    set_tests_properties(native_async_mailbox_credit_wake_linearization PROPERTIES TIMEOUT 90)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
