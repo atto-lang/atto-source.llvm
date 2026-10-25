@@ -41,7 +41,7 @@ MAVEN_ARTIFACT = re.compile(
     r"(?::[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)?$"
 )
 SAFE_EXECUTABLE = re.compile(
-    r"^(?:python3|mvn|cmake|ctest|g\\+\\+|clang\\+\\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
+    r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
 )
 MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 MAX_FILES = 1024
