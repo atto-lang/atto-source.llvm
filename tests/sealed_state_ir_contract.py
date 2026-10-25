@@ -38,6 +38,14 @@ def main():
     args = parser.parse_args()
     root = pathlib.Path(args.fixtures)
 
+    empty_ir = compile_fixture(args.compiler, root / "sealed-state-empty-positive.ores")
+    require("oreslang_actor_Idle_on_message" in empty_ir,
+            "zero-schema actor missing compiler-generated message handler")
+    require("call i64 @ores_actor_i64_heap_field_read" not in empty_ir,
+            "zero-schema actor emitted a hidden state read")
+    require("call void @ores_actor_i64_heap_field_write" not in empty_ir,
+            "zero-schema actor emitted a hidden state write")
+
     read_ir = compile_fixture(args.compiler, root / "sealed-state-read-positive.ores")
     require("call i64 @ores_actor_i64_heap_field_read" in read_ir,
             "read callback emitted no actor state read")
