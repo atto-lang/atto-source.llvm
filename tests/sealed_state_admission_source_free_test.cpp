@@ -82,6 +82,24 @@ int main() {
     m.actor_state_loan->writes.emplace_back();
     m.actor_state_loan->writes.front().field="count";
     must_admit(std::move(write));
+    // Old scalar actors still compile through their existing handler lane.
+    auto legacy=valid();
+    legacy.front().sealed_state=false;
+    legacy.front().on_message.actor_state_loan.reset();
+    legacy.front().on_message.result=std::make_unique<Expression>();
+    must_admit(std::move(legacy));
+
+    must_reject([](Actor& a){a.sealed_state=false;});
+    must_reject([](Actor& a){a.sealed_state=false;
+        a.on_message.actor_state_loan.reset();});
+    must_reject([](Actor& a){a.sealed_state=false;
+        a.on_message.actor_state_loan.reset();
+        a.on_message.result=std::make_unique<Expression>();
+        a.on_message.parameters.clear();});
+    must_reject([](Actor& a){a.sealed_state=false;
+        a.on_message.actor_state_loan.reset();
+        a.on_message.result=std::make_unique<Expression>();
+        a.on_message.returns_void=true;});
 
     must_reject([](Actor& a){a.on_message.parameters.clear();});
     must_reject([](Actor& a){a.on_message.parameters.emplace_back();});
