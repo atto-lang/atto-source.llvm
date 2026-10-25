@@ -226,7 +226,8 @@ def main():
                         "source-actor-future-void-ready.ores",
                         "source-actor-future-void-double-await.ores",
                         "source-actor-future-void-await-again.ores",
-                        "source-actor-future-void-await-worker-instead.ores"}:
+                        "source-actor-future-void-await-worker-instead.ores",
+                        "source-actor-await-ready-done.ores"}:
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
                 # A runtime declaration or source text alone is not an await:
