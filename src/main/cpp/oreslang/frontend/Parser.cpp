@@ -1005,6 +1005,7 @@ private:
                 loan->result = expression();
             }
             require(")");
+            require(";");
             require("}");
             method.actor_state_loan = std::move(loan);
         } else {
@@ -3580,7 +3581,11 @@ private:
             const std::string& parameter = method.parameters.at(0).name;
             if (actor.sealed_state) {
                 if (!method.actor_state_loan || method.result ||
-                        !method.actor_field_writes.empty())
+                        !method.actor_field_writes.empty() ||
+                        !method.locals.empty() || !method.actor_sends.empty() ||
+                        !method.actor_stops.empty() || !method.actor_actions.empty() ||
+                        !method.statements.empty() || !method.early_returns.empty() ||
+                        !method.actor_spawns.empty())
                     throw std::runtime_error(
                         "sealed actor state requires exactly one scoped state callback");
                 if (!method.has_declared_effects)
