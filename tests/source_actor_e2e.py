@@ -26,6 +26,12 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-two-owned-heaps.ores":
+        sequences = ([1, 2, 3, 4], [5, 6, 7, 8])
+        value = 0
+        for n in sequences[actor_index][:processed]:
+            value = 2 * (value + n)
+        return value
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])

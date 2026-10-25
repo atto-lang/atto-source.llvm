@@ -444,35 +444,41 @@ static void terminal_retirement_waits_for_inflight_owner_to_ack() {
 static void stale_generation_cannot_reuse_a_live_native_actor_inbox() {
     NativeActorGroup old_group(750, 1), newer_group(750, 1);
     auto old_actor = old_group.adopt(750, 9, 1, [] {});
-    auto new_actor = newer_group.adopt(750, 9, 2, [] {});
     CHECK(old_group.mark_ready(old_actor));
+    // The owner registry forbids overlapping live generations. Prove that
+    // fence before recycling the routing identity after physical DONE.
+    bool duplicate_owner = false;
+    try { (void)newer_group.adopt(750, 9, 2, [] {}); }
+    catch (const std::logic_error&) { duplicate_owner = true; }
+    CHECK(duplicate_owner);
+    CHECK(old_group.finalized(old_actor));
+    old_actor.get_done().get();
+    auto new_actor = newer_group.adopt(750, 9, 2, [] {});
     CHECK(newer_group.mark_ready(new_actor));
     Inbox inbox({2, 16}, {2, 16}, {2, 16});
-    inbox.bind_target(old_actor);
-    CHECK(inbox.offer_to(old_actor, Lane::Normal, 5, 8));
+    inbox.bind_target(new_actor);
+    CHECK(inbox.offer_to(new_actor, Lane::Normal, 5, 8));
     int rejected_payload = 17;
     bool rejected = false;
     try {
-        (void)inbox.offer_to(new_actor, Lane::Urgent,
+        (void)inbox.offer_to(old_actor, Lane::Urgent,
                              std::move(rejected_payload), 8);
     } catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected && rejected_payload == 17);
-    CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery&) {
-        CHECK(false && "new generation stole old queued message");
+    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery&) {
+        CHECK(false && "stale generation stole new queued message");
     }) == Inbox::Dispatch::Retired);
     CHECK(inbox.snapshot() == 1 && inbox.used_frames(Lane::Normal) == 1);
     rejected = false;
-    try { inbox.bind_target(new_actor); }
+    try { inbox.bind_target(old_actor); }
     catch (const std::logic_error&) { rejected = true; }
     CHECK(rejected);
-    CHECK(inbox.dispatch_next(old_group, old_actor, [&](Inbox::Delivery& message) {
+    CHECK(inbox.dispatch_next(newer_group, new_actor, [&](Inbox::Delivery& message) {
         CHECK(message.value() == 5 && message.sequence() == 1);
         CHECK(message.acknowledge_released());
     }) == Inbox::Dispatch::User);
     CHECK(inbox.completed_through(1));
-    CHECK(old_group.finalized(old_actor));
     CHECK(newer_group.finalized(new_actor));
-    old_actor.get_done().get();
     new_actor.get_done().get();
     inbox.close();
 }
@@ -828,24 +834,25 @@ static void owned_handle_admission_never_steals_on_rejection_or_constructor_faul
     // without touching the sender's still-owned object.
     NativeActorGroup original(751, 1), replacement(751, 1);
     auto original_ref = original.adopt(751, 11, 1, [] {});
+    CHECK(original.mark_ready(original_ref));
+    CHECK(original.finalized(original_ref));
+    original_ref.get_done().get();
     auto replacement_ref = replacement.adopt(751, 11, 2, [] {});
-    CHECK(original.mark_ready(original_ref) && replacement.mark_ready(replacement_ref));
+    CHECK(replacement.mark_ready(replacement_ref));
     Inbox target({1, 8}, {1, 8}, {1, 8});
-    target.bind_target(original_ref);
+    target.bind_target(replacement_ref);
     auto owned = std::make_unique<int>(7);
     bool invalid = false;
-    try { (void)target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8); }
+    try { (void)target.offer_owned_to(original_ref, Lane::Urgent, owned, 8); }
     catch (const std::logic_error&) { invalid = true; }
     CHECK(invalid && owned && *owned == 7);
     CHECK(target.snapshot() == 0);
-    CHECK(target.offer_owned_to(original_ref, Lane::Urgent, owned, 8));
+    CHECK(target.offer_owned_to(replacement_ref, Lane::Urgent, owned, 8));
     CHECK(!owned);
     auto accepted = target.try_receive();
     CHECK(accepted && accepted->value() == 7 && accepted->acknowledge_released());
     CHECK(target.completed_through(1));
-    CHECK(original.finalized(original_ref));
     CHECK(replacement.finalized(replacement_ref));
-    original_ref.get_done().get();
     replacement_ref.get_done().get();
     target.close();
 }
