@@ -749,19 +749,23 @@ if(BUILD_TESTING)
     # Source files are exact Git blobs shared with canonical conformance.
     oreslang_contract_test(native_opaque_any_explicitly_unsupported
         authority-guard-any-pending.ores
-        --diagnostic "native opaque any/unknown unsupported")
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
     oreslang_contract_test(native_opaque_unknown_explicitly_unsupported
         authority-guard-unknown-pending.ores
-        --diagnostic "native opaque any/unknown unsupported")
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
 
     # Return-position admission must also fail closed; a parameter-only
     # parser guard would not protect opaque return value ownership.
     oreslang_contract_test(native_opaque_any_return_explicitly_unsupported
         authority-return-any-pending.ores
-        --diagnostic "native opaque any/unknown unsupported")
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
     oreslang_contract_test(native_opaque_unknown_return_explicitly_unsupported
         authority-return-unknown-pending.ores
-        --diagnostic "native opaque any/unknown unsupported")
+        --diagnostic "native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required"
+        --parser-diagnostic)
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;

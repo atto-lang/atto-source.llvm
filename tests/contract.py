@@ -117,6 +117,7 @@ def main():
     parser.add_argument("--fixture", required=True)
     parser.add_argument("--ir")
     parser.add_argument("--diagnostic")
+    parser.add_argument("--parser-diagnostic", action="store_true")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
     parser.add_argument("--target")
@@ -133,6 +134,8 @@ def main():
                 not args.no_native_abi and not args.no_main_link and
                 not args.verify_object and args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
+    require(not args.parser_diagnostic or bool(args.diagnostic),
+            "--parser-diagnostic requires --diagnostic")
     if args.ir is not None:
         require(bool(args.ir), "--ir requires nonempty text")
     if args.run is not None:
@@ -169,6 +172,13 @@ def main():
         )
         require(not any(marker in diagnostic_lower for marker in infrastructure_markers),
                 "infrastructure failure cannot certify compiler rejection")
+        if args.parser_diagnostic:
+            # The native frontend emits one bounded exception line. A matched
+            # substring in a wrapper traceback or echoed source is not proof.
+            expected_line = (r"oreslang-llvmc: " + re.escape(args.diagnostic)
+                             + r" at byte [0-9]+\n")
+            require(re.fullmatch(expected_line, compile_result.stderr) is not None,
+                    "parser diagnostic did not match exact compiler error line")
         require(not compile_result.stdout, "compiler emitted stdout after rejection")
         return
     require(compile_result.returncode == 0,

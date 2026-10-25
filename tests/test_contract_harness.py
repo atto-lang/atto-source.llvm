@@ -182,6 +182,37 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
                             p.stderr,
                         )
 
+    def test_parser_diagnostic_requires_a_single_compiler_error_line(self):
+        expected = ("native opaque any/unknown unsupported: dynamic tag, "
+                    "ownership and capability-safe lowering required")
+        correct = "oreslang-llvmc: " + expected + " at byte 27\\n"
+        cases = (
+            (correct, True),
+            (expected + "\\n", False),
+            ("wrapper: " + correct, False),
+            (correct + "fatal: signal 11\\n", False),
+            ("oreslang-llvmc: " + expected + " at byte -1\\n", False),
+            ("oreslang-llvmc: " + expected + " at byte 27", False),
+            ("oreslang-llvmc: " + expected + " at byte 27\\n"
+             "unrelated failure\\n", False),
+        )
+        for stderr, accepted in cases:
+            with self.subTest(stderr=stderr):
+                compiler = self.compiler(status=1, stderr=stderr)
+                for optimize in ("-O", "-OO"):
+                    with self.subTest(optimize=optimize):
+                        p = self.run_contract(
+                            compiler, "--diagnostic", expected,
+                            "--parser-diagnostic", optimize=optimize,
+                        )
+                        self.assertEqual(p.returncode == 0, accepted, p.stderr)
+
+    def test_parser_diagnostic_cannot_be_requested_without_diagnostic(self):
+        compiler = self.compiler(status=1, stderr="anything")
+        p = self.run_contract(compiler, "--parser-diagnostic")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("--parser-diagnostic requires --diagnostic", p.stderr)
+
     def test_valid_negative_still_passes_under_optimization(self):
         compiler = self.compiler(status=1, stderr="private class field")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
