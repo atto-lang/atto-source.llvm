@@ -1765,34 +1765,49 @@ private:
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
-            // Typed Future<void> is admitted ONLY as a linear lexical alias
-            // for one already-spawned ActorRef.get_ready() lifecycle promise.
-            // No scalar/object borrow crosses this suspension, and general
-            // Future<T> / async lowering must remain fail-closed.
+            // One linear Future<void> token is admitted from either
+            // ActorRef.get_ready() or ActorRef.send_async(i64). The latter
+            // starts admission immediately at declaration.
             if ((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future") {
-                if (!value.ready_future_name.empty())
-                    fail("native source supports only one Future<void> readiness token");
+                if (!value.ready_future_name.empty() || !value.send_future_name.empty())
+                    fail("native source supports only one Future<void> token");
+                if (!value.locals.empty())
+                    fail("native Future<void> suspension cannot capture scalar/class locals");
                 advance();
                 require("Future");
                 require("<");
                 if (!accept("void"))
                     fail("Future<T> requires native continuation lowering");
                 require(">");
-                value.ready_future_name = identifier();
+                const std::string future_name = identifier();
                 require("=");
-                value.ready_future_actor = identifier();
+                const std::string future_actor = identifier();
                 require(".");
-                require("get_ready");
+                const std::string future_method = identifier();
                 require("(");
-                require(")");
+                if (future_method == "get_ready") {
+                    require(")");
+                    value.ready_future_name = future_name;
+                    value.ready_future_actor = future_actor;
+                } else if (future_method == "send_async") {
+                    if (value.name != "main" || !value.parameters.empty())
+                        fail("native send_async Future<void> requires trusted zero-argument main");
+                    value.send_future_name = future_name;
+                    value.send_future_actor = future_actor;
+                    value.send_future_submit_offset = token_.offset;
+                    value.send_future_payload = expression();
+                    require(")");
+                } else {
+                    fail("Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)");
+                }
                 require(";");
                 const bool bound = std::any_of(value.actor_spawns.begin(),
                     value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
-                        return spawn.name == value.ready_future_actor;
+                        return spawn.name == future_actor;
                     });
                 if (!bound)
-                    fail("Future<void> requires previously spawned ActorRef.get_ready");
+                    fail("Future<void> requires previously spawned ActorRef");
                 continue;
             }
             LocalBinding binding;
@@ -2358,9 +2373,17 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
-                    fail("native source supports only one direct ActorRef lifecycle await");
+                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
+                        || value.send_future_await_offset != 0)
+                    fail("native source supports only one async await boundary");
                 const std::string awaited = identifier();
+                if (!value.send_future_name.empty()) {
+                    if (awaited != value.send_future_name || token_.text != ";")
+                        fail("native Future<void> await requires its declared send_async token");
+                    value.send_future_await_offset = await_offset;
+                    require(";");
+                    continue;
+                }
                 if (!value.ready_future_name.empty()) {
                     if (awaited != value.ready_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared readiness token");
@@ -2484,7 +2507,7 @@ private:
             auto action = primary();
             if (action->kind == Expression::Kind::Field
                     && action->name == "send_async" && token_.text == "(") {
-                fail("native send_async requires direct await; storable Future<void> lowering is not implemented");
+                fail("native send_async statement must be awaited directly or bound to Future<void>");
             }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
