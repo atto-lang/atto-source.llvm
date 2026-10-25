@@ -1135,7 +1135,10 @@ int64_t oreslang_source_actor_await_readable(
         group_unlock();
         goto readable_complete;
     }
+    group_lock();
+    ensure(group.pending_readable == &frame && !frame.done);
     frame.admitted = 1;
+    group_unlock();
 
     const int completion_fd = ores_native_vm_nio_completion_fd(
         vm, (size_t)frame.awaiting.watch.watch.reactor);
@@ -1163,14 +1166,20 @@ int64_t oreslang_source_actor_await_readable(
 
     const OresNativeActorNioAwaitDispatchStatus dispatched =
         ores_native_vm_nio_dispatch_actor_await(vm, completion);
-    if (dispatched != ORES_NATIVE_NIO_AWAIT_PUBLISHED) {
-        /* STOP-before-transfer has no wake callback. Retire the persisted
-         * continuation here so trusted-main never waits forever. */
+    if (dispatched == ORES_NATIVE_NIO_AWAIT_INVALID)
+        ensure(0 && "invalid source readable NIO/wake handoff");
+    if (dispatched == ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED) {
+        /*
+         * The source-root producer is gone, so resuming source code would
+         * resurrect an actor incarnation. Retire the persisted continuation
+         * without guest execution; this remains a fatal trusted-runtime
+         * boundary rather than pretending it is an ordinary I/O failure.
+         */
         group_lock();
         ensure(group.pending_readable == &frame && !frame.done);
         ensure(ores_native_continuation_store_cancel(
             group.continuations, frame.link.continuation));
-        frame.outcome = 3;
+        frame.outcome = 0;
         frame.done = 1;
         ensure(pthread_cond_signal(&frame.completed) == 0);
         group_unlock();
