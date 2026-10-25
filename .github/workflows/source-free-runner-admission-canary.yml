@@ -1,0 +1,27 @@
+name: Source-free Oreslang runner admission canary
+
+on:
+  push:
+    branches:
+      - ci/source-free-runner-admission-20261024
+    paths:
+      - .github/workflows/source-free-runner-admission-canary.yml
+
+permissions: {}
+
+jobs:
+  source-free-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify runner allocation without checkout or source transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import platform
+          import struct
+          assert platform.system() == "Linux"
+          assert struct.calcsize("P") == 8
+          print("SOURCE_FREE_SOURCE_ORG_RUNNER_ALLOCATED")
+          PY
