@@ -39,7 +39,7 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
 /* Deterministic quota-path hook for the isolated send_async runtime test.
  * Refuses values above the production cohort bound. */
 int oreslang_source_actor_test_set_async_waiters(void* actor, size_t waiters);
-size_t oreslang_source_actor_test_waiting_sends(void* actor);
+size_t oreslang_source_actor_test_pending_async_sends(void* actor);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
