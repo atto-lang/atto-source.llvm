@@ -87,6 +87,38 @@ static void run_case(int sealed) {
     check(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void run_resource_loan_case(void) {
+    State state = {0};
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open(1, 2, 1, handler, &state);
+    check(scheduler != NULL);
+
+    OresNativeActorRef actor =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    check(actor.scheduler_domain != 0);
+    check(ores_native_actor_scheduler_retain_resource(scheduler, actor));
+
+    /* STOP seals new resource admission but does not strand the loan which
+     * already won the scheduler-lock race. DONE remains physically fenced. */
+    check(ores_native_actor_scheduler_stop_sealed(scheduler, actor));
+    check(!ores_native_actor_scheduler_retain_resource(scheduler, actor));
+    check(!ores_native_actor_scheduler_poll_done(scheduler, actor));
+
+    OresNativeActorRef stale = actor;
+    ++stale.generation;
+    check(!ores_native_actor_scheduler_release_resource(scheduler, stale));
+    check(!ores_native_actor_scheduler_poll_done(scheduler, actor));
+
+    check(ores_native_actor_scheduler_release_resource(scheduler, actor));
+    check(!ores_native_actor_scheduler_release_resource(scheduler, actor));
+    check(ores_native_actor_scheduler_poll_done(scheduler, actor));
+    check(ores_native_actor_scheduler_wait_done(scheduler, actor));
+
+    ores_native_actor_scheduler_retire(scheduler);
+    check(ores_native_actor_scheduler_drain(scheduler));
+    check(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void run_control_case(void) {
     State state = {0};
     OresNativeActorScheduler* scheduler =
@@ -133,6 +165,7 @@ static void run_control_case(void) {
 int main(void) {
     run_case(1);
     run_case(0);
+    run_resource_loan_case();
     run_control_case();
     puts("NATIVE_ACTOR_SEALED_STOP_PASS");
     return 0;
