@@ -1408,6 +1408,7 @@ private:
             // Future<T> / async lowering must remain fail-closed.
             if ((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future") {
+                const std::size_t future_offset = token_.offset;
                 if (!value.ready_future_name.empty())
                     fail("native source supports only one Future<void> readiness token");
                 advance();
@@ -1429,7 +1430,9 @@ private:
                         return spawn.name == value.ready_future_actor;
                     });
                 if (!bound)
-                    fail("Future<void> requires previously spawned ActorRef.get_ready");
+                    throw std::runtime_error(
+                        "Future<void> requires previously spawned ActorRef.get_ready at byte "
+                        + std::to_string(future_offset));
                 continue;
             }
             LocalBinding binding;
