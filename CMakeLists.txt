@@ -899,7 +899,8 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-entry-llvm-type-test
         tests/native_entry_llvm_type_test.cpp)
     target_include_directories(oreslang-native-entry-llvm-type-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-entry-llvm-type-test SYSTEM PRIVATE
         "${LLVM_INCLUDE_DIRS}")
     target_link_libraries(oreslang-native-entry-llvm-type-test PRIVATE
         ${ORE_LLVM_LIBS})
