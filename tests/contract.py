@@ -158,6 +158,17 @@ def main():
                 f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
         require(args.diagnostic in compile_result.stderr,
                 "expected compiler diagnostic was absent")
+        # A wrapper crash, missing toolchain, or sanitizer failure can exit 1
+        # and echo the sought-for diagnostic; that is not guest admission.
+        diagnostic_lower = compile_result.stderr.casefold()
+        infrastructure_markers = (
+            "traceback (most recent call last)", "filenotfounderror",
+            "command not found", "no such file or directory",
+            "addresssanitizer", "undefinedbehaviorsanitizer",
+            "segmentation fault", "runtime error: ",
+        )
+        require(not any(marker in diagnostic_lower for marker in infrastructure_markers),
+                "infrastructure failure cannot certify compiler rejection")
         require(not compile_result.stdout, "compiler emitted stdout after rejection")
         return
     require(compile_result.returncode == 0,
