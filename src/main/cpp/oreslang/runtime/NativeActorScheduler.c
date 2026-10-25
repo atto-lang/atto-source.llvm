@@ -1087,6 +1087,15 @@ size_t ores_native_actor_scheduler_test_waiting_sends(
     unlock(s);
     return count;
 }
+size_t ores_native_actor_scheduler_test_pending_async_sends(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const size_t count = matching(s, actor)
+        ? s->actors[actor.actor_slot].async_pending : 0;
+    unlock(s);
+    return count;
+}
 #endif
 
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
