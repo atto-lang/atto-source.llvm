@@ -1,0 +1,131 @@
+#include "oreslang/backend/SealedStateAdmission.hpp"
+
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+using oreslang::FunctionEffect;
+using oreslang::FunctionEffects;
+
+struct Expression {};
+struct Field {
+    std::string name;
+    bool field_mutable = true;
+    std::unique_ptr<Expression> initializer = std::make_unique<Expression>();
+};
+struct Parameter { std::string name; };
+struct Write {
+    std::string field;
+    std::unique_ptr<Expression> expression = std::make_unique<Expression>();
+};
+struct Loan {
+    enum class Mode { Read, Write };
+    Mode mode = Mode::Read;
+    std::string binder = "s";
+    std::vector<Write> writes;
+    std::unique_ptr<Expression> result = std::make_unique<Expression>();
+};
+struct Method {
+    enum class Return { I64, Bool };
+    std::string name = "on_message";
+    bool exported = true;
+    bool returns_void = false;
+    Return return_type = Return::I64;
+    std::vector<Parameter> parameters{{"n"}};
+    std::unique_ptr<Loan> actor_state_loan = std::make_unique<Loan>();
+    bool has_declared_effects = true;
+    FunctionEffects declared_effects{static_cast<std::uint32_t>(FunctionEffect::StateRead)};
+    std::unique_ptr<Expression> result;
+    std::vector<int> actor_field_writes, locals, actor_sends, actor_stops,
+        actor_actions, statements, early_returns, actor_spawns;
+};
+struct Actor {
+    bool sealed_state = true;
+    std::vector<Field> fields;
+    Method on_message;
+};
+
+std::vector<Actor> valid() {
+    std::vector<Actor> actors(1);
+    actors.front().fields.emplace_back();
+    actors.front().fields.front().name = "count";
+    return actors;
+}
+
+std::size_t admitted=0, rejected=0;
+void must_admit(std::vector<Actor> a) {
+    oreslang::verify_sealed_actor_state_shape(a);
+    ++admitted;
+}
+template<typename Modify>
+void must_reject(Modify modify) {
+    auto actors=valid();
+    modify(actors.front());
+    try { oreslang::verify_sealed_actor_state_shape(actors); }
+    catch (const std::runtime_error&) { ++rejected; return; }
+    throw std::runtime_error("invalid sealed-state AST was admitted");
+}
+} // namespace
+
+int main() {
+    must_admit(valid());
+    auto empty=valid(); empty.front().fields.clear(); must_admit(std::move(empty));
+    auto write=valid();
+    auto &m=write.front().on_message;
+    m.actor_state_loan->mode=Loan::Mode::Write;
+    m.declared_effects.bits=static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+    m.actor_state_loan->writes.emplace_back();
+    m.actor_state_loan->writes.front().field="count";
+    must_admit(std::move(write));
+
+    must_reject([](Actor& a){a.on_message.parameters.clear();});
+    must_reject([](Actor& a){a.on_message.parameters.emplace_back();});
+    must_reject([](Actor& a){a.on_message.parameters.front().name.clear();});
+    must_reject([](Actor& a){a.on_message.name="foo";});
+    must_reject([](Actor& a){a.on_message.exported=false;});
+    must_reject([](Actor& a){a.on_message.returns_void=true;});
+    must_reject([](Actor& a){a.on_message.return_type=Method::Return::Bool;});
+    must_reject([](Actor& a){a.fields.front().name="";});
+    must_reject([](Actor& a){a.fields.front().name="state";});
+    must_reject([](Actor& a){a.fields.front().name="n";});
+    must_reject([](Actor& a){a.fields.emplace_back();a.fields.back().name="count";});
+    must_reject([](Actor& a){a.fields.front().initializer.reset();});
+    must_reject([](Actor& a){a.fields.front().field_mutable=false;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan.reset();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->binder.clear();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->binder="n";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->result.reset();});
+    must_reject([](Actor& a){a.on_message.has_declared_effects=false;});
+    must_reject([](Actor& a){a.on_message.declared_effects.bits|=FunctionEffects::UnresolvedCallBit;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->mode=static_cast<Loan::Mode>(255);});
+    must_reject([](Actor& a){a.on_message.declared_effects.bits=0;});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->writes.emplace_back();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->mode=Loan::Mode::Write;});
+    must_reject([](Actor& a){a.on_message.actor_field_writes.push_back(1);});
+    must_reject([](Actor& a){a.on_message.locals.push_back(1);});
+    must_reject([](Actor& a){a.on_message.actor_sends.push_back(1);});
+    must_reject([](Actor& a){a.on_message.actor_stops.push_back(1);});
+    must_reject([](Actor& a){a.on_message.actor_actions.push_back(1);});
+    must_reject([](Actor& a){a.on_message.statements.push_back(1);});
+    must_reject([](Actor& a){a.on_message.early_returns.push_back(1);});
+    must_reject([](Actor& a){a.on_message.actor_spawns.push_back(1);});
+    must_reject([](Actor& a){a.on_message.result=std::make_unique<Expression>();});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->mode=Loan::Mode::Write;
+        a.on_message.declared_effects.bits=static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+        a.on_message.actor_state_loan->writes.emplace_back();
+        a.on_message.actor_state_loan->writes.back().field="unknown";});
+    must_reject([](Actor& a){a.on_message.actor_state_loan->mode=Loan::Mode::Write;
+        a.on_message.declared_effects.bits=static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+        a.on_message.actor_state_loan->writes.emplace_back();
+        a.on_message.actor_state_loan->writes.back().field="count";
+        a.on_message.actor_state_loan->writes.back().expression.reset();});
+    must_reject([](Actor& a){a.fields.clear();
+        for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
+    std::cout << "Sealed-state admission: " << admitted << " valid / "
+              << rejected << " rejected: PASS\n";
+}
