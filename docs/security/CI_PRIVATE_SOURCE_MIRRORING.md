@@ -4,7 +4,7 @@ Never transfer private oreslang-source.llvm source into a public or internal Git
 
 ## Destination approval
 
-The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through source governance independently reviewed by `@ORESoftware`. Protected-main enforcement is preferred; where unavailable, V3 accepts only the exact review-attested governance path described below.
+The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through source governance independently reviewed by `@ORESoftware` **and source `main` is protected with the required review controls**. There is no unprotected-source export fallback.
 
 Destination privacy, repository identity, workflow permissions, retention, and personnel access must be revalidated immediately before every transfer. A writable repository or successful source-free runner canary is not authorization.
 
@@ -44,12 +44,11 @@ python3 scripts/test-audit-private-ci-governance.py
 python3 scripts/audit-private-ci-governance.py
 ```
 
-The opt-in `--live` preflight diagnoses **protected-main mode only** by
-reading source repository metadata, `branches/main`, and branch protection
-with a read-capable `GITHUB_TOKEN`. It deliberately does not certify the
-review-attested fallback. Exact review history, reviewed Git entries/bytes, and
-carrier-tree attestation are enforced by V3 itself. Neither diagnostic mode is
-a source-export grant.
+The opt-in `--live` preflight diagnoses the mandatory source protected-main
+gate by reading source repository metadata, `branches/main`, and branch
+protection with a read-capable `GITHUB_TOKEN`. Carrier review/tree attestation
+is enforced separately by V3 when the destination carrier itself is
+unprotected. Neither check is a source-export grant.
 
 **Observed governance blocker (2026-10-19):** GitHub returned
 `protected=false` for source `main`. Ruleset reads also returned a
@@ -82,23 +81,17 @@ blob by SHA, and verifies the blob bytes against the Git object ID before any
 destination write.
 
 Before reading or exporting source, the publisher self-attests its governance
-bytes against the exact source `main` commit. Two fail-closed modes exist:
+bytes against the exact source `main` commit and requires source `main` to
+be protected. Source `main` must enforce CODEOWNER review, stale-review
+dismissal, at least one approval, administrator enforcement, no force
+pushes/deletions, and no PR-review bypass actors. If GitHub reports
+`protected=false` or the required protection cannot be verified, private
+source export is denied.
 
-1. **Protected-main mode.** Source `main` must enforce CODEOWNER review,
-   stale-review dismissal, at least one approval, administrator enforcement,
-   no force pushes/deletions, and no PR-review bypass actors.
-2. **Exact review-attested mode.** When source `main` is unprotected, authority
-   PR #974 must be a same-repository PR merged to `main`, authored by an
-   account other than immutable reviewer ID `11139560` / login
-   `ORESoftware`, and the latest review from that reviewer must be
-   `APPROVED` on the PR's exact head before merge. Every reviewed governance
-   path's Git mode/type/blob and bytes on current `main` must still equal the
-   reviewed PR head. Any drift, stale/revoked review, malformed author
-   identity, or ambiguous review history fails closed.
-
-The review-attested mode does not trust unprotected `main` generally; it
-attests only the listed governance/control-plane paths. The source PR under
-test remains bound separately to its exact open-PR head and complete root tree.
+There is deliberately **no review-attested fallback for the source repository**.
+A reviewed governance PR, CODEOWNERS text, or source-free carrier success cannot
+substitute for live source-main protection. The source PR under test is also
+bound separately to its exact open-PR head and complete root tree.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
