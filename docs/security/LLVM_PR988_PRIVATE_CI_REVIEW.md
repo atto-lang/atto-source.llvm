@@ -9,9 +9,9 @@ proposed carrier as part of this proposal.
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
 - Exact source commit for first qualification:
-  `65c59c3fb38c889a1cb8b1856e0b140e2c2f8b20`
+  `fd97fe8216218fcdc5b3225f005fde4de439bb40`
 - Exact source Git tree:
-  `447a627f9cd7bc96bc4c61268d117e8565e9a365`
+  `1b12d87a9dfe0e516720511506b6baa740408c11`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -47,7 +47,9 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 6. Run the real native toolchain (document version, LLVM/CMake/Clang),
    configure/build `oreslang-llvmc`, run CTest
    `native_opaque_any_explicitly_unsupported` and
-   `native_opaque_unknown_explicitly_unsupported`, then relevant native
+   `native_opaque_unknown_explicitly_unsupported`, plus
+   `native_opaque_any_return_explicitly_unsupported` and
+   `native_opaque_unknown_return_explicitly_unsupported`, then relevant native
    parser, ownership, and security regressions. Preserve complete logs,
    exact compiler revision, exit statuses and job/step receipts.
 7. Fail closed on Actions zero-step failures, skipped checks, missing
@@ -57,8 +59,10 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 ## Freshness and reconciliation
 
 This proposal tracks LLVM #988's current-main two-parent reconciliation at
-`65c59c3fb38c889a1cb8b1856e0b140e2c2f8b20`. The resulting PR diff contains only `Parser.cpp`, the CTest
-registrations in `CMakeLists.txt`, and two byte-identical guest fixtures.
+`fd97fe8216218fcdc5b3225f005fde4de439bb40`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
+`tests/contract.py` and `tests/test_contract_harness.py` fail-closed
+infrastructure diagnostic checks, two byte-identical canonical parameter
+fixtures, and two new opaque return-position fixtures.
 Native LLVM include/link and wake-test repairs were already present on newer
 `main` and were deliberately not rolled back. Any subsequent PR-head/tree
 change invalidates this proposal's exact source identity and requires renewed
