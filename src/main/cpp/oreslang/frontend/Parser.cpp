@@ -2734,6 +2734,11 @@ private:
         std::string name = identifier();
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
+        // All nominal declaration forms share this gate. Keeping Entry here
+        // prevents a newly added class/actor/contract kind from accidentally
+        // forging the compiler-owned product identity.
+        if (entry_builtin_name(name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal type");
         return name;
     }
 
