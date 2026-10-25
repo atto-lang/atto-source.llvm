@@ -3,6 +3,7 @@
 #endif
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include <assert.h>
+#include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -82,6 +83,57 @@ static int64_t nested_parent_handler(
     return next;
 }
 
+
+/*
+ * Adversarial physical-DONE gate: the parent has finished its source turn,
+ * but an already-started constructor-owned child is still executing.
+ * Parent get_done must not invoke a root continuation while child work lives.
+ */
+static atomic_uint held_child_entered;
+static atomic_uint held_child_release;
+static atomic_uint held_child_finished;
+static atomic_uint held_parent_handled;
+static atomic_uint parent_done_callbacks;
+
+static int64_t held_child_handler(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)heap; (void)domain; (void)epoch;
+    atomic_store_explicit(&held_child_entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&held_child_release, memory_order_acquire))
+        sched_yield();
+    atomic_store_explicit(&held_child_finished, 1, memory_order_release);
+    return payload;
+}
+
+static void held_parent_init(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
+    ores_actor_i64_heap_field_init_mutable(heap, domain, epoch, 0, 0);
+    oreslang_source_actor_spawn_child_capability(
+        heap, 0, init_zero, held_child_handler, 1);
+}
+
+static int64_t held_parent_handler(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch, int64_t payload) {
+    (void)domain; (void)epoch;
+    oreslang_source_actor_send_capability(heap, 0, payload);
+    atomic_store_explicit(&held_parent_handled, 1, memory_order_release);
+    return payload;
+}
+
+static int64_t observed_parent_done(void* ignored) {
+    (void)ignored;
+    /* A continuation after parent VM DONE but before child JOIN is wrong. */
+    assert(atomic_load_explicit(&held_child_finished, memory_order_acquire) == 1);
+    atomic_fetch_add_explicit(&parent_done_callbacks, 1, memory_order_release);
+    return 43;
+}
+
+static void* await_held_parent_done(void* opaque) {
+    assert(oreslang_source_actor_await_done(
+        opaque, observed_parent_done, 777) == 43);
+    return NULL;
+}
+
 int main(void) {
     /* Copied peer capability identity survives destruction of caller storage. */
     void* target = oreslang_source_actor_spawn(init_zero, target_handler, 1);
@@ -115,5 +167,32 @@ int main(void) {
         &nested_parent_messages, memory_order_relaxed) == 1);
     assert(atomic_load_explicit(
         &nested_child_messages, memory_order_relaxed) == 1);
+
+    /*
+     * The child handler is intentionally held inside a live guest turn.
+     * Awaiting parent physical DONE from another trusted host thread must
+     * wait for the child too, not merely for the parent's own terminal ACK.
+     */
+    void* held_parent = oreslang_source_actor_spawn(
+        held_parent_init, held_parent_handler, 1);
+    assert(held_parent != NULL);
+    assert(oreslang_source_actor_try_send(held_parent, 7) == 1);
+    wait_for_count(&held_child_entered, 1);
+    wait_for_count(&held_parent_handled, 1);
+    oreslang_source_actor_request_stop(held_parent);
+    pthread_t done_thread;
+    assert(pthread_create(
+        &done_thread, NULL, await_held_parent_done, held_parent) == 0);
+    for (unsigned attempt = 0; attempt < 100000u; ++attempt) {
+        assert(atomic_load_explicit(
+            &parent_done_callbacks, memory_order_acquire) == 0);
+        sched_yield();
+    }
+    atomic_store_explicit(&held_child_release, 1, memory_order_release);
+    assert(pthread_join(done_thread, NULL) == 0);
+    assert(atomic_load_explicit(
+        &held_child_finished, memory_order_acquire) == 1);
+    assert(atomic_load_explicit(
+        &parent_done_callbacks, memory_order_acquire) == 1);
     return 0;
 }
