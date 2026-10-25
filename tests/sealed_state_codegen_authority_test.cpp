@@ -145,5 +145,63 @@ int main() {
         p.actors.front().on_message.statements.push_back(std::move(legacy));
     });
 
+    // Reject malformed direct-AST inputs before LLVM field/parameter indexing.
+    rejects([](Program& p) {
+        p.actors.front().on_message.parameters.clear();
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.parameters.emplace_back();
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.parameters.front().name.clear();
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.name = "unchecked";
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.exported = false;
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.returns_void = true;
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.return_type = ScalarType::Bool;
+    });
+    rejects([](Program& p) {
+        auto& field = p.actors.front().fields.front();
+        field.name = "";
+    });
+    rejects([](Program& p) {
+        auto& field = p.actors.front().fields.front();
+        field.name = "state";
+    });
+    rejects([](Program& p) {
+        auto& field = p.actors.front().fields.front();
+        field.name = "n";
+    });
+    rejects([](Program& p) {
+        LocalBinding dup;
+        dup.name = "count";
+        dup.field_mutable = true;
+        dup.initializer = integer(1);
+        p.actors.front().fields.push_back(std::move(dup));
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.declared_effects.bits |=
+            FunctionEffects::UnresolvedCallBit;
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->binder.clear();
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->binder = "n";
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result.reset();
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan.reset();
+    });
+
     return 0;
 }
