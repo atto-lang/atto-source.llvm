@@ -127,6 +127,25 @@ typedef struct {
     OresNativeActorNioWatch watch;
 } OwnedActorNioProbe;
 
+typedef struct {
+    OresNativeVM* vm;
+    enum OresNativeVMDomain domain;
+    OresNativeActorRef actor;
+    int fd;
+    atomic_int active;
+    atomic_int entered;
+    atomic_int go;
+    atomic_int attempted;
+    atomic_int accepted;
+    atomic_int duplicate_rejected;
+    atomic_int wakes;
+    atomic_int wake_outcome;
+    atomic_int wake_errors;
+    OresNativeActorNioAwait await;
+} OwnedActorNioAwaitProbe;
+
+static int same_actor_ref(OresNativeActorRef left, OresNativeActorRef right);
+
 static void on_actor_nio_probe(void* opaque, size_t slot, uint64_t value) {
     ActorNioProbe* probe = (ActorNioProbe*)opaque;
     check(probe != NULL && probe->vm != NULL && probe->fd >= 0);
@@ -159,6 +178,85 @@ static void on_owned_actor_nio(void* opaque, size_t slot, uint64_t value) {
     if (accepted) probe->watch = watch;
     atomic_store_explicit(&probe->accepted, accepted, memory_order_release);
     atomic_store_explicit(&probe->attempted, 1, memory_order_release);
+}
+
+static int same_wake_ticket(
+        OresNativeWakeTicket left, OresNativeWakeTicket right) {
+    return same_actor_ref(left.producer, right.producer)
+        && same_actor_ref(left.target, right.target)
+        && left.slot == right.slot
+        && left.slot_generation == right.slot_generation
+        && left.continuation_slot == right.continuation_slot
+        && left.continuation_generation == right.continuation_generation
+        && left.code_generation == right.code_generation
+        && left.descriptor_generation == right.descriptor_generation;
+}
+
+static void on_owned_actor_nio_await(
+        void* opaque, size_t slot, uint64_t value) {
+    OwnedActorNioAwaitProbe* probe = (OwnedActorNioAwaitProbe*)opaque;
+    check(probe != NULL && probe->vm != NULL && probe->fd >= 0);
+    check(slot == probe->actor.actor_slot && value == UINT64_C(99));
+    check(atomic_fetch_add_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 0);
+    atomic_store_explicit(&probe->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&probe->go, memory_order_acquire))
+        sched_yield();
+
+    OresNativeActorNioAwait awaiting = {0};
+    const int accepted = ores_native_vm_nio_try_watch_actor_await(
+        probe->vm, probe->domain, probe->actor,
+        probe->fd, EPOLLIN,
+        UINT64_C(101), UINT64_C(5), UINT64_C(7), UINT64_C(11),
+        &awaiting);
+    if (accepted) {
+        probe->await = awaiting;
+
+        // A second suspension on the same FD must reject and refund its
+        // speculative wake/resource loans, leaving exactly the first await.
+        OresNativeActorNioAwait duplicate = {0};
+        const int duplicate_accepted = ores_native_vm_nio_try_watch_actor_await(
+            probe->vm, probe->domain, probe->actor,
+            probe->fd, EPOLLIN,
+            UINT64_C(102), UINT64_C(6), UINT64_C(7), UINT64_C(12),
+            &duplicate);
+        atomic_store_explicit(
+            &probe->duplicate_rejected, !duplicate_accepted,
+            memory_order_release);
+    }
+    atomic_store_explicit(&probe->accepted, accepted, memory_order_release);
+    atomic_store_explicit(&probe->attempted, 1, memory_order_release);
+    check(atomic_fetch_sub_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 1);
+}
+
+static void on_owned_actor_nio_wake(
+        void* opaque, size_t slot, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    OwnedActorNioAwaitProbe* probe = (OwnedActorNioAwaitProbe*)opaque;
+    int errors = 0;
+    if (slot != probe->actor.actor_slot
+            || !ores_native_vm_actor_is_current_wake(
+                probe->vm, probe->domain, ticket)
+            || !same_wake_ticket(ticket, probe->await.wake)
+            || atomic_fetch_add_explicit(
+                &probe->active, 1, memory_order_acq_rel) != 0)
+        ++errors;
+
+    OresNativeWakeTicket forged = ticket;
+    ++forged.continuation_generation;
+    if (ores_native_vm_actor_is_current_wake(
+            probe->vm, probe->domain, forged))
+        ++errors;
+
+    atomic_store_explicit(
+        &probe->wake_outcome, (int)outcome, memory_order_release);
+    atomic_fetch_add_explicit(&probe->wakes, 1, memory_order_acq_rel);
+    if (errors)
+        atomic_fetch_add_explicit(
+            &probe->wake_errors, errors, memory_order_acq_rel);
+    check(atomic_fetch_sub_explicit(
+        &probe->active, 1, memory_order_acq_rel) == 1);
 }
 
 static int same_actor_ref(OresNativeActorRef left, OresNativeActorRef right) {
