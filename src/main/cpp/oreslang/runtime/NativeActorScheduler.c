@@ -958,12 +958,24 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
         return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
     }
 
+    /*
+     * Only MAILBOX_FULL is asynchronous. If target credit is immediately
+     * available, every other admission failure (execution id, carrier growth,
+     * scheduler resource exhaustion) must propagate synchronously and must not
+     * mint a Future descriptor. The scheduler mutex keeps the chosen free
+     * descriptor slot stable across this admission attempt.
+     */
+    if (!must_wait
+            && !enqueue_locked(s, (size_t)target.actor_slot, payload)) {
+        unlock(s);
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
+
     AsyncSendCredit* credit = &lane->async_sends[slot];
     ++credit->generation;
     if (!credit->generation) abort();
     credit->payload = payload;
     credit->sequence = 0;
-    credit->outcome = ORES_NATIVE_SEND_MAILBOX_FULL;
     ++lane->async_live;
 
     *out = (OresNativeAsyncSendTicket){
@@ -973,15 +985,11 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     };
 
     if (!must_wait) {
-        if (enqueue_locked(s, (size_t)target.actor_slot, payload)) {
-            credit->state = ORES_NATIVE_ASYNC_SEND_READY;
-            credit->outcome = ORES_NATIVE_SEND_ACCEPTED;
-        } else {
-            credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
-            credit->outcome = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
-        }
+        credit->state = ORES_NATIVE_ASYNC_SEND_READY;
+        credit->outcome = ORES_NATIVE_SEND_ACCEPTED;
     } else {
         credit->state = ORES_NATIVE_ASYNC_SEND_PENDING;
+        credit->outcome = ORES_NATIVE_SEND_MAILBOX_FULL;
         credit->sequence = lane->next_async_sequence;
         lane->next_async_sequence = lane->next_async_sequence == UINT64_MAX
             ? 0 : lane->next_async_sequence + 1;
