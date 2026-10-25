@@ -1,0 +1,17 @@
+// Repeated explicit observation of one readiness barrier is non-consuming.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int throws ActorTerminated {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await worker.get_ready();
+  await worker.get_ready();
+  worker.send(1);
+  worker.send(2);
+  stop worker;
+  return 43;
+}
