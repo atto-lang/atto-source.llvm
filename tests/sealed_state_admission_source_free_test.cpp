@@ -220,6 +220,13 @@ int main() {
     must_reject([](Actor& a){a.on_message.has_declared_effects=false;});
     must_reject([](Actor& a){a.on_message.declared_effects.bits|=FunctionEffects::UnresolvedCallBit;});
     must_reject([](Actor& a){a.on_message.actor_state_loan->mode=static_cast<Loan::Mode>(255);});
+    // A forged mode must fail even if state.write authority is declared:
+    // otherwise it could be silently treated as Mode::Write.
+    must_reject([](Actor& a){
+        a.on_message.actor_state_loan->mode=static_cast<Loan::Mode>(255);
+        a.on_message.declared_effects.bits=
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+    });
     must_reject([](Actor& a){a.on_message.declared_effects.bits=0;});
     must_reject([](Actor& a){a.on_message.actor_state_loan->writes.emplace_back();});
     must_reject([](Actor& a){a.on_message.actor_state_loan->mode=Loan::Mode::Write;});
@@ -243,7 +250,7 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 6 || rejected != 80)
+    if (admitted != 6 || rejected != 81)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
