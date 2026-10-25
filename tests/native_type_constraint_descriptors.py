@@ -108,6 +108,13 @@ def main():
         require(root_declared == root_defined,
                 "declare/define constrained aliases must be descriptor-identical")
 
+        i64_declared = require_descriptor(
+            compiler, root, "root_i64_declared",
+            "declare type Code = i64 with min 0 and max 5;\n",
+            "Code", contract, "root.Code")
+        require(i64_declared == root_declared,
+                "int/i64 constrained aliases must be descriptor-identical")
+
         require_descriptor(
             compiler, root, "module_qualified",
             """define module api as
@@ -249,7 +256,7 @@ end
                     label + " wrong diagnostic: " + repr(rejected.stderr[:1200]))
 
     print(
-        "PASS native constraint descriptor parity: 7 positive metadata cases, "
+        "PASS native constraint descriptor parity: 8 positive metadata cases, "
         "3 shared golden vectors, and 13 fail-closed negatives"
     )
     return 0
