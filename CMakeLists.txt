@@ -3903,3 +3903,33 @@ if(BUILD_TESTING)
         set_tests_properties(native_scalar_future_single_winner_control_tsan PROPERTIES TIMEOUT 90)
     endif()
 endif()
+
+# L01-L05 host substrate conformance, deliberately separate from guest await parity.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-lifecycle-parity-host-test
+        tests/native_actor_lifecycle_parity_smoke.cpp)
+    target_include_directories(oreslang-native-lifecycle-parity-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-lifecycle-parity-host-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-native-lifecycle-parity-host-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-lifecycle-parity-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_lifecycle_l01_l05_host
+        COMMAND oreslang-native-lifecycle-parity-host-test)
+    set_tests_properties(native_actor_lifecycle_l01_l05_host PROPERTIES TIMEOUT 45)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT WIN32)
+        add_executable(oreslang-native-lifecycle-parity-host-asan-test
+            tests/native_actor_lifecycle_parity_smoke.cpp)
+        target_include_directories(oreslang-native-lifecycle-parity-host-asan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features(oreslang-native-lifecycle-parity-host-asan-test PRIVATE cxx_std_20)
+        target_compile_options(oreslang-native-lifecycle-parity-host-asan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-lifecycle-parity-host-asan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-native-lifecycle-parity-host-asan-test PRIVATE Threads::Threads)
+        add_test(NAME native_actor_lifecycle_l01_l05_host_asan_ubsan
+            COMMAND oreslang-native-lifecycle-parity-host-asan-test)
+        set_tests_properties(native_actor_lifecycle_l01_l05_host_asan_ubsan PROPERTIES TIMEOUT 60)
+    endif()
+endif()
