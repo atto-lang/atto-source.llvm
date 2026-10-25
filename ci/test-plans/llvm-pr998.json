@@ -29,7 +29,7 @@
         "2"
       ],
       "cwd": ".",
-      "timeout_seconds": 2400
+      "timeout_seconds": 1800
     },
     {
       "argv": [
@@ -76,7 +76,7 @@
         "--output-on-failure"
       ],
       "cwd": ".",
-      "timeout_seconds": 3600
+      "timeout_seconds": 1800
     },
     {
       "argv": [
@@ -102,7 +102,7 @@
         "2"
       ],
       "cwd": ".",
-      "timeout_seconds": 2400
+      "timeout_seconds": 1800
     },
     {
       "argv": [
@@ -124,7 +124,7 @@
         "--output-on-failure"
       ],
       "cwd": ".",
-      "timeout_seconds": 3600
+      "timeout_seconds": 1800
     },
     {
       "argv": [
@@ -152,7 +152,7 @@
         "2"
       ],
       "cwd": ".",
-      "timeout_seconds": 2400
+      "timeout_seconds": 1800
     },
     {
       "argv": [
