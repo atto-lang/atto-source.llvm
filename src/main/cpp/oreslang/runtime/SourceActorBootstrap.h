@@ -95,8 +95,18 @@ int oreslang_source_actor_send_async_start_checked(
     void* actor, int64_t payload, void** future_out);
 void* oreslang_source_actor_send_async_start(
     void* actor, int64_t payload);
+/* Host-only terminal observer retained for low-level runtime tests. */
 int oreslang_source_actor_await_send_future_checked(void* future);
-void oreslang_source_actor_await_send_future(void* future);
+/*
+ * Compiler-facing logical await. The guest continuation is suspended on the
+ * root actor, the scheduler-owned send Future settles independently, and the
+ * post-await continuation resumes on a fresh root CONTROL turn. The trusted
+ * outer host coordinates the barrier but no actor carrier is parked.
+ */
+int64_t oreslang_source_actor_await_send_future(
+    void* future,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
 int oreslang_source_actor_cancel_send_future(void* future);
 
 /* Exact trusted identity projection for runtime integration/tests. This copies
