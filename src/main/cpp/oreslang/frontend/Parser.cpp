@@ -1996,6 +1996,7 @@ private:
                         fail("native Future<void> await requires its declared readiness token");
                     value.ready_await_actor = value.ready_future_actor;
                     value.ready_await_offset = await_offset;
+                    value.ready_await_form = NativeAwaitForm::FutureValue;
                     require(";");
                     continue;
                 }
@@ -2005,7 +2006,11 @@ private:
                 // non-Copy ActorRef, not an arbitrary scalar or class value.
                 value.ready_await_actor = awaited;
                 value.ready_await_offset = await_offset;
-                if (accept(";")) continue;
+                if (accept(";")) {
+                    value.ready_await_form = NativeAwaitForm::DirectHasFuture;
+                    continue;
+                }
+                value.ready_await_form = NativeAwaitForm::ExplicitGetReady;
                 if (token_.text != ".")
                     fail("native await requires HasFuture ActorRef or an explicit get_ready()");
                 require(".");
@@ -3524,6 +3529,32 @@ private:
                 if (!live_actors.count(fn.ready_await_actor))
                     throw std::runtime_error(
                         "await get_ready requires a live direct ActorRef receiver");
+                const auto actor_witness = references.find(fn.ready_await_actor);
+                if (actor_witness == references.end() ||
+                        actor_witness->second == nullptr)
+                    throw std::runtime_error(
+                        "await get_ready requires a live direct ActorRef receiver");
+                const bool token_form =
+                    fn.ready_await_form == NativeAwaitForm::FutureValue;
+                const NativeAwaitDescriptor candidate{
+                    token_form ? NativeAwaitTargetKind::FutureVoid
+                               : NativeAwaitTargetKind::ActorRef,
+                    fn.ready_await_form,
+                    actor_witness->second->name,
+                    fn.ready_await_actor,
+                    true, // resolved through the live ActorRef registry above
+                    token_form && fn.ready_future_actor == fn.ready_await_actor,
+                    token_form && !fn.ready_future_name.empty(),
+                    token_form ? std::string_view{fn.ready_future_actor}
+                               : std::string_view{}
+                };
+                const NativeAwaitResolution resolution =
+                    resolve_native_has_future(candidate);
+                if (resolution.abi != NativeAwaitAbi::SourceActorReadyControl ||
+                        !resolution.returns_void ||
+                        resolution.consumes_future_token != token_form)
+                    throw std::runtime_error(
+                        "native HasFuture await requires verified get_ready projection");
                 if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
                     throw std::runtime_error(
                         "await get_ready requires one source actor without suspended locals");

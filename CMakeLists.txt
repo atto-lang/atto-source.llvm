@@ -46,6 +46,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compiler-level trait projection contract: closed-world HasFuture dispatch
+    # for native ActorRef readiness and its one-shot Future<void> token.
+    # Independently runnable without LLVM libraries or a guest scheduler.
+    add_executable(oreslang-native-hasfuture-contract-test
+        tests/native_has_future_contract_test.cpp)
+    target_include_directories(oreslang-native-hasfuture-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-hasfuture-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_hasfuture_trait_projection_admission
+        COMMAND oreslang-native-hasfuture-contract-test)
+    set_tests_properties(native_hasfuture_trait_projection_admission PROPERTIES TIMEOUT 15)
+
     # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
     add_executable(oreslang-native-send-sync-contract-test
         tests/native_send_sync_contract_test.cpp)
