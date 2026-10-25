@@ -19,21 +19,25 @@ continuation**. Scheduling and teardown authenticate the exact shared
 `ActorRef` ticket capability in addition to numeric runtime/actor/generation
 identity, so even accidental same-generation reuse cannot let a stale ref
 schedule or revoke a newer Future. Only the owning `NativeActorGroup` parent
-CONTROL lane may consume the terminal outcome. CONTROL admission never occurs
-while holding the Future mutex: the frame publishes a logical scheduled
-reservation, releases its lock, then attempts the bounded ActorGroup CONTROL
-enqueue. Failed admission rolls the reservation back to ready unless
-cancellation won concurrently. This prevents an immediately dequeued CONTROL
-turn from parking a carrier behind Future bookkeeping. When CONTROL is full,
-the outcome remains ready for retry. An explicit cancellation after enqueue
-suppresses the queued guest callback. Group close publishes the generation-fenced
+CONTROL lane may consume the terminal outcome. Future phase arbitration is
+lock-free: the frame atomically publishes a logical scheduled reservation,
+then attempts the bounded ActorGroup CONTROL enqueue. Failed admission rolls
+the reservation back to READY unless cancellation won concurrently. This
+prevents an immediately dequeued CONTROL turn from parking a carrier behind
+Future bookkeeping. When CONTROL is full, the outcome remains READY for retry.
+An explicit cancellation after enqueue suppresses the queued guest callback.
+
+Group close publishes the generation-fenced
 `NativeActorRef::delivery_closed()` barrier before detached shutdown work.
-The supervisor can consume that barrier via `cancel_if_owner_detached()`,
-preventing pending, ready, or scheduled frames from surviving an owner that
-can no longer admit CONTROL delivery. `control_delivery_lost()` remains a
-diagnostic for an actually dropped reserved CONTROL item, not the authority
-for revoking every Future. This isolated primitive still does not autonomously
-subscribe to actor lifecycle events.
+`try_schedule()` consumes an already-published barrier itself, so scheduling
+a detached PENDING or READY frame terminates it as CANCELLED instead of leaving
+a retryable Future behind. If close is observed during CONTROL admission, a
+still-SCHEDULED frame is likewise cancelled before scheduling reports success.
+The supervisor's `cancel_if_owner_detached()` hook remains required for a
+close that happens after a successful scheduling call has already returned,
+and it also covers the transient SETTLING race. `control_delivery_lost()`
+remains a diagnostic for an actually dropped reserved CONTROL item, not the
+authority for revoking every Future.
 
 This is **not** a zero-allocation result, a full compiler-owned typed MIR
 continuation, a safe borrow-across-await implementation, a transport/I/O
