@@ -42,6 +42,8 @@ jobs:
             -Isrc/main/cpp \
             tests/native_checked_scalar_smt_test.cpp \
             src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp \
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp \
             src/main/cpp/oreslang/types/OwnershipChecker.cpp \
             -o build/native-scalar-checked-proof
           build/native-scalar-checked-proof \
