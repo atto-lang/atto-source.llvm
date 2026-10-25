@@ -190,23 +190,23 @@ def main():
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call ptr @oreslang_source_actor_send_async_start(" in line]
                 await_calls = [line for line in guest.stdout.splitlines()
-                               if "call void @oreslang_source_actor_await_send_future(" in line]
+                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
                 send_calls = [line for line in guest.stdout.splitlines()
                               if "call void @oreslang_source_actor_send(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected one eager send_async Future submission", start_calls)
                 assert len(await_calls) == 1, (
-                    name, "expected one linear Future<void> consumption", await_calls)
+                    name, "expected one logical Future<void> continuation await", await_calls)
                 assert len(send_calls) == 1, (
                     name, "expected one post-await ordinary send", send_calls)
+                assert ".send_future_continuation" in guest.stdout, (
+                    name, "missing generated post-await send Future continuation")
                 start_pos = guest.stdout.find(
                     "call ptr @oreslang_source_actor_send_async_start(")
                 await_pos = guest.stdout.find(
-                    "call void @oreslang_source_actor_await_send_future(")
-                send_pos = guest.stdout.find(
-                    "call void @oreslang_source_actor_send(")
-                assert 0 <= start_pos < await_pos < send_pos, (
-                    name, "send_async Future start/await/effect order changed")
+                    "call i64 @oreslang_source_actor_await_send_future(")
+                assert 0 <= start_pos < await_pos, (
+                    name, "send_async Future start must precede logical await")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -277,6 +277,13 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-send-async-future.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert (
+                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
+                    in trace_lines[0]), trace_lines[0]
             if name == "source-actor-await-done.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
