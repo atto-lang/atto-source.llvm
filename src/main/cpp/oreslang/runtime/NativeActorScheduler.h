@@ -98,6 +98,12 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted external-host backpressure bridge. MAILBOX_FULL is waited out under
+ * the scheduler mutex and retried at the exact credit-release linearization.
+ * Never call from one of this scheduler's actor carriers. Unlike repeated
+ * try_send(), transient FULL observations are not counted as rejected sends. */
+OresNativeSendStatus ores_native_actor_scheduler_wait_send(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
