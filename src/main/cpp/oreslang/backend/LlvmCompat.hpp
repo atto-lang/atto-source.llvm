@@ -38,6 +38,17 @@ inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 #endif
 }
 
+inline bool native_has_terminator(const llvm::BasicBlock* block) {
+#if LLVM_VERSION_MAJOR >= 23
+    // LLVM 23 made getTerminator() a well-formed-block accessor. Codegen
+    // intentionally probes open blocks while constructing CFG, so express
+    // nullable intent explicitly instead of invoking that precondition.
+    return block && block->hasTerminator();
+#else
+    return block && block->getTerminator() != nullptr;
+#endif
+}
+
 inline llvm::Function* native_trap(llvm::Module& module) {
 #if LLVM_VERSION_MAJOR >= 20
     return llvm::Intrinsic::getOrInsertDeclaration(&module, llvm::Intrinsic::trap);
