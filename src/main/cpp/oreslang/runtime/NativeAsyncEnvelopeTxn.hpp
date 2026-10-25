@@ -57,11 +57,6 @@ public:
           target_(target),
           lane_(lane),
           bytes_(bytes) {
-        if (!handle.slot_generation_placeholder()) {
-            // This branch is intentionally unreachable: Handle has no ambient
-            // authority beyond its generation. Kept out of the ABI by using
-            // the real generation check below.
-        }
         if (!handle_.generation || !bytes_)
             throw std::invalid_argument("valid async descriptor and byte charge required");
         if (admission_->descriptor_state(handle_) != DescriptorState::Preparing)
