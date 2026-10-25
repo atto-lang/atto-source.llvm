@@ -120,11 +120,14 @@ OresNativeSendStatus ores_native_actor_scheduler_wait_send(
  * Bounded nonblocking send_async Future substrate.
  *
  * submit_async begins admission immediately without parking a host thread.
- * If target credit is unavailable, one generation-fenced descriptor is queued
- * in target-local FIFO order. Physical credit release services pending async
- * sends under the same scheduler mutex before a racing synchronous sender can
- * steal that slot. STOP fails still-pending futures; already READY futures
- * remain READY because mailbox admission was irrevocable.
+ * Only MAILBOX_FULL becomes asynchronous. INVALID_REF, TERMINATED and
+ * RESOURCE_EXHAUSTED propagate from submit_async immediately with a zero
+ * ticket and do not consume a Future descriptor. If target credit alone is
+ * unavailable, one generation-fenced descriptor is queued in target-local
+ * FIFO order. Physical credit release services pending async sends under the
+ * same scheduler mutex before a racing synchronous sender can steal that slot.
+ * STOP fails still-pending futures; already READY futures remain READY because
+ * mailbox admission was irrevocable.
  */
 enum { ORES_NATIVE_ASYNC_SENDS_PER_ACTOR = 256 };
 typedef enum {
