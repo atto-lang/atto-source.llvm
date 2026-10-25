@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
 
@@ -238,6 +239,9 @@ struct Function {
     /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    // Records the syntactic protocol witness; codegen receives only a
+    // checked SourceActorReadyControl resolution, not a magic name.
+    NativeAwaitForm ready_await_form = NativeAwaitForm::None;
     // Non-Copy lexical Future<void> from a previously spawned actor's
     // get_ready(). The compiler consumes it into the existing CONTROL
     // continuation; it is never represented as an untyped i64 guest value.
