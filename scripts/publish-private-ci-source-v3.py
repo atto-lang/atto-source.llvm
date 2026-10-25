@@ -36,6 +36,14 @@ HANDOFF_REF = re.compile(
     r"^ci/(?:oreslang-[0-9a-f]{40}|authorized-[0-9a-f]{40})$"
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+MAVEN_ARTIFACT = re.compile(
+    r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+    r"(?::[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?)?$"
+)
+SAFE_EXECUTABLE = re.compile(
+    r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
+)
+MAX_MAVEN_PREFETCH_ARTIFACTS = 16
 MAX_FILES = 1024
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
@@ -457,6 +465,151 @@ def parse_contract(raw, repository, source_pr, test_plan):
     }
 
 
+def _validate_maven_prefetch_artifacts(plan, uses_maven):
+    extras = plan.get("maven_prefetch_artifacts", [])
+    if extras is None:
+        extras = []
+    if (not isinstance(extras, list)
+            or len(extras) > MAX_MAVEN_PREFETCH_ARTIFACTS
+            or any(not isinstance(value, str)
+                   or len(value) > 256
+                   or not MAVEN_ARTIFACT.fullmatch(value)
+                   for value in extras)
+            or len(set(extras)) != len(extras)):
+        raise Denied("reviewed test plan Maven prefetch artifacts invalid")
+    if not uses_maven and extras:
+        raise Denied("non-Maven test plan cannot prefetch Maven artifacts")
+    return list(extras)
+
+
+def _validate_maven_argv(argv):
+    if "-o" not in argv and "--offline" not in argv:
+        raise Denied("Maven carrier commands must run offline")
+    short_with_values = ("-s", "-gs", "-f")
+    long_with_values = ("--settings", "--global-settings", "--file")
+    dangerous_props = (
+        "-Dmaven.repo.local", "-DskipTests", "-Dmaven.test.skip", "-DskipITs",
+    )
+    for arg in argv[1:]:
+        if (any(arg == flag or (arg.startswith(flag) and arg != flag)
+                for flag in short_with_values)
+                or any(arg == flag or arg.startswith(flag + "=")
+                       for flag in long_with_values)
+                or any(arg == prop or arg.startswith(prop + "=")
+                       for prop in dangerous_props)):
+            raise Denied("Maven carrier command overrides trusted build controls")
+
+
+def validate_test_plan(plan_bytes, source_pr):
+    try:
+        plan = strict_json_loads(
+            plan_bytes.decode("utf-8"), "invalid reviewed carrier test plan"
+        )
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise Denied("invalid reviewed carrier test plan") from exc
+    if (not isinstance(plan, dict)
+            or plan.get("schema") != "ores-private-ci-test-plan-v1"
+            or plan.get("source_repo") != SOURCE_REPO):
+        raise Denied("reviewed test plan source/schema mismatch")
+
+    allowed_fields = {
+        "schema", "source_repo", "allowed_prs", "commands",
+        "required_source_blobs", "maven_pom_blob_sha",
+        "maven_prefetch_artifacts",
+    }
+    if not set(plan).issubset(allowed_fields):
+        raise Denied("reviewed test plan has unexpected fields")
+
+    allowed = plan.get("allowed_prs")
+    if (not isinstance(allowed, list) or not allowed
+            or source_pr not in allowed
+            or any(not isinstance(value, int) or isinstance(value, bool)
+                   or value <= 0 for value in allowed)
+            or len(set(allowed)) != len(allowed)):
+        raise Denied("reviewed test plan does not authorize source PR")
+
+    required = plan.get("required_source_blobs", {})
+    if not isinstance(required, dict):
+        raise Denied("reviewed test plan required source blobs invalid")
+    checked_required = {}
+    for path, sha in required.items():
+        if (not isinstance(path, str) or not path
+                or path.startswith("/") or "\\" in path
+                or ".." in PurePosixPath(path).parts
+                or ".git" in PurePosixPath(path).parts):
+            raise Denied("reviewed test plan has unsafe required source path")
+        checked_required[path] = valid_sha(
+            sha, "reviewed test plan required source blob invalid"
+        )
+
+    commands = plan.get("commands")
+    if not isinstance(commands, list) or not 1 <= len(commands) <= 16:
+        raise Denied("reviewed test plan commands missing or excessive")
+    uses_maven = False
+    for command in commands:
+        if not isinstance(command, dict):
+            raise Denied("reviewed test plan command shape invalid")
+        if (not {"argv", "cwd", "timeout_seconds"}.issubset(command)
+                or not set(command).issubset({
+                    "argv", "cwd", "timeout_seconds", "stdout_contains",
+                })):
+            raise Denied("reviewed test plan command shape invalid")
+        argv = command.get("argv")
+        cwd = command.get("cwd")
+        timeout = command.get("timeout_seconds")
+        expected = command.get("stdout_contains")
+        if (not isinstance(argv, list) or not argv or len(argv) > 64
+                or any(not isinstance(arg, str) or not arg or len(arg) > 4096
+                       or "\x00" in arg for arg in argv)
+                or not SAFE_EXECUTABLE.fullmatch(argv[0])
+                or not isinstance(cwd, str) or not cwd
+                or cwd.startswith("/") or "\\" in cwd
+                or ".." in PurePosixPath(cwd).parts
+                or ".git" in PurePosixPath(cwd).parts
+                or not isinstance(timeout, int) or isinstance(timeout, bool)
+                or not 1 <= timeout <= 1800
+                or (expected is not None
+                    and (not isinstance(expected, str)
+                         or not expected or len(expected) > 4096))):
+            raise Denied("reviewed test plan command invalid")
+        if argv[0] == "mvn":
+            uses_maven = True
+            _validate_maven_argv(argv)
+
+    pom_pin = plan.get("maven_pom_blob_sha")
+    if pom_pin is not None:
+        pom_pin = valid_sha(pom_pin, "reviewed Maven pom blob invalid")
+        old_pin = checked_required.get("pom.xml")
+        if old_pin is not None and old_pin != pom_pin:
+            raise Denied("reviewed Maven pom pins disagree")
+        checked_required["pom.xml"] = pom_pin
+
+    extras = _validate_maven_prefetch_artifacts(plan, uses_maven)
+    if uses_maven and "pom.xml" not in checked_required:
+        raise Denied("Maven test plan must bind exact pom.xml blob")
+    if not uses_maven and pom_pin is not None:
+        raise Denied("non-Maven test plan cannot bind Maven pom")
+
+    return {
+        "sha256": hashlib.sha256(plan_bytes).hexdigest(),
+        "required_source_blobs": checked_required,
+        "uses_maven": uses_maven,
+        "maven_pom_blob_sha": checked_required.get("pom.xml"),
+        "maven_prefetch_artifacts": extras,
+    }
+
+
+def verify_required_source_blobs(files, required):
+    if not isinstance(required, dict):
+        raise Denied("required source blob contract invalid")
+    actual = {path: sha for path, _mode, sha, _data in files}
+    for path, expected in required.items():
+        if actual.get(path) != expected:
+            raise Denied(
+                "exact source tree differs from reviewed required blob: " + path
+            )
+
+
 def protected_authority(repository, source_pr, test_plan):
     """Attest this exact script plus local policies to protected source main."""
     main_sha = source_protection()
@@ -831,11 +984,13 @@ def publish(repository, source_pr, source_commit, test_plan, now=None):
         repository, source_pr, test_plan
     )
     base_tree, plan_bytes = checked_destination(repository, contract)
+    plan_meta = validate_test_plan(plan_bytes, source_pr)
     source_tree, files, rows, manifest_sha256 = exact_source_tree(
         source_pr, source_commit
     )
+    verify_required_source_blobs(files, plan_meta["required_source_blobs"])
     branch = "ci/oreslang-" + source_tree
-    plan_sha256 = hashlib.sha256(plan_bytes).hexdigest()
+    plan_sha256 = plan_meta["sha256"]
 
     elements = []
     for path, mode, sha, data in files:
