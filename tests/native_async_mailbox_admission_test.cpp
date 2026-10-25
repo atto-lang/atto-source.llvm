@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
@@ -283,6 +284,20 @@ static void preparation_quota_bounds_work_before_payload_freeze() {
     finish(f);
 }
 
+static void exhausted_descriptor_generation_skips_to_usable_slot() {
+    NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
+    admission.test_set_slot_generation(
+        0, std::numeric_limits<std::uint64_t>::max());
+
+    NativeAsyncMailboxAdmission::Handle handle;
+    CHECK(admission.begin_preparation(&handle));
+    CHECK(handle.slot == 1);
+    CHECK(handle.generation == 1);
+    CHECK(admission.active_descriptors() == 1);
+    CHECK(admission.cancel_preparation(handle));
+    CHECK(admission.active_descriptors() == 0);
+}
+
 static void cancel_and_credit_release_have_exactly_one_winner() {
     Fixture f;
     setup(f);
@@ -368,6 +383,7 @@ int main() {
     cancelled_fifo_tombstone_cannot_hide_free_credit();
     aborted_transfer_hands_credit_to_next_waiter();
     preparation_quota_bounds_work_before_payload_freeze();
+    exhausted_descriptor_generation_skips_to_usable_slot();
     cancel_and_credit_release_have_exactly_one_winner();
     seal_fails_waiters_but_not_irrevocable_transfers();
     return 0;
