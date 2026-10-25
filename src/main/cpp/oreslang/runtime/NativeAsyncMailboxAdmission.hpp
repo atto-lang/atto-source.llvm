@@ -91,7 +91,8 @@ public:
             return Registration::Rejected;
 
         std::lock_guard<std::mutex> guard(mutex_);
-        if (sealed_ || pending_waiters_ >= max_waiters_
+        if (sealed_ || bytes > max_bytes_
+                || pending_waiters_ >= max_waiters_
                 || bytes > max_pending_bytes_ - pending_bytes_)
             return Registration::Rejected;
 
