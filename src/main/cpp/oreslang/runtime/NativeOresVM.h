@@ -118,6 +118,10 @@ OresNativeSendStatus ores_native_vm_try_send(
  * cannot guarantee undelivered terminal notices without host reconciliation. */
 int ores_native_vm_stop(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Source-style stop: reject new DATA and abandon queued DATA while preserving
+ * an already-active turn and lifecycle CONTROL. */
+int ores_native_vm_stop_sealed(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */
