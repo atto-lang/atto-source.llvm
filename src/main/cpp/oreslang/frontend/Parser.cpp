@@ -2168,6 +2168,9 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if ((token_.text == "const" || token_.text == "val")
+                    && peek_next().text == "Future")
+                fail("native Future<void> declaration must precede actor effects");
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
