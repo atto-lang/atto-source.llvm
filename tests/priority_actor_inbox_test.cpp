@@ -850,6 +850,171 @@ static void owned_handle_admission_never_steals_on_rejection_or_constructor_faul
     target.close();
 }
 
+static void stop_vs_bound_send_admission_has_one_winner() {
+    using SendInbox = PriorityActorInbox<PausedPublication>;
+    using SendLane = SendInbox::Lane;
+    std::uint32_t send_wins = 0;
+    std::uint32_t stop_wins = 0;
+
+    for (std::uint32_t trial = 0; trial < 2000; ++trial) {
+        const std::uint64_t runtime = 990000 + trial;
+        NativeActorGroup group(runtime, 1);
+        std::atomic<int> stops{0};
+        auto actor = group.adopt(runtime, 1, 1, [&] {
+            stops.fetch_add(1, std::memory_order_acq_rel);
+        });
+        CHECK(group.mark_ready(actor));
+
+        SendInbox inbox({1, 64}, {1, 64}, {1, 64}, 2);
+        inbox.bind_target(actor);
+        std::atomic<int> moved{0};
+        PausedPublication payload([&] {
+            moved.fetch_add(1, std::memory_order_acq_rel);
+        });
+        std::atomic<int> ready{0};
+        bool accepted = false;
+        bool rejected = false;
+
+        std::thread sender([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try {
+                accepted = inbox.offer_to(
+                    actor, SendLane::Normal, std::move(payload), 8);
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        std::thread stopper([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            group.stop_workers();
+        });
+        sender.join();
+        stopper.join();
+
+        CHECK(stops.load(std::memory_order_acquire) == 1);
+        CHECK(accepted != rejected);
+        CHECK((accepted && moved.load(std::memory_order_acquire) == 1)
+              || (rejected && moved.load(std::memory_order_acquire) == 0));
+
+        // STOP is sticky: a second bound send is rejected before moving.
+        std::atomic<int> late_moves{0};
+        PausedPublication late([&] {
+            late_moves.fetch_add(1, std::memory_order_acq_rel);
+        });
+        bool late_rejected = false;
+        try {
+            (void)inbox.offer_to(
+                actor, SendLane::Urgent, std::move(late), 8);
+        } catch (const std::logic_error&) {
+            late_rejected = true;
+        }
+        CHECK(late_rejected);
+        CHECK(late_moves.load(std::memory_order_acquire) == 0);
+
+        if (accepted) {
+            ++send_wins;
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(!group.finalized(actor));
+            auto receipt = inbox.try_receive();
+            CHECK(receipt);
+            CHECK(receipt->acknowledge_released());
+            CHECK(actor.outstanding_resource_loans() == 0);
+        } else {
+            ++stop_wins;
+            CHECK(actor.outstanding_resource_loans() == 0);
+            CHECK(inbox.snapshot() == 0);
+        }
+
+        CHECK(group.finalized(actor));
+        actor.get_done().get();
+        inbox.close();
+    }
+
+    CHECK(send_wins + stop_wins == 2000);
+}
+
+static void stop_vs_bound_owned_send_preserves_sender_ownership() {
+    std::uint32_t send_wins = 0;
+    std::uint32_t stop_wins = 0;
+
+    for (std::uint32_t trial = 0; trial < 2000; ++trial) {
+        const std::uint64_t runtime = 993000 + trial;
+        NativeActorGroup group(runtime, 1);
+        std::atomic<int> stops{0};
+        auto actor = group.adopt(runtime, 1, 1, [&] {
+            stops.fetch_add(1, std::memory_order_acq_rel);
+        });
+        CHECK(group.mark_ready(actor));
+
+        Inbox inbox({1, 64}, {1, 64}, {1, 64}, 2);
+        inbox.bind_target(actor);
+        auto owner = std::make_unique<int>(static_cast<int>(trial));
+        std::atomic<int> ready{0};
+        bool accepted = false;
+        bool rejected = false;
+
+        std::thread sender([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            try {
+                accepted = inbox.offer_owned_to(
+                    actor, Lane::Bulk, owner, sizeof(int));
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+        });
+        std::thread stopper([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            group.stop_workers();
+        });
+        sender.join();
+        stopper.join();
+
+        CHECK(stops.load(std::memory_order_acquire) == 1);
+        CHECK(accepted != rejected);
+
+        if (accepted) {
+            ++send_wins;
+            CHECK(!owner);
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(!group.finalized(actor));
+            auto receipt = inbox.try_receive();
+            CHECK(receipt && receipt->value() == static_cast<int>(trial));
+            CHECK(receipt->acknowledge_released());
+            CHECK(actor.outstanding_resource_loans() == 0);
+        } else {
+            ++stop_wins;
+            CHECK(owner && *owner == static_cast<int>(trial));
+            CHECK(actor.outstanding_resource_loans() == 0);
+            CHECK(inbox.snapshot() == 0);
+        }
+
+        auto late_owner = std::make_unique<int>(-1);
+        bool late_rejected = false;
+        try {
+            (void)inbox.offer_owned_to(
+                actor, Lane::Urgent, late_owner, sizeof(int));
+        } catch (const std::logic_error&) {
+            late_rejected = true;
+        }
+        CHECK(late_rejected);
+        CHECK(late_owner && *late_owner == -1);
+
+        CHECK(group.finalized(actor));
+        actor.get_done().get();
+        inbox.close();
+    }
+
+    CHECK(send_wins + stop_wins == 2000);
+}
+
 static void concurrent_publish_has_unique_global_sequences_and_no_credit_leaks() {
     constexpr int PER_LANE = 500, LANES = 3, TOTAL = PER_LANE * LANES;
     Inbox inbox({16, 128}, {16, 128}, {16, 128}, 64);
@@ -912,5 +1077,7 @@ int main() {
     actor_binding_rejects_unpublished_preparation_and_unguarded_send();
     stop_cannot_leave_a_preparing_message_unaccounted();
     owned_handle_admission_never_steals_on_rejection_or_constructor_fault();
+    stop_vs_bound_send_admission_has_one_winner();
+    stop_vs_bound_owned_send_preserves_sender_ownership();
     concurrent_publish_has_unique_global_sequences_and_no_credit_leaks();
 }
