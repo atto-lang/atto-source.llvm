@@ -1280,6 +1280,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     set_tests_properties(native_sealed_state_ir_effect_contract PROPERTIES TIMEOUT 60)
+    # Runs the exact codegen-admission header without LLVM libraries. This
+    # validates fail-closed input shape, not source-to-native compilation.
+    add_executable(oreslang-sealed-state-admission-source-free-test
+        tests/sealed_state_admission_source_free_test.cpp)
+    target_include_directories(oreslang-sealed-state-admission-source-free-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-sealed-state-admission-source-free-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-sealed-state-admission-source-free-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_sealed_state_admission_source_free
+        COMMAND oreslang-sealed-state-admission-source-free-test)
+    set_tests_properties(native_sealed_state_admission_source_free PROPERTIES TIMEOUT 30)
     # Direct compiler-AST callers cannot manufacture state authority by
     # setting effect bits or malformed schema metadata after parsing.
     add_executable(oreslang-sealed-state-codegen-authority-test
