@@ -73,5 +73,45 @@ class ActorReceiptParserTest(unittest.TestCase):
             parse("OTHER_MARKER " + self.good)
 
 
+    def test_c_integer_abi_boundaries(self):
+        decimal = source_actor_e2e.parse_native_decimal
+        self.assertEqual((1 << 64) - 1, decimal(str((1 << 64) - 1)))
+        self.assertEqual((1 << 63) - 1, decimal(str((1 << 63) - 1), signed=True))
+        self.assertEqual(-(1 << 63), decimal(str(-(1 << 63)), signed=True))
+
+    def test_c_integer_overflow_is_denied(self):
+        for old, new in (
+            ("accepted=4", "accepted=18446744073709551616"),
+            ("last=52", "last=9223372036854775808"),
+            ("last=52", "last=-9223372036854775809"),
+        ):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                parse(self.good.replace(old, new))
+
+    def test_noncanonical_leading_zero_negative_zero_and_sign_are_denied(self):
+        for old, new in (
+            ("processed=4", "processed=04"),
+            ("ready=1", "ready=01"),
+            ("last=52", "last=052"),
+            ("last=52", "last=-0"),
+            ("accepted=4", "accepted=+4"),
+            ("last=52", "last=+52"),
+        ):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                parse(self.good.replace(old, new))
+
+    def test_exact_native_abi_field_order_and_framing(self):
+        for altered in (
+            self.good.replace("ready=1 accepted=4", "accepted=4 ready=1"),
+            self.good.replace(" released=1", "  released=1"),
+            self.good.replace(" released=1", "\treleased=1"),
+            self.good.replace(" released=1", "\u2003released=1"),
+            self.good + " ",
+            self.good.replace("last=52", "last=52 extra=1"),
+        ):
+            with self.subTest(altered=altered), self.assertRaises(AssertionError):
+                parse(altered)
+
+
 if __name__ == "__main__":
     unittest.main()
