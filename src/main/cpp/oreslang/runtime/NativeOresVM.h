@@ -32,19 +32,26 @@ typedef struct {
      * Not an actor-local panic catch or an external supervisor pool. */
     OresNativeActorPanicFn on_failure;
     void* context;
-    /* Optional continuation wake callback. Appended after context so existing
-     * positional host initializers keep their ABI meaning. When present, the
-     * domain allocates bounded scheduler wake credits and invokes this callback
-     * only on the producer actor's authenticated single-flight lane. */
-    OresNativeActorWakeFn on_wake;
 } OresNativeVMDomainConfig;
 
 typedef struct {
     OresNativeVMDomainConfig domains[ORES_NATIVE_VM_DOMAIN_COUNT];
 } OresNativeVMConfig;
 
+/* ABI-separate optional continuation wake configuration. Keeping this out of
+ * OresNativeVMDomainConfig preserves the existing public C struct layout for
+ * hosts compiled against the original VM ABI. The wake callback reuses each
+ * domain's existing context pointer from OresNativeVMConfig. */
+typedef struct {
+    OresNativeActorWakeFn domains[ORES_NATIVE_VM_DOMAIN_COUNT];
+} OresNativeVMWakeConfig;
+
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* Opt-in wake-capable VM construction for continuation/NIO runtimes. Existing
+ * ores_native_vm_open() remains wake-free and ABI-compatible. */
+OresNativeVM* ores_native_vm_open_with_wakes(
+    const OresNativeVMConfig* config, const OresNativeVMWakeConfig* wakes);
 /* RT bootstrap: prestart every configured carrier in all four domains before
  * exposing the VM to guest work. No carrier will be created on its DATA or
  * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
