@@ -10,6 +10,7 @@ on:
       - 'tests/source_actor_e2e.py'
       - 'tests/test_source_actor_receipts.py'
       - 'tests/test_source_actor_owned_ir.py'
+      - 'tests/test_source_actor_control_receipts.py'
       - 'tests/fixtures/source-actor-*.ores'
       - '.github/workflows/source-actor-owned-drop.yml'
   workflow_dispatch:
@@ -44,6 +45,7 @@ jobs:
           set -euo pipefail
           python3 -I tests/test_source_actor_receipts.py
           python3 -I tests/test_source_actor_owned_ir.py
+          python3 -I tests/test_source_actor_control_receipts.py
 
       - name: Install LLVM C++ compiler and native linker
         run: |
@@ -128,6 +130,7 @@ jobs:
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
               "tests/source_actor_e2e.py",
               "tests/test_source_actor_owned_ir.py",
+              "tests/test_source_actor_control_receipts.py",
               "tests/fixtures/source-actor-scoped-owned-i64.ores",
               "tests/fixtures/source-actor-two-owned-heaps.ores",
           ]
