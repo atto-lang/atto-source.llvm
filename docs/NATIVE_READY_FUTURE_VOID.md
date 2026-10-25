@@ -11,6 +11,10 @@ stop worker;
 return 43;
 ```
 
+Readiness can fail if the actor terminates before READY publication, so the
+enclosing native source function must declare `throws ActorTerminated`.
+`get_done()` remains the separate physical-finalization barrier.
+
 Three admitted spellings have identical readiness semantics:
 `await worker;`, `await worker.get_ready();`, and
 `const Future<void> ready = worker.get_ready(); await ready;`.
