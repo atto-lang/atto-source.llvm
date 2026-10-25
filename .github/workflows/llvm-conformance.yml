@@ -13,7 +13,22 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact-head provenance before running any conformance test
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse --verify HEAD)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Wrong conformance source commit: expected $expected, actual $actual" >&2
+            exit 65
+          fi
+          printf 'source_commit=%s\nsource_tree=%s\n' "$actual" "$(git rev-parse 'HEAD^{tree}')"
       - name: Verify Java/LLVM strict parity gate fail-closed shell admissions
         run: bash tests/java_llvm_parity_gate_admission.sh
       - name: Reject forged Java/LLVM parity receipts without a real compiler
