@@ -33,6 +33,13 @@ typedef struct {
     uint64_t generation; /* never recycled at UINT64_MAX */
 } WakeCredit;
 typedef struct {
+    uint64_t generation; /* descriptor generation, never recycled at UINT64_MAX */
+    uint64_t sequence;   /* target-local FIFO order */
+    uint64_t payload;
+    OresNativeAsyncSendState state;
+    OresNativeSendStatus outcome;
+} AsyncSendCredit;
+typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     size_t head, tail, queued;
     unsigned active;
@@ -41,6 +48,9 @@ typedef struct {
     unsigned has_control;
     WakeCredit* wakes; /* preallocated producer-local escrow credits */
     size_t wake_live, wake_ready, wake_cursor;
+    AsyncSendCredit* async_sends; /* preallocated target-local Future descriptors */
+    size_t async_live, async_pending;
+    uint64_t next_async_sequence;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
@@ -67,6 +77,7 @@ struct OresNativeActorScheduler {
     ActorLane* actors;
     uint64_t* slots;
     WakeCredit* wake_slots;
+    AsyncSendCredit* async_send_slots;
     pthread_t* threads;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
     size_t next_actor, outstanding, runnable_lanes;
@@ -430,9 +441,11 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
+    s->async_send_slots = (AsyncSendCredit*)calloc(
+        actors * ORES_NATIVE_ASYNC_SENDS_PER_ACTOR, sizeof(AsyncSendCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
-            || !s->threads)
+    if (!s->actors || !s->slots || !s->async_send_slots
+            || (wake_callback && !s->wake_slots) || !s->threads)
         goto allocation_failed;
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
@@ -449,6 +462,9 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
         s->actors[i].messages = s->slots + i * capacity;
         s->actors[i].wakes = wake_callback
             ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
+        s->actors[i].async_sends = s->async_send_slots
+            + i * ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
+        s->actors[i].next_async_sequence = 1;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
@@ -476,6 +492,7 @@ allocation_failed:
     free(s->threads);
     free(s->slots);
     free(s->wake_slots);
+    free(s->async_send_slots);
     free(s->actors);
     free(s);
     return NULL;
@@ -1319,6 +1336,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     free(s->threads);
     free(s->slots);
     free(s->wake_slots);
+    free(s->async_send_slots);
     free(s->actors);
     free(s);
     return 1;
