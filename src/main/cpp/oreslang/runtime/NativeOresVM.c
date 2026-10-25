@@ -331,15 +331,18 @@ OresNativeSendStatus ores_native_vm_try_send(
         : ORES_NATIVE_SEND_INVALID_REF;
 }
 
-int ores_native_vm_stop(
-    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+static int vm_stop(
+        OresNativeVM* vm,
+        enum OresNativeVMDomain domain,
+        OresNativeActorRef ref,
+        int sealed) {
     if (!vm || !valid_domain(domain)) return 0;
     /* Keep stop ordered against supervised child registration so a child
      * cannot inherit a parent concurrently passing into retirement. */
     control_lock(vm);
     int ok = !vm->control_retired;
     /* A supervisor may stop only after every direct child has physically
-     * drained AND its terminal notice was admitted to the supervisor lane.
+     * completed and its terminal notice was admitted to the supervisor lane.
      * Reject early parent retirement rather than silently orphaning a live
      * child. Every operation here acquires scheduler locks under the same
      * master -> scheduler ordering as spawn and terminal admission. */
@@ -355,10 +358,25 @@ int ores_native_vm_stop(
             }
         }
     }
-    if (ok)
-        ok = ores_native_actor_scheduler_stop(vm->schedulers[domain], ref);
+    if (ok) {
+        ok = sealed
+            ? ores_native_actor_scheduler_stop_sealed(
+                vm->schedulers[domain], ref)
+            : ores_native_actor_scheduler_stop(
+                vm->schedulers[domain], ref);
+    }
     control_unlock(vm);
     return ok;
+}
+
+int ores_native_vm_stop(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm_stop(vm, domain, ref, 0);
+}
+
+int ores_native_vm_stop_sealed(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm_stop(vm, domain, ref, 1);
 }
 
 int ores_native_vm_poll_done(

@@ -25,6 +25,8 @@ typedef struct {
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
     atomic_int initialized;
+    atomic_int stop_requested;
+    atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
 } SourceActor;
@@ -423,40 +425,94 @@ int oreslang_source_actor_snapshot_current_trace(
         out);
 }
 
-void oreslang_source_actor_stop(void* opaque) {
+void oreslang_source_actor_request_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
+    int expected = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->stop_requested,
+        &expected,
+        1,
+        memory_order_acq_rel,
+        memory_order_acquire));
+
     /*
-     * Stop admission is serialized with group metadata, but the blocking host
-     * wait MUST NOT hold group.mutex: constructor completion may need that
-     * mutex to settle a registered readiness Future.
+     * Stop admission is serialized with group metadata, but this phase never
+     * waits for physical completion. A future source get_done continuation
+     * must be able to observe the actor between requested and quiescent.
      */
     group_lock();
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    ensure(ores_native_vm_stop(
+    /*
+     * Source stop matches Java ActorRef.stop(), not gracefulStop(): reject
+     * future DATA and abandon queued DATA, while an already-active turn is
+     * allowed to cross its physical execution boundary.
+     */
+    ensure(ores_native_vm_stop_sealed(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
     group_unlock();
+}
 
+void oreslang_source_actor_join_done(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(atomic_load_explicit(
+        &instance->stop_requested, memory_order_acquire) == 1);
+
+    int expected = 0;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->join_started,
+        &expected,
+        1,
+        memory_order_acq_rel,
+        memory_order_acquire));
+
+    /*
+     * This is trusted outer-host glue, never a carrier turn. Do not block a
+     * source actor carrier while waiting for the actor's physical terminal ACK.
+     */
+    OresNativeExecutionContext carrier = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &carrier));
+
+    const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(ores_native_vm_wait_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
     group_lock();
-    ensure(group.actors[slot] == instance);
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == instance);
     ensure(atomic_load_explicit(
         &instance->initialized, memory_order_acquire) == 1);
     ensure(ores_native_vm_poll_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
+    OresNativeActorTerminalState terminal = {0};
+    ensure(ores_native_vm_actor_terminal_state(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, &terminal));
+    ensure(terminal.kind == ORES_NATIVE_TERMINATION_STOPPED);
+    ensure(terminal.processed_user_messages
+        + terminal.abandoned_user_messages
+        == terminal.accepted_user_messages);
+    ensure(terminal.processed_user_messages
+        == atomic_load_explicit(&instance->processed, memory_order_acquire));
+    ensure(terminal.abandoned_control_messages == 0);
+
+    /*
+     * get_done parity requires physical quiescence, not a logical stop bit.
+     * Reclaim the actor-owned heap only after the VM terminal acknowledgement.
+     */
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 processed=%llu last=%lld\n",
-        (unsigned long long)atomic_load_explicit(
-            &instance->processed, memory_order_acquire),
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        (unsigned long long)terminal.accepted_user_messages,
+        (unsigned long long)terminal.processed_user_messages,
+        (unsigned long long)terminal.abandoned_user_messages,
         (long long)atomic_load_explicit(
             &instance->last_result, memory_order_relaxed));
 #endif
@@ -488,4 +544,13 @@ void oreslang_source_actor_stop(void* opaque) {
         group.peak = 0;
     }
     group_unlock();
+}
+
+void oreslang_source_actor_stop(void* opaque) {
+    /*
+     * Preserve the existing compiled-source behavior while the frontend still
+     * has no source get_done state machine: stop remains request + physical join.
+     */
+    oreslang_source_actor_request_stop(opaque);
+    oreslang_source_actor_join_done(opaque);
 }

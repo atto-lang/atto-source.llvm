@@ -3408,6 +3408,65 @@ if(BUILD_TESTING)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()
 
+# Source-actor lifecycle prerequisite for real ActorRef.get_done lowering:
+# stop request must not wait for physical termination; join_done owns the
+# host-side terminal ACK and heap-reclamation barrier.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-actor-sealed-stop-test
+        tests/native_actor_sealed_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-sealed-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-sealed-stop-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-sealed-stop-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-sealed-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_sealed_stop_abandons_queued_data
+        COMMAND oreslang-native-actor-sealed-stop-test)
+    set_tests_properties(native_actor_sealed_stop_abandons_queued_data
+        PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-actor-sealed-stop-race-test
+        tests/native_actor_sealed_stop_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-sealed-stop-race-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_sealed_stop_send_race
+        COMMAND oreslang-native-actor-sealed-stop-race-test)
+    set_tests_properties(native_actor_sealed_stop_send_race
+        PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-source-actor-stop-join-split-test
+        tests/source_actor_stop_join_split_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-stop-join-split-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-stop-join-split-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-stop-join-split-test PRIVATE c_std_11)
+    target_compile_options(oreslang-source-actor-stop-join-split-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_stop_request_join_split
+        COMMAND oreslang-source-actor-stop-join-split-test)
+    set_tests_properties(source_actor_stop_request_join_split PROPERTIES TIMEOUT 30)
+endif()
+
 # Receiver-elided source overload selector; this C++ unit is intentionally
 # independent of LLVM libraries and can be compiled on minimal hosts.
 if(BUILD_TESTING)
