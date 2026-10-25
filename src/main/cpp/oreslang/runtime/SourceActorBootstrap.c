@@ -180,6 +180,20 @@ int oreslang_source_actor_test_cancel_readable_await(void) {
     group_unlock();
     return ores_native_vm_nio_try_cancel_actor(vm, watch);
 }
+
+int oreslang_source_actor_test_stop_readable_root(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    if (!frame || !frame->admitted || frame->done
+            || !group.vm || !group.root_ref.scheduler_domain) {
+        group_unlock();
+        return 0;
+    }
+    const int stopped = ores_native_vm_stop_sealed(
+        group.vm, ORES_NATIVE_VM_MAIN, group.root_ref);
+    group_unlock();
+    return stopped;
+}
 #endif
 #endif
 
