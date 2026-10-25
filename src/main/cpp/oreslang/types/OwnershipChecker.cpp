@@ -27,6 +27,7 @@ struct LocalOwnership {
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
+    bool assignable = false; // lexical slot replacement, not referent mutation
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
     std::string class_name;
@@ -641,10 +642,12 @@ void validate_i64_ownership(const Program& program) {
             }
             LocalOwnership entry;
             entry.mode = param.mode;
-            // Native by-value scalar parameters occupy independently owned,
-            // mutable stack slots; borrowed parameters retain caller loans.
-            // Do not silently confer that mutability on const local bindings.
+            // By-value scalar parameters own data that may be lent exclusively;
+            // their identifiers remain read-only. Borrowed parameters retain
+            // caller loans. Const locals do not gain referent mutability.
             entry.mutable_owner = param.mode == Mode::Value;
+            // Parameter bindings are val slots even for exclusive loans.
+            // Referent capability does not grant identifier reassignment.
             entry.class_name = param.class_name;
             if (!param.class_name.empty()) {
                 entry.mutable_paths = layouts.mutable_paths(param.class_name);
@@ -661,6 +664,7 @@ void validate_i64_ownership(const Program& program) {
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
             entry.mutable_owner = binding.owner_mutable;
+            entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
@@ -810,6 +814,8 @@ void validate_i64_ownership(const Program& program) {
         std::function<void(const Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
+            entry.mutable_owner = binding.owner_mutable;
+            entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (!binding.class_name.empty()) {
                 if (!class_fields.count(binding.class_name))
@@ -830,6 +836,20 @@ void validate_i64_ownership(const Program& program) {
                 state.erase(action.branch_local->name);
         };
         check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::ScalarWrite) {
+                const auto found = state.find(stmt.receiver);
+                if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
+                auto writable = [&]() {
+                    const auto& target = state.at(stmt.receiver);
+                    return target.assignable && !target.heap_owned && !target.int_array && target.class_name.empty() &&
+                        target.shared_loans == 0 && !target.exclusive_loan;
+                };
+                if (!writable()) throw std::runtime_error("assignment requires an unloaned mutable scalar slot");
+                check_value(*stmt.expression, state, functions);
+                if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
+                state.at(stmt.receiver).moved = false;
+                return;
+            }
             if (stmt.kind == Statement::Kind::Conditional) {
                 if (stmt.condition) check_value(*stmt.condition, state, functions);
                 else { check_pure_guard(*stmt.condition_lhs, state, functions); check_pure_guard(*stmt.condition_rhs, state, functions); }
@@ -1016,6 +1036,8 @@ void validate_i64_ownership(const Program& program) {
                 continue;
             }
             check_effect(stmt, locals);
+            if (stmt.kind == Statement::Kind::ScopedLocal)
+                root_names.insert(stmt.branch_local->name);
         }
         // Actor sends transfer scalar payloads in lexical send/stop order.
         // Do not let the backend load moved locals or leak raw borrow pointers.
