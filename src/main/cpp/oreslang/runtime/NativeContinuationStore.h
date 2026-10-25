@@ -52,6 +52,9 @@ OresNativeContinuationStore* ores_native_continuation_store_open(
     uint32_t capacity,
     OresNativeExecutionContextStore* executions);
 
+/* Close requires every API user/producer to be externally quiescent and all
+ * logical references released; live_count alone is not a shutdown fence.
+ * The execution store must outlive this continuation store. */
 int ores_native_continuation_store_close(OresNativeContinuationStore* store);
 
 int ores_native_continuation_store_publish(
@@ -72,6 +75,8 @@ int ores_native_continuation_store_retain(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
 
+/* The final reference cannot retire a CLAIMED frame. Its owner must finish
+ * execution first; a rejected release leaves the reference unchanged. */
 int ores_native_continuation_store_release(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);

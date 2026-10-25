@@ -77,7 +77,7 @@ def main():
                   "cannot borrow a partially moved class")
             check(decl +
                   "fnc view(borrow mut Record p): int { return rt take p.f0; }\n" +
-                  head + "  return view(rt borrow mut p);\n}\n",
+                  head + "  return view(rt mut borrow p);\n}\n",
                   "cannot take a class field through a borrowed parameter")
             check(decl + head +
                   "  const v: int = rt take p.f0;\n"
