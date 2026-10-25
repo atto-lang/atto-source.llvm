@@ -80,6 +80,20 @@ operations **without producing LLVM IR**. Existing
 `tests/fixtures/unsupported-native-io-{bare,blocking}.ores` already guard
 two cases; the async-only boundary matrix widens the future regression gate.
 
+### Native reserved I/O identities while lowering is unavailable
+
+Until the native backend has the typed I/O registry, nonblocking transport,
+suspension-aware effect checking and continuation lowering described below,
+the concrete standard-I/O operation spellings exercised by
+`native_async_only_io_boundary_matrix` are compiler-owned names. A source
+unit may neither call an unavailable binding nor define a global function or
+method with one of those exact identities to make the call look synchronous.
+
+This reservation is deliberately identity-based, not suffix-based. Ordinary
+user functions such as `pure_math_blocking`, `checksum_async` or similar
+names remain valid when they are otherwise synchronous native functions.
+The compiler must not infer async/nonblocking semantics merely from a suffix.
+
 Complete migration requires:
 - Versioned shared typed I/O ABI/registry, with async-only backends and
   `suspends` effects, covering aliases/qualified method calls.

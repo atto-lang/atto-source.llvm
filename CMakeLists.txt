@@ -1416,6 +1416,27 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-source-actor-capability-runtime-test
+        tests/source_actor_capability_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-capability-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-capability-runtime-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-source-actor-capability-runtime-test PRIVATE
+        -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME source_actor_capability_runtime
+        COMMAND oreslang-source-actor-capability-runtime-test)
+    set_tests_properties(source_actor_capability_runtime PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
@@ -1961,6 +1982,8 @@ if(BUILD_TESTING)
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
     oreslang_contract_test(reject_unsupported_native_io_bare unsupported-native-io-bare.ores --diagnostic "unknown function or wrong call arity")
+    oreslang_contract_test(reject_unsupported_native_io_global_launder unsupported-native-io-global-launder.ores --diagnostic "native I/O callable name is compiler-owned")
+    oreslang_contract_test(reject_unsupported_native_io_method_launder unsupported-native-io-method-launder.ores --diagnostic "native I/O callable name is compiler-owned")
     oreslang_contract_test(reject_unverified_target_header unsupported-target-header.ores --diagnostic "native target admission unsupported")
     # Neither naming style is permitted without a typed I/O registry, async
     # transport and continuation lowering. No IR may be emitted on failure.

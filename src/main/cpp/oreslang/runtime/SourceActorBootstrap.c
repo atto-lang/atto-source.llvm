@@ -20,13 +20,17 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 
-typedef struct {
+typedef struct SourceActor SourceActor;
+struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    OresNativeActorRef capabilities[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
+    SourceActor* children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS];
+    uint8_t capability_count;
     atomic_int initialized;
     atomic_int startup_state;
     atomic_int constructor_started;
@@ -34,7 +38,7 @@ typedef struct {
     atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
-} SourceActor;
+};
 
 typedef struct {
     pthread_cond_t completed;
@@ -82,6 +86,8 @@ typedef struct {
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
+static _Thread_local SourceActor* current_source_actor;
+static _Thread_local uint8_t current_source_phase;
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
@@ -439,7 +445,12 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    ensure(current_source_actor == NULL && current_source_phase == 0);
+    current_source_actor = instance;
+    current_source_phase = 1;
     instance->constructor(instance->heap, turn.domain, turn.epoch);
+    current_source_phase = 0;
+    current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
@@ -489,8 +500,13 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->initialized, memory_order_acquire) == 1);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    ensure(current_source_actor == NULL && current_source_phase == 0);
+    current_source_actor = instance;
+    current_source_phase = 2;
     const int64_t result = instance->on_message(
         instance->heap, turn.domain, turn.epoch, (int64_t)payload);
+    current_source_phase = 0;
+    current_source_actor = NULL;
     ores_actor_i64_heap_leave(instance->heap, turn);
     atomic_store_explicit(
         &instance->last_result, result, memory_order_relaxed);
@@ -548,12 +564,15 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+static SourceActor* spawn_actor_locked(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
-        uint64_t fields) {
+        uint64_t fields,
+        const OresNativeActorRef* copied,
+        uint64_t actor_count) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
-    group_lock();
+    ensure(actor_count <= ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+    ensure(actor_count == 0 || copied != NULL);
     if (!group.vm) open_group_locked();
 
     ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
@@ -566,6 +585,9 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->capability_count = (uint8_t)actor_count;
+    for (uint64_t i = 0; i < actor_count; ++i)
+        instance->capabilities[i] = copied[i];
 
     /*
      * SourceActor is dynamically allocated. Initialize every C11 atomic
@@ -593,17 +615,124 @@ void* oreslang_source_actor_spawn(
     /* CONTROL initializes the compiler-emitted actor constructor on a worker. */
     ensure(ores_native_vm_publish_control(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
+    return instance;
+}
+
+void* oreslang_source_actor_spawn_with_capabilities(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        void* const* actors,
+        uint64_t actor_count) {
+    ensure(actor_count <= ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+    ensure(actor_count == 0 || actors != NULL);
+    OresNativeActorRef copied[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+
+    group_lock();
+    if (!group.vm) open_group_locked();
+    for (uint64_t i = 0; i < actor_count; ++i) {
+        SourceActor* target = NULL;
+        for (size_t candidate = 0; candidate < group.next_slot; ++candidate) {
+            if (group.actors[candidate] == actors[i]) {
+                target = group.actors[candidate];
+                break;
+            }
+        }
+        ensure(target && target->magic == SOURCE_ACTOR_MAGIC);
+        ensure(target->ref.scheduler_domain != 0);
+        copied[i] = target->ref;
+    }
+    SourceActor* instance = spawn_actor_locked(
+        constructor, on_message, fields, copied, actor_count);
     group_unlock();
     return instance;
+}
+
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    group_lock();
+    SourceActor* instance = spawn_actor_locked(
+        constructor, on_message, fields, NULL, 0);
+    group_unlock();
+    return instance;
+}
+
+static OresNativeSendStatus source_actor_send_ref(
+        OresNativeActorRef ref, int64_t payload) {
+    ensure(group.vm != NULL && ref.scheduler_domain != 0);
+    return ores_native_vm_try_send(
+        group.vm, ORES_NATIVE_VM_MAIN, ref, (uint64_t)payload);
+}
+
+static int source_actor_try_send_ref(
+        OresNativeActorRef ref, int64_t payload) {
+    const OresNativeSendStatus status = source_actor_send_ref(ref, payload);
+    if (status == ORES_NATIVE_SEND_ACCEPTED) return 1;
+    if (status == ORES_NATIVE_SEND_MAILBOX_FULL) return 0;
+    ensure(0);
+    return 0;
 }
 
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
         && instance->on_message);
-    ensure(ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+    ensure(source_actor_send_ref(instance->ref, payload)
         == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
+    SourceActor* instance = (SourceActor*)opaque;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->on_message);
+    return source_actor_try_send_ref(instance->ref, payload);
+}
+
+static OresNativeActorRef current_capability(
+        OresActorI64Heap* heap, uint64_t slot) {
+    SourceActor* instance = current_source_actor;
+    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 2);
+    ensure(instance->heap == heap);
+    ensure(slot < instance->capability_count);
+    const OresNativeActorRef ref = instance->capabilities[slot];
+    ensure(ref.scheduler_domain != 0);
+    return ref;
+}
+
+void oreslang_source_actor_send_capability(
+        OresActorI64Heap* heap, uint64_t slot, int64_t payload) {
+    ensure(source_actor_send_ref(current_capability(heap, slot), payload)
+        == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_try_send_capability(
+        OresActorI64Heap* heap, uint64_t slot, int64_t payload) {
+    return source_actor_try_send_ref(current_capability(heap, slot), payload);
+}
+
+void oreslang_source_actor_spawn_child_capability(
+        OresActorI64Heap* heap,
+        uint64_t slot,
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    SourceActor* parent = current_source_actor;
+    ensure(parent && parent->magic == SOURCE_ACTOR_MAGIC);
+    ensure(current_source_phase == 1 && parent->heap == heap);
+    ensure(slot == parent->capability_count);
+    ensure(slot < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS);
+
+    group_lock();
+    SourceActor* child = spawn_actor_locked(
+        constructor, on_message, fields, NULL, 0);
+    ensure(child != NULL);
+    parent->capabilities[slot] = child->ref;
+    parent->children[slot] = child;
+    parent->capability_count++;
+    group_unlock();
 }
 
 int oreslang_source_actor_await_ready_checked(
@@ -695,6 +824,35 @@ int64_t oreslang_source_actor_await_ready(
     return result;
 }
 
+/*
+ * Parent DONE also waits for physically joined constructor-owned children.
+ * This is trusted outer-host glue: neither an actor carrier nor the group
+ * mutex may block on a child's terminal receipt.
+ */
+static void source_actor_join_owned_children(SourceActor* parent) {
+    SourceActor* owned_children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+    const size_t slot = (size_t)parent->ref.actor_slot;
+    group_lock();
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == parent);
+    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i)
+        owned_children[i] = parent->children[i];
+    group_unlock();
+
+    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i) {
+        SourceActor* child = owned_children[i];
+        if (!child) continue;
+        if (atomic_load_explicit(&child->stop_requested, memory_order_acquire) == 0)
+            oreslang_source_actor_request_stop(child);
+        if (atomic_load_explicit(&child->join_started, memory_order_acquire) == 0)
+            oreslang_source_actor_join_done(child);
+        group_lock();
+        ensure(parent->children[i] == child);
+        parent->children[i] = NULL;
+        group_unlock();
+    }
+}
+
 int64_t oreslang_source_actor_await_done(
         void* opaque,
         OresSourceActorContinuation continuation,
@@ -752,6 +910,9 @@ int64_t oreslang_source_actor_await_done(
 
     ensure(ores_native_vm_wait_done(
         vm, ORES_NATIVE_VM_MAIN, target));
+
+    /* Settle parent DONE only after its owned children physically join. */
+    source_actor_join_owned_children(instance);
 
     group_lock();
     ensure(group.vm == vm && group.pending_done == &frame);
@@ -877,6 +1038,13 @@ void oreslang_source_actor_join_done(void* opaque) {
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(ores_native_vm_wait_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+
+    /*
+     * Synchronous stop drains children here. Source get_done already drained
+     * them before publishing its root completion; cleared child slots make
+     * this second call a no-op on that trusted host path.
+     */
+    source_actor_join_owned_children(instance);
 
     group_lock();
     ensure(group.vm && slot < group.next_slot

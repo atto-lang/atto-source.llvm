@@ -379,6 +379,20 @@ int ores_native_vm_stop_sealed(
     return vm_stop(vm, domain, ref, 1);
 }
 
+int ores_native_vm_actor_resource_retain(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_retain_resource(
+            vm->schedulers[domain], ref);
+}
+
+int ores_native_vm_actor_resource_release(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_release_resource(
+            vm->schedulers[domain], ref);
+}
+
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
     return vm && valid_domain(domain)
@@ -564,13 +578,16 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
             return 0;
-    /* No callback can synchronously join or destroy its own scheduler. */
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
-        if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
-
-    /* External-host close owns the final NIO join. Retirement has already
-     * fenced new acquisitions; wait for previously accepted operations and
-     * any owner-bound cold-start reservation before detaching the backend. */
+    /*
+     * Retire NIO before scheduler drain. Actor-owned watches now hold exact
+     * scheduler resource loans, so draining schedulers first can deadlock on
+     * a kernel watch whose physical retirement is itself owned by the NIO
+     * backend. VM retirement already rejects every new backend acquisition.
+     *
+     * Wait for accepted host API leases/bootstrap, detach the backend under
+     * CONTROL, then join selector threads and abandon/settle any remaining
+     * actor watch loans. Only after that can scheduler DONE/drain complete.
+     */
     control_lock(vm);
     while (vm->nio_borrows || vm->nio_bootstrap_in_progress) {
         if (pthread_cond_wait(&vm->nio_idle, &vm->control_lock) != 0) abort();
@@ -581,6 +598,10 @@ int ores_native_vm_close(OresNativeVM* vm) {
     vm->nio_destroy = NULL;
     control_unlock(vm);
     if (nio_backend) nio_destroy(nio_backend);
+
+    /* No callback can synchronously join or destroy its own scheduler. */
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
+        if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
 
     /* Caller-owned API/producer fence is required before memory reclamation. */
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)

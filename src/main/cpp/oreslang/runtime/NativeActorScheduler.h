@@ -107,6 +107,16 @@ int ores_native_actor_scheduler_stop(
  * lifecycle CONTROL. Queued DATA is abandoned with terminal accounting. */
 int ores_native_actor_scheduler_stop_sealed(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/*
+ * Trusted runtime external-resource loan. Retain linearizes against STOP under
+ * the scheduler lock; a successful retain delays terminal publication and
+ * get_done until the exact incarnation releases it. Release remains valid
+ * after STOP but stale/recycled ActorRefs fail closed.
+ */
+int ores_native_actor_scheduler_retain_resource(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+int ores_native_actor_scheduler_release_resource(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Nonblocking host readiness/termination observations. Source-level
  * get_ready()/get_done() must return futures when compiler lowering exists.
  */

@@ -84,6 +84,7 @@ def main():
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
+        ("source-actor-child-capability.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -143,6 +144,16 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-child-capability-mutable-reject.ores":
+            "native actor ActorRef field must be val/const",
+        "source-actor-child-capability-mismatch-reject.ores":
+            "ActorRef<T> actor field requires spawn T()",
+        "source-actor-child-capability-unknown-reject.ores":
+            "unknown actor capability target 'Missing'",
+        "source-actor-child-capability-cycle-reject.ores":
+            "native actor capability spawn graph contains a cycle",
+        "source-actor-child-capability-footprint-reject.ores":
+            "native actor capability spawn tree exceeds 63 guest actor slots",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -198,6 +209,11 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+            if name == "source-actor-child-capability.ores":
+                assert "oreslang_source_actor_spawn_child_capability" in guest.stdout, name
+                assert "oreslang_source_actor_send_capability" in guest.stdout, name
+                assert "ptrtoint" not in guest.stdout, (
+                    name, "ActorRef capability must not lower through guest integer state")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -253,18 +269,33 @@ def main():
                 processed = receipt["processed"]
                 abandoned = receipt["abandoned"]
                 observed_last = receipt["last"]
-                expected_accepted = (
-                    [1, 2][i]
-                    if name == "source-actor-interleaved-stop.ores"
-                    else count)
-                assert accepted == expected_accepted, (
-                    name, i, accepted, expected_accepted)
+                if name == "source-actor-child-capability.ores":
+                    # Parent stop is sealed: its accepted DATA may either run
+                    # before the stop linearizes or be abandoned. If the
+                    # parent runs, its child send is likewise accepted before
+                    # recursive physical child retirement. The focused host
+                    # runtime test waits for delivery and proves the 41->42
+                    # path; this source gate proves bounded lowering and safe
+                    # physical teardown under both legal stop interleavings.
+                    assert accepted in ((0, 1) if i == 0 else (1,)), (
+                        name, i, accepted)
+                else:
+                    expected_accepted = (
+                        [1, 2][i]
+                        if name == "source-actor-interleaved-stop.ores"
+                        else count)
+                    assert accepted == expected_accepted, (
+                        name, i, accepted, expected_accepted)
                 assert 0 <= processed <= accepted, (name, i, processed, accepted)
                 assert abandoned == accepted - processed, (
                     name, i, accepted, processed, abandoned)
-                assert observed_last == expected_prefix_last(
-                    name, i, processed), (
-                    name, i, processed, observed_last)
+                if name == "source-actor-child-capability.ores":
+                    assert observed_last in ((0, 42) if i == 0 else (0, 41)), (
+                        name, i, processed, observed_last)
+                else:
+                    assert observed_last == expected_prefix_last(
+                        name, i, processed), (
+                        name, i, processed, observed_last)
             if name == "source-actor-two-owned-heaps.ores":
                 assert sorted(receipt["last"] for receipt in receipts) == [
                     52, 172
