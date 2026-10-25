@@ -292,6 +292,8 @@ int main(int argc, char** argv) {
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
+    std::string source_module;
+    std::string source_namespace;
     try {
         std::cout.exceptions(std::ios::badbit | std::ios::failbit);
         const std::size_t kMaxSourceBytes = cortex_m_target ? 128u * 1024u : 8u * 1024u * 1024u;
@@ -317,6 +319,8 @@ int main(int argc, char** argv) {
 
         auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
                                                  experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
+        source_module = ast.module;
+        source_namespace = ast.namespace_name;
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
@@ -550,7 +554,23 @@ int main(int argc, char** argv) {
         if (coreLog)
             coreLog->record(oreslang::CoreLog::Level::Error,
                             oreslang::CoreLog::EventId::CompileFailed, 1);
-        std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+        std::cerr << "oreslang-llvmc: " << error.what();
+        if (path != nullptr) {
+            // Report the user-selected source filename, not an absolute CI
+            // workspace path; escape terminal controls in an untrusted argv.
+            std::string_view source_name(path);
+            const auto slash = source_name.find_last_of("/\\");
+            if (slash != std::string_view::npos) source_name.remove_prefix(slash + 1);
+            std::cerr << " [file: ";
+            for (char c : source_name.substr(0, 128)) {
+                const unsigned char byte = static_cast<unsigned char>(c);
+                std::cerr << (byte < 32 || byte == 127 ? '?' : c);
+            }
+            std::cerr << "]";
+        }
+        if (!source_module.empty()) std::cerr << " [module: " << source_module << "]";
+        if (!source_namespace.empty()) std::cerr << " [namespace: " << source_namespace << "]";
+        std::cerr << '\n';
         if (coreLog) coreLog->dump(stderr);
         return 1;
     }
