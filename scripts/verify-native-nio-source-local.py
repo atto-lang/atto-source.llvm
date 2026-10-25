@@ -26,6 +26,38 @@ def git(*args: str) -> bytes:
                                    stderr=subprocess.PIPE)
 
 
+def secure_parent_dir(path: bytes) -> tuple[int, bytes]:
+    """Open every tracked parent beneath cwd without following symlinks."""
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if not nofollow or not directory:
+        raise ValueError("platform cannot safely inspect tracked source paths")
+    if (os.open not in os.supports_dir_fd
+            or os.stat not in os.supports_dir_fd
+            or os.readlink not in os.supports_dir_fd):
+        raise ValueError("platform lacks dir_fd tracked-source safety")
+    parts = path.split(b"/")
+    if not parts or any(part in (b"", b".", b"..") for part in parts):
+        raise ValueError("noncanonical tracked source path: " + repr(path[:120]))
+    flags = os.O_RDONLY | directory | nofollow | cloexec
+    fd = os.open(b".", flags)
+    try:
+        for part in parts[:-1]:
+            try:
+                next_fd = os.open(part, flags, dir_fd=fd)
+            except OSError as exc:
+                raise ValueError(
+                    "tracked source has symlinked/non-directory ancestor: "
+                    + repr(path[:120])) from exc
+            os.close(fd)
+            fd = next_fd
+        return fd, parts[-1]
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def verify_raw_tracked_blobs() -> None:
     """Hash actual compiler-visible bytes, bypassing Git clean/smudge filters.
 
@@ -46,47 +78,59 @@ def verify_raw_tracked_blobs() -> None:
             raise ValueError("unmerged or invalid tracked index entry")
         mode, object_id, _ = fields
         if mode in (b"100644", b"100755"):
-            # O_NOFOLLOW ensures a source-file symlink substitution cannot
-            # redirect verification outside this checkout.
-            # O_NONBLOCK also prevents a replaced regular file from becoming
-            # a blocking FIFO admission hazard before fstat can reject it.
-            # Production qualification is Linux-only; missing primitives
-            # must deny rather than silently weaken no-follow/nonparking.
-            if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+            # O_NOFOLLOW on every ancestor and the final leaf prevents a
+            # same-byte source substitution from escaping through a symlinked
+            # parent directory. O_NONBLOCK also prevents a replaced regular
+            # file from becoming a blocking FIFO before fstat can reject it.
+            if not hasattr(os, "O_NONBLOCK"):
                 raise ValueError("platform cannot safely inspect tracked source files")
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            parent_fd, leaf = secure_parent_dir(path)
             try:
-                before = os.fstat(fd)
-                if not stat.S_ISREG(before.st_mode):
-                    raise ValueError("tracked source is not a regular file: " + repr(path[:120]))
-                # A verified inode with another hardlink can be modified
-                # through a path outside the checkout after verification.
-                # Source-local compilation must not trust such an alias.
-                if before.st_nlink != 1:
-                    raise ValueError("multiply-linked tracked source: " + repr(path[:120]))
-                if bool(before.st_mode & 0o111) != (mode == b"100755"):
-                    raise ValueError("tracked source executable mode mismatch: " + repr(path[:120]))
-                digest = hashlib.sha1()
-                digest.update(b"blob " + str(before.st_size).encode("ascii") + b"\0")
-                while True:
-                    chunk = os.read(fd, 1024 * 1024)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-                after = os.fstat(fd)
-                if (before.st_size, before.st_mtime_ns, before.st_ctime_ns,
-                        before.st_ino, before.st_dev, before.st_nlink) != (
-                        after.st_size, after.st_mtime_ns, after.st_ctime_ns,
-                        after.st_ino, after.st_dev, after.st_nlink):
-                    raise ValueError("tracked source changed during verification: " + repr(path[:120]))
-                if digest.hexdigest().encode("ascii") != object_id:
-                    raise ValueError("raw tracked blob mismatch: " + repr(path[:120]))
+                fd = os.open(
+                    leaf,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=parent_fd,
+                )
+                try:
+                    before = os.fstat(fd)
+                    if not stat.S_ISREG(before.st_mode):
+                        raise ValueError("tracked source is not a regular file: " + repr(path[:120]))
+                    # A verified inode with another hardlink can be modified
+                    # through a path outside the checkout after verification.
+                    # Source-local compilation must not trust such an alias.
+                    if before.st_nlink != 1:
+                        raise ValueError("multiply-linked tracked source: " + repr(path[:120]))
+                    if bool(before.st_mode & 0o111) != (mode == b"100755"):
+                        raise ValueError("tracked source executable mode mismatch: " + repr(path[:120]))
+                    digest = hashlib.sha1()
+                    digest.update(b"blob " + str(before.st_size).encode("ascii") + b"\0")
+                    while True:
+                        chunk = os.read(fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    after = os.fstat(fd)
+                    if (before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+                            before.st_ino, before.st_dev, before.st_nlink) != (
+                            after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                            after.st_ino, after.st_dev, after.st_nlink):
+                        raise ValueError("tracked source changed during verification: " + repr(path[:120]))
+                    if digest.hexdigest().encode("ascii") != object_id:
+                        raise ValueError("raw tracked blob mismatch: " + repr(path[:120]))
+                finally:
+                    os.close(fd)
             finally:
-                os.close(fd)
+                os.close(parent_fd)
         elif mode == b"120000":
-            if not stat.S_ISLNK(os.lstat(path).st_mode):
-                raise ValueError("tracked symlink type mismatch: " + repr(path[:120]))
-            raw_target = os.readlink(path)
+            parent_fd, leaf = secure_parent_dir(path)
+            try:
+                info = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat.S_ISLNK(info.st_mode):
+                    raise ValueError("tracked symlink type mismatch: " + repr(path[:120]))
+                raw_target = os.readlink(leaf, dir_fd=parent_fd)
+            finally:
+                os.close(parent_fd)
             digest = hashlib.sha1(b"blob " + str(len(raw_target)).encode("ascii")
                                   + b"\0" + raw_target).hexdigest().encode("ascii")
             if digest != object_id:
