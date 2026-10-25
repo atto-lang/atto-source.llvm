@@ -89,7 +89,7 @@ void oreslang_source_actor_stop(void* actor);
  */
 int64_t oreslang_source_actor_await_ready(
     void* actor,
-    OresSourceActorReadableContinuation continuation,
+    OresSourceActorContinuation continuation,
     uint64_t source_token);
 
 /* Host/runtime projection of the same readiness observer. Returns READY or
@@ -135,7 +135,7 @@ int64_t oreslang_source_actor_await_done(
 int64_t oreslang_source_actor_await_readable(
     void* actor,
     int64_t fd,
-    OresSourceActorContinuation continuation,
+    OresSourceActorReadableContinuation continuation,
     uint64_t source_token);
 
 /*
