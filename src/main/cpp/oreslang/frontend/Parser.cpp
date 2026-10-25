@@ -4303,6 +4303,19 @@ private:
                     throw std::runtime_error(
                         "await get_ready requires side-effect-free scalar return");
             }
+            if (!fn.ready_await_actor.empty()) {
+                /*
+                 * Every actor send in this restricted slice executes on the
+                 * resumed READY CONTROL lane. Until transitive callable effect
+                 * summaries can prove a payload helper nonblocking, keep
+                 * payload evaluation carrier-safe and call-free.
+                 */
+                for (const auto& send : fn.actor_sends) {
+                    if (contains_callable_invocation(send.payload.get()))
+                        throw std::runtime_error(
+                            "await get_ready send payload requires call-free scalar expression");
+                }
+            }
             if (!fn.done_await_actor.empty()) {
                 /*
                  * get_done is a physical-quiescence boundary. The opaque
