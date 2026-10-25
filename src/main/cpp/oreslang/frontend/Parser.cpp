@@ -2536,8 +2536,11 @@ private:
                     awaited == value.ready_future_name &&
                     token_.text == ";";
                 if (bound_future) {
-                    if (!value.actor_actions.empty() || !value.statements.empty())
-                        fail("await get_ready must precede post-await actor effects");
+                    if (value.ready_await_actor.empty() &&
+                            (!value.actor_actions.empty() || !value.statements.empty()))
+                        fail("first await get_ready must precede post-await actor effects");
+                    if (!value.done_await_actor.empty())
+                        fail("get_ready observation after get_done is unsupported");
                     if (!value.ready_await_actor.empty() &&
                             value.ready_await_actor != value.ready_future_actor)
                         fail("native source supports one ActorRef readiness barrier");
@@ -2561,8 +2564,11 @@ private:
                 // ActorRef<T> implements HasFuture: direct await means
                 // readiness, never get_done().
                 if (accept(";")) {
-                    if (!value.actor_actions.empty() || !value.statements.empty())
-                        fail("await get_ready must precede post-await actor effects");
+                    if (first_ready &&
+                            (!value.actor_actions.empty() || !value.statements.empty()))
+                        fail("first await get_ready must precede post-await actor effects");
+                    if (!value.done_await_actor.empty())
+                        fail("get_ready observation after get_done is unsupported");
                     if (first_ready) {
                         value.ready_await_actor = awaited;
                         value.ready_await_offset = await_offset;
@@ -2595,8 +2601,11 @@ private:
                 require(")");
                 require(";");
                 if (lifecycle == "get_ready") {
-                    if (!value.actor_actions.empty() || !value.statements.empty())
-                        fail("await get_ready must precede post-await actor effects");
+                    if (first_ready &&
+                            (!value.actor_actions.empty() || !value.statements.empty()))
+                        fail("first await get_ready must precede post-await actor effects");
+                    if (!value.done_await_actor.empty())
+                        fail("get_ready observation after get_done is unsupported");
                     if (first_ready) {
                         value.ready_await_actor = awaited;
                         value.ready_await_offset = await_offset;
