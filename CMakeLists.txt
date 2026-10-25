@@ -3638,5 +3638,49 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-scalar-future-await-test PRIVATE Threads::Threads)
     add_test(NAME native_scalar_future_single_winner_control
         COMMAND oreslang-native-scalar-future-await-test)
-    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 30)
+    set_tests_properties(native_scalar_future_single_winner_control PROPERTIES TIMEOUT 60)
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-native-scalar-future-await-asan-ubsan-test
+            tests/native_scalar_future_await_test.cpp)
+        target_include_directories(
+            oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(
+            oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_libraries(
+            oreslang-native-scalar-future-await-asan-ubsan-test PRIVATE
+            Threads::Threads)
+        add_test(NAME native_scalar_future_single_winner_control_asan_ubsan
+            COMMAND oreslang-native-scalar-future-await-asan-ubsan-test)
+        set_tests_properties(
+            native_scalar_future_single_winner_control_asan_ubsan
+            PROPERTIES TIMEOUT 90)
+
+        add_executable(oreslang-native-scalar-future-await-tsan-test
+            tests/native_scalar_future_await_test.cpp)
+        target_include_directories(
+            oreslang-native-scalar-future-await-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(
+            oreslang-native-scalar-future-await-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-native-scalar-future-await-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_libraries(
+            oreslang-native-scalar-future-await-tsan-test PRIVATE
+            Threads::Threads)
+        add_test(NAME native_scalar_future_single_winner_control_tsan
+            COMMAND oreslang-native-scalar-future-await-tsan-test)
+        set_tests_properties(
+            native_scalar_future_single_winner_control_tsan
+            PROPERTIES TIMEOUT 90)
+    endif()
 endif()
