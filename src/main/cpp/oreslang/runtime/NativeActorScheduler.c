@@ -834,6 +834,41 @@ int ores_native_actor_scheduler_cancel_wake(
     unlock(s);
     return ok;
 }
+OresNativeWakePublishStatus ores_native_actor_scheduler_fail_reserved_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!s) return ORES_NATIVE_WAKE_INVALID;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    if (!w || w->state != WAKE_RESERVED) {
+        unlock(s);
+        return ORES_NATIVE_WAKE_INVALID;
+    }
+    ActorLane* lane = &s->actors[ticket.producer.actor_slot];
+    if (s->retired || lane->retired) {
+        /* Producer STOP wins: no callback is required, but the reserved
+         * physical continuation loan must still retire exactly once. */
+        release_wake_locked(s, (size_t)ticket.producer.actor_slot, w);
+        unlock(s);
+        return ORES_NATIVE_WAKE_PRODUCER_RETIRED;
+    }
+    /* The execution identifier and worker availability were prepaid at
+     * RESERVE. This terminal failure does not imply target admission and does
+     * not inspect target liveness: target STOP is precisely why it exists. */
+    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
+    const int new_lane = !lane->active && !lane_has_work(lane);
+    --s->reserved_wakes;
+    w->outcome = ORES_NATIVE_WAKE_FAILED;
+    w->state = WAKE_READY;
+    ++lane->wake_ready;
+    if (new_lane) ++s->runnable_lanes;
+    ++s->reserved_executions;
+    ++s->accepted;
+    ++s->outstanding;
+    pthread_cond_signal(&s->ready);
+    unlock(s);
+    return ORES_NATIVE_WAKE_PUBLISHED;
+}
+
 int ores_native_actor_scheduler_abort_transferred_wake(
         OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
     if (!s) return 0;
