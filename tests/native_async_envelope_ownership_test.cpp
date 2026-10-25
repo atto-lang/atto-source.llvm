@@ -199,6 +199,45 @@ static void waiting_target_stop_fails_future_and_releases_owned_state() {
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
 }
 
+static void transaction_move_transfers_descriptor_payload_and_loan_once() {
+    NativeActorGroup group(7007, 1);
+    auto target = group.adopt(7007, 47, 1, [] {});
+    CHECK(group.mark_ready(target));
+
+    NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
+    WakeFixture f;
+    setup_scheduler(f);
+
+    NativeAsyncMailboxAdmission::Handle handle;
+    CHECK(admission.begin_preparation(&handle));
+    auto frozen = std::make_unique<Payload>();
+    frozen->value = 13;
+
+    {
+        Txn original(admission, handle, target, Lane::Normal, 8);
+        CHECK(original.reserve_and_arm_owned(
+            frozen, f.scheduler, f.producer, f.target,
+            701, 1, 1) == NativeAsyncMailboxAdmission::Registration::Transferred);
+        CHECK(target.outstanding_resource_loans() == 1);
+        CHECK(original.owns_payload() && original.owns_target_loan());
+
+        Txn moved(std::move(original));
+        CHECK(moved.owns_payload() && moved.owns_target_loan());
+        CHECK(target.outstanding_resource_loans() == 1);
+        CHECK(moved.abort_transferred());
+        CHECK(!moved.owns_payload() && !moved.owns_target_loan());
+    }
+
+    CHECK(target.outstanding_resource_loans() == 0);
+    CHECK(admission.active_descriptors() == 0);
+    CHECK(admission.used_frames() == 0);
+    CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(
+        f.scheduler, f.producer));
+    CHECK(group.finalized(target));
+    target.get_done().get();
+    finish_scheduler(f);
+}
+
 static void waiting_send_transfers_frozen_payload_and_exact_resource_loan() {
     NativeActorGroup group(7001, 1);
     auto target = group.adopt(7001, 41, 1, [] {});
@@ -411,6 +450,7 @@ int main() {
     unarmed_transaction_destruction_refunds_preparation_descriptor();
     terminal_target_rejects_before_payload_or_wake_transfer();
     waiting_target_stop_fails_future_and_releases_owned_state();
+    transaction_move_transfers_descriptor_payload_and_loan_once();
     waiting_send_transfers_frozen_payload_and_exact_resource_loan();
     waiting_cancellation_releases_payload_loan_and_wake();
     publication_exception_aborts_transfer_and_releases_target_loan();
