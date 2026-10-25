@@ -553,6 +553,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         for kwargs, message in (
             ({"state": "CHANGES_REQUESTED"}, "stale, late, or not approved"),
             ({"author_id": v3.REVIEW_AUTHORITY_USER_ID}, "independent merged"),
+            ({"author_id": 0}, "independent merged"),
             ({"drift_path": v3.CONTRACT_PATH}, "drifted"),
         ):
             with self.subTest(kwargs=kwargs):
@@ -653,6 +654,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         cases = (
             ({"state": "CHANGES_REQUESTED"}, ["8" * 40, "8" * 40], "stale, late, or not approved"),
             ({"author_id": v3.CARRIER_REVIEW_USER_ID}, ["8" * 40, "8" * 40], "independent merged"),
+            ({"author_id": 0}, ["8" * 40, "8" * 40], "independent merged"),
             ({}, ["8" * 40, "9" * 40], "tree differs"),
         )
         for kwargs, trees, message in cases:
