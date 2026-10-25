@@ -12,7 +12,32 @@ namespace oreslang {
 // exercised without a native LLVM SDK or codegen mocks.
 template <typename ActorContainer>
 void verify_sealed_actor_state_shape(const ActorContainer& actors) {
+    // Both actor modes lower exactly one VALUE i64 message parameter.
+    // Compiler-built ASTs can bypass parser checks on aliases/borrow modes.
+    const auto plain_message = [](const auto& param) {
+        return !param.name.empty() &&
+               param.scalar_type == decltype(param.scalar_type)::I64 &&
+               param.mode == decltype(param.mode)::Value &&
+               param.class_name.empty() && param.generic_type.empty() &&
+               param.pending_type_alias.empty() && param.sum_type.empty();
+    };
+    // An actor field is physically one integer heap slot; do not allow
+    // forged type aliases, array element types, or ownership metadata to
+    // turn it into a reference while lowering it as a scalar.
+    const auto plain_slot = [](const auto& field) {
+        return field.scalar_type == decltype(field.scalar_type)::I64 &&
+               field.array_element_type == decltype(field.array_element_type)::I64 &&
+               !field.heap_owned && !field.int_array && !field.record_view &&
+               field.array_record_class.empty() && field.class_name.empty() &&
+               !field.new_class && field.constructor_arguments.empty() &&
+               !field.move_class && field.move_source.empty() &&
+               !field.owner_mutable && field.pending_type_alias.empty() &&
+               field.sum_type.empty();
+    };
     for (const auto& actor : actors) {
+        if (actor.on_message.parameters.size() != 1 ||
+                !plain_message(actor.on_message.parameters.front()))
+            throw std::runtime_error("actor handler must take exactly one plain i64 value");
         // A parser-bypassing AST must not route a sealed-state capability
         // through the legacy handler, whose return is dereferenced directly.
         if (!actor.sealed_state) {
@@ -33,8 +58,7 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                 if (field.name.empty() || field.name == "state" ||
                         field.name == legacy.parameters.front().name ||
                         !legacy_names.insert(field.name).second ||
-                        !field.initializer ||
-                        field.scalar_type != decltype(field.scalar_type)::I64)
+                        !field.initializer || !plain_slot(field))
                     throw std::runtime_error("legacy actor contains an invalid state field");
             }
             continue;
@@ -58,12 +82,7 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                 throw std::runtime_error("sealed actor state field is not initialized and writable");
             // A canonical native state slot is currently a plain i64 value.
             // Forged owner/record/array metadata cannot reach heap lowering.
-            if (field.scalar_type != decltype(field.scalar_type)::I64 ||
-                    field.heap_owned || field.int_array || field.record_view ||
-                    !field.array_record_class.empty() || !field.class_name.empty() ||
-                    field.new_class || !field.constructor_arguments.empty() ||
-                    field.move_class || !field.move_source.empty() ||
-                    field.owner_mutable || !field.sum_type.empty())
+            if (!plain_slot(field))
                 throw std::runtime_error("sealed actor state forbids non-scalar storage metadata");
         }
         const auto* loan = method.actor_state_loan.get();
