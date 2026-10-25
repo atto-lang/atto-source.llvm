@@ -3769,11 +3769,12 @@ private:
 
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
                 if (type.empty()) return;
-                const auto layout = layouts.find(type);
-                if (layout == layouts.end())
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& candidate) { return candidate.name == type; });
+                if (cls == program.classes.end())
                     throw std::runtime_error(
                         "native return type requires resolved class layout '" + type + "'");
-                for (const auto& leaf : layout->second.leaves) {
+                for (const auto& leaf : layouts.at(type).leaves) {
                     scalar_types.emplace(owner + "." + leaf.path, leaf.field->scalar_type);
                     if (leaf.field->int_array) scalar_types.emplace(owner + "." + leaf.path + ".$element", leaf.field->array_element_type);
                 }
