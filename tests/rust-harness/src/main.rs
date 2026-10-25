@@ -449,10 +449,11 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
     let fixture = temp.path.join("probe.ores");
-    // These names are the concrete future standard-I/O spellings named by the
-    // native async-only contract. They must remain unavailable as calls AND
-    // impossible to impersonate as user declarations until registry/effect/
-    // continuation lowering lands together.
+
+    // Concrete standard-I/O spellings named by the native async-only contract.
+    // Until registry/effect/continuation lowering lands together, each spelling
+    // must be unavailable as a call and impossible to impersonate as a user
+    // global function or method.
     let operations = [
         ("legacy read", "read_text"),
         ("legacy write", "write_text"),
@@ -475,12 +476,12 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     ];
 
     for (name, symbol) in operations {
-        // Undefined use must still fail before IR.
-        fs::write(
-            &fixture,
-            format!("pub fnc main(): int {{ return {symbol}(1); }}\n"),
-        )
-        .map_err(|e| format!("{name}: write undefined-call fixture: {e}"))?;
+        let undefined_call = format!(
+            r#"pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, undefined_call)
+            .map_err(|e| format!("{name}: write undefined-call fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
         require(
             !out.status.success(),
@@ -495,15 +496,13 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
             format!("{name}: missing undefined-call rejection diagnostic: {}", stderr(&out)),
         )?;
 
-        // A same-unit global declaration must not launder the reserved I/O
-        // identity into ordinary synchronous call lowering.
-        fs::write(
-            &fixture,
-            format!(
-                "fnc {symbol}(int n): int {{ return n; }}\npub pub fnc main(): int {{ return {symbol}(1); }}\n"
-            ),
-        )
-        .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
+        let global_launder = format!(
+            r#"fnc {symbol}(int n): int {{ return n; }}
+pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, global_launder)
+            .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
         require(
             !out.status.success()
@@ -517,14 +516,18 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
             ),
         )?;
 
-        // The same name cannot be hidden behind a nominal receiver either.
-        fs::write(
-            &fixture,
-            format!(
-                "define class SocketFacade as\npub   pub {symbol}(self, int n): int {{ return n; }}\npub end\npub pub fnc main(): int {{\npub   let SocketFacade s = new SocketFacade();\npub   return s.{symbol}(1);\npub }}\n"
-            ),
-        )
-        .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
+        let method_launder = format!(
+            r#"define class SocketFacade as
+  pub {symbol}(self, int n): int {{ return n; }}
+end
+pub fnc main(): int {{
+  let SocketFacade s = new SocketFacade();
+  return s.{symbol}(1);
+}}
+"#
+        );
+        fs::write(&fixture, method_launder)
+            .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
         require(
             !out.status.success()
@@ -539,21 +542,21 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         )?;
     }
 
-    // Do not reserve arbitrary suffixes. These are ordinary synchronous user
-    // functions; the standard-I/O identity set above is the safety boundary.
+    // The reservation is identity-based, not suffix-based. Preserve ordinary
+    // synchronous user functions that happen to end in _async/_blocking.
     let positives = [
         ("blocking suffix", "pure_math_blocking"),
         ("async suffix", "checksum_async"),
         ("similar I/O-looking suffix", "read_textish_async"),
     ];
     for (name, symbol) in positives {
-        fs::write(
-            &fixture,
-            format!(
-                "fnc {symbol}(int n): int {{ return n + 1; }}\npub pub fnc main(): int {{ return {symbol}(41); }}\n"
-            ),
-        )
-        .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
+        let program = format!(
+            r#"fnc {symbol}(int n): int {{ return n + 1; }}
+pub fnc main(): int {{ return {symbol}(41); }}
+"#
+        );
+        fs::write(&fixture, program)
+            .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
         require(
             out.status.success() && stdout(&out).starts_with("; ModuleID"),
