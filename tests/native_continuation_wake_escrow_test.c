@@ -24,11 +24,6 @@ typedef struct {
 static void no_op_data(void* raw, size_t actor, uint64_t payload) {
     (void)raw; (void)actor; (void)payload;
 }
-static void no_op_wake(void* raw, size_t actor, OresNativeWakeTicket ticket,
-        OresNativeWakeOutcome outcome) {
-    (void)raw; (void)actor; (void)ticket; (void)outcome;
-}
-
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef producer;
@@ -168,7 +163,7 @@ static void contest(Fixture* f, OresNativeWakeTicket ticket, int both_cancel) {
     CHECK(pthread_join(first, NULL) == 0);
     CHECK(pthread_join(second, NULL) == 0);
     CHECK(a.won + b.won == 1);
-    if (b.won) {
+    if (b.won && b.transfer) {
         CHECK(!ores_native_actor_scheduler_cancel_wake(f->scheduler, ticket));
         CHECK(ores_native_actor_scheduler_abort_transferred_wake(
             f->scheduler, ticket));

@@ -870,6 +870,8 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (accept("await"))
+                fail("native actor await requires continuation lowering; native send_async direct await requires trusted zero-argument main");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -2630,12 +2632,13 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
-            // Keep ActorRef.send(...) for the outer actor action parser.
+            // Keep ActorRef.send/send_async(...) for the outer action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
-            const bool actor_send = field->name == "send" && !named_class_receiver;
+            const bool actor_send = (field->name == "send"
+                || field->name == "send_async") && !named_class_receiver;
             if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {

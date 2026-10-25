@@ -142,14 +142,12 @@ static void capacity_release_admits_waiter(void) {
     atomic_init(&waiter.done, 0);
     pthread_t thread;
     CHECK(pthread_create(&thread, NULL, await_send, &waiter) == 0);
-    while (!atomic_load_explicit(&waiter.started, memory_order_acquire))
+    while (oreslang_source_actor_test_waiting_sends(actor) != 1)
         sched_yield();
 
-    /* Capacity cannot change while the sole active turn is blocked. */
-    for (int i = 0; i < 10000; ++i) {
-        CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
-        sched_yield();
-    }
+    /* The scheduler-mutex snapshot proves the waiter reached cond_wait
+     * while FULL. The blocked handler prevents capacity from changing. */
+    CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
 
     atomic_store_explicit(&release_first, 1, memory_order_release);
     CHECK(pthread_join(thread, NULL) == 0);
@@ -174,12 +172,9 @@ static void stop_wakes_full_waiter_as_terminated(void) {
     atomic_init(&waiter.done, 0);
     pthread_t thread;
     CHECK(pthread_create(&thread, NULL, await_send, &waiter) == 0);
-    while (!atomic_load_explicit(&waiter.started, memory_order_acquire))
+    while (oreslang_source_actor_test_waiting_sends(actor) != 1)
         sched_yield();
-    for (int i = 0; i < 10000; ++i) {
-        CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
-        sched_yield();
-    }
+    CHECK(!atomic_load_explicit(&waiter.done, memory_order_acquire));
 
     /* Sealed STOP is itself a scheduler credit-state transition. The waiter
      * must wake and observe TERMINATED even though the active turn is still
@@ -243,6 +238,35 @@ static void carrier_call_fails_would_deadlock(void) {
     fprintf(stderr, "SOURCE_SEND_ASYNC_DEADLOCK_PASS carrier_rejected=1\n");
 }
 
+static void foreign_carrier_probe(void* raw, size_t slot, uint64_t payload) {
+    (void)slot;
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    const int status = oreslang_source_actor_await_send_async_checked(
+        raw, (int64_t)payload);
+    atomic_store_explicit(&carrier_probe_status, status, memory_order_release);
+}
+
+static void foreign_scheduler_carrier_fails_would_deadlock(void) {
+    void* actor = oreslang_source_actor_spawn(init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    atomic_store_explicit(&carrier_probe_status, -1, memory_order_release);
+    OresNativeActorScheduler* foreign = ores_native_actor_scheduler_open(
+        1, 1, 1, foreign_carrier_probe, actor);
+    CHECK(foreign);
+    OresNativeActorRef producer = ores_native_actor_scheduler_spawn(foreign, 0);
+    CHECK(ores_native_actor_scheduler_send(foreign, producer, 17));
+    CHECK(ores_native_actor_scheduler_drain(foreign));
+    CHECK(atomic_load_explicit(&carrier_probe_status, memory_order_acquire)
+        == ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK);
+    CHECK(!ores_native_actor_scheduler_is_carrier_thread());
+    CHECK(ores_native_actor_scheduler_stop(foreign, producer));
+    ores_native_actor_scheduler_retire(foreign);
+    CHECK(ores_native_actor_scheduler_try_destroy(foreign));
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr, "SOURCE_SEND_ASYNC_FOREIGN_CARRIER_PASS rejected=1\n");
+}
+
 static void cross_scheduler_carrier_cannot_park(void) {
     atomic_store_explicit(&foreign_probe_status, -1, memory_order_release);
     foreign_scheduler = ores_native_actor_scheduler_open(
@@ -294,6 +318,7 @@ int main(void) {
     stop_wakes_full_waiter_as_terminated();
     bounded_waiter_cohort_rejects_before_pin();
     carrier_call_fails_would_deadlock();
+    foreign_scheduler_carrier_fails_would_deadlock();
     cross_scheduler_carrier_cannot_park();
     return 0;
 }

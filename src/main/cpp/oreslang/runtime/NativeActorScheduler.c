@@ -48,6 +48,9 @@ typedef struct {
     uint64_t generation;
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    size_t test_waiting_sends;
+#endif
     uint64_t abandoned_user_messages;
     OresNativeActorTerminationKind requested_terminal_kind;
     unsigned terminal_valid;
@@ -757,7 +760,14 @@ OresNativeSendStatus ores_native_actor_scheduler_wait_send(
                  * failed FULL observation and cond-wait registration therefore
                  * have no check-then-sleep lost-wakeup window.
                  */
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+                ++lane->test_waiting_sends;
+#endif
                 if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+                if (!lane->test_waiting_sends) abort();
+                --lane->test_waiting_sends;
+#endif
                 continue;
             } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                     || !execution_slot_available_locked(s)) {
@@ -780,6 +790,22 @@ OresNativeSendStatus ores_native_actor_scheduler_wait_send(
         return status;
     }
 }
+
+int ores_native_actor_scheduler_is_carrier_thread(void) {
+    return executing != NULL;
+}
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+size_t ores_native_actor_scheduler_test_waiting_sends(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const size_t count = matching(s, actor)
+        ? s->actors[actor.actor_slot].test_waiting_sends : 0;
+    unlock(s);
+    return count;
+}
+#endif
 
 int ores_native_actor_scheduler_send(OresNativeActorScheduler* s,
                                      OresNativeActorRef actor, uint64_t payload) {

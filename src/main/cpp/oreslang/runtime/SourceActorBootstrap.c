@@ -149,6 +149,20 @@ int oreslang_source_actor_test_set_async_waiters(
     group_unlock();
     return ok;
 }
+
+size_t oreslang_source_actor_test_waiting_sends(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance) return 0;
+    group_lock();
+    size_t count = 0;
+    if (instance->magic == SOURCE_ACTOR_MAGIC && group.vm
+            && instance->ref.actor_slot < group.next_slot
+            && group.actors[instance->ref.actor_slot] == instance)
+        count = ores_native_vm_test_waiting_sends(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
+    group_unlock();
+    return count;
+}
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -686,9 +700,7 @@ int oreslang_source_actor_await_send_async_checked(
      * the target's mailbox credit. Full continuation suspension is a later
      * source lowering gate.
      */
-    OresNativeExecutionContext carrier = {0};
-    if (ores_native_vm_current_execution_context(
-            group.vm, ORES_NATIVE_VM_MAIN, &carrier)) {
+    if (ores_native_actor_scheduler_is_carrier_thread()) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
     }

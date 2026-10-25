@@ -38,6 +38,15 @@ static int valid_domain(enum OresNativeVMDomain domain) {
     return domain >= ORES_NATIVE_VM_MAIN && domain < ORES_NATIVE_VM_DOMAIN_COUNT;
 }
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+size_t ores_native_vm_test_waiting_sends(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_test_waiting_sends(vm->schedulers[domain], actor)
+        : 0;
+}
+#endif
+
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     if (!config) return NULL;
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));

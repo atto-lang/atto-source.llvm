@@ -446,7 +446,43 @@ static void producer_stop_after_transfer_does_not_retract_envelope() {
     CHECK(ores_native_actor_scheduler_try_destroy(f.scheduler));
 }
 
+static void sealed_preparation_rejection_releases_reserved_wake() {
+    NativeActorGroup group(7008, 1);
+    auto target = group.adopt(7008, 48, 1, [] {});
+    CHECK(group.mark_ready(target));
+    NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
+    WakeFixture f;
+    setup_scheduler(f);
+
+    NativeAsyncMailboxAdmission::Handle handle;
+    CHECK(admission.begin_preparation(&handle));
+    auto frozen = std::make_unique<Payload>();
+    frozen->value = 14;
+    {
+        Txn txn(admission, handle, target, Lane::Normal, 8);
+        // STOP/seal may detach PREPARING between transaction construction
+        // and register_prepared(). A rejection still leaves wake ownership
+        // with the transaction, even though the descriptor is now inactive.
+        admission.seal();
+        CHECK(txn.reserve_and_arm_owned(
+            frozen, f.scheduler, f.producer, f.target,
+            801, 1, 1) == NativeAsyncMailboxAdmission::Registration::Rejected);
+        CHECK(frozen && frozen->value == 14);
+        CHECK(!txn.owns_payload() && !txn.owns_target_loan());
+        CHECK(target.outstanding_resource_loans() == 0);
+        CHECK(admission.active_descriptors() == 0);
+        CHECK(admission.pending_bytes() == 0);
+        CHECK(admission.used_frames() == 0);
+        CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(
+            f.scheduler, f.producer));
+    }
+    CHECK(group.finalized(target));
+    target.get_done().get();
+    finish_scheduler(f);
+}
+
 int main() {
+    sealed_preparation_rejection_releases_reserved_wake();
     unarmed_transaction_destruction_refunds_preparation_descriptor();
     terminal_target_rejects_before_payload_or_wake_transfer();
     waiting_target_stop_fails_future_and_releases_owned_state();

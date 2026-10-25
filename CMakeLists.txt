@@ -46,6 +46,22 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compile the production parser/type/ownership passes without LLVM IR.
+    # This complements, rather than replaces, the source -> LLVM -> native gate.
+    add_executable(oreslang-source-actor-send-async-frontend-test
+        tests/source_actor_send_async_frontend_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-actor-send-async-frontend-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-actor-send-async-frontend-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME source_actor_send_async_frontend_admission
+        COMMAND oreslang-source-actor-send-async-frontend-test)
+    set_tests_properties(source_actor_send_async_frontend_admission PROPERTIES TIMEOUT 30)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.

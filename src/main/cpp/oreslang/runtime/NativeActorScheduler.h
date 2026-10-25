@@ -7,11 +7,20 @@ typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
+/* Thread-local trusted observation across ALL schedulers/domains. External
+ * host waits must reject a carrier even when it belongs to another scheduler. */
+int ores_native_actor_scheduler_is_carrier_thread(void);
 typedef struct {
     uint64_t scheduler_domain;
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Snapshot under the scheduler mutex. Nonzero proves wait_send has reached
+ * the FULL -> cond_wait registration boundary, not merely entered its caller. */
+size_t ores_native_actor_scheduler_test_waiting_sends(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+#endif
 
 /* Native scheduler-owned continuation wake escrow. Each producer actor has a
  * finite, preallocated pool, separate from DATA and supervisor CONTROL. This

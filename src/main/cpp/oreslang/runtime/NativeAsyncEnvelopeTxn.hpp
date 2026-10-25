@@ -137,11 +137,18 @@ public:
 
         // Rejected leaves the wake RESERVED; Failed consumed it as FAILED.
         if (result == Registration::Rejected) {
+            // Descriptor ownership and wake ownership are independent. Seal
+            // may already have detached PREPARING, but register_prepared's
+            // Rejected result NEVER consumes the reserved wake. Refund it
+            // before inspecting the descriptor or producer DONE can remain
+            // fenced forever by an orphaned continuation loan.
+            if (!ores_native_actor_scheduler_cancel_wake(scheduler, wake))
+                std::terminate();
             const auto descriptor = admission_->descriptor_state(handle_);
             if (descriptor == DescriptorState::Preparing) {
-                if (!ores_native_actor_scheduler_cancel_wake(scheduler, wake))
-                    std::terminate();
-                if (!admission_->cancel_preparation(handle_))
+                if (!admission_->cancel_preparation(handle_)
+                        && admission_->descriptor_state(handle_)
+                            != DescriptorState::Inactive)
                     std::terminate();
             } else if (descriptor != DescriptorState::Inactive) {
                 std::terminate();
@@ -282,7 +289,9 @@ private:
             if (!admission_->abort_transferred(handle_))
                 std::terminate();
         } else if (descriptor == DescriptorState::Preparing) {
-            if (!admission_->cancel_preparation(handle_))
+            if (!admission_->cancel_preparation(handle_)
+                    && admission_->descriptor_state(handle_)
+                        != DescriptorState::Inactive)
                 std::terminate();
         } else if (descriptor == DescriptorState::Publishing) {
             std::terminate();
