@@ -147,24 +147,6 @@ public:
     }
 
     /**
-     * Trusted async-send publication after the descriptor already owns one
-     * exact-incarnation resource loan. This method does NOT retain another
-     * loan. On successful publication the existing loan transfers to the
-     * envelope and Delivery::acknowledge_released()/terminal retirement
-     * releases it exactly once. On rejection/exception the caller still owns
-     * the loan and payload.
-     *
-     * This is a runtime-only capability boundary; source code cannot invoke it.
-     */
-    bool offer_owned_preloaned_to(PreloanedPublicationTag,
-                                  const NativeActorRef& target, Lane lane,
-                                  std::unique_ptr<T>& value,
-                                  std::size_t bytes) {
-        AdmissionGuard admission(*this, &target, false);
-        return port(lane).offer_owned(value, bytes);
-    }
-
-    /**
      * One fair dequeue opportunity. The 8:4:1 static weighted service cycle
      * is work-conserving: empty lanes are skipped; live NORMAL/BULK traffic
      * cannot be starved by continuously refilled URGENT traffic. Every lane
@@ -335,6 +317,19 @@ private:
         PreloanedPublicationTag() = default;
     };
     friend class NativeAsyncEnvelopeTxn<T>;
+
+    /**
+     * Friend-only async publication after NativeAsyncEnvelopeTxn already owns
+     * one exact-incarnation resource loan. On success that existing loan moves
+     * into the real envelope; no second retain occurs.
+     */
+    bool offer_owned_preloaned_to(PreloanedPublicationTag,
+                                  const NativeActorRef& target, Lane lane,
+                                  std::unique_ptr<T>& value,
+                                  std::size_t bytes) {
+        AdmissionGuard admission(*this, &target, false);
+        return port(lane).offer_owned(value, bytes);
+    }
 
     // Prevent a send started before bind_target() from publishing into a
     // newly bound actor. Drop the fairness lock BEFORE moving a payload: its
