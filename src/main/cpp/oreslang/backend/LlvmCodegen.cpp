@@ -595,7 +595,8 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target) {
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, bool cortex_m_target,
+                                  bool android_aarch64_target) {
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -610,9 +611,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
     }
-    if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    const unsigned selected_targets =
+        static_cast<unsigned>(wasm32_target) +
+        static_cast<unsigned>(cortex_m_target) +
+        static_cast<unsigned>(android_aarch64_target);
+    if (selected_targets > 1)
+        throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
+        if (wasm32_target || android_aarch64_target ||
+            !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
@@ -660,7 +667,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     const auto main_it = std::find_if(source.functions.begin(), source.functions.end(),
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
-        main_it != source.functions.end();
+        !android_aarch64_target && main_it != source.functions.end();
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
@@ -754,6 +761,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (module.getDataLayout().getPointerSizeInBits(0) != 32 ||
             !module.getDataLayout().isLittleEndian())
             throw std::runtime_error("Cortex-M ABI/data layout mismatch");
+    }
+    if (android_aarch64_target) {
+        const auto profile = TargetAbi::parse("aarch64-unknown-linux-android24");
+        if (!profile.experimental_android_aarch64_scalar_ir())
+            throw std::runtime_error("Android AArch64 scalar IR emission is not admitted");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout(
+            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-"
+            "i64:64-i128:128-n32:64-S128-Fn32");
+        const auto& actual = module.getDataLayout();
+        if (actual.getPointerSizeInBits(0) != profile.pointer_bits() ||
+            actual.isLittleEndian() != (profile.endian() == "little"))
+            throw std::runtime_error("Android AArch64 ABI/data layout mismatch");
     }
     if (wasm32_target) {
         const auto profile = TargetAbi::parse("wasm32-unknown-unknown");
