@@ -1515,6 +1515,65 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-bounded-actor-port-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-bounded-actor-port-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_actor_port_bounded_owned_transport COMMAND oreslang-bounded-actor-port-test)
+    # Bounded-port mailbox ledger, physical ownership and supervisor CONTROL
+    # transport tests; host primitives only, not guest compiler parity.
+    target_link_libraries(oreslang-bounded-actor-port-test PRIVATE Threads::Threads)
+    set_tests_properties(native_actor_port_bounded_owned_transport PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-mailbox-parallel-terminal-test
+        tests/native_mailbox_parallel_terminal_test.cpp)
+    target_include_directories(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-mailbox-parallel-terminal-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-mailbox-parallel-terminal-test PRIVATE Threads::Threads)
+    add_test(NAME native_mailbox_parallel_terminal_races
+        COMMAND oreslang-native-mailbox-parallel-terminal-test)
+    set_tests_properties(native_mailbox_parallel_terminal_races PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-actor-port-alloc-fault-test
+        tests/native_actor_port_allocation_failure_test.cpp)
+    target_include_directories(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-actor-port-alloc-fault-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_actor_port_ownership_allocator_rollback
+        COMMAND oreslang-native-actor-port-alloc-fault-test)
+    set_tests_properties(native_actor_port_ownership_allocator_rollback PROPERTIES TIMEOUT 15)
+
+    add_executable(oreslang-priority-actor-inbox-test tests/priority_actor_inbox_test.cpp)
+    target_include_directories(oreslang-priority-actor-inbox-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-priority-actor-inbox-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-priority-actor-inbox-test PRIVATE Threads::Threads)
+    add_test(NAME native_priority_user_inbox_control_isolation
+        COMMAND oreslang-priority-actor-inbox-test)
+    set_tests_properties(native_priority_user_inbox_control_isolation PROPERTIES TIMEOUT 30)
+
+    # Incarnation ticket finalization is a CAS winner-takes-all race.
+    # Register this target exactly once; stale #894 duplicated it.
+    add_executable(oreslang-actor-resource-loan-terminal-race-test
+        tests/actor_resource_loan_terminal_race_test.cpp)
+    target_include_directories(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-resource-loan-terminal-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-resource-loan-terminal-race-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_resource_loan_terminal_race
+        COMMAND oreslang-actor-resource-loan-terminal-race-test)
+    set_tests_properties(native_actor_resource_loan_terminal_race PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-actor-mailbox-completion-model-test
+        tests/actor_mailbox_completion_model_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-completion-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-mailbox-completion-model-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-completion-model-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_completion_model
+        COMMAND oreslang-actor-mailbox-completion-model-test)
+    set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -2809,6 +2868,41 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Scheduler-owned producer continuation wake escrow: independent from
+    # supervisor CONTROL and USER mail capacity. Native host substrate only.
+    add_executable(oreslang-native-continuation-wake-escrow-test
+        tests/native_continuation_wake_escrow_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-continuation-wake-escrow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-continuation-wake-escrow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-continuation-wake-escrow-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_escrow_stop_cancel_aba
+        COMMAND oreslang-native-continuation-wake-escrow-test)
+    set_tests_properties(native_continuation_wake_escrow_stop_cancel_aba
+        PROPERTIES TIMEOUT 45)
+
+    # Reservation must fail cleanly if pthread_create cannot allocate a
+    # future wake carrier. The macro is absent from production builds.
+    add_executable(oreslang-native-wake-carrier-failure-test
+        tests/native_continuation_wake_carrier_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-wake-carrier-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-wake-carrier-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
+    target_compile_options(oreslang-native-wake-carrier-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-wake-carrier-failure-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_carrier_failure_fence
+        COMMAND oreslang-native-wake-carrier-failure-test)
+    set_tests_properties(native_continuation_wake_carrier_failure_fence
+        PROPERTIES TIMEOUT 30)
+
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
     add_executable(oreslang-native-carrier-create-failure-test
@@ -3414,6 +3508,42 @@ if(BUILD_TESTING)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
 endif()
 
+# Stage-2 prerequisite: readiness-gated Future continuation ownership.
+# This host race test is not source-level async, channels or select parity.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-continuation-ready-resume-test
+        tests/native_continuation_ready_resume_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    set_target_properties(oreslang-native-continuation-ready-resume-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_include_directories(oreslang-native-continuation-ready-resume-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-continuation-ready-resume-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-continuation-ready-resume-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_continuation_ready_cancel_resume_race
+        COMMAND oreslang-native-continuation-ready-resume-test)
+    set_tests_properties(native_continuation_ready_cancel_resume_race PROPERTIES TIMEOUT 45)
+endif()
+
+# Source-free continuation wake failure-boundary oracle. This verifies only
+# model invariants; production continuation-store tests remain separate.
+if(BUILD_TESTING)
+    add_executable(oreslang-continuation-wake-transaction-oracle
+        tests/continuation_wake_transaction_oracle.c)
+    set_target_properties(oreslang-continuation-wake-transaction-oracle PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-continuation-wake-transaction-oracle PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME continuation_wake_transaction_model
+        COMMAND oreslang-continuation-wake-transaction-oracle)
+    set_tests_properties(continuation_wake_transaction_model PROPERTIES TIMEOUT 10)
+endif()
+
 # Source-actor lifecycle prerequisite for real ActorRef.get_done lowering:
 # stop request must not wait for physical termination; join_done owns the
 # host-side terminal ACK and heap-reclamation barrier.
@@ -3607,4 +3737,46 @@ if(BUILD_TESTING)
     add_test(NAME native_callable_selector_source_arity
         COMMAND oreslang-native-callable-selector-test)
     set_tests_properties(native_callable_selector_source_arity PROPERTIES TIMEOUT 10)
+endif()
+
+# Host-only structured Task cancellation authority. This mirrors the Java
+# stage-1 runtime primitive only: it is NOT source-level task lowering,
+# scheduler continuation integration, or proof that get_done is quiescent.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-cancellation-test
+        tests/native_task_cancellation_test.cpp)
+    target_include_directories(oreslang-native-task-cancellation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-cancellation-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-cancellation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-cancellation-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_cancellation_tree_host_only
+        COMMAND oreslang-native-task-cancellation-test)
+    set_tests_properties(native_task_cancellation_tree_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
+
+# Task authority <-> generation-checked continuation integration, with
+# producer-ready/cancel and scheduler-claim/cancel adversarial races.
+# Tests a real shared host admission primitive, not arbitrary guest Task syntax.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-continuation-gate-test
+        tests/native_task_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-native-task-continuation-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-continuation-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-continuation-gate-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME native_task_continuation_cancel_ready_races
+        COMMAND oreslang-native-task-continuation-gate-test)
+    set_tests_properties(native_task_continuation_cancel_ready_races
+        PROPERTIES TIMEOUT 60)
 endif()

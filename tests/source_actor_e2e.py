@@ -31,6 +31,31 @@ def expected_prefix_last(name, actor_index, processed):
         return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
+def parse_actor_receipt(line):
+    """Strictly parse the complete current native stop receipt."""
+    parts = line.split()
+    marker = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED"
+    assert parts and parts[0] == marker, ("missing actor receipt marker", line)
+    expected = {
+        "constructor_on_worker", "released", "ready",
+        "accepted", "processed", "abandoned", "last",
+    }
+    fields = {}
+    for field in parts[1:]:
+        key, sep, value = field.partition("=")
+        assert sep and key in expected and key not in fields, (
+            "invalid actor receipt field", field)
+        signed = key == "last" and value.startswith("-")
+        digits = value[1:] if signed else value
+        assert digits and digits.isascii() and digits.isdecimal(), (
+            "invalid integer actor receipt", field)
+        fields[key] = int(value)
+    assert set(fields) == expected, ("missing actor receipt fields", fields)
+    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
+        "native actor constructor/release not verified", fields)
+    assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    return fields
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -57,6 +82,7 @@ def main():
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
+        ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -145,8 +171,10 @@ def main():
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
-            flags = ["--experimental-owned-int"] if name.startswith(
-                "source-actor-scoped-owned-") else []
+            flags = ["--experimental-owned-int"] if name in {
+                "source-actor-scoped-owned-i64.ores",
+                "source-actor-two-owned-heaps.ores",
+            } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
@@ -157,7 +185,10 @@ def main():
                 "source-actor-await-done.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
-            if name == "source-actor-scoped-owned-i64.ores":
+            if name in {
+                "source-actor-scoped-owned-i64.ores",
+                "source-actor-two-owned-heaps.ores",
+            }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
                 assert guest.stdout.count(
@@ -232,14 +263,12 @@ def main():
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
-            for i, line in enumerate(lines):
-                assert "constructor_on_worker=1 released=1" in line, line
-                match = re.search(
-                    r"accepted=(\\d+) processed=(\\d+) abandoned=(\\d+) last=(-?\\d+)",
-                    line)
-                assert match is not None, (name, line)
-                accepted, processed, abandoned, observed_last = map(
-                    int, match.groups())
+            receipts = [parse_actor_receipt(line) for line in lines]
+            for i, receipt in enumerate(receipts):
+                accepted = receipt["accepted"]
+                processed = receipt["processed"]
+                abandoned = receipt["abandoned"]
+                observed_last = receipt["last"]
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
@@ -252,6 +281,10 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
+            if name == "source-actor-two-owned-heaps.ores":
+                assert sorted(receipt["last"] for receipt in receipts) == [
+                    52, 172
+                ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
