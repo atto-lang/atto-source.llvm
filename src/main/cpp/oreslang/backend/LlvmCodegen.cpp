@@ -1395,6 +1395,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         std::vector<const Statement*> deferred_effects;
         auto lower_effect = [&](const Statement& effect) {
+            if (effect.kind == Statement::Kind::ScalarWrite) {
+                auto* value = lower(*effect.expression, builder, i64, storage, field_storage, declarations, &region_moves);
+                builder.CreateStore(value, storage.at(effect.receiver));
+                return;
+            }
             if (effect.kind == Statement::Kind::ArrayCommitFilled) {
                 // OwnershipChecker guarantees a live unique mutable class
                 // with exactly four array fields; the class layout fixes
@@ -1564,6 +1569,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             storage.erase(slot.name);
         };
         std::vector<ScopedSlot> active_scopes;
+        std::vector<ScopedSlot> ordered_root_scopes;
         auto forget_scope = [&](const ScopedSlot& slot) {
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
@@ -1686,6 +1692,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 continue;
             }
             if (builder.GetInsertBlock()->getTerminator()) break;
+            if (stmt.kind == Statement::Kind::ScopedLocal) {
+                const auto& local = *stmt.branch_local;
+                auto* value = lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+                ordered_root_scopes.push_back(scoped_value(local, value));
+                continue;
+            }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
                     stmt.kind == Statement::Kind::Conditional) {
                 lower_control(stmt); continue;
@@ -1952,6 +1964,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             return llvm::ConstantInt::get(i64, 0); // owning ABI publishes through caller storage
         };
         auto emit_lexical_cleanup = [&]() {
+            // Root lexical locals can be referenced by deferred cleanup.
+            // Their lifetimes end after defers, unlike branch temporaries.
+            for (auto it = ordered_root_scopes.rbegin(); it != ordered_root_scopes.rend(); ++it)
+                native_lifetime_end(builder, it->address, it->bytes);
             for (auto it = lexical_slots.rbegin(); it != lexical_slots.rend(); ++it) {
                 if (it->int_array) {
                     llvm::Value* handle = builder.CreateLoad(i64,

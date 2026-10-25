@@ -55,6 +55,9 @@ for every workload.
   generation/schema/tag validation. Real routing capture fixtures run natively;
   class payloads and the full Spin server remain work in progress. See
   [native sums and lifetime boundaries](docs/NATIVE_SCALAR_SUMS.md).
+- Ordered scalar/sum locals and immutable record views can follow calls and
+  control flow. Mutable scalar slots preserve lexical scope, loan checks and
+  deferred cleanup lifetimes. See [ordered locals](docs/NATIVE_ORDERED_LOCALS.md).
 - Parse a relative module graph with one or more `fnc`/`routine` declarations returning `int`, with optional
   `pub` and one optional `define module M [as] ... end` wrapper.
 - Typed `int` and `bool` parameters, scalar fields and loans; checked bool operators

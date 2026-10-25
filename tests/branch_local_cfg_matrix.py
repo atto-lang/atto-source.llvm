@@ -20,17 +20,17 @@ GUESTS = {
 fnc choose(borrow mut Record r, int n): void {
   if (n eq 0) {
     val left: int = 41;
-    store(rt borrow mut r, left);
+    store(rt mut borrow r, left);
   } else {
     const right: int = 42;
-    store(rt borrow mut r, right);
+    store(rt mut borrow r, right);
   } fi
   return;
 }
 pub fnc main(): int {
   let mut Record r = new Record();
-  choose(rt borrow mut r, 0);
-  choose(rt borrow mut r, 1);
+  choose(rt mut borrow r, 0);
+  choose(rt mut borrow r, 1);
   return r.score;
 }
 """,
@@ -40,10 +40,10 @@ pub fnc main(): int {
   if (1 eq 1) {
     val a: int = 19;
     val b: int = a + 23;
-    store(rt borrow mut r, b);
+    store(rt mut borrow r, b);
   } else {
     val other: int = 0;
-    store(rt borrow mut r, other);
+    store(rt mut borrow r, other);
   } fi
   return r.score;
 }
@@ -53,10 +53,10 @@ pub fnc main(): int {
   let mut Record r = new Record();
   if (3 eq 4) {
     val v: int = 22;
-    store(rt borrow mut r, v + 20);
+    store(rt mut borrow r, v + 20);
   } else {
     val v: int = 12;
-    store(rt borrow mut r, v + 30);
+    store(rt mut borrow r, v + 30);
   } fi
   return r.score;
 }
@@ -67,19 +67,19 @@ fnc increment(borrow mut Record r): void {
   return;
 }
 fnc action(borrow mut Record r, int n): void {
-  defer increment(rt borrow mut r);
+  defer increment(rt mut borrow r);
   if (n eq 0) {
     val x: int = 41;
-    store(rt borrow mut r, x);
+    store(rt mut borrow r, x);
   } else {
     val y: int = 41;
-    store(rt borrow mut r, y);
+    store(rt mut borrow r, y);
   } fi
   return;
 }
 pub fnc main(): int {
   let mut Record r = new Record();
-  action(rt borrow mut r, 1);
+  action(rt mut borrow r, 1);
   return r.score;
 }
 """,
@@ -91,9 +91,9 @@ pub fnc main(): int {
   let mut Record r = new Record();
   if (1 == 1) {
     val x: int = 42;
-    store(rt borrow mut r, passthrough(rt borrow x));
+    store(rt mut borrow r, passthrough(rt borrow x));
   } else {
-    store(rt borrow mut r, 1);
+    store(rt mut borrow r, 1);
   } fi
   return r.score;
 }
@@ -111,7 +111,7 @@ pub fnc main(): int {
 pub fnc main(): int {
   let mut Record r = new Record();
   if (1 eq 0) { val x: int = 42; }
-  else { store(rt borrow mut r, x); } fi
+  else { store(rt mut borrow r, x); } fi
   return r.score;
 }
 """, "unknown parameter 'x'"),
