@@ -36,6 +36,9 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Deterministic quota-path hook for the isolated send_async runtime test.
+ * Refuses values above the production cohort bound. */
+int oreslang_source_actor_test_set_async_waiters(void* actor, size_t waiters);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
@@ -63,6 +66,10 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  * compiler projection. WOULD_DEADLOCK is source-runtime specific.
  */
 enum {
+    /* Match the Java bounded pending-producer cohort for this interim
+     * outer-host source bridge. This bounds parked host threads/opaque pins
+     * until cooperative producer continuations replace the bridge. */
+    ORES_SOURCE_SEND_ASYNC_MAX_WAITERS = 256,
     ORES_SOURCE_SEND_ASYNC_ACCEPTED = ORES_NATIVE_SEND_ACCEPTED,
     ORES_SOURCE_SEND_ASYNC_INVALID_REF = ORES_NATIVE_SEND_INVALID_REF,
     ORES_SOURCE_SEND_ASYNC_TERMINATED = ORES_NATIVE_SEND_TERMINATED,
