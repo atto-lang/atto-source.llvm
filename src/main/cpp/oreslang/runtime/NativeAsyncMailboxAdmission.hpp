@@ -151,6 +151,7 @@ public:
         Slot& entry = *entry_ptr;
         if (sealed_ || bytes > max_bytes_
                 || pending_waiters_ >= max_waiters_
+                || pending_bytes_ > max_pending_bytes_
                 || bytes > max_pending_bytes_ - pending_bytes_)
             return Registration::Rejected;
 
@@ -404,6 +405,18 @@ public:
         return sealed_;
     }
 
+#ifdef ORESLANG_NATIVE_ASYNC_MAILBOX_TEST_PEER
+    void test_set_slot_generation(std::size_t slot, std::uint64_t generation) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (slot >= slots_.size()) throw std::out_of_range("async mailbox test slot");
+        Slot& entry = slots_[slot];
+        if (entry.state == State::Preparing || entry.state == State::Waiting
+                || entry.state == State::Transferred || entry.state == State::Publishing)
+            throw std::logic_error("cannot mutate live async mailbox test slot");
+        entry.generation = generation;
+    }
+#endif
+
 private:
     enum class State { Empty, Preparing, Waiting, Transferred, Publishing, Cancelled };
     struct Slot {
@@ -415,15 +428,18 @@ private:
     };
 
     bool fits_locked(std::size_t bytes) const noexcept {
+        if (used_frames_ > max_frames_ || used_bytes_ > max_bytes_) return false;
         return used_frames_ < max_frames_
             && bytes <= max_bytes_ - used_bytes_;
     }
 
     std::size_t find_empty_slot_locked() {
-        for (std::size_t i = 0; i < slots_.size(); ++i)
-            if (slots_[i].state == State::Empty
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            if ((slots_[i].state == State::Empty
                     || slots_[i].state == State::Cancelled)
+                    && slots_[i].generation != std::numeric_limits<std::uint64_t>::max())
                 return i;
+        }
         return max_waiters_;
     }
 
