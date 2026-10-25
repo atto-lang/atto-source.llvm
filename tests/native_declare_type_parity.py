@@ -7,234 +7,57 @@ import tempfile
 
 ENTRY = "pub fnc main(): int { return 7; }\n"
 
+# Complete aliases supersede the removed declare-then-define protocol.
+# Keep source admission, runtime ABI and descriptor-only types distinct.
 POSITIVE = {
-    "shared-java-llvm-executable-fixture": (
-        Path(__file__).with_name("fixtures")
-        / "forward-scalar-alias-parity.ores"
-    ).read_text(encoding="utf-8"),
-    "scalar-int-forward": (
-        "declare type Code;\n"
-        "define type Code = int;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "pub fnc main(): int { return id(7); }\n"
-    ),
-    "public-int-forward": (
-        "declare pub type Code;\n"
-        "define pub type Code = int;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "pub fnc main(): int { return id(7); }\n"
-    ),
-    "legacy-public-define": (
-        "declare pub type Code;\n"
-        "pub define type Code = int;\n" + ENTRY
-    ),
-    "module-scope-alias": (
-        "define module foo as\n"
-        "  declare type Code;\n"
-        "  define type Code = int;\n"
-        "  fnc id(Code code): Code { return code; }\n"
-        "  pub fnc main(): int { return id(7); }\n"
-        "end\n"
-    ),
-    "bool-alias": (
-        "declare type Flag;\n"
-        "define type Flag = bool;\n"
-        "fnc ready(Flag value): Flag { return value; }\n"
-        "pub fnc main(): int { return ready(true) ? 7 : 0; }\n"
-    ),
-    "forward-use-before-definition": (
-        "declare type Code;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "define type Code = int;\n"
-        "pub fnc main(): int { return id(7); }\n"
-    ),
-    "forward-bool-before-definition": (
-        "declare type Flag;\n"
-        "fnc ready(Flag value): Flag { return value; }\n"
-        "define type Flag = bool;\n"
-        "pub fnc main(): int { return ready(true) ? 7 : 0; }\n"
-    ),
-    "module-forward-before-definition": (
-        "define module foo as\n"
-        "  declare type Code;\n"
-        "  fnc id(Code code): Code { return code; }\n"
-        "  define type Code = int;\n"
-        "  pub fnc main(): int { return id(7); }\n"
-        "end\n"
-    ),
-    "forward-alias-dependency-chain": (
-        "declare type Code;\n"
-        "declare type Raw;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "define type Code = Raw;\n"
-        "define type Raw = int;\n"
-        "pub fnc main(): int { return id(7); }\n"
-    ),
-    "alias-chain": (
-        "type Raw = int;\n"
-        "declare type Code;\n"
-        "define type Code = Raw;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "pub fnc main(): int { return id(7); }\n"
-    ),
+    "complete-alias-chain-fixture": (Path(__file__).with_name("fixtures") / "forward-scalar-alias-parity.ores").read_text(encoding="utf-8"),
+    "declared-int": "declare type Code = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);}",
+    "defined-int": "define type Code = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);}",
+    "public-int": "declare pub type Code = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);}",
+    "prefix-public-int": "pub declare type Code = int;" + ENTRY,
+    "legacy-public-define": "pub define type Code = int;" + ENTRY,
+    "module-scope-alias": "define module foo as declare type Code = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);} end",
+    "bool-alias": "declare type Flag = bool; fnc ready(Flag n):Flag{return n;} pub fnc main():int{return ready(true)?7:0;}",
+    "forward-target-chain": "declare type Code = Raw; declare type Raw = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);}",
+    "defined-chain": "define type Raw = int; define type Code = Raw; fnc id(Code n):Code{return n;} pub fnc main():int{return id(7);}",
+    "descriptor-only-trait": "define trait Printable as end " + ENTRY,
+    "descriptor-only-interface": "define interface Named as end " + ENTRY,
 }
-
 NEGATIVE = {
-    "missing-definition": ("declare type Missing;\n"+ENTRY, "unresolved native forward type"),
-    "duplicate-forward": (
-        "declare type Code;\ndeclare type Code;\ndefine type Code = int;\n"+ENTRY,
-        "duplicate native forward"
-    ),
-    "visibility-widen": (
-        "declare type Code;\ndefine pub type Code = int;\n"+ENTRY,
-        "visibility mismatch"
-    ),
-    "visibility-narrow": (
-        "declare pub type Code;\ndefine type Code = int;\n"+ENTRY,
-        "visibility mismatch"
-    ),
-    "duplicate-definition": (
-        "type Code = int;\ntype Code = bool;\n"+ENTRY,
-        "duplicate native type alias"
-    ),
-    "refined-with-min-max-unverified": (
-        "declare type Code;\n"
-        "fnc identity(Code value): Code { return value; }\n"
-        "define type Code = int with min 0 and max 5;\n" + ENTRY,
-        "proof-preserving lowering"
-    ),
-    "refined-with-value-unverified": (
-        "declare type Code;\n"
-        "define type Code = int with value gte 0 and value lte 5;\n" + ENTRY,
-        "proof-preserving lowering"
-    ),
-    "refined-as-language-unverified": (
-        "declare type Code;\n"
-        "define type Code = int as positive integer;\n" + ENTRY,
-        "proof-preserving lowering"
-    ),
-    "string-length-charset-not-lowered": (
-        "declare type Code;\n"
-        "fnc identity(Code value): Code { return value; }\n"
-        "define type Code = string with min_length 2 and max_length 4 "
-        "and chars ascii_letters;\n" + ENTRY,
-        "native refined string aliases require Zorde UTF-8/charset checks"
-    ),
-    "string-ascii-uppercase-not-lowered": (
-        "declare type Code;\n"
-        "define type Code = string with chars ascii_uppercase;\n" + ENTRY,
-        "native refined string aliases require Zorde UTF-8/charset checks"
-    ),
-    "string-unicode-uppercase-not-lowered": (
-        "declare type Code;\n"
-        "define type Code = string with chars uppercase;\n" + ENTRY,
-        "native refined string aliases require Zorde UTF-8/charset checks"
-    ),
-    "string-han-not-lowered": (
-        "declare type Code;\n"
-        "define type Code = string with chars han;\n" + ENTRY,
-        "native refined string aliases require Zorde UTF-8/charset checks"
-    ),
-    "generic-forward": (
-        "declare type Code<T>;\ndefine type Code = int;\n"+ENTRY,
-        "generic type alias forward"
-    ),
-    "generic-definition": (
-        "define type Code<T> = int;\n"+ENTRY,
-        "generic type alias"
-    ),
-    "unsupported-trait": ("declare trait Printable;\n"+ENTRY, "native trait/interface forward"),
-    "unsupported-trait-definition": (
-        "define trait Printable as end\n"+ENTRY,
-        "native trait/interface definitions"
-    ),
-    "unsupported-interface-definition": (
-        "define interface Named as end\n"+ENTRY,
-        "native trait/interface definitions"
-    ),
-    "unsupported-enum-definition": (
-        "define enum Status as Success = 1; end\n"+ENTRY,
-        "native user-defined tagged enum"
-    ),
-    "unsupported-interface": ("declare interface Named;\n"+ENTRY, "native trait/interface forward"),
-    "unsupported-actor": ("declare actor Worker;\n"+ENTRY, "native declare supports only"),
-    "unsupported-enum": ("declare enum Status;\n"+ENTRY, "native declare supports only"),
-    "non-scalar-alias": (
-        "declare type Code;\ndefine type Code = Option<int>;\n"+ENTRY,
-        "scalar target"
-    ),
-    "self-alias": (
-        "declare type Code;\ndefine type Code = Code;\n"+ENTRY,
-        "native type alias cycle"
-    ),
-    "mutual-alias-cycle": (
-        "declare type One;\n"
-        "declare type Two;\n"
-        "define type One = Two;\n"
-        "define type Two = One;\n"+ENTRY,
-        "native type alias cycle"
-    ),
-    "alias-forward-without-definition": (
-        "declare type Code;\n"
-        "define type Raw = Code;\n"+ENTRY,
-        "unresolved native forward type"
-    ),
-    "builtin-shadowing": ("type int = bool;\n"+ENTRY, "reserved"),
-    "string-builtin-alias-shadowing": (
-        "type String = int;\n" + ENTRY, "reserved"
-    ),
-    "string-forward-shadowing": (
-        "declare type String;\n" + ENTRY, "cannot shadow builtin"
-    ),
-    "canonical-String-refinement-unverified": (
-        "declare type DisplayName;\n"
-        "define type DisplayName = String with min_length 1 "
-        "and chars ascii_letters;\n" + ENTRY,
-        "native refined string aliases require Zorde UTF-8/charset checks"
-    ),
-    "class-collision": (
-        "define type Box = int;\n"
-        "define class Box as pub let int count = 1; end\n"+ENTRY,
-        "collides with type alias"
-    ),
-    "actor-collision": (
-        "define type Worker = int;\n"
-        "define actor Worker as\n"
-        "  let count: int = 0;\n"
-        "  pub fnc on_message(int value): int { return value; }\n"
-        "end\n"+ENTRY,
-        "collides with type alias"
-    ),
-    "use-before-forward-not-admitted": (
-        "fnc id(Code code): Code { return code; }\n"
-        "declare type Code;\n"
-        "define type Code = int;\n"+ENTRY,
-        "native return type"
-    ),
-    "borrow-bool-through-forward": (
-        "declare type Flag;\n"
-        "fnc invalid(borrow Flag flag): bool { return flag; }\n"
-        "define type Flag = bool;\n" + ENTRY,
-        "native bool borrow ABI is not yet admitted"
-    ),
-    "bool-disguised-as-int-return": (
-        "declare type Flag;\n"
-        "fnc bad(Flag flag): int { return flag; }\n"
-        "define type Flag = bool;\n" + ENTRY,
-        "native function return requires int, got bool"
-    ),
-    "int-disguised-as-bool-argument": (
-        "declare type Code;\n"
-        "fnc id(Code code): Code { return code; }\n"
-        "define type Code = int;\n"
-        "pub fnc main(): int { return id(true); }\n",
-        "argument 'code' requires int, got bool"
-    ),
-    "forward-class-impersonation": (
-        "declare type Box;\n"
-        "define class Box as pub let int value = 1; end\n" + ENTRY,
-        "unresolved native forward type"
-    ),
+    "missing-definition": ("declare type Missing;" + ENTRY, "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+    "incomplete-before-definition": ("declare type Code; define type Code = int;" + ENTRY, "TYPE_ONLY_INCOMPLETE_DEFINITION"),
+    "duplicate-declaration": ("declare type Code = int; declare type Code = int;" + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "duplicate-definition": ("define type Code = int; define type Code = bool;" + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "visibility-widen": ("declare type Code = int; define pub type Code = int;" + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "visibility-narrow": ("declare pub type Code = int; define type Code = int;" + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "refined-runtime-value": ("define type Code = int with min 0 and max 5; fnc id(Code n):Code{return n;}" + ENTRY, "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED"),
+    "refined-chain-runtime-value": ("define type Code = int with min 0 and max 5; declare type Raw = Code; fnc id(Raw n):Raw{return n;}" + ENTRY, "CONSTRAINT_VALIDATION_BRIDGE_REQUIRED"),
+    "unsupported-refinement-expression": ("define type Code = int with value gte 0 and value lte 5;" + ENTRY, "CONSTRAINT"),
+    "unsupported-refinement-language": ("define type Code = int as positive integer;" + ENTRY, "expected ';'"),
+    "string-length-refinement": ("define type Code = string with min_length 2 and max_length 4 and chars ascii_letters;" + ENTRY, "CONSTRAINT"),
+    "string-ascii-refinement": ("define type Code = string with chars ascii_uppercase;" + ENTRY, "CONSTRAINT"),
+    "string-unicode-refinement": ("define type Code = string with chars uppercase;" + ENTRY, "CONSTRAINT"),
+    "string-han-refinement": ("define type Code = string with chars han;" + ENTRY, "CONSTRAINT"),
+    "generic-declare": ("declare type Code<T> = int;" + ENTRY, "TYPE_ONLY_GENERIC_UNSUPPORTED"),
+    "generic-define": ("define type Code<T> = int;" + ENTRY, "TYPE_ONLY_GENERIC_UNSUPPORTED"),
+    "incomplete-trait": ("declare trait Printable;" + ENTRY, "expected 'as'"),
+    "incomplete-interface": ("declare interface Named;" + ENTRY, "expected 'as'"),
+    "enum-runtime-layout": ("define enum Status as Success = 1; end " + ENTRY, "native user-defined tagged enum"),
+    "actor-not-type-only": ("declare actor Worker;" + ENTRY, "TYPE_ONLY_INVALID_KIND"),
+    "enum-not-type-only": ("declare enum Status;" + ENTRY, "TYPE_ONLY_INVALID_KIND"),
+    "non-scalar-generic-alias": ("define type Code = Option<int>;" + ENTRY, "expected ';'"),
+    "self-alias": ("define type Code = Code;" + ENTRY, "TYPE_ALIAS_CYCLE"),
+    "mutual-alias-cycle": ("define type One = Two; define type Two = One;" + ENTRY, "TYPE_ALIAS_CYCLE"),
+    "unknown-alias-target": ("define type Raw = Missing;" + ENTRY, "TYPE_ALIAS_UNKNOWN_TARGET"),
+    "builtin-shadowing": ("define type int = bool;" + ENTRY, "identifier"),
+    "string-builtin-shadowing": ("define type String = int;" + ENTRY, "TYPE_DECL_RESERVED_BUILTIN"),
+    "class-collision": ("define type Box = int; define class Box as pub let int count = 1; end " + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "actor-collision": ("define type Worker = int; define actor Worker as let count:int=0; pub fnc on_message(int n):int{return n;} end " + ENTRY, "TYPE_DECL_NAME_COLLISION"),
+    "borrow-bool-alias": ("declare type Flag = bool; fnc invalid(borrow Flag n):bool{return n;}" + ENTRY, "native bool borrow ABI is not yet admitted"),
+    "bool-as-int-return": ("declare type Flag = bool; fnc bad(Flag n):int{return n;}" + ENTRY, "native function return requires int, got bool"),
+    "int-as-bool-argument": ("declare type Code = int; fnc id(Code n):Code{return n;} pub fnc main():int{return id(true);}", "requires int, got bool"),
+    "trait-as-value": ("define trait Box as end fnc invalid(Box n):int{return 7;}" + ENTRY, "TYPE_ALIAS_KIND_MISMATCH"),
+    "use-before-declaration": ("fnc id(Code n):Code{return n;} define type Code = int;" + ENTRY, "unknown native class type"),
 }
 
 def run(compiler, root, name, source):
@@ -273,7 +96,7 @@ def main():
             if p.returncode == 0 or p.stdout.strip() or expected not in p.stderr:
                 raise AssertionError(("unsupported source admitted or missing diagnostic",
                                       name, p.returncode, p.stderr, p.stdout[:400]))
-    print("PASS native source-forward scalar type: "
+    print("PASS native complete scalar aliases: "
           f"{len(POSITIVE)} compiled and executed, {len(NEGATIVE)} rejected; "
           "type/trait/interface full JVM parity NOT CLAIMED")
 

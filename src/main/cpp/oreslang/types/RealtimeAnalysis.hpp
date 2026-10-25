@@ -200,6 +200,12 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
     }
     if (binding.heap_owned || binding.int_array)
         add_effect(facts, FunctionEffect::Alloc);
+    // Materializing an immutable class view allocates a root descriptor even
+    // when its initializer is only a named value, rather than a constructor.
+    if (binding.record_view && !binding.class_name.empty()) {
+        add_effect(facts, FunctionEffect::Alloc);
+        facts.unsupported_runtime = true;
+    }
 }
 
 inline void scan_statement(const Statement& statement, DirectFacts& facts) {
@@ -218,7 +224,7 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         scan_binding(*statement.branch_local, facts);
     if (facts.call_budget_exceeded) return;
 
-    if (statement.kind == Statement::Kind::FieldWrite)
+    if (statement.kind == Statement::Kind::FieldWrite || statement.kind == Statement::Kind::ScalarWrite)
         add_effect(facts, FunctionEffect::StateWrite);
     if (statement.kind == Statement::Kind::ArrayCommitFilled)
         add_effect(facts, FunctionEffect::Alloc);

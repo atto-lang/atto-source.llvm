@@ -59,13 +59,13 @@ def main():
            "fnc bump(borrow mut Counter c): void {\n"
            "  c.value = c.value + 1;\n  return;\n}\n"
            "fnc snapshot(borrow mut Counter c, int mode): int {\n"
-           "  defer bump(rt borrow mut c);\n"
+           "  defer bump(rt mut borrow c);\n"
            "  if (mode eq 0) { return c.value; } fi\n"
            "  return c.value;\n}\n"
            "pub fnc main(): int {\n"
            "  let mut Counter c = new Counter();\n"
-           "  const a: int = snapshot(rt borrow mut c, 0);\n"
-           "  const b: int = snapshot(rt borrow mut c, 1);\n"
+           "  const a: int = snapshot(rt mut borrow c, 0);\n"
+           "  const b: int = snapshot(rt mut borrow c, 1);\n"
            "  return a + b - 39;\n}\n")
     examples.append(("deferred-mutator-return-snapshot", cls, 0, 42))
 

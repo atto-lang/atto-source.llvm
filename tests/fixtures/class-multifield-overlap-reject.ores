@@ -7,5 +7,5 @@ fnc inspect(borrow mut Box one, borrow Box two): int {
 }
 pub fnc main(): int {
   let mut Box box = new Box();
-  return inspect(rt borrow mut box, rt borrow box);
+  return inspect(rt mut borrow box, rt borrow box);
 }
