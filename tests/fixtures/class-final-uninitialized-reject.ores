@@ -1,0 +1,7 @@
+define class Pair as
+  pub final int a;
+end
+pub fnc main(): int {
+  let mut Pair missing = new Pair();
+  return 42;
+}

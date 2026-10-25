@@ -1,0 +1,10 @@
+import module http_status from "./http_status";
+// This actor is compiled to LLVM machine code, never interpreted at request time.
+// HTTP framing and capability validation are trusted native adapter work.
+define actor HttpWorker as {
+  let requests: int = 0;
+  pub fnc on_message(int status): int {
+    requests = requests + 1;
+    return http_status.response_status(status);
+  }
+}

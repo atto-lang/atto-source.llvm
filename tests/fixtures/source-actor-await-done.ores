@@ -1,0 +1,15 @@
+// Terminal lifecycle await: stop seals DATA immediately and get_done resumes
+// only after physical terminal acknowledgement and runtime finalization.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  stop worker;
+  await worker.get_done();
+  return 43;
+}

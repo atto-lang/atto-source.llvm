@@ -1,0 +1,12 @@
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    const temporary: owned int = n;
+    return temporary;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return 43;
+}

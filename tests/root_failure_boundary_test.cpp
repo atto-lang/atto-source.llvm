@@ -24,8 +24,14 @@ int main() {
         CHECK(outcome.terminal.kind == kind && outcome.original.kind == kind);
     }
 
+    const auto explicitExit = root_terminal_outcome({EffectKind::ProcessExit, 17u});
+    CHECK(!explicitExit.failed && explicitExit.default_exit_status == 0);
+    CHECK(explicitExit.original.kind == EffectKind::ProcessExit);
+    CHECK(explicitExit.terminal.kind == EffectKind::ProcessExit && explicitExit.terminal.code == 17u);
+
     const auto forged = root_terminal_outcome({static_cast<EffectKind>(0xff), 7u});
     CHECK(forged.failed && forged.default_exit_status == 1);
     CHECK(forged.terminal.kind == EffectKind::Fatal);
+    CHECK(forged.terminal.code == 0xFFFFFFFDu);
     CHECK(forged.original.code == 7u);
 }

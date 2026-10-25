@@ -10,14 +10,14 @@ fnc add_one(borrow mut Counter c): void {
   return;
 }
 fnc tick(borrow mut Counter c, int guard): int {
-  defer add_one(rt borrow mut c);
-  defer multiply_ten(rt borrow mut c);
+  defer add_one(rt mut borrow c);
+  defer multiply_ten(rt mut borrow c);
   if (guard eq 0) { return 0; } fi
   return 1;
 }
 pub fnc main(): int {
   let mut Counter c = new Counter();
-  tick(rt borrow mut c, 0);
-  tick(rt borrow mut c, 1);
+  tick(rt mut borrow c, 0);
+  tick(rt mut borrow c, 1);
   return c.value;
 }

@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace oreslang {
 
@@ -39,8 +40,12 @@ public:
     };
 
     explicit SupervisorControlTurn(std::size_t capacity,
-                                   std::size_t restart_budget = 0)
-        : child_failures_(capacity), restart_budget_(restart_budget) {}
+                                   std::size_t restart_budget = 0,
+                                   std::uint64_t restart_window_ticks = 0)
+        : child_failures_(capacity),
+          restart_budget_(restart_budget),
+          restart_window_ticks_(restart_window_ticks),
+          restart_ticks_(restart_budget, 0) {}
 
     void reserve_child(const SupervisorFailureLane::ActorKey& child) {
         child_failures_.reserve(child);
@@ -85,6 +90,7 @@ public:
     std::size_t pending_count() const { return child_failures_.pending_count(); }
     std::size_t reserved_count() const { return child_failures_.reserved_count(); }
     std::size_t restarts_used() const noexcept { return restarts_used_; }
+    std::size_t restarts_in_window() const noexcept { return restart_count_; }
 
     /**
      * At most one CONTROL event per admitted turn. CONTROL takes priority
@@ -92,6 +98,17 @@ public:
      * scheduler's existing single-flight turn before ordinary work.
      */
     Admitted admit_turn(Hooks& hooks, bool ordinary_mail_ready) {
+        return admit_turn(hooks, ordinary_mail_ready, 0);
+    }
+
+    /**
+     * Window-aware CONTROL admission. restart_tick is a caller-supplied
+     * monotonic scheduler tick; no clock, thread or timer is created here.
+     * A zero restart_window_ticks constructor preserves the legacy lifetime
+     * restart budget. Windowed callers must provide nondecreasing ticks.
+     */
+    Admitted admit_turn(Hooks& hooks, bool ordinary_mail_ready,
+                        std::uint64_t restart_tick) {
         if (lease_.test_and_set(std::memory_order_acquire)) {
             throw std::logic_error("overlapping native supervisor logical turns");
         }
@@ -111,20 +128,25 @@ public:
                         hooks.on_escalate(*next);
                         break;
                     case Decision::Restart:
-                        // Budget is supervisor-scoped. A failed attempt must
-                        // escalate; no actor generation may be silently reused.
-                        if (restarts_used_ >= restart_budget_) {
+                        // Restart admission is supervisor-scoped. With a
+                        // configured window this is an intensity bound rather
+                        // than a permanent lifetime fuse. A failed restart
+                        // attempt still consumes its slot: retry storms must
+                        // never bypass supervision policy.
+                        if (!consume_restart_slot(restart_tick)) {
                             hooks.on_escalate(*next);
-                        } else {
-                            ++restarts_used_;
-                            if (!hooks.on_restart(*next)) hooks.on_escalate(*next);
+                        } else if (!hooks.on_restart(*next)) {
+                            hooks.on_escalate(*next);
                         }
                         break;
                     default:
-                        // Invalid enum tags from host FFI/corrupt handlers must
-                        // retain the in-flight CONTROL event for retry rather
-                        // than silently acknowledging a failed actor.
-                        throw std::invalid_argument("invalid supervisor CONTROL decision");
+                        // Invalid FFI/hook decision must escalate in this
+                        // same CONTROL turn: endless retries would strand the
+                        // pre-reserved child failure and allow no progress.
+                        // An exception thrown by escalation itself is still
+                        // retried through the existing catch/retry boundary.
+                        hooks.on_escalate(*next);
+                        break;
                 }
                 child_failures_.ack(next->actor);
             } catch (...) {
@@ -139,6 +161,36 @@ public:
     }
 
 private:
+    bool consume_restart_slot(std::uint64_t now) noexcept {
+        if (restart_budget_ == 0) return false;
+        if (restart_window_ticks_ == 0) {
+            if (restarts_used_ >= restart_budget_) return false;
+            ++restarts_used_;
+            return true;
+        }
+
+        // A regressing scheduler tick is not trustworthy restart evidence.
+        // Fail closed by denying this restart rather than throwing/retrying
+        // the same CONTROL event forever.
+        if (restart_count_ != 0 && now < last_restart_tick_) return false;
+
+        while (restart_count_ != 0) {
+            const std::uint64_t oldest = restart_ticks_[restart_head_];
+            if (now < oldest || now - oldest < restart_window_ticks_) break;
+            restart_head_ = (restart_head_ + 1) % restart_budget_;
+            --restart_count_;
+        }
+        if (restart_count_ >= restart_budget_) return false;
+
+        const std::size_t index =
+                (restart_head_ + restart_count_) % restart_budget_;
+        restart_ticks_[index] = now;
+        ++restart_count_;
+        last_restart_tick_ = now;
+        ++restarts_used_;
+        return true;
+    }
+
     static Decision dispatch(Hooks& hooks,
                              const SupervisorFailureLane::Failure& failure) {
         switch (failure.kind) {
@@ -154,7 +206,12 @@ private:
 
     SupervisorFailureLane child_failures_;
     const std::size_t restart_budget_;
-    std::size_t restarts_used_ = 0; // single-writer supervisor turn
+    const std::uint64_t restart_window_ticks_;
+    std::vector<std::uint64_t> restart_ticks_;
+    std::size_t restart_head_ = 0;
+    std::size_t restart_count_ = 0;
+    std::uint64_t last_restart_tick_ = 0;
+    std::size_t restarts_used_ = 0; // lifetime telemetry; single-writer CONTROL turn
     std::atomic_flag lease_ = ATOMIC_FLAG_INIT;
 
 };

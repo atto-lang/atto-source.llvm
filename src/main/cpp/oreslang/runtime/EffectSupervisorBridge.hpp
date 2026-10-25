@@ -36,11 +36,20 @@ public:
             std::string_view parent_id = {}) {
         using Effect = EffectKind;
         using Failure = SupervisorFailureLane::Kind;
-        if (effect.kind == Effect::Return) return false;
-        const Failure origin = original_kind(effect.kind);
-        const Failure delivered = terminal_kind(effect.kind);
+        // Every native/FFI tag, including forged bytes, is canonicalized
+        // *before* the CONTROL publication. A forged tag can neither appear
+        // as a graceful Return nor throw across the carrier and strand a
+        // preallocated child slot. Keep the original numeric error code
+        // for valid statuses, and use a fixed fatal code for invalid tags.
+        const bool forged = !effect_kind_valid(effect.kind);
+        const EffectStatus canonical = normalize_effect(effect);
+        if (canonical.kind == Effect::Return) return false;
+        const Failure origin = original_kind(canonical.kind);
+        const Failure delivered = terminal_kind(canonical.kind);
+        const auto summary = forged
+            ? std::string_view{"invalid native effect discriminant"} : diagnostic;
         return supervisor.publish_child(
-            actor, delivered, diagnostic, parent_id, origin, effect.code);
+            actor, delivered, summary, parent_id, origin, canonical.code);
     }
 
     static bool publish_terminal(
@@ -51,10 +60,19 @@ public:
             std::string_view parent_id = {}) {
         using Effect = EffectKind;
         using Failure = SupervisorFailureLane::Kind;
-        if (effect.kind == Effect::Return) return false;
-        const Failure origin = original_kind(effect.kind);
-        const Failure delivered = terminal_kind(effect.kind);
-        return lane.publish_preallocated(actor, delivered, diagnostic, parent_id, origin, effect.code);
+        // Every native/FFI tag, including forged bytes, is canonicalized
+        // *before* the CONTROL publication. A forged tag can neither appear
+        // as a graceful Return nor throw across the carrier and strand a
+        // preallocated child slot. Keep the original numeric error code
+        // for valid statuses, and use a fixed fatal code for invalid tags.
+        const bool forged = !effect_kind_valid(effect.kind);
+        const EffectStatus canonical = normalize_effect(effect);
+        if (canonical.kind == Effect::Return) return false;
+        const Failure origin = original_kind(canonical.kind);
+        const Failure delivered = terminal_kind(canonical.kind);
+        const auto summary = forged
+            ? std::string_view{"invalid native effect discriminant"} : diagnostic;
+        return lane.publish_preallocated(actor, delivered, summary, parent_id, origin, canonical.code);
     }
 
 private:
@@ -65,7 +83,8 @@ private:
             case EffectKind::Raise: return K::Raise;
             case EffectKind::Panic: return K::Panic;
             case EffectKind::Cancel: return K::Cancel;
-            case EffectKind::Fatal: return K::HostFailure;
+            case EffectKind::Fatal:
+            case EffectKind::ProcessExit: return K::HostFailure;
             default: throw std::invalid_argument("unknown actor terminal effect");
         }
     }
@@ -79,7 +98,8 @@ private:
             case EffectKind::Raise:
             case EffectKind::Panic: return K::Panic;
             case EffectKind::Cancel: return K::Cancel;
-            case EffectKind::Fatal: return K::HostFailure;
+            case EffectKind::Fatal:
+            case EffectKind::ProcessExit: return K::HostFailure;
             default: throw std::invalid_argument("unknown actor terminal effect");
         }
     }

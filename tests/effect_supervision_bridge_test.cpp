@@ -85,14 +85,35 @@ int main() {
     CHECK(delivered->summary == "defer panic");
     lane.ack(key(6));
 
+    // All 249 unknown uint8 native/FFI effect tags must escalate through
+    // the reserved CONTROL slot as fatal HostFailure. Throwing C++ across
+    // the failing carrier would strand the child reservation permanently.
+    for (unsigned raw = 7; raw < 256; ++raw) {
+        const auto actor = key(700 + static_cast<int>(raw));
+        lane.reserve(actor);
+        CHECK(Bridge::publish_terminal(lane, actor,
+                {static_cast<EffectKind>(raw), 10u}, "forged return"));
+        CHECK(lane.pending_count() == 1);
+        const auto event = lane.poll();
+        CHECK(event.has_value());
+        CHECK(event->kind == Lane::Kind::HostFailure);
+        CHECK(event->origin_kind == Lane::Kind::HostFailure);
+        CHECK(event->origin_code == 0xFFFFFFFDu);
+        CHECK(event->summary == "invalid native effect discriminant");
+        lane.ack(actor);
+        CHECK(lane.pending_count() == 0);
+    }
+    // A valid ProcessExit(0) is actor-terminal and cannot be confused
+    // with a successful Return; keep its numeric payload.
     lane.reserve(key(7));
-    bool invalid = false;
-    try {
-        Bridge::publish_terminal(lane, key(7),
-                {static_cast<EffectKind>(0xff), 10}, "forged");
-    } catch (const std::invalid_argument&) { invalid = true; }
-    CHECK(invalid && lane.pending_count() == 0);
-    lane.retire_gracefully(key(7));
+    CHECK(Bridge::publish_terminal(lane, key(7),
+            {EffectKind::ProcessExit, 0u}, "process exit from child"));
+    const auto process_exit = lane.poll();
+    CHECK(process_exit.has_value());
+    CHECK(process_exit->kind == Lane::Kind::HostFailure);
+    CHECK(process_exit->origin_kind == Lane::Kind::HostFailure);
+    CHECK(process_exit->origin_code == 0u);
+    lane.ack(key(7));
 
     // Promotion is tested through the SupervisorControlTurn overload too.
     // A malformed (terminal, origin) pair is never accepted.

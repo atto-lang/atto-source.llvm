@@ -152,7 +152,7 @@ pub fnc main(): int {
   } else { } fi
   return 42;
 }
-""", "expected 'int'"),
+""", "branch-local owned value requires destructor/drop lowering"),
 }
 
 

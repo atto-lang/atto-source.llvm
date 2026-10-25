@@ -11,9 +11,9 @@ must fail closed instead of producing misleading native code.
 
 | Effect | Caught by catch | Converted by trap | Handled by recover | Unhandled actor outcome |
 |---|---|---|---|---|
-| throw(E) | yes, typed | `None` | not needed | `on_throw`, then `Panic(origin=Throw)` if unhandled |
-| raise(E) | no | no | yes, explicit | `on_raise`, then `Panic(origin=Raise)` if unhandled |
-| panic(PanicInfo) | no | no | no guest recovery | parent's supervisor `on_panic` |
+| throw(E) | yes, typed | `None` | not needed | `on_throw` |
+| raise(E) | no | no | yes, explicit | `on_raise` |
+| panic(PanicInfo) | no | no | **never** | `on_panic` |
 | cancel | no | no | no | `on_cancel` |
 | fatal host failure | no | no | no | `on_host_failure` when containable |
 
@@ -25,6 +25,36 @@ returns `Option<T>` for synchronous calls and eventually
 `throw`. `Option<Option<T>>` must not flatten. Existing detailed trap
 contract: `docs/TRAP.md` in Java.
 
+## Native compiler exceptional CFG milestone (experimental)
+
+The LLVM frontend now admits one local synchronous `int` throw inside a
+terminal `try`, where a matching `catch` always consumes the thrown scalar.
+Its nonthrowing class-field defers run in LIFO order on dedicated LLVM
+`throw.cleanup` -> `throw.catch` edges, and the existing `finally` path
+runs after the catch-return snapshot. No general source exceptional-effect
+propagation, arbitrary cleanup throws, async unwind or supervisor hook
+lowering is implemented. Java's production parser still rejects the explicit
+`throw` statement; this is **not cross-backend parity**.
+
+## Bootstrap catch versus trap admission (Java/GraalVM PR #781)
+
+Java distinguishes *explicit recovery* from *silent conversion to None*.
+Wrapped and suppressed causes receive bounded fail-closed classification.
+
+| Runtime failure origin | Explicit guest catch | Callable trap |
+| --- | --- | --- |
+| Ordinary recoverable throw/assertion | Yes | Yes (`None`) |
+| Denied filesystem/HTTP permission | Yes | No |
+| Recoverable operation timeout | Yes | No |
+| Panic/raise, cancellation, interruption, rejected scheduling | No | No |
+| Process exit, host-fatal error, unknown control | No | No |
+
+Handling a permission denial does not grant the denied side effect.
+The native `GuestFailureBoundary` and `GuestFailureOrigin` admission
+helper in `ExceptionPolicy.hpp` is a tested host control-plane contract,
+**not compiled LLVM guest `try/catch` or `trap` support**. Unsupported
+guest exception source forms must continue to fail closed.
+
 `defer` is lexical and LIFO; `finally` always runs on normal/exceptional
 unwind **while the runtime remains executable**. Neither can be promised after
 SIGKILL, native UB, OOM exhaustion or externally killed isolates. Under
@@ -35,30 +65,26 @@ a stronger failure. An ordinary cleanup throw may replace an ordinary return.
 Cleanup operations cannot extend a borrow past its lifetime or resume a dead
 actor.
 
-A `recover` is an explicit, restricted `raise` recovery boundary, not an
-implicit `catch all`. The compiler must verify recovery authority and a safe
-checkpoint before resuming, with no leaked actor state loans. An actor's own
-`panic` **always bypasses guest recover and actor-local hooks** and is published
-to its parent/root supervisor CONTROL lane while the hosting runtime survives.
-The parent's `on_panic` operates on a child-failure envelope, never in the
-failing actor. **Every unhandled actor `throw` or `raise` is normalized to a
-terminal `Panic` at the actor-supervision boundary** (after eligible local
-handlers), carrying immutable `origin=Throw|Raise` metadata and the initiating
-cause. Direct panic has `origin=Panic`. Host panics should not be translated
-to normal Oreslang `throw` automatically.
+A `recover()` is an explicit, restricted **same-logical-invocation** effect
+boundary, not an implicit `catch all`. A direct deferred `recover()` may
+consume an active ordinary `throw` or `raise` exactly once, subject to
+definite-return checking after unwind; it cannot jump back to the failing
+statement. It **cannot consume `panic`**, cancellation, process exit, or fatal
+host control. Indirect helper calls, detached tasks, sibling invocations,
+and supervisor callbacks cannot recover an originating actor's effect.
+A failed actor's `on_panic` is an independent supervisor CONTROL event on a
+new ExecutionContext: it may select stop/restart/escalate policy but cannot
+resurrect the child or unwind the child's stack. Never translate a host panic
+or native fatal failure into a normal Oreslang `throw`.
+This matches the Java `docs/EXCEPTION_EFFECT_ADMISSION.md` normative contract;
+no Java/LLVM source-language parity is claimed before executable guest tests.
 
 ## Typed supervisor protocol
 
-An actor's unhandled failure *ends that actor's execution domain*.
-Unrecovered throw/raise is **delivered as `Panic`**; typed `origin_kind` retains
-the throw/raise identity. No guest exception is injected up the parent's call
-stack. The actor lifecycle future settles with the original cause; an
-independent supervisor CONTROL panic event is delivered to its parent/supervisor.
-Nested non-actor calls propagate ordinary throws/raises until their outermost
-task/root boundary converts unresolved effects to terminal `Panic`; the CLI
-reports status 1 while an embedder receives the terminal outcome. A non-actor
-main supervising child actors receives child CONTROL events but does not intercept
-its own root panic. See `contracts/EXCEPTION_CONTROL_V1.md`.
+An actor's unhandled failure *ends that actor's execution domain*, preserving
+its original classification. No guest exception is injected up the parent's
+call stack. The actor lifecycle future settles with the original cause; an
+independent supervisor CONTROL event is delivered to its parent/supervisor.
 
 Proposed source hooks (not yet supported by the compiler):
 
@@ -158,11 +184,6 @@ provide supervisor failure delivery.
   but Java Throwable and metadata objects still use managed memory. Do not
   claim GC-free Java execution. An untrusted actor must be placed in a true
   isolate/process for physical fatal-failure containment.
-- LLVM: the `EffectSupervisorBridge` now normalizes actor terminal throw/raise
-  into Panic before CONTROL publication and preserves a typed `origin_kind` in
-  the lane's failure envelope; this is **host-side substrate** and not native
-  source actor/compiler lowering. `RootFailureBoundary.hpp` separately models
-  non-actor task/root terminal escalation and default exit-1 failure.
 - LLVM: the `SupervisorFailureLane` queues preallocated intrusive CONTROL
   nodes with bounded inline summary/parent metadata. `publish_preallocated`
   does not grow a queue or allocate event data. Separately,
