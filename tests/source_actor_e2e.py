@@ -56,6 +56,63 @@ def parse_actor_receipt(line):
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
     return fields
 
+
+def verify_native_owned_ir(ir, name):
+    """Prove two issued three-word native tokens and subsequent LIFO drops.
+
+    A message constant "i64 3" is not ownership evidence. Every ownership
+    event must appear in one defined LLVM function, in causal instruction
+    order; mismatched tokens or extra/dropped operations fail closed.
+    """
+    alloca = re.compile(
+        r"^\s*%([A-Za-z_.$][A-Za-z0-9_.$-]*\.actor\.owned\.token)"
+        r"\s*=\s*alloca\s+\[3 x i64\](?:,\s*align\s+\d+)?\s*$"
+    )
+    call = re.compile(
+        r"^\s*call void @(ores_actor_i64_heap_scoped_(?:new|drop))"
+        r"\((.*)\)\s*$"
+    )
+    last_pointer = re.compile(r"(?:^|,)\s*ptr\s+%([A-Za-z_.$][A-Za-z0-9_.$-]*)\s*$")
+    events = []
+    current_function = None
+    for number, line in enumerate(ir.splitlines(), start=1):
+        if line.lstrip().startswith("define "):
+            assert current_function is None, (name, "nested LLVM function", number)
+            current_function = number
+        elif line.strip() == "}" and current_function is not None:
+            current_function = None
+        allocation = alloca.fullmatch(line)
+        if allocation is not None:
+            assert current_function is not None, (name, "token outside function", number)
+            events.append((current_function, "alloca", allocation.group(1)))
+        if "call void @ores_actor_i64_heap_scoped_" in line:
+            matched = call.fullmatch(line)
+            assert current_function is not None and matched is not None, (
+                name, "malformed native ownership call", number, line)
+            token = last_pointer.search(matched.group(2))
+            assert token is not None, (
+                name, "ownership call missing explicit token", number, line)
+            operation = "new" if matched.group(1).endswith("_new") else "drop"
+            events.append((current_function, operation, token.group(1)))
+    allocs = [(owner, token) for owner, kind, token in events if kind == "alloca"]
+    assert len(allocs) == 2 and allocs[0][1] != allocs[1][1], (
+        name, "expected two distinct three-word actor-native token allocas", allocs)
+    owner, first = allocs[0]
+    other_owner, second = allocs[1]
+    assert owner == other_owner, (name, "owned tokens split across functions", allocs)
+    expected = [
+        (owner, "alloca", first),
+        (owner, "new", first),
+        (owner, "alloca", second),
+        (owner, "new", second),
+        (owner, "drop", second),
+        (owner, "drop", first),
+    ]
+    assert events == expected, (
+        name, "native owned tokens must be issued then dropped exactly once in LIFO order",
+        events, expected)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -173,16 +230,7 @@ def main():
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
             }:
-                assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_new(") == 2, name
-                assert guest.stdout.count(
-                    "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
-                # One actor-native heap for the retained field plus two
-                # reusable temporary slots. Immediate stop may abandon queued
-                # DATA, so runtime repeat-turn proof belongs to dedicated host
-                # tests; this source gate pins the generated bounded reserve.
-                assert "i64 3" in guest.stdout, (
-                    name, "actor heap needs bounded local slot reserve")
+                verify_native_owned_ir(guest.stdout, name)
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
