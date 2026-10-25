@@ -42,6 +42,8 @@ int main(int argc, char** argv) {
         check(std::to_string(target.pointer_bits()) == cells[1]);
         check(target.endian() == cells[2] && target.abi() == cells[3] && target.emission() == cells[4]);
         check(target.experimental_wasm32_ir() == (cells[4] == "experimental-wasm32-ir"));
+        check(target.experimental_android_aarch64_scalar_ir() ==
+              (cells[4] == "experimental-android-aarch64-scalar-ir"));
         if (target.pointer_bits() == 32) {
             check(target.checked_contiguous_bytes(2147483647ULL) == 2147483647ULL);
             rejects<std::overflow_error>([&] { (void)target.checked_contiguous_bytes(2147483648ULL); });
@@ -61,10 +63,13 @@ int main(int argc, char** argv) {
     check(stable.triple() == "wasm32-unknown-unknown");
     const std::set<std::string> expected = {
         "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
-        "i686-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf",
-        "thumbv7m-none-eabi", "wasm32-unknown-unknown"};
+        "aarch64-unknown-linux-android24", "i686-unknown-linux-gnu",
+        "armv7-unknown-linux-gnueabihf", "thumbv7m-none-eabi",
+        "wasm32-unknown-unknown"};
     check(seen == expected && count == expected.size());
     check(oreslang::TargetAbi::parse("thumbv7m-none-eabi").experimental_cortexm_ir());
+    check(oreslang::TargetAbi::parse("aarch64-unknown-linux-android24")
+              .experimental_android_aarch64_scalar_ir());
     static_assert(CHAR_BIT == 8, "native ABI requires 8-bit bytes");
     static_assert(sizeof(float) == 4, "DOP F32 requires 32-bit float");
     static_assert(sizeof(std::uint64_t) == 8, "Oreslang i64 requires 64-bit storage");
