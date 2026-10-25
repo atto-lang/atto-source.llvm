@@ -107,7 +107,13 @@ suspension site, and a native-int literal descriptor. General `async`,
 suspension remain fail-closed.
 
 The compiler emits a pointer-free scalar continuation with no lexical user
-frame. `SourceActorBootstrap` first persists the existing root-actor
+frame. Post-await actor sends/stops are the only effects admitted in this
+first slice. Ordinary calls, field writes, defers or other non-actor statements
+after the await are rejected until general continuation-frame lowering can
+preserve their source order; they must never be silently hoisted before
+readiness.
+
+`SourceActorBootstrap` first persists the existing root-actor
 `OresNativeSuspensionLink`, then passes its continuation slot/generation plus
 the source-offset descriptor generation to
 `ores_native_vm_nio_try_watch_actor_await()`. The source group opts into the
@@ -120,6 +126,10 @@ scheduler wake, releases the old one-shot NIO/FD claim, then publishes the wake.
 Only the authenticated source-root actor callback marks the persisted
 continuation READY, claims a fresh execution context, and invokes the compiled
 continuation. Reactor/completion threads never execute guest code.
+
+A direct Linux runtime gate also arms a real nonblocking pipe before a delayed
+writer makes it readable. That independently exercises VM-NIO wake escrow,
+logical trace resumption and actor cleanup without relying on compiler IR.
 
 The native E2E fixture uses nonblocking stdin fd 0 and supplies one byte from
 the harness. It checks compiler IR, real mixed C/C++ runtime linkage, exact
