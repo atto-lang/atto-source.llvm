@@ -1833,6 +1833,26 @@ if(BUILD_TESTING)
         endif()
         set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
+    # Unary + now lowers as an int-only identity under the existing typed
+    # scalar checker. Verify guest compilation, real AOT execution, and
+    # fail-closed type/range/recursion rejection without Python tooling.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_unary_plus_source_parity.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            DEPENDS tests/native_unary_plus_source_parity.rs
+            VERBATIM)
+        add_custom_target(oreslang-native-unary-plus-parity-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity")
+        add_test(NAME native_unary_plus_source_aot
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    else()
+        add_test(NAME native_unary_plus_source_aot COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_unary_plus_source_aot PROPERTIES TIMEOUT 180)
     add_test(NAME native_strict_nonblocking_io_source_guard
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")
