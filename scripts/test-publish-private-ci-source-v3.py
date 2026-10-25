@@ -63,6 +63,192 @@ def carrier_contract():
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def source_governance_fixture(self):
+        codeowners = (
+            b"/.github/CODEOWNERS @ORESoftware\n"
+            b"/.github/workflows/* @ORESoftware\n"
+            b"/.github/private-ci-approved-repositories.txt @ORESoftware\n"
+            b"/.github/private-ci-carrier-contracts.json @ORESoftware\n"
+            b"/docs/security/CI_PRIVATE_SOURCE_MIRRORING.md @ORESoftware\n"
+            b"/scripts/run-in-private-ci-destination.sh @ORESoftware\n"
+            b"/scripts/publish-private-ci-source.py @ORESoftware\n"
+            b"/scripts/publish-private-ci-source-v3.py @ORESoftware\n"
+            b"/scripts/test-publish-private-ci-source-v3.py @ORESoftware\n"
+            b"/scripts/test-private-ci-destination.sh @ORESoftware\n"
+            b"/scripts/test-publish-private-ci-source.py @ORESoftware\n"
+            b"/scripts/audit-private-ci-governance.py @ORESoftware\n"
+            b"/scripts/test-audit-private-ci-governance.py @ORESoftware\n"
+        )
+        blobs = {}
+        for path in v3.REVIEWED_SOURCE_GOVERNANCE_PATHS:
+            raw = codeowners if path == v3.CODEOWNERS_PATH else (path + "\n").encode()
+            blobs[path] = (raw, v3.git_blob_sha(raw))
+        tree = {
+            path: ("100644", "blob", blob)
+            for path, (_raw, blob) in blobs.items()
+        }
+        return blobs, tree
+
+    def source_authority_api(self, *, main_sha="2"*40, head_sha="3"*40,
+                             author_id=424242, protected=False):
+        def api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}":
+                return {
+                    "id": v3.SOURCE_REPO_ID,
+                    "full_name": v3.SOURCE_REPO,
+                    "private": True,
+                    "visibility": "private",
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": protected,
+                    "commit": {"sha": main_sha},
+                }
+            if route == f"repos/{v3.SOURCE_REPO}/pulls/{v3.SOURCE_REVIEW_AUTHORITY_PR}":
+                return {
+                    "number": v3.SOURCE_REVIEW_AUTHORITY_PR,
+                    "state": "closed",
+                    "merged_at": "2026-10-25T05:00:00Z",
+                    "user": {"id": author_id, "login": "source-author"},
+                    "head": {
+                        "sha": head_sha,
+                        "repo": {
+                            "full_name": v3.SOURCE_REPO,
+                            "id": v3.SOURCE_REPO_ID,
+                        },
+                    },
+                    "base": {
+                        "ref": v3.SOURCE_BRANCH,
+                        "repo": {
+                            "full_name": v3.SOURCE_REPO,
+                            "id": v3.SOURCE_REPO_ID,
+                        },
+                    },
+                }
+            raise AssertionError((method, route))
+        return api
+
+    def approved_source_review(self, *, head_sha="3"*40, review_id=71,
+                               state="APPROVED",
+                               submitted="2026-10-25T04:59:00Z"):
+        return {
+            "id": review_id,
+            "state": state,
+            "commit_id": head_sha,
+            "submitted_at": submitted,
+            "user": {
+                "id": v3.SOURCE_REVIEW_USER_ID,
+                "login": v3.SOURCE_REVIEW_LOGIN,
+            },
+        }
+
+    def test_unprotected_source_main_accepts_exact_reviewed_governance(self):
+        blobs, tree = self.source_governance_fixture()
+        api = self.source_authority_api()
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(
+                v3, "gh_api_list",
+                return_value=[self.approved_source_review()],
+            ),
+            patch.object(
+                v3, "source_governance_tree_entries",
+                return_value=tree,
+            ),
+            patch.object(
+                v3, "remote_source_file",
+                side_effect=lambda path, _ref, _limit: blobs[path],
+            ),
+        ):
+            self.assertEqual(v3.authorized_source_main_sha(), "2" * 40)
+
+    def test_source_review_attestation_rejects_author_revocation_and_drift(self):
+        blobs, tree = self.source_governance_fixture()
+
+        with patch.object(
+            v3, "gh_api",
+            side_effect=self.source_authority_api(
+                author_id=v3.SOURCE_REVIEW_USER_ID
+            ),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "independent merged"):
+                v3.review_attested_source_main_sha()
+
+        reviews = [
+            self.approved_source_review(review_id=71),
+            self.approved_source_review(
+                review_id=72,
+                state="CHANGES_REQUESTED",
+                submitted="2026-10-25T04:59:30Z",
+            ),
+        ]
+        with (
+            patch.object(v3, "gh_api", side_effect=self.source_authority_api()),
+            patch.object(v3, "gh_api_list", return_value=reviews),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "stale, late, or not approved"):
+                v3.review_attested_source_main_sha()
+
+        current = dict(tree)
+        target = "scripts/publish-private-ci-source-v3.py"
+        current[target] = ("100755", "blob", tree[target][2])
+        with (
+            patch.object(v3, "gh_api", side_effect=self.source_authority_api()),
+            patch.object(
+                v3, "gh_api_list",
+                return_value=[self.approved_source_review()],
+            ),
+            patch.object(
+                v3, "source_governance_tree_entries",
+                side_effect=[tree, current],
+            ),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "Git entry drifted"):
+                v3.review_attested_source_main_sha()
+
+        changed_blobs = dict(blobs)
+        raw = b"changed reviewed publisher bytes\n"
+        changed_blobs[target] = (raw, v3.git_blob_sha(raw))
+        with (
+            patch.object(v3, "gh_api", side_effect=self.source_authority_api()),
+            patch.object(
+                v3, "gh_api_list",
+                return_value=[self.approved_source_review()],
+            ),
+            patch.object(
+                v3, "source_governance_tree_entries",
+                side_effect=[tree, tree],
+            ),
+            patch.object(
+                v3, "remote_source_file",
+                side_effect=lambda path, ref, _limit: (
+                    changed_blobs[path] if ref == "2" * 40 else blobs[path]
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "bytes drifted"):
+                v3.review_attested_source_main_sha()
+
+    def test_authorized_source_main_prefers_classic_protection(self):
+        def branch_api(route, method="GET", payload=None):
+            if route == f"repos/{v3.SOURCE_REPO}/branches/{v3.SOURCE_BRANCH}":
+                return {
+                    "name": v3.SOURCE_BRANCH,
+                    "protected": True,
+                    "commit": {"sha": PROTECTED},
+                }
+            raise AssertionError(route)
+
+        with (
+            patch.object(v3, "gh_api", side_effect=branch_api),
+            patch.object(v3, "source_protection", return_value=PROTECTED) as protected,
+            patch.object(v3, "review_attested_source_main_sha") as fallback,
+        ):
+            self.assertEqual(v3.authorized_source_main_sha(), PROTECTED)
+            protected.assert_called_once_with()
+            fallback.assert_not_called()
+
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
         for raw in (
