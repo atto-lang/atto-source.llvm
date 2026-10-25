@@ -824,6 +824,35 @@ int64_t oreslang_source_actor_await_ready(
     return result;
 }
 
+/*
+ * Parent DONE also waits for physically joined constructor-owned children.
+ * This is trusted outer-host glue: neither an actor carrier nor the group
+ * mutex may block on a child's terminal receipt.
+ */
+static void source_actor_join_owned_children(SourceActor* parent) {
+    SourceActor* owned_children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
+    const size_t slot = (size_t)parent->ref.actor_slot;
+    group_lock();
+    ensure(group.vm && slot < group.next_slot
+        && group.actors[slot] == parent);
+    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i)
+        owned_children[i] = parent->children[i];
+    group_unlock();
+
+    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i) {
+        SourceActor* child = owned_children[i];
+        if (!child) continue;
+        if (atomic_load_explicit(&child->stop_requested, memory_order_acquire) == 0)
+            oreslang_source_actor_request_stop(child);
+        if (atomic_load_explicit(&child->join_started, memory_order_acquire) == 0)
+            oreslang_source_actor_join_done(child);
+        group_lock();
+        ensure(parent->children[i] == child);
+        parent->children[i] = NULL;
+        group_unlock();
+    }
+}
+
 int64_t oreslang_source_actor_await_done(
         void* opaque,
         OresSourceActorContinuation continuation,
@@ -881,6 +910,9 @@ int64_t oreslang_source_actor_await_done(
 
     ensure(ores_native_vm_wait_done(
         vm, ORES_NATIVE_VM_MAIN, target));
+
+    /* Settle parent DONE only after its owned children physically join. */
+    source_actor_join_owned_children(instance);
 
     group_lock();
     ensure(group.vm == vm && group.pending_done == &frame);
@@ -1008,27 +1040,11 @@ void oreslang_source_actor_join_done(void* opaque) {
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
     /*
-     * Constructor-owned children are physical resources of the parent. Once
-     * the parent itself is quiescent, snapshot those pointers under the group
-     * mutex and drain each child outside the mutex before reclaiming the
-     * parent. This avoids lock recursion and never blocks an actor carrier.
+     * Synchronous stop drains children here. Source get_done already drained
+     * them before publishing its root completion; cleared child slots make
+     * this second call a no-op on that trusted host path.
      */
-    SourceActor* owned_children[ORES_SOURCE_ACTOR_CAPABILITY_SLOTS] = {0};
-    group_lock();
-    ensure(group.vm && slot < group.next_slot
-        && group.actors[slot] == instance);
-    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i)
-        owned_children[i] = instance->children[i];
-    group_unlock();
-
-    for (uint64_t i = 0; i < ORES_SOURCE_ACTOR_CAPABILITY_SLOTS; ++i) {
-        SourceActor* child = owned_children[i];
-        if (!child) continue;
-        if (atomic_load_explicit(&child->stop_requested, memory_order_acquire) == 0)
-            oreslang_source_actor_request_stop(child);
-        if (atomic_load_explicit(&child->join_started, memory_order_acquire) == 0)
-            oreslang_source_actor_join_done(child);
-    }
+    source_actor_join_owned_children(instance);
 
     group_lock();
     ensure(group.vm && slot < group.next_slot
