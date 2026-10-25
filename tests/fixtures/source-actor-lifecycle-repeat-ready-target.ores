@@ -1,0 +1,13 @@
+// L01 target: both awaits observe one reusable READY settlement.
+// Expected language semantics; LLVM source compiler may currently fail closed.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return total + n; }
+}
+pub fnc main(): int throws ActorTerminated {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await worker;
+  await worker;
+  stop worker;
+  return 43;
+}
