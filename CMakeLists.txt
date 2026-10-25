@@ -1265,6 +1265,9 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_await_ready_post_call_reordering
+        source-actor-await-ready-post-call-reject.ores
+        --diagnostic "await get_ready does not yet lower post-await non-actor statements")
     # First compiled source-level nonblocking I/O suspension. The compiler
     # owns the await form; only a literal fd, one source actor and zero
     # suspended locals are admitted.
