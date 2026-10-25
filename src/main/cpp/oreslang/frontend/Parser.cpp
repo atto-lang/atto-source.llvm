@@ -3888,8 +3888,12 @@ private:
             const Expression* expr, std::size_t depth = 1) {
         if (!expr) return false;
         require_expression_depth(depth, expr->offset);
-        if (expr->kind == Expression::Kind::SumConstruct || expr->kind == Expression::Kind::SumAccess || expr->kind == Expression::Kind::RecordConstruct || expr->kind == Expression::Kind::Call ||
-            expr->kind == Expression::Kind::ArrayCall) return true;
+        if (expr->kind == Expression::Kind::SumConstruct ||
+            expr->kind == Expression::Kind::SumAccess ||
+            expr->kind == Expression::Kind::RecordConstruct ||
+            expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ArrayCall ||
+            expr->kind == Expression::Kind::Console) return true;
         if (contains_callable_invocation(expr->left.get(), depth + 1) ||
             contains_callable_invocation(expr->right.get(), depth + 1) ||
             contains_callable_invocation(expr->condition.get(), depth + 1) ||
