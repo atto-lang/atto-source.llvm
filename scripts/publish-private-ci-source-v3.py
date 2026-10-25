@@ -24,6 +24,24 @@ import tempfile
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
+SOURCE_REVIEW_AUTHORITY_PR = 958
+SOURCE_REVIEW_LOGIN = "ORESoftware"
+SOURCE_REVIEW_USER_ID = 11139560
+CARRIER_REVIEW_LOGIN = "ORESoftware"
+CARRIER_REVIEW_USER_ID = 11139560
+MAX_SOURCE_GOVERNANCE_FILE = 1024 * 1024
+REVIEWED_SOURCE_GOVERNANCE_PATHS = (
+    ".github/CODEOWNERS",
+    ".github/private-ci-approved-repositories.txt",
+    ".github/private-ci-carrier-contracts.json",
+    ".github/workflows/private-ci-governance.yml",
+    "docs/security/CI_PRIVATE_SOURCE_MIRRORING.md",
+    "scripts/audit-private-ci-governance.py",
+    "scripts/publish-private-ci-source-v3.py",
+    "scripts/run-in-private-ci-destination.sh",
+    "scripts/test-audit-private-ci-governance.py",
+    "scripts/test-publish-private-ci-source-v3.py",
+)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -263,6 +281,36 @@ def gh_api(route, method="GET", payload=None):
     return result
 
 
+def gh_api_list(route):
+    argv = [
+        trusted_github_cli(), "api", "--method", "GET", route,
+        "--header", "Accept: application/vnd.github+json",
+    ]
+    proc = run_bounded_gh(
+        argv,
+        env=github_api_environment(),
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        raise Denied("authenticated GitHub list request failed")
+    result = strict_json_loads(proc.stdout, "invalid GitHub list response")
+    if not isinstance(result, list):
+        raise Denied("unexpected GitHub list response shape")
+    return result
+
+
+def github_timestamp(value, label):
+    if not isinstance(value, str):
+        raise Denied(label)
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Denied(label) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise Denied(label)
+    return parsed.astimezone(dt.timezone.utc)
+
+
 def decode_contents(item, path, max_bytes):
     if (item.get("path") != path or item.get("type") != "file"
             or item.get("encoding") != "base64"):
@@ -380,6 +428,173 @@ def source_protection():
                      "source protected-main SHA invalid")
 
 
+def latest_source_authority_review():
+    reviews = gh_api_list(
+        f"repos/{SOURCE_REPO}/pulls/{SOURCE_REVIEW_AUTHORITY_PR}/reviews?per_page=100"
+    )
+    if len(reviews) >= 100:
+        raise Denied("source authority review history exceeds bounded page")
+    matching = []
+    seen_ids = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise Denied("source authority review history malformed")
+        review_id = review.get("id")
+        if (not isinstance(review_id, int) or isinstance(review_id, bool)
+                or review_id <= 0 or review_id in seen_ids):
+            raise Denied("source authority review history has invalid IDs")
+        seen_ids.add(review_id)
+        user = review.get("user")
+        if (isinstance(user, dict)
+                and user.get("id") == SOURCE_REVIEW_USER_ID
+                and isinstance(user.get("login"), str)
+                and user["login"].casefold() == SOURCE_REVIEW_LOGIN.casefold()):
+            valid_sha(
+                review.get("commit_id"), "source authority review commit SHA"
+            )
+            submitted = github_timestamp(
+                review.get("submitted_at"), "source authority review timestamp"
+            )
+            if not isinstance(review.get("state"), str):
+                raise Denied("source authority review state invalid")
+            matching.append((submitted, review_id, review))
+    if not matching:
+        raise Denied("independent source authority review is missing")
+    matching.sort(key=lambda item: (item[0], item[1]))
+    return matching[-1][2]
+
+
+def source_governance_tree_entries(commit_sha):
+    commit_sha = valid_sha(commit_sha, "source governance commit SHA")
+    commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{commit_sha}")
+    if commit.get("sha") != commit_sha:
+        raise Denied("source governance commit identity mismatch")
+    tree_sha = valid_sha(
+        commit.get("tree", {}).get("sha"), "source governance root tree SHA"
+    )
+    listing = gh_api(f"repos/{SOURCE_REPO}/git/trees/{tree_sha}?recursive=1")
+    if (listing.get("sha") != tree_sha
+            or listing.get("truncated") is not False
+            or not isinstance(listing.get("tree"), list)):
+        raise Denied("source governance tree listing incomplete")
+
+    wanted = set(REVIEWED_SOURCE_GOVERNANCE_PATHS)
+    found = {}
+    for entry in listing["tree"]:
+        if not isinstance(entry, dict):
+            raise Denied("source governance tree entry malformed")
+        path = entry.get("path")
+        if path not in wanted:
+            continue
+        if path in found:
+            raise Denied("source governance tree has duplicate reviewed path")
+        mode = entry.get("mode")
+        kind = entry.get("type")
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Denied("source governance path has unsafe Git type/mode: " + path)
+        found[path] = (
+            mode,
+            kind,
+            valid_sha(entry.get("sha"), "source governance blob SHA"),
+        )
+    if set(found) != wanted:
+        raise Denied("source governance tree is missing reviewed paths")
+    return found
+
+
+def review_attested_source_main_sha():
+    repo = gh_api(f"repos/{SOURCE_REPO}")
+    if (repo.get("id") != SOURCE_REPO_ID
+            or repo.get("full_name") != SOURCE_REPO
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"):
+        raise Denied("source repository identity/privacy mismatch")
+
+    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    if branch.get("name") != SOURCE_BRANCH:
+        raise Denied("source main branch identity changed")
+    main_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "source main SHA"
+    )
+
+    authority = gh_api(
+        f"repos/{SOURCE_REPO}/pulls/{SOURCE_REVIEW_AUTHORITY_PR}"
+    )
+    head = authority.get("head")
+    base = authority.get("base")
+    author = authority.get("user")
+    if (authority.get("number") != SOURCE_REVIEW_AUTHORITY_PR
+            or authority.get("state") != "closed"
+            or authority.get("merged_at") is None
+            or not isinstance(author, dict)
+            or author.get("id") == SOURCE_REVIEW_USER_ID
+            or not isinstance(head, dict)
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("full_name") != SOURCE_REPO
+            or head["repo"].get("id") != SOURCE_REPO_ID
+            or not isinstance(base, dict)
+            or base.get("ref") != SOURCE_BRANCH
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != SOURCE_REPO
+            or base["repo"].get("id") != SOURCE_REPO_ID):
+        raise Denied(
+            "source authority PR is not an independent merged same-repo main review"
+        )
+    reviewed_head = valid_sha(
+        head.get("sha"), "source authority PR head SHA"
+    )
+
+    review = latest_source_authority_review()
+    submitted = github_timestamp(
+        review.get("submitted_at"), "source authority review timestamp"
+    )
+    merged = github_timestamp(
+        authority.get("merged_at"), "source authority merge timestamp"
+    )
+    if (review.get("state") != "APPROVED"
+            or review.get("commit_id") != reviewed_head
+            or submitted > merged):
+        raise Denied("independent source authority review is stale, late, or not approved")
+
+    reviewed = source_governance_tree_entries(reviewed_head)
+    current = source_governance_tree_entries(main_sha)
+    codeowners = None
+    for path in REVIEWED_SOURCE_GOVERNANCE_PATHS:
+        if current[path] != reviewed[path]:
+            raise Denied(
+                "source governance Git entry drifted after independent review: " + path
+            )
+        reviewed_raw, reviewed_blob = remote_source_file(
+            path, reviewed_head, MAX_SOURCE_GOVERNANCE_FILE
+        )
+        current_raw, current_blob = remote_source_file(
+            path, main_sha, MAX_SOURCE_GOVERNANCE_FILE
+        )
+        if (reviewed_blob != reviewed[path][2]
+                or current_blob != current[path][2]
+                or current_blob != reviewed_blob
+                or current_raw != reviewed_raw):
+            raise Denied(
+                "source governance bytes drifted after independent review: " + path
+            )
+        if path == CODEOWNERS_PATH:
+            codeowners = current_raw
+
+    if codeowners is None:
+        raise Denied("review-attested source governance is incomplete")
+    require_source_security_codeowners(codeowners)
+    return main_sha
+
+
+def authorized_source_main_sha():
+    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    if branch.get("name") != SOURCE_BRANCH:
+        raise Denied("source main branch identity changed")
+    if branch.get("protected") is True:
+        return source_protection()
+    return review_attested_source_main_sha()
+
+
 def remote_source_file(path, main_sha, max_bytes):
     item = gh_api(f"repos/{SOURCE_REPO}/contents/{path}?ref={main_sha}")
     data = decode_contents(item, path, max_bytes)
@@ -427,15 +642,23 @@ def parse_contract(raw, repository, source_pr, test_plan):
     carrier = carriers.get(repository) if isinstance(carriers, dict) else None
     if not isinstance(carrier, dict):
         raise Denied("destination absent from protected carrier contract")
-    if set(carrier) != {
+    required_carrier_fields = {
         "repository_id", "base_sha", "workflow_path",
         "workflow_blob_sha", "test_plans"
-    }:
+    }
+    allowed_carrier_fields = required_carrier_fields | {"review_pr"}
+    if (not required_carrier_fields.issubset(carrier)
+            or not set(carrier).issubset(allowed_carrier_fields)):
         raise Denied("carrier contract fields")
     repo_id = carrier.get("repository_id")
     if not isinstance(repo_id, int) or isinstance(repo_id, bool) or repo_id <= 0:
         raise Denied("carrier repository id")
     base_sha = valid_sha(carrier.get("base_sha"), "carrier base SHA")
+    review_pr = carrier.get("review_pr")
+    if (review_pr is not None
+            and (not isinstance(review_pr, int) or isinstance(review_pr, bool)
+                 or review_pr <= 0)):
+        raise Denied("carrier review PR invalid")
     workflow_path = safe_path(
         carrier.get("workflow_path"), ".github/workflows/", ".yml"
     )
@@ -462,6 +685,7 @@ def parse_contract(raw, repository, source_pr, test_plan):
         "workflow_blob_sha": workflow_blob,
         "test_plan_path": plan_path,
         "test_plan_blob_sha": blob_sha,
+        "review_pr": review_pr,
     }
 
 
@@ -611,8 +835,8 @@ def verify_required_source_blobs(files, required):
 
 
 def protected_authority(repository, source_pr, test_plan):
-    """Attest this exact script plus local policies to protected source main."""
-    main_sha = source_protection()
+    """Attest this exact script plus local policies to authorized source main."""
+    main_sha = authorized_source_main_sha()
     remote_self, remote_self_sha = remote_source_file(
         SELF_PATH, main_sha, 512 * 1024
     )
@@ -644,16 +868,122 @@ def protected_authority(repository, source_pr, test_plan):
     return main_sha, contract
 
 
-def checked_carrier_main(repository, expected_sha):
-    branch = gh_api(f"repos/{repository}/branches/main")
-    if (branch.get("name") != "main"
-            or branch.get("protected") is not True):
-        raise Denied("carrier main is not protected")
+def carrier_commit_tree(repository, commit_sha):
+    commit_sha = valid_sha(commit_sha, "carrier commit SHA")
+    commit = gh_api(f"repos/{repository}/git/commits/{commit_sha}")
+    if commit.get("sha") != commit_sha:
+        raise Denied("carrier commit identity mismatch")
+    return valid_sha(
+        commit.get("tree", {}).get("sha"), "carrier root tree SHA"
+    )
+
+
+def latest_carrier_review(repository, review_pr):
+    reviews = gh_api_list(
+        f"repos/{repository}/pulls/{review_pr}/reviews?per_page=100"
+    )
+    if len(reviews) >= 100:
+        raise Denied("carrier review history exceeds bounded page")
+    matching = []
+    seen_ids = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise Denied("carrier review history malformed")
+        review_id = review.get("id")
+        if (not isinstance(review_id, int) or isinstance(review_id, bool)
+                or review_id <= 0 or review_id in seen_ids):
+            raise Denied("carrier review history has invalid IDs")
+        seen_ids.add(review_id)
+        user = review.get("user")
+        if (isinstance(user, dict)
+                and user.get("id") == CARRIER_REVIEW_USER_ID
+                and isinstance(user.get("login"), str)
+                and user["login"].casefold() == CARRIER_REVIEW_LOGIN.casefold()):
+            valid_sha(
+                review.get("commit_id"), "carrier review commit SHA"
+            )
+            submitted = github_timestamp(
+                review.get("submitted_at"), "carrier review timestamp"
+            )
+            if not isinstance(review.get("state"), str):
+                raise Denied("carrier review state invalid")
+            matching.append((submitted, review_id, review))
+    if not matching:
+        raise Denied("independent carrier review is missing")
+    matching.sort(key=lambda item: (item[0], item[1]))
+    return matching[-1][2]
+
+
+def review_attested_carrier_main(repository, contract, branch):
+    review_pr = contract.get("review_pr")
+    if not isinstance(review_pr, int) or isinstance(review_pr, bool) or review_pr <= 0:
+        raise Denied("unprotected carrier requires reviewed carrier PR")
     base_sha = valid_sha(
         branch.get("commit", {}).get("sha"), "carrier main SHA"
     )
-    if base_sha != expected_sha:
+    if base_sha != contract["base_sha"]:
         raise Denied("carrier main advanced beyond reviewed base")
+
+    pr = gh_api(f"repos/{repository}/pulls/{review_pr}")
+    head = pr.get("head")
+    base = pr.get("base")
+    author = pr.get("user")
+    if (pr.get("number") != review_pr
+            or pr.get("state") != "closed"
+            or pr.get("merged_at") is None
+            or not isinstance(author, dict)
+            or author.get("id") == CARRIER_REVIEW_USER_ID
+            or not isinstance(head, dict)
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("full_name") != repository
+            or head["repo"].get("id") != contract["repository_id"]
+            or not isinstance(base, dict)
+            or base.get("ref") != "main"
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != repository
+            or base["repo"].get("id") != contract["repository_id"]):
+        raise Denied("carrier review PR is not an independent merged same-repo main review")
+
+    reviewed_head = valid_sha(
+        head.get("sha"), "carrier review PR head SHA"
+    )
+    review = latest_carrier_review(repository, review_pr)
+    submitted_at = github_timestamp(
+        review.get("submitted_at"), "carrier review timestamp"
+    )
+    merged_at = github_timestamp(
+        pr.get("merged_at"), "carrier merge timestamp"
+    )
+    if (review.get("state") != "APPROVED"
+            or review.get("commit_id") != reviewed_head
+            or submitted_at > merged_at):
+        raise Denied("independent carrier review is stale, late, or not approved")
+
+    if carrier_commit_tree(repository, reviewed_head) != carrier_commit_tree(
+            repository, base_sha):
+        raise Denied("carrier main tree differs from independently reviewed PR head")
+
+    codeowners = gh_api(
+        f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
+    )
+    require_carrier_security_codeowners(
+        decode_contents(codeowners, CODEOWNERS_PATH, MAX_CODEOWNERS)
+    )
+    return base_sha
+
+
+def checked_carrier_main(repository, contract):
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if branch.get("name") != "main":
+        raise Denied("carrier main branch identity changed")
+    base_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "carrier main SHA"
+    )
+    if base_sha != contract["base_sha"]:
+        raise Denied("carrier main advanced beyond reviewed base")
+
+    if branch.get("protected") is not True:
+        return review_attested_carrier_main(repository, contract, branch)
 
     protection = gh_api(f"repos/{repository}/branches/main/protection")
     reviews = protection.get("required_pull_request_reviews")
@@ -684,7 +1014,6 @@ def checked_carrier_main(repository, expected_sha):
         codeowners, CODEOWNERS_PATH, MAX_CODEOWNERS
     )
     require_carrier_security_codeowners(carrier_codeowners)
-
     return base_sha
 
 
@@ -699,7 +1028,7 @@ def checked_destination(repository, contract):
             or repo.get("disabled") is not False
             or repo.get("fork") is not False):
         raise Denied("carrier identity/state differs from protected contract")
-    base_sha = checked_carrier_main(repository, contract["base_sha"])
+    base_sha = checked_carrier_main(repository, contract)
     commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
     base_tree = valid_sha(commit.get("tree", {}).get("sha"), "carrier base tree")
     listing = gh_api(f"repos/{repository}/git/trees/{base_tree}?recursive=1")
@@ -892,6 +1221,10 @@ def recheck_destination_identity(repository, contract):
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if (branch.get("name") != "main"
+            or branch.get("commit", {}).get("sha") != contract["base_sha"]):
+        raise Denied("carrier main changed during source-bearing write")
 
 
 def _gh_ref_request(repository, ref_name, method):
