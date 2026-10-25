@@ -83,6 +83,17 @@ int main() {
     denied.negative.insert(AutoTrait::Send);
     REQUIRE(!oreslang::types::infer_auto_traits(denied).send);
 
+    AutoType opaque_nominal;
+    opaque_nominal.kind = AutoTypeKind::Nominal;
+    const auto opaque_caps = oreslang::types::infer_auto_traits(opaque_nominal);
+    REQUIRE(!opaque_caps.send && !opaque_caps.sync && !opaque_caps.share);
+
+    AutoType proven_empty_nominal;
+    proven_empty_nominal.kind = AutoTypeKind::Nominal;
+    proven_empty_nominal.complete_nominal_layout = true;
+    const auto empty_caps = oreslang::types::infer_auto_traits(proven_empty_nominal);
+    REQUIRE(empty_caps.send && empty_caps.sync && !empty_caps.share);
+
     for (auto layout : {oreslang::dop::Layout::AoS,
                         oreslang::dop::Layout::SoA,
                         oreslang::dop::Layout::AoSoA}) {
