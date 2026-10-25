@@ -6,9 +6,12 @@ This file defines the same target descriptors in Java/Graal and LLVM:
 **Important:** This is a conservative *descriptor and bounds contract*, not a
 declaration that all targets have executable compiler/runtime support. An
 `unimplemented` row must not be accepted for explicit cross-compilation.
-LLVM currently supports default host IR (without cross-target certification)
-and the restricted `wasm32-unknown-unknown` IR subset. No explicit CPU
-features or ABI overrides are supported yet.
+LLVM currently supports default host IR (without cross-target certification),
+the restricted `wasm32-unknown-unknown` IR subset, and an experimental
+`aarch64-unknown-linux-android24` scalar-only AOT subset. The Android subset
+admits import-free i64 functions only; actors, classes, heap ownership,
+suspension, effects, native `main`, and runtime services remain rejected.
+No explicit CPU feature or ABI overrides are supported yet.
 
 ## Invariants
 
