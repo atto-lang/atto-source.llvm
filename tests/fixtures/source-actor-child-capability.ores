@@ -1,0 +1,24 @@
+define actor Consumer as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+
+define actor Producer as {
+  let seen: int = 0;
+  val ActorRef<Consumer> child = spawn Consumer();
+  pub fnc on_message(int n): int {
+    child.send(n + 1);
+    seen = seen + n;
+    return seen;
+  }
+}
+
+pub fnc main(): int {
+  const producer = spawn Producer();
+  producer.send(41);
+  stop producer;
+  return 43;
+}
