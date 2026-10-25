@@ -668,6 +668,9 @@ static void open_group_locked(void) {
     ensure(!group.vm && !group.executions && !group.continuations);
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+    ensure(group.pending_readable == NULL && !group.nio_enabled);
+#endif
 
     /*
      * Live trace stores are process-local runtime metadata. They hold logical
@@ -692,7 +695,13 @@ static void open_group_locked(void) {
         cfg.domains[i].on_control = initialize;
         cfg.domains[i].context = &group;
     }
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+    OresNativeVMWakeConfig wake_cfg = {0};
+    wake_cfg.domains[ORES_NATIVE_VM_MAIN] = source_root_wake;
+    group.vm = ores_native_vm_open_with_wakes(&cfg, &wake_cfg);
+#else
     group.vm = ores_native_vm_open(&cfg);
+#endif
     ensure(group.vm != NULL);
 
     /*
