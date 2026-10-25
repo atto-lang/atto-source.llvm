@@ -424,8 +424,11 @@ std::string native_dispatch_constant_key(const Expression& expr) {
 std::unique_ptr<Expression> native_dispatch_equal(
         const Expression& subject, const Expression& constant) {
     auto condition = make_expression(Expression::Kind::Equal, constant.offset);
-    condition->left = clone_native_expression(subject);
-    condition->right = clone_native_expression(constant);
+    // Keep the compile-time literal on the left. The native string codegen
+    // dispatches equality through ores_string_equal based on the left
+    // operand's resolved scalar type; validation annotates String literals.
+    condition->left = clone_native_expression(constant);
+    condition->right = clone_native_expression(subject);
     return condition;
 }
 
