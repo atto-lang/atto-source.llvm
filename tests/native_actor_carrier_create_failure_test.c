@@ -57,6 +57,36 @@ int main(void) {
     require(ores_native_actor_scheduler_drain(prestart));
     require(ores_native_actor_scheduler_try_destroy(prestart));
 
+    /* A successful throughput prestart is not an RT bootstrap. Even with
+     * no admitted messages, an already-created carrier set cannot be relabeled
+     * as the cold one-way realtime profile. */
+    OresNativeActorScheduler* promoted =
+        ores_native_actor_scheduler_open(1, 1, 1, deliver, &state);
+    require(promoted != NULL);
+    require(ores_native_actor_scheduler_prestart_carriers(promoted));
+    require(ores_native_actor_scheduler_started_carriers(promoted) == 1);
+    require(!ores_native_actor_scheduler_prestart_realtime(promoted));
+    require(ores_native_actor_scheduler_started_carriers(promoted) == 1);
+    ores_native_actor_scheduler_retire(promoted);
+    require(ores_native_actor_scheduler_drain(promoted));
+    require(ores_native_actor_scheduler_try_destroy(promoted));
+
+    /* A partial ordinary prestart also remains throughput-only. RT admission
+     * must reject it without consuming throughput's legitimate retry semantics. */
+    OresNativeActorScheduler* partial_ordinary =
+        ores_native_actor_scheduler_open(1, 1, 2, deliver, &state);
+    require(partial_ordinary != NULL);
+    ores_native_actor_scheduler_test_fail_create_after(1);
+    require(!ores_native_actor_scheduler_prestart_carriers(partial_ordinary));
+    require(ores_native_actor_scheduler_started_carriers(partial_ordinary) == 1);
+    require(!ores_native_actor_scheduler_prestart_realtime(partial_ordinary));
+    require(ores_native_actor_scheduler_started_carriers(partial_ordinary) == 1);
+    require(ores_native_actor_scheduler_prestart_carriers(partial_ordinary));
+    require(ores_native_actor_scheduler_started_carriers(partial_ordinary) == 2);
+    ores_native_actor_scheduler_retire(partial_ordinary);
+    require(ores_native_actor_scheduler_drain(partial_ordinary));
+    require(ores_native_actor_scheduler_try_destroy(partial_ordinary));
+
     /* RT prestart is a one-way bootstrap transition. A failed pthread
      * allocation permanently poisons this scheduler instance; silently
      * succeeding on a later retry would make deadline admission depend on
