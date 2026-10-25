@@ -11,11 +11,20 @@ case "$mode" in
   address,undefined|thread|none) ;;
   *) printf 'unsupported MAILBOX_SANITIZER: %s\n' "$mode" >&2; exit 2 ;;
 esac
-if ! [[ "$repeats" =~ ^[1-9][0-9]*$ ]] || (( repeats > 100 )); then
+if ! [[ "$repeats" =~ ^[1-9][0-9]{0,2}$ ]] || (( repeats > 100 )); then
   printf 'MAILBOX_TEST_REPEATS must be an integer from 1 to 100\n' >&2
   exit 2
 fi
 command -v "$cxx" >/dev/null || { printf 'C++ compiler not found: %s\n' "$cxx" >&2; exit 2; }
+# A missing timeout utility must never permit an unbounded test run.
+if command -v timeout >/dev/null 2>&1; then
+  timeout_cmd=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+  timeout_cmd=gtimeout
+else
+  printf 'timeout or gtimeout is required to bound native test execution\n' >&2
+  exit 2
+fi
 
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/oreslang-mailbox.XXXXXXXX")"
 cleanup() {
@@ -50,11 +59,7 @@ for source in "${sources[@]}"; do
   binary="$build_dir/${name%.cpp}"
   "$cxx" "${flags[@]}" -I"$root/src/main/cpp" "$root/$source" -o "$binary"
   for ((i=1; i<=repeats; ++i)); do
-    if command -v timeout >/dev/null 2>&1; then
-      timeout 120s "$binary"
-    else
-      "$binary"
-    fi
+    "$timeout_cmd" 120s "$binary"
   done
   printf 'PASS %s (%s runs)\n' "$source" "$repeats"
 done
