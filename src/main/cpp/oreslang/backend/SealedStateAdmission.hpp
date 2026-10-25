@@ -18,8 +18,25 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
         if (!actor.sealed_state) {
             const auto& legacy = actor.on_message;
             if (legacy.actor_state_loan || legacy.parameters.size() != 1 ||
-                    !legacy.result || legacy.returns_void)
-                throw std::runtime_error("legacy actor contains invalid sealed-state authority or return");
+                    !legacy.result || legacy.returns_void ||
+                    legacy.name != "on_message" || !legacy.exported ||
+                    legacy.return_type != decltype(legacy.return_type)::I64 ||
+                    legacy.parameters.front().name.empty())
+                throw std::runtime_error("legacy actor contains invalid handler authority or return");
+            // Directly constructed legacy ASTs bypass source validation. Check
+            // all fields before codegen dereferences initializers or aliases a
+            // message stack slot through an ambiguous field name.
+            if (actor.fields.empty() || actor.fields.size() > 16)
+                throw std::runtime_error("legacy actor requires bounded scalar fields");
+            std::unordered_set<std::string> legacy_names;
+            for (const auto& field : actor.fields) {
+                if (field.name.empty() || field.name == "state" ||
+                        field.name == legacy.parameters.front().name ||
+                        !legacy_names.insert(field.name).second ||
+                        !field.initializer ||
+                        field.scalar_type != decltype(field.scalar_type)::I64)
+                    throw std::runtime_error("legacy actor contains an invalid state field");
+            }
             continue;
         }
         const auto& method = actor.on_message;
