@@ -2,7 +2,7 @@
 """Source-level L01/L02 admission *and generated call-count* probe.
 
 Diagnostic-only by default. --require-ir-admission fails if any target
-rejects or emits fewer than two real lifecycle bridge calls. Even a passing
+rejects or fails to emit exactly one coalesced lifecycle bridge call. Even a passing
 IR gate is not LLVM->Clang native guest execution or Java parity.
 """
 import argparse
@@ -22,6 +22,8 @@ BRIDGE = {
 }
 
 def lifecycle_calls(ir, symbol):
+    # LLVM prints a real call as "call i64 @..." (possibly with attributes).
+    # Declarations, source comments and symbol-name text are not execution.
     pattern = re.compile(
         r"\\bcall\\s+(?:[A-Za-z_0-9]+\\s+)+@" + re.escape(symbol) + r"\\s*\\("
     )
@@ -40,9 +42,9 @@ def evaluate(name, result):
     if not result.stdout.startswith("; ModuleID"):
         raise RuntimeError(f"{name}: compiler succeeded without LLVM IR")
     calls = lifecycle_calls(result.stdout, BRIDGE[name])
-    if len(calls) != 2:
-        return f"OPEN_GAP {name} guest_bridge_calls={len(calls)} required=2", False
-    return f"IR_ONLY_NEEDS_NATIVE_EXECUTION {name} guest_bridge_calls=2", True
+    if len(calls) != 1:
+        return f"OPEN_GAP {name} guest_bridge_calls={len(calls)} required=1", False
+    return f"IR_ONLY_NEEDS_NATIVE_EXECUTION {name} coalesced_bridge_calls=1", True
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
