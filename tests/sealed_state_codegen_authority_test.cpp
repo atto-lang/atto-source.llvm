@@ -86,6 +86,19 @@ int main() {
         CHECK(ir.find("call i64 @ores_actor_i64_heap_field_read") != std::string::npos);
     }
 
+    // Empty state { } is a legitimate actor schema: its zero physical guest
+    // fields must not induce implicit state reads or writes.
+    {
+        Program p = valid_program();
+        p.actors.front().fields.clear();
+        p.actors.front().on_message.actor_state_loan->result = variable("n");
+        const std::string ir = emit_verified_llvm_ir(p);
+        CHECK(ir.find("call i64 @ores_actor_i64_heap_field_read") ==
+              std::string::npos);
+        CHECK(ir.find("call void @ores_actor_i64_heap_field_write") ==
+              std::string::npos);
+    }
+
     // Effect bits alone are not authority. The parser/source checker must
     // have produced an explicit declared effect row.
     rejects([](Program& p) {
