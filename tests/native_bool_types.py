@@ -35,12 +35,12 @@ def main():
         ('typed-let', 'pub fnc main():int{let bool flag=true;if(flag eq true){return 42;}fi return 0;}'),
         ('nested-call', 'fnc flip(bool flag):bool{return !flag;}pub fnc main():int{const flag:bool=flip(flip(true));if(flag){return 42;}fi return 0;}'),
         ('borrow-copy', 'fnc read(borrow bool flag):bool{return rt copy flag;}pub fnc main():int{const flag:bool=true;const result:bool=read(rt borrow flag);if(result){return 42;}fi return 0;}'),
-        ('exclusive-reborrow', 'fnc read(borrow bool flag):bool{return rt copy flag;}fnc forward(borrow mut bool flag):bool{return read(rt borrow flag);}pub fnc main():int{val flag:bool=true;const result:bool=forward(rt borrow mut flag);if(result){return 42;}fi return 0;}'),
-        ('class-method', FLAG+'fnc exercise(borrow mut Flag f):bool{f.set(false);return f.read();}pub fnc main():int{let mut Flag f=new Flag();const after:bool=exercise(rt borrow mut f);if(!after){return 42;}fi return 0;}'),
+        ('exclusive-reborrow', 'fnc read(borrow bool flag):bool{return rt copy flag;}fnc forward(borrow mut bool flag):bool{return read(rt borrow flag);}pub fnc main():int{val flag:bool=true;const result:bool=forward(rt mut borrow flag);if(result){return 42;}fi return 0;}'),
+        ('class-method', FLAG+'fnc exercise(borrow mut Flag f):bool{f.set(false);return f.read();}pub fnc main():int{let mut Flag f=new Flag();const after:bool=exercise(rt mut borrow f);if(!after){return 42;}fi return 0;}'),
         ('final-field', 'define class Flag as const bool ready=true;pub read():bool{return self.ready;}end pub fnc main():int{let Flag f=new Flag();const flag:bool=f.read();if(flag){return 42;}fi return 0;}'),
         ('bool-guarded-result', 'fnc flag(int n):bool{if(n eq 1){return true;}fi return false;}pub fnc main():int{const result:bool=flag(1);if(result){return 42;}fi return 0;}'),
         ('branch-write', FLAG+'pub fnc main():int{let mut Flag f=new Flag();if(true eq false){f.set(false);}else{f.set(true);}fi return 42;}'),
-        ('branch-local-bool', FLAG+'fnc exercise(borrow mut Flag f):bool{if(true eq false){const ready:bool=false;f.set(ready);}else{const ready:bool=true;f.set(ready);}fi return f.read();}pub fnc main():int{let mut Flag f=new Flag();const ready:bool=exercise(rt borrow mut f);if(ready){return 42;}fi return 0;}'),
+        ('branch-local-bool', FLAG+'fnc exercise(borrow mut Flag f):bool{if(true eq false){const ready:bool=false;f.set(ready);}else{const ready:bool=true;f.set(ready);}fi return f.read();}pub fnc main():int{let mut Flag f=new Flag();const ready:bool=exercise(rt mut borrow f);if(ready){return 42;}fi return 0;}'),
         ('take-local', 'pub fnc main():int{val original:bool=true;const moved:bool=rt take original;if(moved){return 42;}fi return 0;}'),
     ]
     negative = [
@@ -66,10 +66,10 @@ def main():
         ('generic-bool', 'fnc id<T>(T n):T{return n;}pub fnc main():int{return id(true);}'),
     ]
     negative.extend([
-        ('exclusive-alias', 'fnc pair(borrow mut bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt borrow mut flag,rt borrow mut flag);}'),
-        ('shared-exclusive-alias', 'fnc pair(borrow bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt borrow flag,rt borrow mut flag);}'),
+        ('exclusive-alias', 'fnc pair(borrow mut bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt mut borrow flag,rt mut borrow flag);}'),
+        ('shared-exclusive-alias', 'fnc pair(borrow bool a,borrow mut bool b):int{return 42;}pub fnc main():int{val flag:bool=true;return pair(rt borrow flag,rt mut borrow flag);}'),
         ('moved-bool', 'pub fnc main():int{val flag:bool=true;const moved:bool=rt take flag;if(flag){return 42;}fi return 0;}'),
-        ('readonly-mutable-loan', 'fnc read(borrow mut bool flag):int{return 42;}pub fnc main():int{const flag:bool=true;return read(rt borrow mut flag);}'),
+        ('readonly-mutable-loan', 'fnc read(borrow mut bool flag):int{return 42;}pub fnc main():int{const flag:bool=true;return read(rt mut borrow flag);}'),
     ])
     ownership_diagnostics = {
         'exclusive-alias': 'conflicting active native borrow',

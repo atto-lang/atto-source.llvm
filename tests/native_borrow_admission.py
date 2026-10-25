@@ -19,7 +19,7 @@ CASES = {
         "native borrow requires an addressable named int",
     ),
     "shared-to-mutable": (
-        "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt borrow mut x); }\npub fnc main(int v): int { return inner(rt borrow v); }\n",
+        "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt mut borrow x); }\npub fnc main(int v): int { return inner(rt borrow v); }\n",
         "cannot mutably reborrow shared parameter",
     ),
 }

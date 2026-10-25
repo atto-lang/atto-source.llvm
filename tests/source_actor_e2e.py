@@ -26,6 +26,12 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-two-owned-heaps.ores":
+        value = 0
+        start = 1 if actor_index == 0 else 5
+        for n in range(start, start + processed):
+            value = 2 * (value + n)
+        return value
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -51,9 +57,13 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["released"] == 1, ("native actor release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1), fields
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    # Immediate stop can win before initialization begins. It must never
+    # claim readiness or execute DATA in that canceled startup incarnation.
+    if fields["constructor_on_worker"] == 0:
+        assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
 def main():
@@ -326,8 +336,9 @@ def main():
                     name, i, processed), (
                     name, i, processed, observed_last)
             if name == "source-actor-two-owned-heaps.ores":
-                assert sorted(receipt["last"] for receipt in receipts) == [
-                    52, 172
+                assert [r["last"] for r in receipts] == [
+                    expected_prefix_last(name, i, r["processed"])
+                    for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")

@@ -42,11 +42,11 @@ int ores_native_failure_trace_capture(
         OresNativeContinuationTraceFrame* continuation_frames,
         size_t continuation_capacity,
         OresNativeFailureTraceHeader* out) {
+    if (out) memset(out, 0, sizeof(*out));
     if (!executions || !continuations || !out || !valid_kind(kind)
             || !ores_native_store_handle_valid(current_execution))
         return 0;
 
-    memset(out, 0, sizeof(*out));
     if (!ores_native_execution_context_store_retain(
             executions, current_execution))
         return 0;
@@ -72,9 +72,11 @@ int ores_native_failure_trace_capture(
     }
 
     if (!ores_native_execution_context_store_release(
-            executions, current_execution))
+            executions, current_execution) || !ok) {
+        memset(out, 0, sizeof(*out));
         return 0;
-    return ok;
+    }
+    return 1;
 }
 
 typedef struct {
@@ -103,13 +105,18 @@ static void appendf(TraceWriter* writer, const char* format, ...) {
         writer->used += amount;
 }
 
-size_t ores_native_failure_trace_format(
+size_t ores_native_failure_trace_format_checked(
         const OresNativeFailureTraceHeader* header,
         const OresNativeExecutionTraceFrame* execution_frames,
+        size_t execution_capacity,
         const OresNativeContinuationTraceFrame* continuation_frames,
+        size_t continuation_capacity,
         char* buffer,
         size_t capacity) {
-    if (!header || (!buffer && capacity != 0)
+    if (buffer && capacity != 0) buffer[0] = '\0';
+    if (!header || !valid_kind(header->kind) || (!buffer && capacity != 0)
+            || header->logical.execution_count > execution_capacity
+            || header->logical.continuation_count > continuation_capacity
             || (header->logical.execution_count != 0 && !execution_frames)
             || (header->logical.continuation_count != 0 && !continuation_frames))
         return 0;
@@ -128,7 +135,8 @@ size_t ores_native_failure_trace_format(
         (unsigned long long)header->allocation.owner,
         (unsigned long long)header->allocation.generation);
 
-    for (size_t i = 0; i < header->logical.execution_count; ++i) {
+    for (size_t i = 0; i < header->logical.execution_count
+            && writer.used < writer.capacity - 1; ++i) {
         const OresNativeExecutionContext* context =
             &execution_frames[i].context;
         appendf(&writer,
@@ -144,7 +152,8 @@ size_t ores_native_failure_trace_format(
     if (header->logical.execution_truncated)
         appendf(&writer, "  ... execution ancestry truncated ...\n");
 
-    for (size_t i = 0; i < header->logical.continuation_count; ++i) {
+    for (size_t i = 0; i < header->logical.continuation_count
+            && writer.used < writer.capacity - 1; ++i) {
         const OresNativeContinuationRecord* record =
             &continuation_frames[i].record;
         appendf(&writer,
@@ -162,4 +171,18 @@ size_t ores_native_failure_trace_format(
         appendf(&writer, "  ... logical ancestry corrupt ...\n");
 
     return writer.used;
+}
+
+size_t ores_native_failure_trace_format(
+        const OresNativeFailureTraceHeader* header,
+        const OresNativeExecutionTraceFrame* execution_frames,
+        const OresNativeContinuationTraceFrame* continuation_frames,
+        char* buffer,
+        size_t capacity) {
+    /* Compatibility API: the caller already guarantees captured frame counts.
+     * New consumers must supply actual buffer bounds through the checked API. */
+    return ores_native_failure_trace_format_checked(
+        header, execution_frames, header ? header->logical.execution_count : 0,
+        continuation_frames, header ? header->logical.continuation_count : 0,
+        buffer, capacity);
 }
