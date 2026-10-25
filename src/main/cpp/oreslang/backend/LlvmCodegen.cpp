@@ -864,8 +864,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // Only generated source actors resolve this native scheduler/heap ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
-    llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+    llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
+        sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -887,6 +887,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceSendAsyncAwait = module.getOrInsertFunction(
+            "oreslang_source_actor_await_send_async",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
@@ -1724,7 +1727,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (send.reference != fn.ready_await_actor)
                     throw std::runtime_error(
                         "await continuation references unexpected ActorRef");
-                resumed.CreateCall(sourceSend, {resumed_actor, payload});
+                resumed.CreateCall(
+                    send.await_admission ? sourceSendAsyncAwait : sourceSend,
+                    {resumed_actor, payload});
             }
             llvm::Value* continuation_result = lower(
                 *fn.result,
@@ -1774,7 +1779,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         declarations,
                         &region_moves);
                     builder.CreateCall(
-                        sourceSend,
+                        send.await_admission ? sourceSendAsyncAwait : sourceSend,
                         {actorRefs.at(send.reference), payload});
                 } else {
                     const auto& stopped = fn.actor_stops.at(action.index);
@@ -1839,7 +1844,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         declarations,
                         &region_moves);
                     builder.CreateCall(
-                        sourceSend,
+                        send.await_admission ? sourceSendAsyncAwait : sourceSend,
                         {actorRefs.at(send.reference), payload});
                 } else {
                     builder.CreateCall(
