@@ -1726,6 +1726,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
          * path blocks an actor carrier.
          */
         llvm::Value* awaited_result = nullptr;
+        std::size_t direct_send_await_action_index = fn.actor_actions.size();
+        for (std::size_t i = 0; i < fn.actor_actions.size(); ++i) {
+            const auto& action = fn.actor_actions[i];
+            if (action.kind != ActorAction::Kind::Send) continue;
+            const auto& send = fn.actor_sends.at(action.index);
+            if (!send.await_admission) continue;
+            if (direct_send_await_action_index != fn.actor_actions.size())
+                throw std::runtime_error(
+                    "native source supports only one direct send_async await boundary");
+            direct_send_await_action_index = i;
+        }
+
         if (!fn.send_future_name.empty()) {
             if (!send_future_ref || !fn.send_future_await_offset
                     || fn.send_future_await_action_index > fn.actor_actions.size())
@@ -1819,6 +1831,103 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (action.kind == ActorAction::Kind::Stop)
                     builder.CreateCall(
                         sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+            }
+        } else if (direct_send_await_action_index != fn.actor_actions.size()) {
+            const auto& awaited_action =
+                fn.actor_actions.at(direct_send_await_action_index);
+            const auto& awaited_send =
+                fn.actor_sends.at(awaited_action.index);
+
+            for (std::size_t i = 0; i < direct_send_await_action_index; ++i) {
+                const auto& action = fn.actor_actions[i];
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    llvm::Value* payload = lower(
+                        *send.payload, builder, i64, storage, field_storage,
+                        declarations, &region_moves);
+                    builder.CreateCall(sourceSend,
+                        {actorRefs.at(send.reference), payload});
+                } else {
+                    builder.CreateCall(sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+                }
+            }
+
+            llvm::Value* awaited_payload = lower(
+                *awaited_send.payload,
+                builder,
+                i64,
+                storage,
+                field_storage,
+                declarations,
+                &region_moves);
+            llvm::Value* direct_future = builder.CreateCall(
+                sourceSendAsyncStart,
+                {actorRefs.at(awaited_send.reference), awaited_payload},
+                "direct.send_async.future.ref");
+
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".send_async_continuation",
+                module);
+            auto* admitted =
+                llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumed(admitted);
+            auto* resumed_actor = &*resume->arg_begin();
+            resumed_actor->setName(awaited_send.reference);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (std::size_t i = direct_send_await_action_index + 1;
+                    i < fn.actor_actions.size(); ++i) {
+                const auto& action = fn.actor_actions[i];
+                if (action.kind != ActorAction::Kind::Send) continue;
+                const auto& send = fn.actor_sends.at(action.index);
+                if (send.reference != awaited_send.reference)
+                    throw std::runtime_error(
+                        "direct send_async continuation references unexpected ActorRef");
+                llvm::Value* payload = lower(
+                    *send.payload,
+                    resumed,
+                    i64,
+                    no_storage,
+                    no_fields,
+                    declarations,
+                    nullptr);
+                resumed.CreateCall(sourceSend, {resumed_actor, payload});
+            }
+            llvm::Value* continuation_result = lower(
+                *fn.result,
+                resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            resumed.CreateRet(continuation_result);
+
+            llvm::Value* continuation_ptr =
+                builder.CreatePointerCast(resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitSendFuture,
+                {
+                    direct_future,
+                    continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(awaited_send.offset))
+                },
+                "future.await.direct.send.result");
+
+            for (std::size_t i = direct_send_await_action_index + 1;
+                    i < fn.actor_actions.size(); ++i) {
+                const auto& action = fn.actor_actions[i];
+                if (action.kind == ActorAction::Kind::Stop)
+                    builder.CreateCall(sourceStop,
                         {actorRefs.at(fn.actor_stops.at(action.index))});
             }
         } else if (!fn.ready_await_actor.empty()) {
