@@ -29,6 +29,25 @@ static void no_op_wake(void* raw, size_t actor, OresNativeWakeTicket ticket,
     (void)raw; (void)actor; (void)ticket; (void)outcome;
 }
 
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef producer;
+    atomic_int failed_wakes;
+    atomic_int errors;
+} ReservedFailureFixture;
+
+static void on_reserved_failure_wake(
+        void* raw, size_t actor, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    ReservedFailureFixture* f = (ReservedFailureFixture*)raw;
+    if (actor != 0 || outcome != ORES_NATIVE_WAKE_FAILED
+            || !ores_native_actor_scheduler_is_current_wake(f->scheduler, ticket)
+            || !ores_native_actor_scheduler_is_current_actor(
+                f->scheduler, f->producer))
+        atomic_fetch_add(&f->errors, 1);
+    atomic_fetch_add(&f->failed_wakes, 1);
+}
+
 static void event(Fixture* f, int code) {
     pthread_mutex_lock(&f->lock);
     if (f->events_len >= 32) abort();
@@ -186,20 +205,31 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(plain));
 
     /* A local target that stops after reservation must lose before the
-     * irreversible transfer boundary. The reserved producer ticket remains
-     * cancellable and cannot become a false mailbox-admission receipt. */
+     * irreversible transfer boundary. Unlike ordinary producer cancellation,
+     * target STOP must cooperatively resume a still-live producer with FAILED
+     * so the source send_async Future cannot hang forever. */
+    ReservedFailureFixture rf = {0};
     OresNativeActorScheduler* local = ores_native_actor_scheduler_open_with_wakes(
-        2, 1, 1, no_op_data, NULL, NULL, no_op_wake, NULL);
+        2, 1, 1, no_op_data, NULL, NULL, on_reserved_failure_wake, &rf);
     CHECK(local);
+    rf.scheduler = local;
     OresNativeActorRef producer = ores_native_actor_scheduler_spawn(local, 0);
     OresNativeActorRef target = ores_native_actor_scheduler_spawn(local, 1);
+    rf.producer = producer;
     CHECK(producer.scheduler_domain && target.scheduler_domain);
     OresNativeWakeTicket target_ticket = {0};
     CHECK(ores_native_actor_scheduler_reserve_wake(
         local, producer, target, 1, 1, 1, 1, &target_ticket));
     CHECK(ores_native_actor_scheduler_stop(local, target));
     CHECK(!ores_native_actor_scheduler_transfer_wake(local, target_ticket));
-    CHECK(ores_native_actor_scheduler_cancel_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_fail_reserved_wake(
+        local, target_ticket) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(!ores_native_actor_scheduler_cancel_wake(local, target_ticket));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_drain(local));
+    CHECK(atomic_load(&rf.failed_wakes) == 1);
+    CHECK(!atomic_load(&rf.errors));
+    CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(local, producer));
     CHECK(ores_native_actor_scheduler_stop(local, producer));
     CHECK(ores_native_actor_scheduler_wait_done(local, target));
     CHECK(ores_native_actor_scheduler_wait_done(local, producer));
