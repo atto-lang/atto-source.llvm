@@ -167,6 +167,20 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+int oreslang_source_actor_test_cancel_readable_await(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    if (!frame || !frame->admitted || frame->done) {
+        group_unlock();
+        return 0;
+    }
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorNioWatch watch = frame->awaiting.watch;
+    group_unlock();
+    return ores_native_vm_nio_try_cancel_actor(vm, watch);
+}
+#endif
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
