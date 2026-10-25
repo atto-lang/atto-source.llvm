@@ -2229,8 +2229,6 @@ private:
                         value.ready_await_form = NativeAwaitForm::ExplicitGetReady;
                     }
                 } else if (lifecycle == "get_done") {
-                    if (!value.ready_await_actor.empty())
-                        fail("native source cannot compose readiness and get_done awaits yet");
                     if (!value.done_await_actor.empty() &&
                             value.done_await_actor != awaited)
                         fail("native source supports one ActorRef DONE barrier");
@@ -3920,6 +3918,10 @@ private:
                 if (!references.count(fn.done_await_actor))
                     throw std::runtime_error(
                         "await get_done requires a direct ActorRef receiver");
+                if (!fn.ready_await_actor.empty() &&
+                        fn.ready_await_actor != fn.done_await_actor)
+                    throw std::runtime_error(
+                        "readiness and get_done must observe the same ActorRef");
                 if (contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
                         "await get_done requires side-effect-free scalar return");
