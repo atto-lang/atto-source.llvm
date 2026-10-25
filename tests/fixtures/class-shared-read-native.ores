@@ -5,7 +5,7 @@ fnc inspect(borrow Box b): int {
   return b.value;
 }
 pub fnc main(): int {
-  let Box b = new Box();
+  let mut Box b = new Box();
   b.value = 42;
   return inspect(rt borrow b);
 }

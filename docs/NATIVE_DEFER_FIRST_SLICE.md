@@ -25,3 +25,13 @@ The ownership CFG verifier also incorporates each deferred call's input
 place-read and loan effects **after** the return-expression effects on every
 exit edge. A three-exit executable fixture checks two guarded returns plus
 fallthrough without granting a moved value a synthetic surviving loan.
+
+## Deferred field writes and return snapshots
+
+The synchronous subset now accepts `defer namedOwner.field = expression;`
+with the same field-mutation/loan checks as ordinary writes. Every return
+expression is evaluated into an SSA snapshot before LIFO deferred writes; a
+deferred mutation cannot replace the pending return. The exact shared guest
+fixture `native-defer-field-return.ores` returns 222 on LLVM and Java.
+Nested/deferred closures, typed `finally`, async cleanup and exceptional
+unwinding remain fail-closed.

@@ -144,12 +144,15 @@ pub fnc main(): int {
                         for line in ir.splitlines())
                     check(allocation_calls == owned_count,
                           f"native owners mismatch in {path}")
+                    # A shared exit epilogue handles all guarded-return
+                    # paths; concrete per-owner flags still prevent double
+                    # drops after an explicit move.
                     check(ir.count("call void @oreslang_owned_i64_region_drop")
-                          == owned_count * (guards + 1),
-                          f"not all return paths drop every owner: {path}")
+                          == owned_count,
+                          f"missing or duplicate shared owner drops: {path}")
                     check(ir.count("call void @oreslang_owned_i64_region_close")
-                          == guards + 1,
-                          f"not all returns close region: {path}")
+                          == 1,
+                          f"missing or duplicate shared region closure: {path}")
                 else:
                     check("oreslang_owned_i64_region_" not in ir,
                           f"ordinary int path declares heap ABI: {path}")

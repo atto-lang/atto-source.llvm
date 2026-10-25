@@ -11,6 +11,11 @@ typedef struct OresNativeActorMailbox OresNativeActorMailbox;
  * Returned 0 means overload/retirement and MUST NOT execute guest code.
  */
 OresNativeActorMailbox* ores_native_actor_mailbox_open(size_t capacity);
+/* Never parks for actor readiness and never jumps ahead of admitted FIFO
+ * waiters. Admission is one active turn, NOT handler-completion acknowledgement.
+ * Suitable as a host scheduler probe; do not confuse with guest await send.
+ */
+int ores_native_actor_mailbox_try_enter(OresNativeActorMailbox* mailbox);
 int ores_native_actor_mailbox_enter(OresNativeActorMailbox* mailbox);
 void ores_native_actor_mailbox_leave(OresNativeActorMailbox* mailbox);
 void ores_native_actor_mailbox_retire(OresNativeActorMailbox* mailbox);

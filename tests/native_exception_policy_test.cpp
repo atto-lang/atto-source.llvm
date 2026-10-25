@@ -12,12 +12,46 @@
 
 using oreslang::runtime::Failure;
 using oreslang::runtime::FailureKind;
+using oreslang::runtime::GuestFailureBoundary;
+using oreslang::runtime::GuestFailureOrigin;
+using oreslang::runtime::admits_guest_failure;
 using oreslang::runtime::bounded_control_diagnostic;
 using oreslang::runtime::combine_failure;
 using oreslang::runtime::failure_priority;
 using oreslang::runtime::max_control_diagnostic_bytes;
 
 int main() {
+    // Boundary contract parity with Java/GraalVM PR #781; not guest lowering.
+    constexpr std::array<GuestFailureOrigin, 11> origins = {
+        GuestFailureOrigin::OrdinaryThrow, GuestFailureOrigin::PermissionDenied,
+        GuestFailureOrigin::DeadlineExceeded, GuestFailureOrigin::Cancellation,
+        GuestFailureOrigin::SchedulerRejected, GuestFailureOrigin::Interrupted,
+        GuestFailureOrigin::Panic, GuestFailureOrigin::Raise,
+        GuestFailureOrigin::ProcessExit, GuestFailureOrigin::HostFatal,
+        GuestFailureOrigin::Unknown
+    };
+    static_assert(admits_guest_failure(GuestFailureBoundary::Trap,
+                                      GuestFailureOrigin::OrdinaryThrow));
+    static_assert(!admits_guest_failure(GuestFailureBoundary::Trap,
+                                       GuestFailureOrigin::PermissionDenied));
+    static_assert(admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                      GuestFailureOrigin::PermissionDenied));
+    static_assert(!admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                       GuestFailureOrigin::Cancellation));
+    for (const auto origin : origins) {
+        const bool ordinary = origin == GuestFailureOrigin::OrdinaryThrow;
+        const bool explicit_recovery = ordinary
+            || origin == GuestFailureOrigin::PermissionDenied
+            || origin == GuestFailureOrigin::DeadlineExceeded;
+        assert(admits_guest_failure(GuestFailureBoundary::Trap, origin) == ordinary);
+        assert(admits_guest_failure(GuestFailureBoundary::ExplicitCatch, origin)
+                == explicit_recovery);
+    }
+    assert(!admits_guest_failure(static_cast<GuestFailureBoundary>(0xff),
+                                 GuestFailureOrigin::OrdinaryThrow));
+    assert(!admits_guest_failure(GuestFailureBoundary::ExplicitCatch,
+                                 static_cast<GuestFailureOrigin>(0xff)));
+
     static_assert(failure_priority(FailureKind::HostFatal) ==
                   failure_priority(FailureKind::ProcessExit));
     static_assert(failure_priority(FailureKind::Cancelled) >
@@ -34,6 +68,29 @@ int main() {
         rejected_unknown_kind = true;
     }
     assert(rejected_unknown_kind);
+
+    // Parity with the Java/Graal recovery integrity gate: rejecting malformed
+    // foreign metadata must not overwrite or downgrade the pending failure.
+    Failure pending_integrity = Failure::make(FailureKind::Raise, "pending-raise");
+    bool rejected_foreign_metadata = false;
+    try {
+        (void)Failure::make(static_cast<FailureKind>(0xfe), "hostile metadata");
+    } catch (const std::invalid_argument&) {
+        rejected_foreign_metadata = true;
+    }
+    assert(rejected_foreign_metadata);
+    assert(pending_integrity.kind() == FailureKind::Raise);
+    assert(pending_integrity.diagnostic() == "pending-raise");
+    assert(pending_integrity.suppressed().empty());
+
+    auto weaker_callback_failure = combine_failure(
+        Failure::make(FailureKind::Raise, "pending-raise"),
+        Failure::make(FailureKind::Throw, "callback-throw"));
+    assert(weaker_callback_failure.kind() == FailureKind::Raise);
+    assert(weaker_callback_failure.diagnostic() == "pending-raise");
+    assert(weaker_callback_failure.suppressed().size() == 1);
+    assert(weaker_callback_failure.suppressed()[0].kind() == FailureKind::Throw);
+    assert(weaker_callback_failure.suppressed()[0].diagnostic() == "callback-throw");
 
     // All 36 rank pairs share the Java OresExceptionPolicy regression lattice.
     constexpr std::array<FailureKind, 6> kinds = {

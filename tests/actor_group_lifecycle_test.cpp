@@ -2,8 +2,9 @@
 
 #include <atomic>
 #include <chrono>
-#include <deque>
 #include <future>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -17,227 +18,6 @@ static void check(bool yes, const char* error) {
 }
 
 int main() {
-    {
-        // Inline CONTROL dispatch used to deadlock on the supervisor mutex
-        // and could execute policies on a failing child's physical carrier.
-        int callbacks = 0;
-        auto inline_enqueue = [](std::function<void()> work) {
-            work(); // invalid adapter: must be refused without deadlock
-            return true;
-        };
-        auto lane = std::make_shared<oreslang::runtime::SupervisorFailureControl>(2703, 2);
-        lane->install([&](const auto&) { ++callbacks; }, inline_enqueue);
-        lane->publish(oreslang::runtime::SupervisorFailureNotice{
-            2703, 2703, 1, 1, std::nullopt, "terminal"});
-        check(callbacks == 0 && !lane->healthy() && lane->undelivered() >= 1,
-              "inline supervisor CONTROL adapter was not rejected");
-        auto process = std::make_shared<oreslang::runtime::SupervisorProcess>(
-            2704, 2704, 2, inline_enqueue,
-            [&](const auto&) -> std::optional<oreslang::runtime::SupervisorProcess::Directive> {
-                ++callbacks;
-                return oreslang::runtime::SupervisorProcess::Directive::stop;
-            },
-            [&](const auto&) { ++callbacks; });
-        process->accept(oreslang::runtime::SupervisorFailureNotice{
-            2704, 2704, 1, 1, std::nullopt, "terminal"});
-        check(callbacks == 0 && !process->healthy() && process->undelivered() >= 1,
-              "inline supervisor process adapter ran guest policy");
-    }
-    {
-        // A supervisor's physical carrier is released across an await-like
-        // suspension, but its logical single-flight turn stays reserved.
-        NativeActorGroup group(2701, 4);
-        std::deque<std::function<void()>> dispatcher;
-        std::vector<oreslang::runtime::SupervisorProcess::Resolution> decisions;
-        int active = 0;
-        int maximum = 0;
-        int entered = 0;
-        auto enqueue = [&](std::function<void()> job) {
-            dispatcher.push_back(std::move(job));
-            return true;
-        };
-        auto process = group.install_supervisor_process(
-            4, enqueue,
-            [&](const oreslang::runtime::SupervisorFailureNotice& n)
-                -> std::optional<oreslang::runtime::SupervisorProcess::Directive> {
-                ++entered;
-                ++active;
-                maximum = std::max(maximum, active);
-                if (n.actor_id == 3 || n.actor_id == 4)
-                    return std::nullopt; // two distinct logical awaits
-                return oreslang::runtime::SupervisorProcess::Directive::stop;
-            },
-            [&](const oreslang::runtime::SupervisorProcess::Resolution& d) {
-                decisions.push_back(d);
-                --active;
-            });
-        auto a = group.adopt(2701, 1, 1, [] {});
-        auto b = group.adopt_child(a, 2701, 2, 1, [] {});
-        auto c = group.adopt_child(b, 2701, 3, 1, [] {});
-        auto d = group.adopt_child(b, 2701, 4, 1, [] {});
-        check(group.mark_ready(a) && group.mark_ready(b)
-              && group.mark_ready(c) && group.mark_ready(d),
-              "supervisor process family not ready");
-        check(group.finalized(c, "C terminal"), "C did not finalize");
-        check(group.finalized(d, "D terminal"), "D did not finalize");
-        check(decisions.empty() && dispatcher.size() == 1,
-              "policy unexpectedly ran on child finalizer");
-        auto run_one = [&] {
-            check(!dispatcher.empty(), "expected scheduled CONTROL turn");
-            auto job = std::move(dispatcher.front());
-            dispatcher.pop_front();
-            job();
-        };
-        run_one(); // underlying failure CONTROL dispatch
-        check(decisions.empty() && dispatcher.size() == 1,
-              "supervisor process must schedule its own admission turn");
-        run_one(); // process handles C and suspends
-        check(process->callback_active() && entered == 1 && decisions.empty(),
-              "await released the exclusive logical supervisor lease");
-        check(dispatcher.empty() && process->pending() == 2,
-              "second supervisor policy was executed while first suspended");
-        const auto c_epoch = process->current_epoch();
-        check(c_epoch != 0, "supervisor callback did not record continuation epoch");
-        check(process->resume(c_epoch,
-              oreslang::runtime::SupervisorProcess::Directive::escalate),
-              "supervisor could not enqueue await continuation");
-        // A resumed continuation is queued, not executed on foreign thread.
-        check(decisions.empty(), "resume invoked supervisor sink inline");
-        check(!process->resume(c_epoch,
-              oreslang::runtime::SupervisorProcess::Directive::restart),
-              "duplicate supervisor resume was admitted");
-        run_one(); // C's continuation: sink and schedule D
-        check(decisions.size() == 1 && entered == 1,
-              "first resolution crossed the await boundary incorrectly");
-        run_one(); // D's new exclusive admitted turn, also suspended
-        check(decisions.size() == 1 && entered == 2 && process->callback_active(),
-              "second supervisor turn incorrectly escaped its logical lease");
-        const auto d_epoch = process->current_epoch();
-        check(d_epoch != c_epoch && d_epoch != 0,
-              "new child failure reused stale supervisor invocation epoch");
-        check(!process->resume(c_epoch,
-              oreslang::runtime::SupervisorProcess::Directive::restart),
-              "late completion from C resumed D's unrelated CONTROL turn");
-        check(process->resume(d_epoch,
-              oreslang::runtime::SupervisorProcess::Directive::stop),
-              "current invocation continuation could not be admitted");
-        run_one();
-        check(decisions.size() == 2 && entered == 2,
-              "second supervisor continuation failed");
-        check(maximum == 1 && active == 0,
-              "supervisor policies overlapped on logical lane");
-        check(decisions[0].requested
-              == oreslang::runtime::SupervisorProcess::Directive::escalate
-              && decisions[0].notice.spawned_by == b.actor_id()
-              && decisions[1].requested
-              == oreslang::runtime::SupervisorProcess::Directive::stop,
-              "supervisor policy resolutions drifted");
-        check(process->resolved() == 2 && process->healthy(),
-              "supervisor process terminal resolution accounting drift");
-        group.close();
-    }
-    {
-        // Native terminal CONTROL must be value-only and scheduler-enqueued,
-        // not a direct child -> supervisor guest callback.
-        NativeActorGroup group(2501, 3);
-        std::deque<std::function<void()>> jobs;
-        std::vector<oreslang::runtime::SupervisorFailureNotice> seen;
-        group.install_supervisor_failure_handler(
-            [&](const auto& notice) { seen.push_back(notice); },
-            [&](std::function<void()> job) {
-                jobs.push_back(std::move(job));
-                return true;
-            });
-        auto a = group.adopt(2501, 1, 1, [] {});
-        auto b = group.adopt_child(a, 2501, 2, 1, [] {});
-        auto c = group.adopt_child(b, 2501, 3, 1, [] {});
-        check(group.mark_ready(a) && group.mark_ready(b)
-              && group.mark_ready(c), "native supervisor family not ready");
-        check(group.finalized(c, "C terminal"), "terminal native child failed");
-        check(seen.empty(), "supervisor callback executed on child finalizer");
-        check(jobs.size() == 1, "supervisor CONTROL was not enqueued");
-        auto dispatch = std::move(jobs.front());
-        jobs.pop_front();
-        dispatch();
-        check(seen.size() == 1, "supervisor did not observe one terminal notice");
-        check(seen[0].supervisor_id == group.supervisor_id(),
-              "supervisor notice identity drift");
-        check(seen[0].actor_id == c.actor_id()
-              && seen[0].spawned_by == b.actor_id(),
-              "supervisor notice lost terminal/parent identity");
-        check(seen[0].diagnostic == "C terminal",
-              "supervisor notice diagnostic drift");
-        check(group.undelivered_supervisor_failures() == 0,
-              "native supervisor delivery reported false overflow");
-        group.close();
-        check(group.finalized(a) && group.finalized(b),
-              "closed native family could not finalize");
-    }
-    {
-        // Detached runtime finalizer must preserve CONTROL after group close.
-        NativeActorGroup group(2502, 2);
-        std::deque<std::function<void()>> jobs;
-        int notices = 0;
-        group.install_supervisor_failure_handler(
-            [&](const auto& n) {
-                check(n.diagnostic == "after-close", "after-close reason lost");
-                ++notices;
-            },
-            [&](std::function<void()> job) {
-                jobs.push_back(std::move(job));
-                return true;
-            });
-        auto child = group.adopt(2502, 5, 1, [] {});
-        check(group.mark_ready(child), "after-close child not ready");
-        auto finalizer = group.runtime_finalizer(child);
-        group.close();
-        check(finalizer.finalized("after-close"),
-              "runtime finalizer rejected after-close notice");
-        check(!finalizer.finalized("duplicate"),
-              "duplicate finalizer accepted and could duplicate CONTROL");
-        check(notices == 0 && jobs.size() == 1,
-              "CONTROL ran inline or failed to enqueue after close");
-        auto dispatch = std::move(jobs.front());
-        jobs.pop_front();
-        dispatch();
-        check(notices == 1, "supervisor lost after-close terminal notice");
-    }
-    {
-        // Host-side contract: A -> B -> C remains one ActorGroup, and
-        // spawn ancestry does not create independent lifecycle managers.
-        NativeActorGroup group(1206, 3);
-        NativeActorGroup foreign_group(1206, 3);
-        int stops = 0;
-        auto a = group.adopt(1206, 101, 1, [&] { ++stops; });
-        check(group.mark_ready(a), "root not ready");
-        auto b = group.adopt_child(a, 1206, 102, 1, [&] { ++stops; });
-        check(group.mark_ready(b), "child not ready");
-        auto c = group.adopt_child(b, 1206, 103, 1, [&] { ++stops; });
-        check(group.mark_ready(c), "grandchild not ready");
-        check(group.worker_count() == 3, "nested spawn created an extra group");
-        check(a.supervisor_id() == group.supervisor_id(),
-              "root supervisor identity differs from owning group");
-        check(b.supervisor_id() == a.supervisor_id()
-              && c.supervisor_id() == a.supervisor_id(),
-              "recursive spawn changed supervisor identity");
-        check(a.supervisor_id() != foreign_group.supervisor_id(),
-              "unrelated ActorGroups cannot impersonate one supervisor");
-        check(!group.spawned_by(a).has_value(), "root has a fabricated parent");
-        check(group.spawned_by(b) == a.actor_id(), "incorrect child lineage");
-        check(group.spawned_by(c) == b.actor_id(), "incorrect grandchild lineage");
-        bool foreign = false;
-        try { (void) foreign_group.adopt_child(b, 1206, 104, 1, [] {}); }
-        catch (const std::logic_error&) { foreign = true; }
-        check(foreign, "foreign ActorGroup accepted a stale/foreign parent");
-        group.close();
-        check(stops == 3, "group close did not stop the full actor family");
-        check(group.worker_count() == 0, "closed group retained child refs");
-        check(group.finalized(a) && group.finalized(b) && group.finalized(c),
-              "physically finalized family was rejected");
-        a.get_done().get();
-        b.get_done().get();
-        c.get_done().get();
-    }
     {
         NativeActorGroup group(100, 2);
         int stop_count = 0;
@@ -639,6 +419,189 @@ int main() {
         check(a.control_delivery_lost(), "close silently dropped terminal CONTROL");
         check(group.finalized(a), "closed group could not retire discarded CONTROL");
         a.get_done().get();
+    }
+
+
+    {
+        // Runtime owns a token independent of the group object. Destroying a
+        // closed group must not strand actor identity, readiness or DONE.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        {
+            NativeActorGroup group(8101, 1);
+            auto worker = group.adopt(8101, 9, 41, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(!finalizer->finalized(),
+                  "runtime finalizer bypassed live group ownership");
+            check(group.mark_ready(worker), "runtime finalizer actor not ready");
+            group.close();
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "group close fabricated physical retirement");
+        }
+        NativeActorGroup successor(8101, 1);
+        bool blocked = false;
+        try { (void) successor.adopt(8101, 9, 42, [] {}); }
+        catch (const std::logic_error&) { blocked = true; }
+        check(blocked, "actor ID reused before runtime physical ack");
+        check(finalizer->finalized(), "runtime finalizer lost retired group");
+        original->get_ready().get();
+        original->get_done().get();
+        check(!finalizer->finalized(), "runtime finalizer double-acked DONE");
+        auto next = successor.adopt(8101, 9, 42, [] {});
+        check(!finalizer->finalized(), "stale finalizer retired new generation");
+        check(successor.mark_ready(next), "reused generation not ready");
+        check(successor.finalized(next), "reused generation failed to finalize");
+        next.get_done().get();
+    }
+    {
+        // Failed startup remains failed after closing and destroying a
+        // group, and its completion is settled only on a runtime quiescence
+        // acknowledgement rather than on close().
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        int notified = 0;
+        {
+            NativeActorGroup group(8102, 1);
+            auto worker = group.adopt(8102, 2, 3, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            worker.when_ready([&](const auto& result) {
+                check(!result.ready, "closed initializing actor became ready");
+                ++notified;
+            });
+            group.close();
+        }
+        check(notified == 1, "close lost startup rejection notification");
+        check(original->get_done().wait_for(0ms) == std::future_status::timeout,
+              "failed startup manufactured DONE without release");
+        check(finalizer->finalized(), "late failed-startup ack not accepted");
+        bool ready_failed = false, done_failed = false;
+        try { original->get_ready().get(); }
+        catch (const std::runtime_error&) { ready_failed = true; }
+        try { original->get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        check(ready_failed && done_failed,
+              "late failed startup did not fail both lifecycle futures");
+    }
+    {
+        // A trusted runtime finalizer racing with close must not free a
+        // still-group-owned actor; retries can succeed once close detaches.
+        // This test has no executing carrier work or retained native loans.
+        for (int round = 0; round < 64; ++round) {
+            const auto runtime = static_cast<std::uint64_t>(8200 + round);
+            NativeActorGroup group(runtime, 1);
+            auto worker = group.adopt(runtime, 5, 1, [] {});
+            auto finalizer = group.runtime_finalizer(worker);
+            check(group.mark_ready(worker), "race worker init failed");
+            std::atomic<bool> retired{false};
+            std::thread runtime_ack([&] {
+                for (int attempt = 0; attempt < 100000; ++attempt) {
+                    if (finalizer.finalized()) {
+                        retired.store(true, std::memory_order_release);
+                        return;
+                    }
+                    std::this_thread::yield();
+                }
+            });
+            group.close();
+            runtime_ack.join();
+            check(retired.load(std::memory_order_acquire),
+                  "runtime finalization raced with close and stayed pending");
+            check(!group.finalized(worker), "double finalization accepted");
+            worker.get_done().get();
+        }
+    }
+    {
+        // Close drops undelivered CONTROL work, but only a post-close
+        // runtime finalizer can acknowledge physical retirement. Neither
+        // token nor close may execute the actor handler inline.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> actor;
+        int ran = 0;
+        {
+            NativeActorGroup group(8103, 1);
+            auto worker = group.adopt(8103, 4, 1, [] {});
+            actor.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(group.mark_ready(worker), "CONTROL worker not ready");
+            check(group.enqueue_control(worker, [&] { ++ran; }),
+                  "CONTROL reservation failed");
+            check(!group.finalized(worker), "queued CONTROL was bypassed");
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "failed physical ack settled DONE");
+            group.close();
+        }
+        check(ran == 0, "close executed guest CONTROL inline");
+        check(actor->control_delivery_lost(), "CONTROL loss unreported");
+        check(finalizer->finalized(), "late ack blocked after CONTROL dropped");
+        actor->get_done().get();
+    }
+
+
+    {
+        // Nonblocking DONE subscriber must enqueue CONTROL, not invoke guest
+        // continuation inline on the retiring child's completion thread.
+        NativeActorGroup parent(8401, 1);
+        auto supervisor = parent.adopt(8401, 1, 1, [] {});
+        check(parent.mark_ready(supervisor), "supervisor not ready");
+        int resumed = 0;
+        int observed = 0;
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> child;
+        {
+            NativeActorGroup children(8402, 1);
+            auto worker = children.adopt(8402, 1, 1, [] {});
+            child.emplace(worker);
+            finalizer.emplace(children.runtime_finalizer(worker));
+            check(children.mark_ready(worker), "child not ready");
+            worker.when_done([&](const auto& done) {
+                check(done.success && done.error.empty(),
+                      "successful child DONE reported failure");
+                ++observed;
+                check(parent.enqueue_control(supervisor, [&] { ++resumed; }),
+                      "DONE could not enqueue parent CONTROL continuation");
+            });
+            children.close();
+            check(observed == 0, "close prematurely published DONE callback");
+        }
+        check(finalizer->finalized(), "late child completion was not accepted");
+        check(observed == 1 && resumed == 0,
+              "child finalizer ran a guest continuation on host thread");
+        check(parent.has_pending_control(supervisor),
+              "nonblocking DONE callback did not reserve supervisor CONTROL");
+        check(parent.run_control_turn(supervisor) == NativeActorGroup::ControlTurn::executed,
+              "scheduler did not run resumed DONE on parent turn");
+        check(resumed == 1, "DONE resumed more or fewer than once");
+        int late = 0;
+        child->when_done([&](const auto& done) {
+            check(done.success, "late DONE observer did not see successful result");
+            ++late;
+        });
+        check(late == 1, "late DONE subscription was not settled immediately");
+        check(!finalizer->finalized(), "duplicate DONE ack was admitted");
+        check(parent.finalized(supervisor), "supervisor could not retire after continuation");
+    }
+    {
+        // Failed child startup propagates to nonblocking DONE subscribers
+        // once, even when the group has already been destroyed.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        int failed = 0;
+        {
+            NativeActorGroup group(8403, 1);
+            auto child = group.adopt(8403, 1, 1, [] {});
+            finalizer.emplace(group.runtime_finalizer(child));
+            child.when_done([&](const auto& result) {
+                check(!result.success && !result.error.empty(),
+                      "failed child DONE lost its terminal error");
+                ++failed;
+            });
+            group.close();
+            check(failed == 0, "stop or close fabricated failed DONE");
+        }
+        check(finalizer->finalized("startup failed"), "failure completion lost");
+        check(failed == 1, "terminal error subscriber notified incorrectly");
+        check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
     }
 
 }

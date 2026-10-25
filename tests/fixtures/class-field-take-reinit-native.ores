@@ -6,7 +6,7 @@ fnc view(borrow Pair pair): int {
   return view(rt borrow pair);
 }
 pub fnc main(): int {
-  let Pair pair = new Pair();
+  let mut Pair pair = new Pair();
   const former: int = rt take pair.left;
   pair.left = former;
   return pair.left + pair.right;

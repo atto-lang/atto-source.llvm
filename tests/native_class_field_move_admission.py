@@ -3,7 +3,7 @@
 
 The bounded native class layout contains only trivially destructible i64
 fields. Explicit field moves invalidate their place until reassignment;
-unsafe whole-object borrows, double takes and region-owned transfers still
+unsafe whole-object borrows and double takes still
 fail with no LLVM IR.
 """
 import argparse
@@ -31,21 +31,27 @@ def main():
             p = subprocess.run([*cmd, str(fixture)], capture_output=True,
                                text=True, timeout=30)
             if diagnostic:
-                assert p.returncode != 0, (source, p.stdout)
-                assert diagnostic in p.stderr, (source, p.stderr)
-                assert not p.stdout.strip(), "emitted LLVM IR after rejection"
+                if p.returncode != 1:
+                    raise AssertionError(("expected source diagnostic exit 1", source, p.returncode, p.stdout))
+                if diagnostic not in p.stderr:
+                    raise AssertionError((source, p.stderr))
+                if p.stdout.strip():
+                    raise AssertionError("emitted LLVM IR after rejection")
                 rejects += 1
             else:
-                assert p.returncode == 0, (source, p.stderr)
-                assert p.stdout.startswith("; ModuleID"), (source, p.stdout)
-                assert not p.stderr, (source, p.stderr)
+                if p.returncode != 0:
+                    raise AssertionError((source, p.stderr))
+                if not p.stdout.startswith("; ModuleID"):
+                    raise AssertionError((source, p.stdout))
+                if p.stderr:
+                    raise AssertionError((source, p.stderr))
                 accepts += 1
 
         for count in (1, 2, 8, 16):
             decl = ("define class Record as\n" +
                     "".join(f"  pub let int f{i} = {i + 1};\n"
                             for i in range(count)) + "end\n")
-            head = "pub fnc main(): int {\n  let Record p = new Record();\n"
+            head = "pub fnc main(): int {\n  let mut Record p = new Record();\n"
             for result in (
                 "  return rt take p.f0 + 41;\n",
                 "  if (p.f0 eq 1) { return rt take p.f0 + 41; } fi\n"
@@ -85,8 +91,9 @@ def main():
             "  if (x eq 42) { return rt take x; } fi\n  return x;\n",
             "  const value: int = rt take x;\n  return value;\n",
         ):
-            check(owned + body + "}\n",
-                  "owned int take requires transfer/drop lowering", experimental=True)
+            # Native owned-int transfers now have checked conditional
+            # drop flags and release the moved-from region slot exactly once.
+            check(owned + body + "}\n", experimental=True)
         check(owned + "  return x;\n}\n", experimental=True)
         check("pub fnc main(): int {\n  const x: int = 42;\n"
               "  return rt take x;\n}\n")
