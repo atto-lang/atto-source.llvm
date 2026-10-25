@@ -173,11 +173,14 @@ class ComparatorParityProof(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("SUITE_COMPLETE=no", summary)
 
-    def test_strict_gate_accepts_complete_fixture_suite_with_pinned_heads(self):
+    def test_strict_gate_rejects_real_fixture_suite_while_cases_are_pending(self):
+        # The checked-in suite currently contains explicitly pending LLVM
+        # defer/finally cases. Strict mode must fail closed until those cases
+        # become required and have real passing backend evidence.
         status, summary = self.compare(strict=True, revisions=self.sha)
-        self.assertEqual(status, 0)
-        self.assertIn("SUITE_COMPLETE=yes", summary)
-        self.assertIn("BACKEND_PENDING=0", summary)
+        self.assertEqual(status, 1)
+        self.assertIn("SUITE_COMPLETE=no", summary)
+        self.assertNotIn("BACKEND_PENDING=0", summary)
 
     def test_strict_gate_demands_pinned_heads(self):
         with self.assertRaisesRegex(ValueError, "requires pinned"):
