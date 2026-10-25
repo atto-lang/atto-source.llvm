@@ -381,7 +381,7 @@ static void* carrier(void* raw) {
          * This is therefore the exact release boundary for a capacity slot,
          * not the earlier user callback return.
          */
-        pthread_cond_broadcast(&s->credit);
+        if (pthread_cond_broadcast(&s->credit) != 0) abort();
         s->outstanding--;
         s->completed++;
         if (kind == 0) {
@@ -1122,7 +1122,7 @@ static int stop_locked(
     }
 
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
-    pthread_cond_broadcast(&s->credit);
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
     maybe_finish_stopped_locked(s, (size_t)actor.actor_slot);
     if (!s->outstanding) {
         /*
@@ -1214,8 +1214,8 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             maybe_finish_stopped_locked(s, i);
         }
     }
-    pthread_cond_broadcast(&s->ready);
-    pthread_cond_broadcast(&s->credit);
+    if (pthread_cond_broadcast(&s->ready) != 0) abort();
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
     unlock(s);
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
