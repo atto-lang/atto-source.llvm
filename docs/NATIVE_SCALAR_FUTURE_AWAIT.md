@@ -14,9 +14,14 @@ continuation**. Scheduling and teardown authenticate the exact shared
 `ActorRef` ticket capability in addition to numeric runtime/actor/generation
 identity, so even accidental same-generation reuse cannot let a stale ref
 schedule or revoke a newer Future. Only the owning `NativeActorGroup` parent
-CONTROL lane may consume the terminal outcome. When CONTROL is full, the outcome remains ready
-for retry. An explicit cancellation after enqueue suppresses the queued guest
-callback. Group close publishes the generation-fenced
+CONTROL lane may consume the terminal outcome. CONTROL admission never occurs
+while holding the Future mutex: the frame publishes a logical scheduled
+reservation, releases its lock, then attempts the bounded ActorGroup CONTROL
+enqueue. Failed admission rolls the reservation back to ready unless
+cancellation won concurrently. This prevents an immediately dequeued CONTROL
+turn from parking a carrier behind Future bookkeeping. When CONTROL is full,
+the outcome remains ready for retry. An explicit cancellation after enqueue
+suppresses the queued guest callback. Group close publishes the generation-fenced
 `NativeActorRef::delivery_closed()` barrier before detached shutdown work.
 The supervisor can consume that barrier via `cancel_if_owner_detached()`,
 preventing pending, ready, or scheduled frames from surviving an owner that
