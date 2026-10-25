@@ -1265,6 +1265,27 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    # First compiled source-level nonblocking I/O suspension. The compiler
+    # owns the await form; only a literal fd, one source actor and zero
+    # suspended locals are admitted.
+    oreslang_contract_test(source_actor_await_readable_runtime_ir
+        source-actor-await-readable.ores
+        --ir "oreslang_source_actor_await_readable")
+    oreslang_contract_test(source_actor_await_readable_continuation_ir
+        source-actor-await-readable.ores
+        --ir "readable_continuation")
+    oreslang_contract_test(reject_source_actor_await_readable_nonliteral_fd
+        source-actor-await-readable-nonliteral-fd.ores
+        --diagnostic "await readable requires an integer literal file descriptor")
+    oreslang_contract_test(reject_source_actor_await_readable_local_crossing
+        source-actor-await-readable-local-crossing.ores
+        --diagnostic "await readable requires one source actor without suspended locals")
+    oreslang_contract_test(reject_source_actor_await_readable_twice
+        source-actor-await-readable-twice.ores
+        --diagnostic "native source supports only one trusted-main suspension")
+    oreslang_contract_test(reject_source_actor_await_readable_without_actor
+        source-actor-await-readable-no-actor.ores
+        --diagnostic "await readable requires one source actor without suspended locals")
     # ActorRef implements HasFuture: awaiting its capability directly
     # delegates to the same get_ready() root CONTROL continuation.
     oreslang_contract_test(source_actor_hasfuture_direct_await_ir
