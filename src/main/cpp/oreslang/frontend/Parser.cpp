@@ -2154,8 +2154,6 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.done_await_actor.empty())
-                    fail("native source supports only one ActorRef lifecycle suspension");
                 const std::string awaited = identifier();
 
                 // A bound Future<void> and its producer ActorRef observe the
@@ -2233,8 +2231,16 @@ private:
                 } else if (lifecycle == "get_done") {
                     if (!value.ready_await_actor.empty())
                         fail("native source cannot compose readiness and get_done awaits yet");
-                    value.done_await_actor = awaited;
-                    value.done_await_offset = await_offset;
+                    if (!value.done_await_actor.empty() &&
+                            value.done_await_actor != awaited)
+                        fail("native source supports one ActorRef DONE barrier");
+                    if (value.done_await_actor.empty()) {
+                        // DONE is a sticky physical-finalization observation.
+                        // Re-observing the same actor after the first await
+                        // resumes does not allocate another continuation.
+                        value.done_await_actor = awaited;
+                        value.done_await_offset = await_offset;
+                    }
                 } else {
                     fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done/send_async is lowered");
                 }
