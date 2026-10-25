@@ -48,8 +48,19 @@ public:
         if (!owner.runtime_id() || !owner.actor_id() || !owner.generation()
                 || !future_id)
             throw std::invalid_argument("invalid scalar future owner identity");
-        return std::shared_ptr<NativeScalarFutureAwait>(
+        // Do not create fresh work for an incarnation whose generation-fenced
+        // no-new-delivery barrier is already visible. A close that races after
+        // this admission point is handled by the existing detach reconciliation
+        // path; this check specifically rejects post-detach resurrection.
+        if (owner.delivery_closed())
+            throw std::logic_error("scalar future owner delivery is closed");
+        auto frame = std::shared_ptr<NativeScalarFutureAwait>(
             new NativeScalarFutureAwait(owner, future_id));
+        // Allocation/capability construction may race group teardown. Recheck
+        // before publishing the new frame to the caller.
+        if (owner.delivery_closed())
+            throw std::logic_error("scalar future owner delivery is closed");
+        return frame;
     }
 
     NativeScalarFutureAwait(const NativeScalarFutureAwait&) = delete;

@@ -308,6 +308,14 @@ int main() {
           "per-actor finalization failed");
     check(finalized_owner.delivery_closed(),
           "per-actor finalization did not publish delivery barrier");
+    bool finalized_open_rejected = false;
+    try {
+        (void)NativeScalarFutureAwait::open(finalized_owner, 72);
+    } catch (const std::logic_error&) {
+        finalized_open_rejected = true;
+    }
+    check(finalized_open_rejected,
+          "physically finalized owner admitted a new scalar Future");
     check(!finalized_ready->try_schedule(
               finalized_ready->id(), finalized_group, finalized_owner,
               [&](const auto&) { check(false, "finalized READY callback executed"); }),
@@ -380,6 +388,17 @@ int main() {
     check(detached_finalizer.ready_for_resource_reclamation(),
           "detached owner still pinned");
     check(detached_finalizer.finalized(), "detached owner finalization failed");
+
+    // Once the no-new-delivery barrier is already published, a stale owner
+    // capability must not create fresh Future work for the dead incarnation.
+    bool detached_open_rejected = false;
+    try {
+        (void)NativeScalarFutureAwait::open(detached_owner, 84);
+    } catch (const std::logic_error&) {
+        detached_open_rejected = true;
+    }
+    check(detached_open_rejected,
+          "detached owner admitted a new scalar Future");
 
     // Scheduling itself must consume an already-published detach barrier.
     // Callers must not need a second teardown reconciliation just because

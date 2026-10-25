@@ -30,9 +30,13 @@ prevents an immediately dequeued CONTROL turn from parking a carrier behind
 Future bookkeeping. When CONTROL is full, the outcome remains READY for retry.
 An explicit cancellation after enqueue suppresses the queued guest callback.
 
-Group close publishes the generation-fenced
-`NativeActorRef::delivery_closed()` barrier before detached shutdown work.
-`try_schedule()` consumes an already-published barrier itself, so scheduling
+Group close and per-actor physical finalization publish the generation-fenced
+`NativeActorRef::delivery_closed()` barrier. `NativeScalarFutureAwait::open()`
+fails closed when that barrier is already visible, so a stale ActorRef cannot
+create fresh pending Future work for an incarnation that has left the delivery
+table. A close racing after successful frame creation is still handled by the
+existing detach reconciliation path. `try_schedule()` consumes an
+already-published barrier itself, so scheduling
 a detached PENDING or READY frame terminates it as CANCELLED instead of leaving
 a retryable Future behind. If close is observed during CONTROL admission, a
 still-SCHEDULED frame is likewise cancelled before scheduling reports success.
@@ -56,8 +60,8 @@ an unpinned actor-owned borrow or to execute a callback on the producer thread.
 
 The `native_scalar_future_single_winner_control` CTest covers stale
 generation, foreign owner, duplicate numeric Future-ID capability isolation,
-exactly-once completion, fail/cancel race, CONTROL backpressure, revocation
-before execution, and no inline resume.
+post-detach creation rejection, exactly-once completion, fail/cancel race,
+CONTROL backpressure, revocation before execution, and no inline resume.
 The acceptance path to guest parity still requires:
 
 1. Typed source `Future<T>` and `async` admission with distinct guest ABIs.
