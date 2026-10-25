@@ -1508,7 +1508,9 @@ int ores_native_actor_scheduler_terminal_state(
 }
 int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
                                           OresNativeActorRef actor) {
-    if (!s || executing == s) return 0;
+    /* Host-only barrier. A carrier of another scheduler can participate in
+     * a dependency cycle, even when the target scheduler is distinct. */
+    if (!s || executing != NULL) return 0;
     lock(s);
     if (!matching(s, actor) || !s->actors[actor.actor_slot].retired) {
         unlock(s);
@@ -1581,7 +1583,8 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     return ok;
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
-    if (!s || executing == s) return 0;
+    /* Do not allow any actor carrier to block on another scheduler's work. */
+    if (!s || executing != NULL) return 0;
     lock(s);
     while (s->outstanding)
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
@@ -1589,7 +1592,9 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     return 1;
 }
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
-    if (!s || executing == s) return 0;
+    /* This may join OS threads. Destruction is external-host-only across
+     * every scheduler, not merely prohibited on the target's own carriers. */
+    if (!s || executing != NULL) return 0;
     lock(s);
     int ready = s->retired && !s->outstanding && !s->reserved_wakes;
     if (ready) {
