@@ -295,6 +295,14 @@ int ores_native_continuation_store_release(
             unlock_store(store);
             break;
         }
+        /* A claimed continuation is a live guest frame. Its final external
+         * reference cannot be used as a reclamation primitive; the claiming
+         * resume authority must finish the frame first. Extra references may
+         * still be dropped above while the frame is claimed. */
+        if (block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+            unlock_store(store);
+            return released_any;
+        }
 
         const OresNativeExecutionHandle execution = {
             block->execution_slot[lane],
