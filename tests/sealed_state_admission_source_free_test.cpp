@@ -117,6 +117,7 @@ int main() {
     // Confirm validation visits every actor, not just the first.
     auto mixed = valid();
     auto second = valid();
+    second.front().name = "LegacyOther";
     second.front().sealed_state = false;
     second.front().on_message.actor_state_loan.reset();
     second.front().on_message.result = std::make_unique<Expression>();
@@ -124,6 +125,7 @@ int main() {
     must_admit(std::move(mixed));
     auto malformed_second = valid();
     auto malformed_actor = valid();
+    malformed_actor.front().name = "OtherActor";
     malformed_actor.front().on_message.parameters.clear();
     malformed_second.push_back(std::move(malformed_actor.front()));
     bool rejected_second = false;
