@@ -1,0 +1,65 @@
+name: Native actor formal safety models
+on:
+  pull_request:
+    paths:
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
+      - 'tools/actor-dispatch-tickets/**'
+      - 'tools/actor-carrier-model/**'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h'
+      - '.github/workflows/actor-formal-models.yml'
+      - 'formal/README.md'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
+      - 'tools/actor-dispatch-tickets/**'
+      - 'tools/actor-carrier-model/**'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorScheduler.h'
+      - 'src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h'
+      - '.github/workflows/actor-formal-models.yml'
+permissions:
+  contents: read
+jobs:
+  bounded-actor-safety:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Establish exact reviewed checkout identity
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_SOURCE_SHA"
+          printf 'EXACT_SOURCE_SHA=%s\n' "$actual"
+          git rev-parse 'HEAD^{tree}'
+      - name: Show exact evaluated revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+      - name: Test Rust exclusive carrier safety model and unsafe negative mutant
+        run: cargo test --offline --manifest-path tools/actor-carrier-model/Cargo.toml
+      - name: Enumerate Rust physical carrier states with negative mutant
+        run: cargo run --offline --manifest-path tools/actor-carrier-model/Cargo.toml
+      - name: Legacy carrier Python comparison oracle (pending executed parity)
+        run: python3 -I scripts/verify_actor_carrier_exclusivity.py
+      - name: Test Rust dispatch-ticket bounded model and unsafe negative mutant
+        run: cargo test --offline --manifest-path tools/actor-dispatch-tickets/Cargo.toml
+      - name: Enumerate Rust dispatch-ticket states with negative mutant
+        run: cargo run --offline --manifest-path tools/actor-dispatch-tickets/Cargo.toml
+      - name: Legacy Python comparison oracle (retained pending validated migration)
+        run: python3 -I scripts/verify_actor_dispatch_tickets.py
