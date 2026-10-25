@@ -1568,6 +1568,32 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_mailbox_completion_model
         COMMAND oreslang-actor-mailbox-completion-model-test)
     set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
+
+    # Post-merge regression against the production completion ledger.
+    add_executable(oreslang-actor-mailbox-completion-stress-test
+        tests/native_actor_mailbox_completion_stress_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-completion-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-mailbox-completion-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-completion-stress-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_completion_stress
+        COMMAND oreslang-actor-mailbox-completion-stress-test)
+    set_tests_properties(native_actor_mailbox_completion_stress PROPERTIES TIMEOUT 90)
+
+    # End-to-end host lifecycle proof across priority dequeue, STOP/detach,
+    # queued terminal abort, checked-out ACK, resource-loan drain and DONE.
+    add_executable(oreslang-native-actor-mailbox-lifecycle-test
+        tests/native_actor_mailbox_lifecycle_test.cpp)
+    target_include_directories(oreslang-native-actor-mailbox-lifecycle-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-actor-mailbox-lifecycle-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-actor-mailbox-lifecycle-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-actor-mailbox-lifecycle-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_stop_loan_done_lifecycle
+        COMMAND oreslang-native-actor-mailbox-lifecycle-test)
+    set_tests_properties(native_actor_mailbox_stop_loan_done_lifecycle PROPERTIES TIMEOUT 30)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
