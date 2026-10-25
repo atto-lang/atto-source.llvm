@@ -379,6 +379,20 @@ int ores_native_vm_stop_sealed(
     return vm_stop(vm, domain, ref, 1);
 }
 
+int ores_native_vm_actor_resource_retain(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_retain_resource(
+            vm->schedulers[domain], ref);
+}
+
+int ores_native_vm_actor_resource_release(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_release_resource(
+            vm->schedulers[domain], ref);
+}
+
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef ref) {
     return vm && valid_domain(domain)
