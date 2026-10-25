@@ -43,6 +43,9 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
+/* Typed host/runtime projection of immediate fail-fast send. The compiler's
+ * existing send() wrapper still aborts on any non-ACCEPTED result. */
+int oreslang_source_actor_try_send_checked(void* actor, int64_t payload);
 void oreslang_source_actor_send(void* actor, int64_t payload);
 
 /*
