@@ -87,6 +87,7 @@ def main():
         ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-await-done-twice.ores", 1, 0, None),
         ("source-actor-await-ready-done.ores", 1, 0, None),
+        ("source-actor-await-two-lifecycle.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
@@ -150,7 +151,8 @@ def main():
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
-        "source-actor-await-two-lifecycle.ores": "native source cannot compose readiness and get_done awaits yet",
+        "source-actor-await-ready-send-async-reject.ores":
+            "native send_async after get_ready requires continuation suspension lowering",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -197,6 +199,8 @@ def main():
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
                 "source-actor-await-done-twice.ores",
+                "source-actor-await-ready-done.ores",
+                "source-actor-await-two-lifecycle.ores",
                 "source-actor-send-async.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
@@ -227,7 +231,8 @@ def main():
                         "source-actor-future-void-double-await.ores",
                         "source-actor-future-void-await-again.ores",
                         "source-actor-future-void-await-worker-instead.ores",
-                        "source-actor-await-ready-done.ores"}:
+                        "source-actor-await-ready-done.ores",
+                        "source-actor-await-two-lifecycle.ores"}:
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
                 # A runtime declaration or source text alone is not an await:
@@ -237,7 +242,8 @@ def main():
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name in {"source-actor-await-done.ores",
                         "source-actor-await-done-twice.ores",
-                        "source-actor-await-ready-done.ores"}:
+                        "source-actor-await-ready-done.ores",
+                        "source-actor-await-two-lifecycle.ores"}:
                 assert "oreslang_source_actor_request_stop" in guest.stdout, name
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
@@ -287,14 +293,16 @@ def main():
                         "source-actor-future-void-double-await.ores",
                         "source-actor-future-void-await-again.ores",
                         "source-actor-future-void-await-worker-instead.ores",
-                        "source-actor-await-ready-done.ores"}:
+                        "source-actor-await-ready-done.ores",
+                        "source-actor-await-two-lifecycle.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             if name in {"source-actor-await-done.ores",
                         "source-actor-await-done-twice.ores",
-                        "source-actor-await-ready-done.ores"}:
+                        "source-actor-await-ready-done.ores",
+                        "source-actor-await-two-lifecycle.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
