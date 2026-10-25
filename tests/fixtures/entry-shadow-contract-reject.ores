@@ -1,0 +1,5 @@
+// Entry is a compiler-owned nominal product and cannot be reused as a module contract identity.
+define contract Entry as
+  fnc ping(int value) => int;
+end
+fnc main(): int { return 0; }
