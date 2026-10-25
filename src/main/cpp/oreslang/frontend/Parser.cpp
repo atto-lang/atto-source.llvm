@@ -2807,6 +2807,11 @@ private:
                 for (auto& parameter_type : member.parameter_types) {
                     if (parameter_type != "int" && parameter_type != "bool") {
                         const std::string name = parameter_type;
+                        if (alias_requires_constraint_validation(name)) {
+                            throw std::runtime_error(
+                                "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED: constrained alias '" +
+                                name + "' cannot be erased in trait/interface parameter metadata");
+                        }
                         parameter_type = resolve_scalar_alias(name) == ScalarType::Bool
                             ? "bool" : "int";
                     }
@@ -2814,6 +2819,11 @@ private:
                 if (member.return_type != "int" &&
                         member.return_type != "bool" && member.return_type != "void") {
                     const std::string name = member.return_type;
+                    if (alias_requires_constraint_validation(name)) {
+                        throw std::runtime_error(
+                            "CONSTRAINT_TYPE_ONLY_SIGNATURE_BRIDGE_REQUIRED: constrained alias '" +
+                            name + "' cannot be erased in trait/interface return metadata");
+                    }
                     member.return_type = resolve_scalar_alias(name) == ScalarType::Bool
                         ? "bool" : "int";
                 }
