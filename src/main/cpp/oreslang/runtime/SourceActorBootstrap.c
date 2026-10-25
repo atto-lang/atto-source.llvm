@@ -27,6 +27,7 @@
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
 #define SOURCE_ROOT_CONTROL_READABLE_SUSPEND UINT64_C(5)
+#define SOURCE_ROOT_CONTROL_READABLE_FAILED UINT64_C(6)
 #define SOURCE_READABLE_CODE_GENERATION UINT64_C(1)
 #endif
 
@@ -511,37 +512,23 @@ static OresSourceReadableOutcome source_readable_outcome(
 }
 
 /*
- * Scheduler wake callback for the source-root actor. Every admitted terminal
- * NIO outcome resumes exactly once on this authenticated actor lane. Producer
- * retirement is different: #994 consumes that wake before callback admission,
- * so a retired root can never be resurrected just to report an outcome.
+ * Run one terminal readable outcome on the source-root actor lane. The
+ * persisted continuation is made READY, claimed once, executed once, and
+ * retired once for READY/CANCELLED/FAILED alike.
  */
-static void source_root_wake(
-        void* raw,
-        size_t slot,
-        OresNativeWakeTicket ticket,
-        OresNativeWakeOutcome outcome) {
-    ensure(raw == &group && slot == SOURCE_GROUP_ROOT_SLOT);
-    ensure(ores_native_vm_actor_is_current_wake(
-        group.vm, ORES_NATIVE_VM_MAIN, ticket));
-
+static void resume_readable_frame_on_root(
+        OresSourceReadableOutcome source_outcome) {
     ReadableAwaitFrame* frame;
     OresSourceActorReadableContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
-    const OresSourceReadableOutcome source_outcome =
-        source_readable_outcome(outcome);
 
     group_lock();
     frame = group.pending_readable;
-    ensure(frame && frame->suspend_recorded && frame->admitted && !frame->done);
-    ensure(same_wake_ticket(ticket, frame->awaiting.wake));
-
-    /*
-     * READY/CANCELLED/FAILED are all terminal values of the same suspension.
-     * Publish the persisted logical continuation exactly once, then let the
-     * typed continuation decide how source code handles the outcome.
-     */
+    ensure(frame && frame->suspend_recorded && !frame->done);
+    ensure(source_outcome == ORES_SOURCE_READABLE_READY
+        || source_outcome == ORES_SOURCE_READABLE_CANCELLED
+        || source_outcome == ORES_SOURCE_READABLE_FAILED);
     ensure(ores_native_continuation_store_notify_ready(
         group.continuations, frame->link.continuation));
     continuation = frame->continuation;
@@ -583,6 +570,40 @@ static void source_root_wake(
     ensure(pthread_cond_signal(&frame->completed) == 0);
     group_unlock();
 }
+
+/*
+ * Scheduler wake callback for the source-root actor. NIO completion consumers
+ * only publish a generation-fenced wake; compiled guest code resumes here on
+ * the authenticated root actor lane, never on an epoll/completion thread.
+ */
+static void source_root_wake(
+        void* raw,
+        size_t slot,
+        OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    ensure(raw == &group && slot == SOURCE_GROUP_ROOT_SLOT);
+    ensure(ores_native_vm_actor_is_current_wake(
+        group.vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    ensure(frame && frame->suspend_recorded && frame->admitted && !frame->done);
+    ensure(same_wake_ticket(ticket, frame->awaiting.wake));
+    group_unlock();
+
+    resume_readable_frame_on_root(source_readable_outcome(outcome));
+}
+
+/* Registration/admission failure has no scheduler wake to publish. Re-enter
+ * the exact same actor lane through trusted CONTROL, never by calling the
+ * continuation directly from outer host glue. */
+static void root_readable_failed_turn(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    ensure(frame && frame->suspend_recorded && !frame->admitted && !frame->done);
+    group_unlock();
+    resume_readable_frame_on_root(ORES_SOURCE_READABLE_FAILED);
+}
 #endif
 
 static void initialize(void* raw, size_t slot, uint64_t payload) {
@@ -595,6 +616,8 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
         else if (payload == SOURCE_ROOT_CONTROL_READABLE_SUSPEND)
             root_readable_suspend_turn();
+        else if (payload == SOURCE_ROOT_CONTROL_READABLE_FAILED)
+            root_readable_failed_turn();
 #endif
         else abort();
         return;
@@ -1097,16 +1120,20 @@ int64_t oreslang_source_actor_await_readable(
         &frame.awaiting);
 
     if (!admitted) {
+        /*
+         * No NIO/wake ownership escaped. Project admission failure as the typed
+         * Failed outcome on the root actor lane so source code can handle it.
+         */
+        ensure(ores_native_vm_publish_control(
+            vm,
+            ORES_NATIVE_VM_MAIN,
+            root,
+            SOURCE_ROOT_CONTROL_READABLE_FAILED));
         group_lock();
-        ensure(group.pending_readable == &frame);
-        ensure(ores_native_continuation_store_cancel(
-            group.continuations, frame.link.continuation));
-        group.pending_readable = NULL;
-        ensure(ores_native_continuation_store_release(
-            group.continuations, frame.link.continuation));
+        while (!frame.done)
+            ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
         group_unlock();
-        ensure(pthread_cond_destroy(&frame.completed) == 0);
-        ensure(0 && "source readable await admission failed");
+        goto readable_complete;
     }
     frame.admitted = 1;
 
@@ -1149,6 +1176,7 @@ int64_t oreslang_source_actor_await_readable(
         group_unlock();
     }
 
+readable_complete:
     group_lock();
     while (!frame.done)
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
