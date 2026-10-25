@@ -483,10 +483,11 @@ int main(void) {
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
             on_owned_actor_nio_await;
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
-        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_wake =
-            on_owned_actor_nio_wake;
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
 
-        OresNativeVM* actor_vm = ores_native_vm_open(&actor_cfg);
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
         check(actor_vm != NULL);
         check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
         int actor_pipe[2] = {-1, -1};
@@ -575,9 +576,10 @@ int main(void) {
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
             on_owned_actor_nio_await;
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
-        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_wake =
-            on_owned_actor_nio_wake;
-        OresNativeVM* actor_vm = ores_native_vm_open(&actor_cfg);
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
         check(actor_vm != NULL);
         check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
         int actor_pipe[2] = {-1, -1};
@@ -648,9 +650,10 @@ int main(void) {
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
             on_owned_actor_nio_await;
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
-        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_wake =
-            on_owned_actor_nio_wake;
-        OresNativeVM* actor_vm = ores_native_vm_open(&actor_cfg);
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
         check(actor_vm != NULL);
         check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
         int actor_pipe[2] = {-1, -1};
@@ -716,9 +719,10 @@ int main(void) {
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
             on_owned_actor_nio_await;
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].context = &probe;
-        actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_wake =
-            on_owned_actor_nio_wake;
-        OresNativeVM* actor_vm = ores_native_vm_open(&actor_cfg);
+        OresNativeVMWakeConfig wake_cfg = {0};
+        wake_cfg.domains[ORES_NATIVE_VM_MAIN] = on_owned_actor_nio_wake;
+        OresNativeVM* actor_vm =
+            ores_native_vm_open_with_wakes(&actor_cfg, &wake_cfg);
         check(actor_vm != NULL);
         check(ores_native_vm_enable_nio(actor_vm, 1, 0, 1));
         int actor_pipe[2] = {-1, -1};
