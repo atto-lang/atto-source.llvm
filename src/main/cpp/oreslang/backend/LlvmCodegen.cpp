@@ -865,7 +865,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+        sourceAwaitReady, sourceAwaitDone, sourceAwaitReadable;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
@@ -899,6 +899,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceAwaitDone = module.getOrInsertFunction(
             "oreslang_source_actor_await_done",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceAwaitReadable = module.getOrInsertFunction(
+            "oreslang_source_actor_await_readable",
+            llvm::FunctionType::get(
+                i64, {native_ptr, i64, native_ptr, i64}, false));
         for (const auto& actor : source.actors) {
             const std::string prefix = "oreslang_actor_" + actor.name + "_";
             actorInits.emplace(actor.name, llvm::Function::Create(
@@ -1688,10 +1692,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
 
         /*
-         * A lifecycle await splits trusted-main execution at one verified point.
-         * get_ready resumes before stop; get_done requests stop first and resumes
-         * only after the scheduler's physical terminal acknowledgement. Neither
-         * path blocks an actor carrier.
+         * A trusted-main suspension splits execution at one verified point.
+         * get_ready and readable resume before stop; get_done requests stop
+         * first and resumes only after physical terminal acknowledgement.
+         * None of these paths blocks an actor carrier.
          */
         llvm::Value* awaited_result = nullptr;
         if (!fn.ready_await_actor.empty()) {
@@ -1748,6 +1752,81 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         static_cast<std::uint64_t>(fn.ready_await_offset))
                 },
                 "future.await.result");
+
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Stop)
+                    builder.CreateCall(
+                        sourceStop,
+                        {actorRefs.at(fn.actor_stops.at(action.index))});
+            }
+        } else if (fn.readable_await) {
+            /*
+             * First compiled source I/O suspension. The only source value
+             * crossing the boundary is the one live ActorRef capability; the
+             * fd is a compiler-validated literal and the continuation has no
+             * lexical scalar/class/array frame.
+             */
+            if (fn.actor_spawns.size() != 1)
+                throw std::runtime_error(
+                    "readable await lowering requires exactly one source actor");
+            const std::string& awaited_actor = fn.actor_spawns.front().name;
+
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+            auto* resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".readable_continuation",
+                module);
+            auto* admitted =
+                llvm::BasicBlock::Create(context, "admitted", resume);
+            llvm::IRBuilder<> resumed(admitted);
+            auto* resumed_actor = &*resume->arg_begin();
+            resumed_actor->setName(awaited_actor);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind != ActorAction::Kind::Send) continue;
+                const auto& send = fn.actor_sends.at(action.index);
+                if (send.reference != awaited_actor)
+                    throw std::runtime_error(
+                        "readable continuation references unexpected ActorRef");
+                llvm::Value* payload = lower(
+                    *send.payload,
+                    resumed,
+                    i64,
+                    no_storage,
+                    no_fields,
+                    declarations,
+                    nullptr);
+                resumed.CreateCall(sourceSend, {resumed_actor, payload});
+            }
+            llvm::Value* continuation_result = lower(
+                *fn.result,
+                resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            resumed.CreateRet(continuation_result);
+
+            llvm::Value* continuation_ptr =
+                builder.CreatePointerCast(resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitReadable,
+                {
+                    actorRefs.at(awaited_actor),
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.readable_await_fd)),
+                    continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.readable_await_offset))
+                },
+                "io.await.readable.result");
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Stop)
