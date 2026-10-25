@@ -105,7 +105,7 @@ def main():
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
-        "source-actor-await-get-done.ores": "expected 'get_ready'",
+        "source-actor-await-get-done.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-worker-twice.ores": "native source supports only one async await boundary",
         "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
         "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
