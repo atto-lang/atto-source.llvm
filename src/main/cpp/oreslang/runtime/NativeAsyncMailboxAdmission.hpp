@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -59,6 +60,19 @@ public:
 
     NativeAsyncMailboxAdmission(const NativeAsyncMailboxAdmission&) = delete;
     NativeAsyncMailboxAdmission& operator=(const NativeAsyncMailboxAdmission&) = delete;
+
+    ~NativeAsyncMailboxAdmission() noexcept {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (used_frames_ != 0 || used_bytes_ != 0
+                || pending_waiters_ != 0 || pending_bytes_ != 0)
+            std::terminate();
+        for (const Slot& entry : slots_) {
+            if (entry.state == State::Waiting
+                    || entry.state == State::Transferred
+                    || entry.state == State::Publishing)
+                std::terminate();
+        }
+    }
 
     // Synchronous send remains fail-fast. Existing async waiters have priority
     // over a racing synchronous sender even if bytes happen to be free.
