@@ -172,6 +172,31 @@ static void stop_wakes_full_waiter_as_terminated(void) {
     fprintf(stderr, "SOURCE_SEND_ASYNC_STOP_PASS terminated=1\n");
 }
 
+static int64_t passthrough_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap; (void)domain; (void)epoch;
+    return payload;
+}
+
+static void bounded_waiter_cohort_rejects_before_pin(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    CHECK(oreslang_source_actor_test_set_async_waiters(
+        actor, ORES_SOURCE_SEND_ASYNC_MAX_WAITERS));
+    CHECK(oreslang_source_actor_await_send_async_checked(actor, 7)
+        == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+    CHECK(oreslang_source_actor_test_set_async_waiters(actor, 0));
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_COHORT_PASS max_waiters=%d resource_exhausted=1\n",
+        ORES_SOURCE_SEND_ASYNC_MAX_WAITERS);
+}
+
 static void carrier_call_fails_would_deadlock(void) {
     atomic_store_explicit(&carrier_probe_actor, (uintptr_t)0, memory_order_release);
     atomic_store_explicit(&carrier_probe_status, -1, memory_order_release);
@@ -206,6 +231,7 @@ int main(void) {
 
     capacity_release_admits_waiter();
     stop_wakes_full_waiter_as_terminated();
+    bounded_waiter_cohort_rejects_before_pin();
     carrier_call_fails_would_deadlock();
     return 0;
 }
