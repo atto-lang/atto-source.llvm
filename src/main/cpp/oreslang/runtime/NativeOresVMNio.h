@@ -13,6 +13,11 @@ extern "C" {
  * attaches a zero-thread reactor domain and starts reactor #0 only on the
  * first valid readiness watch. Preallocated RT mode starts its fixed configured
  * reactor set before source guest admission. No hard-RT WCET is claimed.
+ *
+ * These bare watch/cancel/pop calls are outer-host only and fail closed when
+ * invoked from a VM actor carrier. Source-actor NIO must first bind the exact
+ * ActorRef to a physical resource loan and a generation-fenced continuation;
+ * using this host ABI directly must never make get_done() observable early.
  */
 int ores_native_vm_enable_nio(OresNativeVM* vm, size_t max_reactors,
                               int preallocated_realtime, size_t rt_reactors);
