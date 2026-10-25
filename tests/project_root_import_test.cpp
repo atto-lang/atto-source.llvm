@@ -77,8 +77,7 @@ int main() {
         write_text(dir/"nested/.ores.pkg.toml", "schema_version = \"1\"\n");
         write_text(dir/"nested/app/main.ores", "");
         write_text(dir/"nested/lib.ores", "");
-        if (resolve(dir/"nested/app/main.ores", "+/lib") !=
-                fs::canonical(dir/"nested/lib.ores"))
+        if (resolve(dir/"nested/app/main.ores", "+/lib") != fs::canonical(dir/"nested/lib.ores"))
             throw std::runtime_error("nearest manifest was not authoritative");
     }
     {
