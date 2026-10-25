@@ -296,6 +296,13 @@ int ores_native_continuation_store_release(
             break;
         }
 
+        /* A claimed frame still owns physical execution. Only its claimant
+         * may finish it; dropping the final reference must not retire it. */
+        if (block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+            unlock_store(store);
+            return 0;
+        }
+
         const OresNativeExecutionHandle execution = {
             block->execution_slot[lane],
             block->execution_generation[lane]

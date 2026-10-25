@@ -72,6 +72,8 @@ int ores_native_continuation_store_retain(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
 
+/* The final reference cannot retire a CLAIMED frame. Its owner must finish
+ * execution first; a rejected release leaves the reference unchanged. */
 int ores_native_continuation_store_release(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);

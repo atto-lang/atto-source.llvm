@@ -1671,9 +1671,9 @@ private:
                 }
                 if (token_.text == "?")
                     fail("native optional type '?' requires versioned Option/default ABI lowering");
-                parameter.name = identifier();
-                if (alias_extension && parameter.name == "self")
+                if (alias_extension && token_.text == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
+                parameter.name = identifier();
                 if (token_.text == "?")
                     fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
                 value.parameters.push_back(std::move(parameter));
@@ -1764,37 +1764,39 @@ private:
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
+        auto ready_future_local = [&]() {
+            if (!((token_.text == "const" || token_.text == "val") &&
+                    peek_next().text == "Future")) return false;
+            if (!value.ready_future_name.empty())
+                fail("native source supports only one Future<void> readiness token");
+            advance();
+            require("Future");
+            require("<");
+            if (!accept("void"))
+                fail("Future<T> requires native continuation lowering");
+            require(">");
+            value.ready_future_name = identifier();
+            require("=");
+            value.ready_future_actor = identifier();
+            require(".");
+            require("get_ready");
+            require("(");
+            require(")");
+            require(";");
+            const bool bound = std::any_of(value.actor_spawns.begin(),
+                value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
+                    return spawn.name == value.ready_future_actor;
+                });
+            if (!bound)
+                fail("Future<void> requires previously spawned ActorRef.get_ready");
+            return true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
-            if ((token_.text == "const" || token_.text == "val") &&
-                    peek_next().text == "Future") {
-                if (!value.ready_future_name.empty())
-                    fail("native source supports only one Future<void> readiness token");
-                advance();
-                require("Future");
-                require("<");
-                if (!accept("void"))
-                    fail("Future<T> requires native continuation lowering");
-                require(">");
-                value.ready_future_name = identifier();
-                require("=");
-                value.ready_future_actor = identifier();
-                require(".");
-                require("get_ready");
-                require("(");
-                require(")");
-                require(";");
-                const bool bound = std::any_of(value.actor_spawns.begin(),
-                    value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
-                        return spawn.name == value.ready_future_actor;
-                    });
-                if (!bound)
-                    fail("Future<void> requires previously spawned ActorRef.get_ready");
-                continue;
-            }
+            if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
@@ -2369,6 +2371,7 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+            if (ready_future_local()) continue;
             if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
                 value.statements.push_back(scoped_local()); continue;
             }

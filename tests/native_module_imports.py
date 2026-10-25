@@ -90,7 +90,7 @@ def main():
         ('parameter-shadow', 'import module Lib from "./lib"; fnc read(int Lib):int{return Lib;} pub fnc main():int{return 0;}', library, 'cannot be shadowed'),
         ('local-shadow', 'import module Lib from "./lib"; pub fnc main():int{val Lib:int=1;return Lib;}', library, 'cannot be shadowed'),
         ('move-after-borrow-call', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt take n,rt borrow n);}', 'define module Lib as pub fnc answer(int x,borrow int y):int{return x+y;} end', 'moved'),
-        ('conflicting-borrows', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt borrow mut n,rt borrow n);}', 'define module Lib as pub fnc answer(borrow mut int x,borrow int y):int{return x+y;} end', 'borrow'),
+        ('conflicting-borrows', 'import module Lib from "./lib"; pub fnc main():int{val n:int=1;return Lib.answer(rt mut borrow n,rt borrow n);}', 'define module Lib as pub fnc answer(borrow mut int x,borrow int y):int{return x+y;} end', 'borrow'),
         ('private-overload', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer(1);}', 'define module Lib as pub fnc answer():int{return 42;} fnc answer(int n):int{return n;} end', 'private'),
         ('runtime-collision', 'import module Lib from "./lib"; fnc abort():int{return 1;} pub fnc main():int{return 0;}', library, 'reserved native runtime ABI'),
         ('init-hook', 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}', 'define module Lib as fnc init():void{return;} pub fnc answer():int{return 42;} end', 'init hook'),

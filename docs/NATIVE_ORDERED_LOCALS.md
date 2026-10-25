@@ -44,6 +44,10 @@ locals leave scope at the matching edge. Locals cannot shadow live owners, and
 loop back-edges must preserve outer ownership and loan state. Definite moves
 and restorations remain subject to predecessor-state checks.
 
+Ordered declarations preserve current-main transparent scalar alias and
+extension-method resolution. Type-only interfaces/traits remain non-runtime
+types; the merged parser must not turn them into scalar storage.
+
 ## Lifetime and effect accounting
 
 Root local lifetimes extend through deferred cleanup. A return snapshots its
