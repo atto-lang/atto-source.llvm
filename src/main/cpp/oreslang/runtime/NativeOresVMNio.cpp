@@ -1,19 +1,65 @@
 #include "oreslang/runtime/NativeOresVMNio.h"
 
-// The callback is owned by a C-compiled VM, so use C language linkage
-// explicitly rather than relying on permissive C++ callback-pointer ABI.
-extern "C" void ores_native_vm_nio_destroy_backend(void* backend) {
-    ores_native_nio_close(static_cast<OresNativeNio*>(backend));
-}
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <mutex>
+
 namespace {
-/* The trusted host owns the VM object for the duration of this call. The
- * pinned backend remains alive across concurrent retirement and host close.
- * No dynamically allocated operation frame or guest callback is involved.
+constexpr std::size_t kClaimCapacity = 256;
+
+static bool same_actor(OresNativeActorRef left, OresNativeActorRef right) noexcept {
+    return left.scheduler_domain != 0
+        && left.scheduler_domain == right.scheduler_domain
+        && left.actor_slot == right.actor_slot
+        && left.generation == right.generation;
+}
+
+static bool same_watch(OresNativeNioWatch left, OresNativeNioWatch right) noexcept {
+    return left.ticket == right.ticket && left.reactor == right.reactor;
+}
+
+static bool same_completion(
+        const OresNativeNioCompletion& left,
+        const OresNativeNioCompletion& right) noexcept {
+    return same_watch(left.watch, right.watch)
+        && left.fd == right.fd
+        && left.events == right.events
+        && left.outcome == right.outcome;
+}
+
+/*
+ * A VM actor carrier may use only the actor-owned bridge and must name the
+ * exact actor allocation capability currently executing on that carrier.
+ * Trusted outer-host runtime code has no current VM execution and may operate
+ * on behalf of an exact ActorRef.
  */
+static bool caller_matches_actor(
+        OresNativeVM* vm,
+        enum OresNativeVMDomain domain,
+        OresNativeActorRef actor) noexcept {
+    if (!vm || domain < ORES_NATIVE_VM_MAIN
+            || domain >= ORES_NATIVE_VM_DOMAIN_COUNT
+            || !actor.scheduler_domain || !actor.generation)
+        return false;
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        OresNativeExecutionContext current{};
+        if (!ores_native_vm_current_execution_context(
+                vm, static_cast<enum OresNativeVMDomain>(i), &current))
+            continue;
+        return i == static_cast<int>(domain)
+            && current.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR
+            && current.allocation.domain == actor.scheduler_domain
+            && current.allocation.owner == actor.actor_slot
+            && current.allocation.generation == actor.generation;
+    }
+    return true;
+}
+
 static bool on_vm_actor_carrier(OresNativeVM* vm) noexcept {
     if (!vm) return false;
-    OresNativeExecutionContext current{};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        OresNativeExecutionContext current{};
         if (ores_native_vm_current_execution_context(
                 vm, static_cast<enum OresNativeVMDomain>(i), &current))
             return true;
@@ -21,39 +67,268 @@ static bool on_vm_actor_carrier(OresNativeVM* vm) noexcept {
     return false;
 }
 
+enum class ClaimState : std::uint8_t {
+    free = 0,
+    watching = 1,
+    pending = 2,
+    delivered = 3
+};
+
+struct ActorClaim {
+    ClaimState state = ClaimState::free;
+    std::uint64_t generation = 0; // sticky across reuse; UINT64_MAX retires slot
+    OresNativeNioWatch watch{};
+    enum OresNativeVMDomain domain = ORES_NATIVE_VM_MAIN;
+    OresNativeActorRef actor{};
+    int fd = -1;
+    std::uint32_t events = 0;
+    OresNativeNioCompletion completion{};
+};
+
+struct HostPending {
+    bool occupied = false;
+    OresNativeNioCompletion completion{};
+};
+
+struct VmNioBackend {
+    OresNativeVM* vm = nullptr;
+    OresNativeNio* raw = nullptr;
+    std::mutex gate;
+    std::array<ActorClaim, kClaimCapacity> claims{};
+    std::array<HostPending, kClaimCapacity> host_pending{};
+
+    VmNioBackend(OresNativeVM* owner, OresNativeNio* reactor)
+        : vm(owner), raw(reactor) {}
+
+    bool fd_reserved_locked(int fd) const noexcept {
+        for (const auto& claim : claims)
+            if (claim.state != ClaimState::free && claim.fd == fd)
+                return true;
+        for (const auto& pending : host_pending)
+            if (pending.occupied && pending.completion.fd == fd)
+                return true;
+        return false;
+    }
+
+    ActorClaim* find_claim_locked(OresNativeNioWatch watch) noexcept {
+        for (auto& claim : claims)
+            if (claim.state != ClaimState::free
+                    && same_watch(claim.watch, watch))
+                return &claim;
+        return nullptr;
+    }
+
+    ActorClaim* match_claim_locked(
+            const OresNativeActorNioWatch& token) noexcept {
+        if (token.claim_slot == 0 || token.claim_slot > claims.size())
+            return nullptr;
+        auto& claim = claims[token.claim_slot - 1];
+        return claim.state != ClaimState::free
+                && claim.generation == token.claim_generation
+                && claim.domain == token.domain
+                && same_actor(claim.actor, token.actor)
+                && same_watch(claim.watch, token.watch)
+            ? &claim : nullptr;
+    }
+
+    ActorClaim* reserve_claim_locked(
+            enum OresNativeVMDomain domain,
+            OresNativeActorRef actor,
+            int fd,
+            std::uint32_t events,
+            OresNativeActorNioWatch* output) noexcept {
+        for (std::size_t i = 0; i < claims.size(); ++i) {
+            auto& claim = claims[i];
+            if (claim.state != ClaimState::free
+                    || claim.generation == UINT64_MAX)
+                continue;
+            ++claim.generation;
+            if (!claim.generation) std::abort();
+            claim.state = ClaimState::watching;
+            claim.domain = domain;
+            claim.actor = actor;
+            claim.fd = fd;
+            claim.events = events;
+            claim.watch = {};
+            claim.completion = {};
+            *output = OresNativeActorNioWatch{
+                {}, domain, actor, static_cast<std::uint32_t>(i + 1),
+                claim.generation};
+            return &claim;
+        }
+        return nullptr;
+    }
+
+    static void free_claim_locked(ActorClaim& claim) noexcept {
+        const auto generation = claim.generation;
+        claim = ActorClaim{};
+        claim.generation = generation;
+    }
+
+    bool stash_host_locked(const OresNativeNioCompletion& completion) noexcept {
+        for (auto& pending : host_pending) {
+            if (pending.occupied) continue;
+            pending.occupied = true;
+            pending.completion = completion;
+            return true;
+        }
+        return false;
+    }
+
+    bool pop_stashed_host_locked(OresNativeNioCompletion* output) noexcept {
+        for (auto& pending : host_pending) {
+            if (!pending.occupied) continue;
+            *output = pending.completion;
+            pending = HostPending{};
+            return true;
+        }
+        return false;
+    }
+
+    bool mark_actor_completion_locked(
+            const OresNativeNioCompletion& completion) noexcept {
+        ActorClaim* claim = find_claim_locked(completion.watch);
+        if (!claim) return false;
+        if (claim->state != ClaimState::watching
+                || claim->fd != completion.fd)
+            std::abort(); // duplicate/mismatched kernel terminal record
+        claim->completion = completion;
+        claim->state = ClaimState::pending;
+        return true;
+    }
+
+    bool deliver_pending_actor_locked(
+            OresNativeActorNioCompletion* output) noexcept {
+        for (std::size_t i = 0; i < claims.size(); ++i) {
+            auto& claim = claims[i];
+            if (claim.state != ClaimState::pending) continue;
+            claim.state = ClaimState::delivered;
+            output->io = claim.completion;
+            output->owner = OresNativeActorNioWatch{
+                claim.watch, claim.domain, claim.actor,
+                static_cast<std::uint32_t>(i + 1), claim.generation};
+            return true;
+        }
+        return false;
+    }
+
+    bool has_free_host_pending_locked() const noexcept {
+        for (const auto& pending : host_pending)
+            if (!pending.occupied) return true;
+        return false;
+    }
+
+    bool try_pop_host_locked(OresNativeNioCompletion* output) noexcept {
+        if (pop_stashed_host_locked(output)) return true;
+        for (std::size_t i = 0; i < kClaimCapacity; ++i) {
+            OresNativeNioCompletion completion{};
+            if (!raw || !ores_native_nio_try_pop(raw, &completion))
+                return false;
+            if (mark_actor_completion_locked(completion))
+                continue;
+            *output = completion;
+            return true;
+        }
+        return false;
+    }
+
+    bool try_pop_actor_locked(OresNativeActorNioCompletion* output) noexcept {
+        if (deliver_pending_actor_locked(output)) return true;
+        for (std::size_t i = 0; i < kClaimCapacity; ++i) {
+            // A host completion may be ahead of the desired actor record.
+            // Never consume it unless bounded storage exists to preserve it.
+            if (!has_free_host_pending_locked()) return false;
+            OresNativeNioCompletion completion{};
+            if (!raw || !ores_native_nio_try_pop(raw, &completion))
+                return false;
+            if (mark_actor_completion_locked(completion))
+                return deliver_pending_actor_locked(output);
+            if (!stash_host_locked(completion)) std::abort();
+        }
+        return false;
+    }
+
+    void retire_and_release() noexcept {
+        /*
+         * VM close has fenced new backend leases before this callback. Join
+         * every reactor first; only then can outstanding actor claims be
+         * abandoned because no later kernel completion can materialize.
+         */
+        OresNativeNio* reactor = nullptr;
+        std::array<enum OresNativeVMDomain, kClaimCapacity> domains{};
+        std::array<OresNativeActorRef, kClaimCapacity> actors{};
+        std::size_t release_count = 0;
+        {
+            std::lock_guard<std::mutex> lock(gate);
+            reactor = raw;
+            raw = nullptr;
+        }
+        if (reactor) ores_native_nio_close(reactor);
+        {
+            std::lock_guard<std::mutex> lock(gate);
+            for (auto& claim : claims) {
+                if (claim.state == ClaimState::free) continue;
+                if (release_count >= actors.size()) std::abort();
+                domains[release_count] = claim.domain;
+                actors[release_count] = claim.actor;
+                ++release_count;
+                free_claim_locked(claim);
+            }
+            for (auto& pending : host_pending) pending = HostPending{};
+        }
+        for (std::size_t i = 0; i < release_count; ++i)
+            if (!ores_native_vm_actor_resource_release(
+                    vm, domains[i], actors[i]))
+                std::abort();
+    }
+};
+
 class NioBackendLease final {
 public:
     explicit NioBackendLease(OresNativeVM* vm)
-        : vm_(vm), ptr_(static_cast<OresNativeNio*>(ores_native_vm_nio_acquire(vm))) {}
+        : vm_(vm),
+          ptr_(static_cast<VmNioBackend*>(ores_native_vm_nio_acquire(vm))) {}
     ~NioBackendLease() {
         if (ptr_) ores_native_vm_nio_release(vm_, ptr_);
     }
     NioBackendLease(const NioBackendLease&) = delete;
     NioBackendLease& operator=(const NioBackendLease&) = delete;
-    OresNativeNio* get() const noexcept { return ptr_; }
+    VmNioBackend* get() const noexcept { return ptr_; }
 private:
     OresNativeVM* vm_;
-    OresNativeNio* ptr_;
+    VmNioBackend* ptr_;
 };
+}
+
+// The callback is owned by a C-compiled VM, so use C language linkage.
+extern "C" void ores_native_vm_nio_destroy_backend(void* backend) {
+    auto* state = static_cast<VmNioBackend*>(backend);
+    if (!state) return;
+    state->retire_and_release();
+    delete state;
 }
 
 extern "C" int ores_native_vm_enable_nio(
     OresNativeVM* vm, size_t max_reactors,
     int preallocated_realtime, size_t rt_reactors) {
-    // Creating epoll fds and pthreads is permitted only during bootstrap.
-    // A failed or already-retired attach destroys the candidate immediately.
     if (!vm || !ores_native_vm_nio_begin_bootstrap(vm)) return 0;
-    OresNativeNio* backend =
+    OresNativeNio* raw =
         ores_native_nio_open(max_reactors, preallocated_realtime, rt_reactors);
-    if (!backend) {
+    if (!raw) {
         ores_native_vm_nio_cancel_bootstrap(vm);
         return 0;
     }
-    if (!ores_native_vm_attach_nio(vm, backend, &ores_native_vm_nio_destroy_backend)) {
-        // attach_nio always consumes this thread's reservation. Another
-        // closer may reclaim the VM immediately afterwards, so do not
-        // invoke a second VM method here; reclaim only the unowned candidate.
-        ores_native_nio_close(backend);
+    auto* backend = new (std::nothrow) VmNioBackend(vm, raw);
+    if (!backend) {
+        ores_native_nio_close(raw);
+        ores_native_vm_nio_cancel_bootstrap(vm);
+        return 0;
+    }
+    if (!ores_native_vm_attach_nio(
+            vm, backend, &ores_native_vm_nio_destroy_backend)) {
+        // attach_nio consumes this thread's bootstrap reservation.
+        backend->retire_and_release();
+        delete backend;
         return 0;
     }
     return 1;
@@ -62,58 +337,171 @@ extern "C" int ores_native_vm_enable_nio(
 extern "C" size_t ores_native_vm_nio_started(OresNativeVM* vm) {
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    return backend ? ores_native_nio_started_reactors(backend) : 0;
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    return gate.owns_lock() && backend->raw
+        ? ores_native_nio_started_reactors(backend->raw) : 0;
 }
+
 extern "C" int ores_native_vm_nio_try_watch(
     OresNativeVM* vm, int fd, uint32_t events, OresNativeNioWatch* output) {
-    // Bare VM NIO is trusted outer-host plumbing. Actor/source lowering must
-    // use an actor-owned resource-loan bridge; fail closed if a carrier tries
-    // to bypass physical DONE ownership through this host-only entry point.
-    if (on_vm_actor_carrier(vm)) return 0;
+    if (!output || on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    return backend ? ores_native_nio_try_watch(backend, fd, events, output) : 0;
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (!gate.owns_lock() || !backend->raw || backend->fd_reserved_locked(fd))
+        return 0;
+    return ores_native_nio_try_watch(backend->raw, fd, events, output);
 }
+
+extern "C" int ores_native_vm_nio_try_watch_actor(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor,
+    int fd, uint32_t events, OresNativeActorNioWatch* output) {
+    if (!output || !caller_matches_actor(vm, domain, actor)) return 0;
+    *output = OresNativeActorNioWatch{};
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return 0;
+
+    // Retain first: this is the atomic STOP-vs-physical-admission boundary.
+    if (!ores_native_vm_actor_resource_retain(vm, domain, actor)) return 0;
+
+    bool refund = true;
+    {
+        std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+        if (gate.owns_lock() && backend->raw
+                && !backend->fd_reserved_locked(fd)) {
+            OresNativeActorNioWatch candidate{};
+            ActorClaim* claim = backend->reserve_claim_locked(
+                domain, actor, fd, events, &candidate);
+            if (claim) {
+                OresNativeNioWatch watch{};
+                if (ores_native_nio_try_watch(
+                        backend->raw, fd, events, &watch)) {
+                    claim->watch = watch;
+                    candidate.watch = watch;
+                    *output = candidate;
+                    refund = false;
+                } else {
+                    VmNioBackend::free_claim_locked(*claim);
+                }
+            }
+        }
+    }
+    if (refund) {
+        if (!ores_native_vm_actor_resource_release(vm, domain, actor))
+            std::abort();
+        return 0;
+    }
+    return 1;
+}
+
 extern "C" int ores_native_vm_nio_try_cancel(
     OresNativeVM* vm, OresNativeNioWatch watch) {
     if (on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    return backend ? ores_native_nio_try_cancel(backend, watch) : 0;
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (!gate.owns_lock() || !backend->raw
+            || backend->find_claim_locked(watch))
+        return 0;
+    return ores_native_nio_try_cancel(backend->raw, watch);
 }
+
+extern "C" int ores_native_vm_nio_try_cancel_actor(
+    OresNativeVM* vm, OresNativeActorNioWatch watch) {
+    if (!caller_matches_actor(vm, watch.domain, watch.actor)) return 0;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (!gate.owns_lock() || !backend->raw) return 0;
+    ActorClaim* claim = backend->match_claim_locked(watch);
+    if (!claim || claim->state != ClaimState::watching) return 0;
+    return ores_native_nio_try_cancel(backend->raw, claim->watch);
+}
+
 extern "C" int ores_native_vm_nio_try_pop(
     OresNativeVM* vm, OresNativeNioCompletion* output) {
+    if (!output || on_vm_actor_carrier(vm)) return 0;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    return gate.owns_lock() && backend->raw
+        && backend->try_pop_host_locked(output);
+}
+
+extern "C" int ores_native_vm_nio_try_pop_actor(
+    OresNativeVM* vm, OresNativeActorNioCompletion* output) {
+    if (!output || on_vm_actor_carrier(vm)) return 0;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    return gate.owns_lock() && backend->raw
+        && backend->try_pop_actor_locked(output);
+}
+
+extern "C" int ores_native_vm_nio_ack_actor_completion(
+    OresNativeVM* vm, OresNativeActorNioCompletion completion) {
     if (on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    return backend ? ores_native_nio_try_pop(backend, output) : 0;
+    if (!backend) return 0;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (!gate.owns_lock()) return 0;
+    ActorClaim* claim = backend->match_claim_locked(completion.owner);
+    if (!claim || claim->state != ClaimState::delivered
+            || !same_completion(claim->completion, completion.io))
+        return 0;
+
+    // The resource loan is still live, so the exact actor incarnation cannot
+    // have completed/recycled. Keep the claim gate held across release: no
+    // opposite lock order nests scheduler->backend anywhere in this bridge.
+    if (!ores_native_vm_actor_resource_release(
+            vm, claim->domain, claim->actor))
+        return 0;
+    VmNioBackend::free_claim_locked(*claim);
+    return 1;
 }
+
 extern "C" size_t ores_native_vm_nio_try_pop_batch(
     OresNativeVM* vm, OresNativeNioCompletion* output, size_t capacity) {
     if (!output || capacity == 0 || on_vm_actor_carrier(vm)) return 0;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    // Four reactors x 64 preallocated completions. A hostile caller cannot
-    // turn one scheduler poll into an unbounded hot-path spin.
-    constexpr size_t max_batch = 256;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (!gate.owns_lock() || !backend->raw) return 0;
+    constexpr size_t max_batch = kClaimCapacity;
     const size_t limit = capacity < max_batch ? capacity : max_batch;
     size_t count = 0;
-    while (count < limit && ores_native_nio_try_pop(backend, &output[count]))
+    while (count < limit && backend->try_pop_host_locked(&output[count]))
         ++count;
     return count;
 }
 
 extern "C" int ores_native_vm_nio_completion_fd(
     OresNativeVM* vm, size_t reactor) {
+    if (on_vm_actor_carrier(vm)) return -1;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    return backend ? ores_native_nio_completion_fd(backend, reactor) : -1;
+    if (!backend) return -1;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    return gate.owns_lock() && backend->raw
+        ? ores_native_nio_completion_fd(backend->raw, reactor) : -1;
 }
+
 extern "C" void ores_native_vm_nio_drain_signal(
     OresNativeVM* vm, size_t reactor) {
     if (on_vm_actor_carrier(vm)) return;
     NioBackendLease lease(vm);
     auto* backend = lease.get();
-    if (backend) ores_native_nio_drain_completion_signal(backend, reactor);
+    if (!backend) return;
+    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    if (gate.owns_lock() && backend->raw)
+        ores_native_nio_drain_completion_signal(backend->raw, reactor);
 }
