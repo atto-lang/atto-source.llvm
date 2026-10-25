@@ -19,6 +19,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "oreslang/backend/LlvmCompat.hpp"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -770,7 +771,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* loan_ptr = i64->getPointerTo();
+    llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
 #if LLVM_VERSION_MAJOR >= 18
@@ -824,12 +825,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         auto* voidTy = llvm::Type::getVoidTy(context);
         auto* i32 = llvm::Type::getInt32Ty(context);
         arrayOpen = module.getOrInsertFunction("oreslang_int_array_try_region_open",
-            llvm::FunctionType::get(i32, {native_ptr->getPointerTo()}, false));
+            llvm::FunctionType::get(i32, {native_pointer_type(context, native_ptr)}, false));
         arrayNew = module.getOrInsertFunction("oreslang_int_array_try_new",
             llvm::FunctionType::get(i32, {native_ptr, loan_ptr}, false));
         arrayTransferMany = module.getOrInsertFunction("oreslang_int_array_try_transfer_many",
             llvm::FunctionType::get(i32, {native_ptr, native_ptr, i64,
-                loan_ptr->getPointerTo(), loan_ptr->getPointerTo()}, false));
+                native_pointer_type(context, loan_ptr), native_pointer_type(context, loan_ptr)}, false));
         arrayAdd = module.getOrInsertFunction("oreslang_int_array_try_add",
             llvm::FunctionType::get(i32, {native_ptr, i64, i64}, false));
         // Each opaque handle slot is i64. Arrays of handle-slot pointers
@@ -841,8 +842,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         arrayCommitMany = module.getOrInsertFunction(
             "oreslang_int_array_commit_many",
             llvm::FunctionType::get(voidTy,
-                {native_ptr, i64, loan_ptr->getPointerTo(),
-                 loan_ptr->getPointerTo()}, false));
+                {native_ptr, i64, native_pointer_type(context, loan_ptr),
+                 native_pointer_type(context, loan_ptr)}, false));
         arrayAbort = module.getOrInsertFunction("abort",
             llvm::FunctionType::get(voidTy, {}, false));
         arrayUnhandled = module.getOrInsertFunction(
@@ -946,14 +947,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             : (native_main && source.module.empty() && fn.name == "main"
             ? guest_main_symbol
             : (source.module.empty() ? fn.name : source.module + "." + fn.name));
+        // Overloaded source selectors erase the hidden receiver. Keep the
+        // internal ABI parameter list and lookup count unchanged.
+        const std::size_t source_arity = native_source_value_arity(
+            fn.parameters.size(), !fn.method_owner.empty());
         const std::string symbol = family_sizes.at(fn.name) > 1
-            ? native_function_slot(base_symbol, fn.parameters.size())
+            ? native_function_slot(base_symbol, source_arity)
             : base_symbol;
         std::vector<llvm::Type*> argument_types;
         for (const auto& param : fn.parameters)
             argument_types.push_back(param.class_name.empty()
                 ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : class_types.at(param.class_name)->getPointerTo());
+                : native_pointer_type(context, class_types.at(param.class_name)));
         std::vector<std::size_t> hidden;
         for (std::size_t i = 0; i < fn.parameters.size(); ++i)
             if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
@@ -992,7 +997,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (const auto& child : layouts.at(type).subobjects) {
                 const auto key = field_key(owner, child.first);
                 auto* address = builder.CreateStructGEP(class_types.at(type), slot, static_cast<unsigned>(layouts.at(type).offsets.at(child.first)));
-                auto* typed = builder.CreateBitCast(address, class_types.at(child.second)->getPointerTo());
+                auto* typed = builder.CreateBitCast(address, native_pointer_type(context, class_types.at(child.second)));
                 if (!storage.emplace(key, typed).second) throw std::runtime_error("nested native storage collision");
                 if (class_array_regions.count(owner)) class_array_regions.emplace(key, class_array_regions.at(owner));
                 names.push_back(key);
@@ -1203,7 +1208,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 auto* shape = class_types.at(binding.class_name);
                 auto* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".owned.result");
                 const auto bytes = cls.fields.size() * 8;
-                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                native_lifetime_start(builder, slot, bytes);
                 std::vector<std::string> owned_fields;
                 for (std::size_t i = 0; i < cls.fields.size(); ++i) {
                     auto* address = builder.CreateStructGEP(shape, slot, static_cast<unsigned>(i));
@@ -1236,7 +1241,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 auto* shape = class_types.at(binding.class_name);
                 auto* slot = builder.CreateAlloca(shape, nullptr, binding.name + ".record.view");
                 const auto bytes = cls.fields.size() * 8;
-                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                native_lifetime_start(builder, slot, bytes);
                 auto* handle = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCall(record_check, {handle, llvm::ConstantInt::get(i64, record_schemas.at(cls.name))});
                 for (std::size_t i = 0; i < cls.fields.size(); ++i) {
@@ -1291,8 +1296,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     }
                 }
                 const std::uint64_t bytes = static_cast<std::uint64_t>(cls->fields.size()) * 8;
-                builder.CreateLifetimeStart(slot,
-                    llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+                native_lifetime_start(builder, slot, bytes);
                 // Prepare before publishing class field addresses. On any
                 // failure the checked cleanup reads only initialized shadows,
                 // never uninitialized class field storage.
@@ -1370,7 +1374,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 owned_live_flags.emplace(binding.name, live);
             } else {
                 slot = builder.CreateAlloca(i64, nullptr, binding.name + ".stack.owned");
-                builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), 8));
+                native_lifetime_start(builder, slot, 8);
                 builder.CreateStore(initial, slot);
             }
             storage.emplace(binding.name, slot);
@@ -1521,7 +1525,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             // Allocate once per native invocation, never on every back-edge.
             llvm::IRBuilder<> entry_slots(&function->getEntryBlock(), function->getEntryBlock().begin());
             auto* slot = entry_slots.CreateAlloca(shape, nullptr, local.name + ".arm.stack");
-            builder.CreateLifetimeStart(slot, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), bytes));
+            native_lifetime_start(builder, slot, bytes);
             ScopedSlot result{local.name, slot, bytes, {}, {}};
             if (record) {
                 const auto& cls = *record_classes.at(local.class_name);
@@ -1541,7 +1545,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             return result;
         };
         auto end_scope = [&](const ScopedSlot& slot) {
-            builder.CreateLifetimeEnd(slot.address, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), slot.bytes));
+            native_lifetime_end(builder, slot.address, slot.bytes);
             for (const auto& key : slot.subobjects) { storage.erase(key); class_array_regions.erase(key); }
             for (const auto& key : slot.fields) field_storage.erase(key);
             storage.erase(slot.name);
@@ -1581,7 +1585,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 auto* result = stmt.expression ? lower(*stmt.expression, builder, i64, storage, field_storage, declarations, &region_moves) : nullptr;
                 if (!fn.returns_void) builder.CreateStore(result, structured_snapshot);
                 for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
-                    builder.CreateLifetimeEnd(it->address, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                    native_lifetime_end(builder, it->address, it->bytes);
                 builder.CreateBr(structured_cleanup); return;
             }
             if (stmt.kind == Statement::Kind::ForIndex) {
@@ -1925,8 +1929,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         builder.SetInsertPoint(after_drop);
                     }
                     // llvm.lifetime.end is not a source-level destructor.
-                    builder.CreateLifetimeEnd(it->address,
-                        llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i64), it->bytes));
+                    native_lifetime_end(builder, it->address, it->bytes);
                 }
             }
             if (array_region != nullptr) builder.CreateCall(arrayClose, {array_region});
@@ -2290,7 +2293,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             // 'unreachable' alone is optimizer UB, not a reliable runtime
             // guard. Emit a real llvm.trap, which lowers to Wasm's trap
             // instruction even at -Oz; never permit duplicate INIT/TEARDOWN.
-            b.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+            b.CreateCall(native_trap(module));
             b.CreateUnreachable();
             b.SetInsertPoint(pass);
         };

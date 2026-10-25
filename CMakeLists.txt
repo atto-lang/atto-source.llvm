@@ -557,6 +557,15 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Executable Oreslang method fixtures, using Rust-only tooling.
+    if(ORE_CLANG)
+        add_test(NAME native_inline_self_receiver_arity_aot
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+                native-inline-self-arity
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}")
+        set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
@@ -1911,6 +1920,26 @@ if(BUILD_TESTING)
         endif()
         set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
+    # Unary + now lowers as an int-only identity under the existing typed
+    # scalar checker. Verify guest compilation, real AOT execution, and
+    # fail-closed type/range/recursion rejection without Python tooling.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_unary_plus_source_parity.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            DEPENDS tests/native_unary_plus_source_parity.rs
+            VERBATIM)
+        add_custom_target(oreslang-native-unary-plus-parity-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity")
+        add_test(NAME native_unary_plus_source_aot
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    else()
+        add_test(NAME native_unary_plus_source_aot COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_unary_plus_source_aot PROPERTIES TIMEOUT 180)
     add_test(NAME native_strict_nonblocking_io_source_guard
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")
@@ -3145,6 +3174,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Source-compiled JVM/native declaration parity slice. This deliberately tests
+# native scalar aliases only; generic and trait/interface forms MUST fail closed.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_FORWARD_TYPE_CLANG
+        NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14 REQUIRED)
+    add_test(NAME native_declare_type_scalar_source_parity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_declare_type_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_FORWARD_TYPE_CLANG}")
+    set_tests_properties(native_declare_type_scalar_source_parity PROPERTIES TIMEOUT 120)
+endif()
+
 # Host-only native proxy slab parity with Java ActorProxyRequestSlab.
 # The borrowed arena span requires caller-owned actor-turn fencing; this is
 # not guest Oreslang lowering or a live HTTP/CONNECT transport.
@@ -3323,6 +3366,21 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Dependency-free, executable import/source admission boundary. This test
+# compiles the production SourceInput.hpp with the host C++ compiler.
+if(BUILD_TESTING AND UNIX)
+    add_executable(oreslang-native-source-input-admission-test
+        tests/native_source_input_admission.cpp)
+    target_include_directories(oreslang-native-source-input-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-source-input-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-input-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_source_input_admission
+        COMMAND oreslang-native-source-input-admission-test)
+    set_tests_properties(native_source_input_admission PROPERTIES TIMEOUT 10)
+endif()
+
 if(BUILD_TESTING)
     add_executable(oreslang-native-record-region-test
         tests/native_record_region_test.c
@@ -3335,4 +3393,19 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-record-region-test PRIVATE Threads::Threads)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
+endif()
+
+# Receiver-elided source overload selector; this C++ unit is intentionally
+# independent of LLVM libraries and can be compiled on minimal hosts.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-callable-selector-test
+        tests/native_callable_selector_test.cpp)
+    target_include_directories(oreslang-native-callable-selector-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-callable-selector-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-callable-selector-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_callable_selector_source_arity
+        COMMAND oreslang-native-callable-selector-test)
+    set_tests_properties(native_callable_selector_source_arity PROPERTIES TIMEOUT 10)
 endif()
