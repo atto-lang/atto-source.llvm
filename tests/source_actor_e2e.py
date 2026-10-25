@@ -156,6 +156,10 @@ def main():
             "native send_async after get_ready requires continuation suspension lowering",
         "source-actor-await-ready-send-call-reject.ores":
             "await get_ready send payload requires call-free scalar expression",
+        "source-actor-await-ready-console-result-reject.ores":
+            "await get_ready requires side-effect-free scalar return",
+        "source-actor-await-ready-send-console-reject.ores":
+            "await get_ready send payload requires call-free scalar expression",
         "source-actor-await-ready-after-done-reject.ores":
             "get_ready observation after get_done is unsupported",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
