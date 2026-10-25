@@ -709,6 +709,8 @@ def _validate_maven_prefetch_artifacts(plan, uses_maven):
 def _validate_maven_argv(argv):
     if "-o" not in argv and "--offline" not in argv:
         raise Denied("Maven carrier commands must run offline")
+    if "-C" not in argv and "--strict-checksums" not in argv:
+        raise Denied("Maven carrier commands must require strict checksums")
     short_with_values = ("-s", "-gs", "-f")
     long_with_values = ("--settings", "--global-settings", "--file")
     dangerous_props = (
