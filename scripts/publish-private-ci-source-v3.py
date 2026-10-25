@@ -1038,6 +1038,10 @@ def recheck_destination_identity(repository, contract):
             or repo.get("private") is not True
             or repo.get("visibility") != "private"):
         raise Denied("carrier identity/privacy changed during transfer")
+    branch = gh_api(f"repos/{repository}/branches/main")
+    if (branch.get("name") != "main"
+            or branch.get("commit", {}).get("sha") != contract["base_sha"]):
+        raise Denied("carrier main changed during source-bearing write")
 
 
 def _gh_ref_request(repository, ref_name, method):
