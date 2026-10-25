@@ -1572,7 +1572,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         lower_arm = [&](const std::vector<Statement>& arm) {
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
-                if (builder.GetInsertBlock()->getTerminator()) break;
+                if (native_has_terminator(builder.GetInsertBlock())) break;
                 if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
                     lower_control(action); continue;
                 }
@@ -1587,7 +1587,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             }
             while (active_scopes.size() > scope_start) {
                 const auto scope = active_scopes.back(); active_scopes.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator()) end_scope(scope);
+                if (!native_has_terminator(builder.GetInsertBlock())) end_scope(scope);
                 else forget_scope(scope);
             }
         };
@@ -1609,7 +1609,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
                 builder.SetInsertPoint(body); lower_arm(stmt.then_statements);
-                if (!builder.GetInsertBlock()->getTerminator()) {
+                if (!native_has_terminator(builder.GetInsertBlock())) {
                     auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(next, counter.address); builder.CreateBr(header);
                 }
@@ -1631,7 +1631,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
                 auto scope = scoped_value(*stmt.branch_local, element); active_scopes.push_back(scope);
                 lower_arm(stmt.then_statements); active_scopes.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator()) {
+                if (!native_has_terminator(builder.GetInsertBlock())) {
                     end_scope(scope);
                     auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
                     auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
@@ -1649,8 +1649,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* no = llvm::BasicBlock::Create(context, "if.else", function);
             auto* join = llvm::BasicBlock::Create(context, "if.merge", function);
             builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
-            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !builder.GetInsertBlock()->getTerminator(); if (yes_live) builder.CreateBr(join);
-            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !builder.GetInsertBlock()->getTerminator(); if (no_live) builder.CreateBr(join);
+            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !native_has_terminator(builder.GetInsertBlock()); if (yes_live) builder.CreateBr(join);
+            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !native_has_terminator(builder.GetInsertBlock()); if (no_live) builder.CreateBr(join);
             builder.SetInsertPoint(join); if (!yes_live && !no_live) builder.CreateUnreachable();
         };
         if (fn.caught_throw_value) {
@@ -1683,7 +1683,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 deferred_effects.push_back(&stmt);
                 continue;
             }
-            if (builder.GetInsertBlock()->getTerminator()) break;
+            if (native_has_terminator(builder.GetInsertBlock())) break;
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
                     stmt.kind == Statement::Kind::Conditional) {
                 lower_control(stmt); continue;
@@ -2035,7 +2035,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
                 builder.CreateBr(cleanup);
             };
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!native_has_terminator(builder.GetInsertBlock())) {
                 for (const auto& guard : fn.early_returns) {
                     llvm::Value* conditionValue = nullptr;
                     if (guard.condition) {
