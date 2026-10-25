@@ -1442,6 +1442,37 @@ if(BUILD_TESTING)
         add_test(NAME source_actor_readable_await_runtime
             COMMAND oreslang-source-actor-readable-await-runtime-test)
         set_tests_properties(source_actor_readable_await_runtime PROPERTIES TIMEOUT 30)
+
+        add_executable(oreslang-source-actor-readable-typed-outcome-test
+            tests/source_actor_readable_typed_outcome_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+        target_include_directories(oreslang-source-actor-readable-typed-outcome-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(oreslang-source-actor-readable-typed-outcome-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING
+            ORESLANG_SOURCE_ACTOR_NIO)
+        set_target_properties(oreslang-source-actor-readable-typed-outcome-test PROPERTIES
+            LINKER_LANGUAGE CXX)
+        target_compile_features(oreslang-source-actor-readable-typed-outcome-test PRIVATE
+            c_std_11 cxx_std_17)
+        target_compile_options(oreslang-source-actor-readable-typed-outcome-test PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(oreslang-source-actor-readable-typed-outcome-test PRIVATE
+            Threads::Threads)
+        add_test(NAME source_actor_readable_typed_outcome
+            COMMAND oreslang-source-actor-readable-typed-outcome-test)
+        set_tests_properties(source_actor_readable_typed_outcome PROPERTIES TIMEOUT 45)
     endif()
 
     if(ORE_RT_AOT_CLANG AND ORE_RT_AOT_CXX)
