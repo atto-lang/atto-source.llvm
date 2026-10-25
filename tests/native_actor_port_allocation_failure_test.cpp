@@ -13,7 +13,7 @@
 // arming the fault; the only expected new inside offer_owned is deque growth.
 static thread_local bool fail_next_allocation = false;
 
-void* operator new(std::size_t count) {
+__attribute__((noinline)) void* operator new(std::size_t count) {
     if (fail_next_allocation) {
         fail_next_allocation = false;
         throw std::bad_alloc();

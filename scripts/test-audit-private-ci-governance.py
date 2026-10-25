@@ -28,66 +28,177 @@ class PolicyAuditTest(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(audit.GovernanceError):
                 audit.parse_allowlist(case)
 
-    def test_reject_unprotected_and_missing_codeowner_review(self):
-        repo = {"id": audit.SOURCE_ID, "full_name": audit.SOURCE,
-                "private": True, "default_branch": "main"}
-        protected = {"name": "main", "protected": True,
-                     "commit": {"sha": "a" * 40}}
+    def _valid_live_metadata(self):
+        repo = {
+            "full_name": audit.SOURCE,
+            "id": audit.SOURCE_ID,
+            "private": True,
+            "default_branch": "main",
+            "archived": False,
+            "disabled": False,
+        }
+        branch = {
+            "name": "main",
+            "protected": True,
+            "commit": {"sha": "a" * 40},
+        }
         protection = {
             "required_pull_request_reviews": {
-                "require_code_owner_reviews": True, "dismiss_stale_reviews": True,
-                "required_approving_review_count": 1
+                "require_code_owner_reviews": True,
+                "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1,
+                "bypass_pull_request_allowances": {
+                    "users": [],
+                    "teams": [],
+                    "apps": [],
+                },
             },
             "enforce_admins": {"enabled": True},
             "allow_force_pushes": {"enabled": False},
-            "allow_deletions": {"enabled": False}
+            "allow_deletions": {"enabled": False},
         }
-        audit.check_live_metadata(repo, protected, protection)
+        return repo, branch, protection
+
+    def test_accepts_strict_protected_main_metadata(self):
+        audit.check_live_metadata(*self._valid_live_metadata())
+
+    def test_rejects_weak_or_ambiguous_protection_metadata(self):
+        repo, branch, protection = self._valid_live_metadata()
+        reviews = protection["required_pull_request_reviews"]
         invalids = [
-            (dict(repo, private=False), protected, protection),
-            (None, protected, protection),
-            (repo, [], protection),
-            (repo, protected, None),
-            (repo, protected, []),
-            (dict(repo, id=0), protected, protection),
-            (repo, dict(protected, protected=False), protection),
-            (repo, dict(protected, commit=None), protection),
-            (repo, dict(protected, commit={"sha": "f" * 39}), protection),
-            (repo, dict(protected, commit={"sha": "Z" * 40}), protection),
-            (repo, protected, {**protection, "enforce_admins": {"enabled": False}}),
-            (repo, protected, {**protection, "allow_force_pushes": {"enabled": True}}),
-            (repo, protected, {**protection, "allow_deletions": {"enabled": True}}),
-            (repo, protected, {**protection, "allow_deletions": None}),
-            (repo, protected, {**protection, "allow_force_pushes": None}),
-            (repo, protected, {k: v for k, v in protection.items()
-                               if k != "allow_deletions"}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": False}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": True, "dismiss_stale_reviews": False}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "required_approving_review_count": 0}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "required_approving_review_count": True}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": {"users": ["owner"]}}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": {"teams": ["trusted"]}}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": {"apps": ["automation"]}}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": []}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": {"delegated_roles": ["owner"]}}}),
-            (repo, protected, {**protection, "required_pull_request_reviews": {
-                **protection["required_pull_request_reviews"],
-                "bypass_pull_request_allowances": {"users": {}}}}),
+            (dict(repo, id=audit.SOURCE_ID + 1), branch, protection),
+            (dict(repo, private=False), branch, protection),
+            (dict(repo, archived=True), branch, protection),
+            (dict(repo, disabled=True), branch, protection),
+            (repo, dict(branch, protected=False), protection),
+            (repo, {**branch, "commit": {"sha": "not-a-sha"}}, protection),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "required_approving_review_count": 0,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "required_approving_review_count": True,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "bypass_pull_request_allowances": {
+                            "users": [{"login": "bypass"}],
+                            "teams": [],
+                            "apps": [],
+                        },
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "bypass_pull_request_allowances": None,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "enforce_admins": {"enabled": False}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_force_pushes": {"enabled": True}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_force_pushes": None},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_deletions": {"enabled": True}},
+            ),
+            (
+                repo,
+                branch,
+                {**protection, "allow_deletions": None},
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "require_code_owner_reviews": False,
+                    },
+                },
+            ),
+            (
+                repo,
+                branch,
+                {
+                    **protection,
+                    "required_pull_request_reviews": {
+                        **reviews,
+                        "dismiss_stale_reviews": False,
+                    },
+                },
+            ),
         ]
+        # API responses and future review-bypass capabilities must fail
+        # closed, not be coerced into seemingly safe empty objects/lists.
+        invalids.extend([
+            (None, branch, protection),
+            ([], branch, protection),
+            (repo, None, protection),
+            (repo, [], protection),
+            (repo, branch, None),
+            (repo, branch, []),
+            (repo, {**branch, "commit": {"sha": None}}, protection),
+            (repo, {**branch, "commit": {"sha": True}}, protection),
+            (repo, branch, {
+                **protection,
+                "required_pull_request_reviews": {
+                    **reviews,
+                    "bypass_pull_request_allowances": {
+                        "users": [], "teams": [], "apps": [],
+                        "delegated_roles": [],
+                    },
+                },
+            }),
+            (repo, branch, {
+                **protection,
+                "required_pull_request_reviews": {
+                    **reviews,
+                    "bypass_pull_request_allowances": {
+                        "users": None, "teams": [], "apps": [],
+                    },
+                },
+            }),
+        ])
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
                 audit.check_live_metadata(r, b, p)

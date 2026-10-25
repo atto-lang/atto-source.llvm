@@ -37,6 +37,7 @@ REQUIRED_OWNERS = {
     "/scripts/test-publish-private-ci-source.py",
 }
 DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
+SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 
 
 class GovernanceError(ValueError):
@@ -89,44 +90,54 @@ def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dic
     if not all(isinstance(value, dict) for value in
                (repo_data, branch_data, protection_data)):
         raise GovernanceError("GitHub protection metadata has invalid object shape")
-    # This preflight must not report an export-ready source when the trusted
-    # v3 publisher's corresponding source_protection() would deny it.
-    if (repo_data.get("id") != SOURCE_ID
-            or repo_data.get("full_name") != SOURCE
-            or repo_data.get("private") is not True):
+    if (
+        repo_data.get("full_name") != SOURCE
+        or repo_data.get("id") != SOURCE_ID
+        or repo_data.get("private") is not True
+    ):
         raise GovernanceError("source identity or visibility is not private and exact")
     if repo_data.get("default_branch") != "main":
         raise GovernanceError("unexpected default branch")
+    if repo_data.get("archived") is True or repo_data.get("disabled") is True:
+        raise GovernanceError("source repository is not active")
+
     if branch_data.get("name") != "main" or branch_data.get("protected") is not True:
         raise GovernanceError("protected main is not enforced")
     commit = branch_data.get("commit")
     if (not isinstance(commit, dict)
             or not isinstance(commit.get("sha"), str)
-            or re.fullmatch(r"[0-9a-f]{40}", commit["sha"]) is None):
-        raise GovernanceError("protected main commit identity missing or invalid")
+            or not SHA40.fullmatch(commit["sha"])):
+        raise GovernanceError("protected main commit SHA is missing or invalid")
+
     reviews = protection_data.get("required_pull_request_reviews")
     if not isinstance(reviews, dict):
-        raise GovernanceError("required pull request review protection missing")
-    count = reviews.get("required_approving_review_count")
-    if (reviews.get("require_code_owner_reviews") is not True
-            or reviews.get("dismiss_stale_reviews") is not True
-            or type(count) is not int or count < 1):
-        raise GovernanceError("independent CODEOWNER reviews not enforced")
-    for key, required_value in (
-            ("enforce_admins", True),
-            ("allow_force_pushes", False),
-            ("allow_deletions", False)):
-        field = protection_data.get(key)
-        if not isinstance(field, dict) or field.get("enabled") is not required_value:
-            raise GovernanceError("source main protection incomplete: " + key)
-    bypasses = reviews.get("bypass_pull_request_allowances")
-    if bypasses is not None:
-        if (not isinstance(bypasses, dict)
-                or set(bypasses) - {"users", "teams", "apps"}
-                or any(not isinstance(bypasses.get(key, []), list)
-                       or bypasses.get(key)
-                       for key in ("users", "teams", "apps"))):
-            raise GovernanceError("source main permits pull request review bypasses")
+        raise GovernanceError("pull-request review protection missing")
+    if reviews.get("require_code_owner_reviews") is not True:
+        raise GovernanceError("required CODEOWNER reviews not enforced")
+    if reviews.get("dismiss_stale_reviews") is not True:
+        raise GovernanceError("stale reviews are not dismissed")
+
+    approval_count = reviews.get("required_approving_review_count")
+    if type(approval_count) is not int or approval_count < 1:
+        raise GovernanceError("positive approving review count not enforced")
+
+    bypass = reviews.get("bypass_pull_request_allowances")
+    if (not isinstance(bypass, dict)
+            or set(bypass) - {"users", "teams", "apps"}
+            or any(not isinstance(bypass.get(kind, []), list)
+                   or bypass.get(kind) for kind in ("users", "teams", "apps"))):
+        raise GovernanceError("review bypass policy is missing, malformed or allows bypass")
+
+    if (protection_data.get("enforce_admins") or {}).get("enabled") is not True:
+        raise GovernanceError("administrator protection not enforced")
+
+    force_pushes = protection_data.get("allow_force_pushes")
+    if not isinstance(force_pushes, dict) or force_pushes.get("enabled") is not False:
+        raise GovernanceError("force pushes are not explicitly forbidden")
+
+    deletions = protection_data.get("allow_deletions")
+    if not isinstance(deletions, dict) or deletions.get("enabled") is not False:
+        raise GovernanceError("branch deletion is not explicitly forbidden")
 
 
 def _github_get(path: str, token: str) -> dict:
