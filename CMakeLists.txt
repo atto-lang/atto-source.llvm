@@ -923,6 +923,47 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    # Scalar dispatch parity. Value forms lower to lazy conditional-expression
+    # CFG (ARM_RESULT); do forms lower to structured statement CFG where Return
+    # keeps FUNCTION_RETURN semantics. General async suspension is still gated
+    # by the native continuation subsystem and must fail before IR.
+    oreslang_contract_test(native_value_match_arm_result
+        dispatch-value-match-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_value_switch_arm_result
+        dispatch-value-switch-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_do_match_function_return
+        dispatch-do-match-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_switch_function_return
+        dispatch-do-switch-run.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_arm_result_runtime
+            dispatch-value-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_switch_arm_result_runtime
+            dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_function_return_runtime
+            dispatch-do-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_switch_function_return_runtime
+            dispatch-do-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_value_switch_requires_default
+        dispatch-value-switch-nonexhaustive.ores
+        --diagnostic "native value switch requires a default arm")
+    oreslang_contract_test(native_value_switch_duplicate_case_rejected
+        dispatch-value-switch-duplicate.ores
+        --diagnostic "duplicate native value switch case")
+    oreslang_contract_test(native_value_dispatch_type_mismatch_rejected
+        dispatch-value-arm-type-mismatch.ores
+        --diagnostic "ternary arms require a common scalar type")
+    oreslang_contract_test(native_dispatch_async_arm_not_yet_lowered
+        dispatch-async-arm-unsupported.ores
+        --diagnostic "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering")
+    oreslang_contract_test(native_nb_match_rejected
+        dispatch-invalid-nb-match.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
+    oreslang_contract_test(native_nb_switch_rejected
+        dispatch-invalid-nb-switch.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
+
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores

@@ -1,0 +1,46 @@
+name: dispatch-form-parity
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/fixtures/dispatch-*.ores'
+      - 'CMakeLists.txt'
+      - '.github/workflows/dispatch-form-parity.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dispatch-form-parity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact head and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected"
+          test -z "$(git status --porcelain)"
+          printf 'source_head=%s\nsource_tree=%s\n' "$actual" "$(git rev-parse HEAD^{tree})"
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Configure and compile
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+      - name: Focused dispatch conformance matrix
+        run: ctest --test-dir build -R '^native_(value_(match|switch)_arm_result(_runtime)?|do_(match|switch)_function_return(_runtime)?|value_switch_requires_default|value_switch_duplicate_case_rejected|value_dispatch_type_mismatch_rejected|dispatch_async_arm_not_yet_lowered|nb_(match|switch)_rejected)
+ --output-on-failure
