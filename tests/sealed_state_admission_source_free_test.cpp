@@ -192,6 +192,17 @@ int main() {
     reject_legacy([](Actor& a){a.on_message.return_type=Method::Return::Bool;});
     reject_legacy([](Actor& a){for(int i=0;i<16;++i){a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
 
+    must_reject([](Actor& a){a.name.clear();});
+    auto duplicated = valid();
+    auto again = valid();
+    duplicated.push_back(std::move(again.front()));
+    bool names_rejected = false;
+    try { oreslang::verify_sealed_actor_state_shape(duplicated); }
+    catch (const std::runtime_error&) { names_rejected = true; }
+    if (!names_rejected)
+        throw std::runtime_error("duplicate actor names were admitted");
+    ++rejected;
+
     must_reject([](Actor& a){a.sealed_state=false;});
     must_reject([](Actor& a){a.sealed_state=false;
         a.on_message.actor_state_loan.reset();});
@@ -292,7 +303,7 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 6 || rejected != 108)
+    if (admitted != 6 || rejected != 110)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
