@@ -160,7 +160,7 @@ int oreslang_source_actor_test_set_async_waiters(
     return ok;
 }
 
-size_t oreslang_source_actor_test_waiting_sends(void* opaque) {
+size_t oreslang_source_actor_test_pending_async_sends(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     if (!instance) return 0;
     group_lock();
