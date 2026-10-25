@@ -3931,5 +3931,22 @@ if(BUILD_TESTING)
         add_test(NAME native_actor_lifecycle_l01_l05_host_asan_ubsan
             COMMAND oreslang-native-lifecycle-parity-host-asan-test)
         set_tests_properties(native_actor_lifecycle_l01_l05_host_asan_ubsan PROPERTIES TIMEOUT 60)
+        # TSan must not share an executable with ASan/UBSan. Linux-only, as in
+        # the existing native actor/continuation sanitizer matrix.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_executable(oreslang-native-lifecycle-parity-host-tsan-test
+                tests/native_actor_lifecycle_parity_smoke.cpp)
+            target_include_directories(oreslang-native-lifecycle-parity-host-tsan-test PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(oreslang-native-lifecycle-parity-host-tsan-test PRIVATE cxx_std_20)
+            target_compile_options(oreslang-native-lifecycle-parity-host-tsan-test PRIVATE
+                -Wall -Wextra -Wpedantic -Werror -fsanitize=thread -fno-omit-frame-pointer)
+            target_link_options(oreslang-native-lifecycle-parity-host-tsan-test PRIVATE
+                -fsanitize=thread -fno-omit-frame-pointer)
+            target_link_libraries(oreslang-native-lifecycle-parity-host-tsan-test PRIVATE Threads::Threads)
+            add_test(NAME native_actor_lifecycle_l01_l05_host_tsan
+                COMMAND oreslang-native-lifecycle-parity-host-tsan-test)
+            set_tests_properties(native_actor_lifecycle_l01_l05_host_tsan PROPERTIES TIMEOUT 90)
+        endif()
     endif()
 endif()
