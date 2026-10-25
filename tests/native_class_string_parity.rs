@@ -166,10 +166,10 @@ fn main() {
         ("imported-module-routing-validation", r#"import module paths from './paths.ores';pub routine main():int{return paths.verify_paths();}"#, ""),
         ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
           fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
-          pub fnc main():int{let mut Counter counter=new Counter();update(rt borrow mut counter);return counter.value==99?0:1;}"#, ""),
+          pub fnc main():int{let mut Counter counter=new Counter();update(rt mut borrow counter);return counter.value==99?0:1;}"#, ""),
         ("foreach-return-releases-loan-before-defer", r#"define class Box as pub val Array<int> values;pub let int code=7;end
           fnc pick(borrow mut Box owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
-          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt borrow mut owner);return selected==7&&owner.code==99?0:1;}"#, ""),
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt mut borrow owner);return selected==7&&owner.code==99?0:1;}"#, ""),
         ("index-loop-branch-exits-and-string-result", r#"fnc choose_text(bool first):String{for(let int index=0;index<1;index=index+1){if(first){val String result="yes";return result;}else{val String result="no";return result;}fi}return "empty";}
           pub fnc main():int{return choose_text(true)=="yes"&&choose_text(false)=="no"?0:1;}"#, ""),
         ("index-loop-update-order-and-zero-iterations", r#"define class Counter as pub let int value=0;end
@@ -179,7 +179,7 @@ fn main() {
         ("foreach-return-unwinds-scopes", r#"fnc first(bool fill):int{val Array<int> values=new Array<int>();if(fill){values.add(42);}else{}fi for(const item of values){return item;}return 0;}pub fnc main():int{return first(true)==42&&first(false)==0?0:1;}"#, ""),
         ("index-return-snapshot-before-deferred-field-write", r#"define class Counter as pub let int value=7;end
           fnc choose(borrow mut Counter counter):int{defer counter.value=99;for(let int index=0;index<3;index=index+1){if index==1;then val int selected=counter.value;return selected;fi}return -1;}
-          pub fnc main():int{let mut Counter counter=new Counter();val selected:int=choose(rt borrow mut counter);return selected==7&&counter.value==99?0:1;}"#, ""),
+          pub fnc main():int{let mut Counter counter=new Counter();val selected:int=choose(rt mut borrow counter);return selected==7&&counter.value==99?0:1;}"#, ""),
         ("nested-read-loans-release-after-loop", r#"define class Counter as pub let int total=0;end
           pub routine main():int{val Array<int> values=new Array<int>();values.add(1);values.add(2);let mut Counter counter=new Counter();
           for(const first of values){for(const second of values){counter.total=counter.total+first+second;}}values.add(3);return counter.total==12&&values.size==3?0:1;}"#, ""),
@@ -236,7 +236,7 @@ fn main() {
             r#"define class Shelf as pub let int tag=1;pub let mut Array<int> first=new Array<int>();pub let mut Array<int> second=new Array<int>();end
               fnc make_shelf():Shelf{let mut Shelf value=new Shelf();value.first.add(13);value.second.add(29);return value;}
               fnc edit(borrow mut Shelf value):void{value.first.set(0,14);return;}
-              pub routine main():int{val Shelf value=true?make_shelf():make_shelf();let mut Shelf moved=rt take value;edit(rt borrow mut moved);return moved.tag+moved.first.get(0)+moved.second.get(0)==44?0:1;}"#,
+              pub routine main():int{val Shelf value=true?make_shelf():make_shelf();let mut Shelf moved=rt take value;edit(rt mut borrow moved);return moved.tag+moved.first.get(0)+moved.second.get(0)==44?0:1;}"#,
             "",
         ),
         (
@@ -300,7 +300,7 @@ fn main() {
               pub routine main():int {
                 val Array<int> numbers=new Array<int>(); numbers.add(13);
                 val Box owner=new Box(rt take numbers);
-                append(rt borrow mut owner);
+                append(rt mut borrow owner);
                 return owner.values.size==2 && owner.values.get(1)==29?0:1;
               }"#,
             "",
@@ -702,8 +702,8 @@ fn main() {
         ("nested-depth-forward-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
         ("nested-depth-reverse-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).rev().map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
         ("nested-expanded-layout-bound", format!("define class Child as {}end define class Outer as val Child child;val int extra;end pub fnc main():int{{return 0;}}", (0..16).map(|i| format!("val int field_{i};")).collect::<String>()), foo.to_owned()),
-        ("final-primitive-projection-cannot-borrow-mut", r#"define class Counter as pub val int value;end fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val Counter counter=new Counter(1);return observe(rt borrow mut counter.value);}"#.to_owned(), foo.to_owned()),
-        ("readonly-child-edge-cannot-borrow-mut", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);edit(rt borrow mut outer.child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("final-primitive-projection-cannot-borrow-mut", r#"define class Counter as pub val int value;end fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val Counter counter=new Counter(1);return observe(rt mut borrow counter.value);}"#.to_owned(), foo.to_owned()),
+        ("readonly-child-edge-cannot-borrow-mut", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);edit(rt mut borrow outer.child);return 0;}"#.to_owned(), foo.to_owned()),
         ("readonly-child-edge-cannot-mutate-array", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);outer.child.values.add(1);return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-duplicate-child-owner", r#"define class Child as pub val Array<int> values;end define class Pair as val Child first;val Child second;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Pair pair=new Pair(child,child);return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-child-use-after-move", r#"define class Child as pub val Array<int> values;end define class Outer as val Child child;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Outer outer=new Outer(child);return child.values.size;}"#.to_owned(), foo.to_owned()),
@@ -713,8 +713,8 @@ fn main() {
         ("nested-parent-private-edge", r#"define class Child as pub val int value;end define class Outer as val Child child;end pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return outer.child.value;}"#.to_owned(), foo.to_owned()),
         ("nested-child-private-edge", r#"define class Child as val int value;end define class Outer as pub val Child child;pub leak():int{return self.child.value;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-private-child-loan", r#"define class Child as pub val int value;end define class Outer as val Child child;end fnc read(borrow Child child):int{return child.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return read(rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
-        ("nested-shared-to-exclusive-escalation", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}fnc bad(borrow Outer outer):void{edit(rt borrow mut outer.child);return;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
-        ("nested-projection-alias-conflict", r#"define class Child as pub val int value;end define class Outer as pub val Child child;end fnc pair(borrow mut Child a,borrow Child b):int{return b.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return pair(rt borrow mut outer.child,rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
+        ("nested-shared-to-exclusive-escalation", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}fnc bad(borrow Outer outer):void{edit(rt mut borrow outer.child);return;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-projection-alias-conflict", r#"define class Child as pub val int value;end define class Outer as pub val Child child;end fnc pair(borrow mut Child a,borrow Child b):int{return b.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return pair(rt mut borrow outer.child,rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
         ("nested-owning-field-cannot-escape-by-value", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;pub leak():Child{return self.child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-cycle", r#"define class Node as val Node child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-indirect-cycle", r#"define class A as val B child;end define class B as val A child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
@@ -739,7 +739,7 @@ fn main() {
         ("iteration-record-alias-without-borrow", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const item of a){val Item other=item;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source", r#"pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);for(const n of a){a.add(n);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source-field", r#"define class Box as pub val Array<int> a;end pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){b.a.set(0,n);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-exclusive-owner-helper", r#"define class Box as pub val Array<int> a;end fnc edit(borrow mut Box b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){edit(rt borrow mut b);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-exclusive-owner-helper", r#"define class Box as pub val Array<int> a;end fnc edit(borrow mut Box b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){edit(rt mut borrow b);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-consumes-outer-owner", r#"define class Box as pub val Array<int> a;end fnc consume(Box b):void{return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Array<int> b=new Array<int>();val Box other=new Box(b);for(const n of a){consume(rt take other);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){}return n;}"#.to_owned(), foo.to_owned()),
         ("iteration-local-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){val int x=n;}return x;}"#.to_owned(), foo.to_owned()),
@@ -777,8 +777,8 @@ fn main() {
         ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
         ("record-array-handle-return", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));return a.get(0);}".to_owned(), foo.to_owned()),
         ("record-view-move", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);let mut Item moved=rt take item;return 0;}".to_owned(), foo.to_owned()),
-        ("record-view-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut Item item):int{return item.value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt borrow mut item);}".to_owned(), foo.to_owned()),
-        ("record-view-projected-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut int value):int{return value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt borrow mut item.value);}".to_owned(), foo.to_owned()),
+        ("record-view-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut Item item):int{return item.value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt mut borrow item);}".to_owned(), foo.to_owned()),
+        ("record-view-projected-mutable-loan", "define class Item as pub val int value; end fnc edit(borrow mut int value):int{return value;} pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(new Item(1));val Item item=a.get(0);return edit(rt mut borrow item.value);}".to_owned(), foo.to_owned()),
         ("record-runtime-symbol-collision", "pub fnc ores_record_region_begin():int{return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("string-record-integer-argument", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(1);return 0;}".to_owned(), foo.to_owned()),
         ("integer-record-string-argument", "define class Segment as pub val int kind; end pub fnc main():int{val Segment s=new Segment(\"bad\");return 0;}".to_owned(), foo.to_owned()),
