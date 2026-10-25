@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <stdexcept>
 #include <thread>
+#include <atomic>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -180,8 +181,21 @@ int main() {
         ores_actor_i64_heap_release(heap, loan);
         check(!ores_actor_i64_heap_try_destroy(heap),
               "continuation lifetime lease disappeared before frame retirement");
+        // Read-only observers may run on another carrier. The retirement
+        // publish edge must be after native lease release, never before it.
+        std::atomic<bool> retiredWithPin{false};
+        std::thread observer([&] {
+            while (!frame.retired()) {
+                (void)frame.lifetime_pinned();
+                std::this_thread::yield();
+            }
+            if (frame.lifetime_pinned()) retiredWithPin.store(true);
+        });
         check(frame.try_retire(ticket) && !frame.try_retire(ticket),
               "pinned continuation double-retired");
+        observer.join();
+        check(!retiredWithPin.load(),
+              "published retirement before actor-heap lifetime release");
         check(!frame.lifetime_pinned(),
               "retired continuation retained actor heap lifetime authority");
         check(ores_actor_i64_heap_try_destroy(heap),
