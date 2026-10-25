@@ -180,6 +180,50 @@ int main() {
         check(race_finalizer.finalized(), "race actor did not finalize");
     }
 
+    // Owner detachment is authoritative even when a producer has already
+    // entered the transient SETTLING state. A one-shot teardown cancellation
+    // must never leave a detached Future READY.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        NativeActorGroup settle_group(12000 + iteration, 1);
+        auto settle_owner = settle_group.adopt(
+            12000 + iteration, 1, 1, [] {});
+        check(settle_group.mark_ready(settle_owner), "settle owner not ready");
+        auto settle_finalizer = settle_group.runtime_finalizer(settle_owner);
+        auto settle_future = NativeScalarFutureAwait::open(
+            settle_owner, 4000 + iteration);
+        std::atomic<int> start_settle{0};
+        bool producer_won = false;
+        bool teardown_accepted = false;
+        std::thread producer([&] {
+            while (!start_settle.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            producer_won = settle_future->complete(
+                settle_future->id(), iteration);
+        });
+        std::thread teardown([&] {
+            while (!start_settle.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            settle_group.close();
+            teardown_accepted = settle_future->cancel_if_owner_detached(
+                settle_future->id(), settle_owner);
+        });
+        start_settle.store(1, std::memory_order_release);
+        producer.join();
+        teardown.join();
+
+        check(teardown_accepted, "detached settling Future missed cancellation");
+        check(settle_future->phase()
+                  == NativeScalarFutureAwait::Phase::cancelled,
+              "detached settling Future became non-cancelled");
+        if (!producer_won)
+            check(!settle_future->complete(settle_future->id(), iteration),
+                  "cancel winner allowed producer resurrection");
+        check(settle_finalizer.ready_for_resource_reclamation(),
+              "settle/detach race pinned finalization");
+        check(settle_finalizer.finalized(),
+              "settle/detach race actor did not finalize");
+    }
+
     // Three terminal contenders race. Exactly one wins and no duplicate
     // resumption is accepted, regardless of scheduling order.
     for (std::uint64_t n = 1; n <= 256; ++n) {
