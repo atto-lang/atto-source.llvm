@@ -116,6 +116,70 @@ int main() {
     check(running->phase() == NativeScalarFutureAwait::Phase::completed,
           "running callback did not complete");
 
+    // Scheduling and cancellation may race while CONTROL admission occurs.
+    // Neither path may hang a carrier or resurrect a cancelled Future.
+    for (int iteration = 0; iteration < 512; ++iteration) {
+        NativeActorGroup race_group(9750 + iteration, 1);
+        auto race_owner = race_group.adopt(
+            9750 + iteration, 1, 1, [] {});
+        check(race_group.mark_ready(race_owner), "race owner not ready");
+        auto race_finalizer = race_group.runtime_finalizer(race_owner);
+        auto race = NativeScalarFutureAwait::open(race_owner, 2000 + iteration);
+        check(race->complete(race->id(), iteration), "race settle failed");
+        std::atomic<int> resumed{0};
+        std::atomic<int> start{0};
+        bool scheduled = false;
+        bool cancelled = false;
+        std::thread scheduler([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            scheduled = race->try_schedule(
+                race->id(), race_group, race_owner,
+                [&](const NativeScalarFutureAwait::Result& outcome) {
+                    check(outcome.success && outcome.value == iteration,
+                          "schedule/cancel race result corrupt");
+                    resumed.fetch_add(1, std::memory_order_relaxed);
+                });
+        });
+        std::thread canceller([&] {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            cancelled = race->cancel(race->id());
+        });
+        start.store(1, std::memory_order_release);
+        scheduler.join();
+        canceller.join();
+
+        if (race_group.has_pending_control(race_owner))
+            (void)race_group.run_control_turn(race_owner);
+
+        check(resumed.load(std::memory_order_relaxed) <= 1,
+              "schedule/cancel race resumed twice");
+        const auto phase = race->phase();
+        if (cancelled) {
+            check(phase == NativeScalarFutureAwait::Phase::cancelled,
+                  "cancel winner did not remain terminal");
+            check(resumed.load(std::memory_order_relaxed) == 0,
+                  "cancelled race executed guest callback");
+        } else if (scheduled) {
+            check(phase == NativeScalarFutureAwait::Phase::completed,
+                  "scheduled race did not complete");
+            check(resumed.load(std::memory_order_relaxed) == 1,
+                  "scheduled race did not resume exactly once");
+        } else {
+            check(phase == NativeScalarFutureAwait::Phase::ready,
+                  "failed admission changed ready Future");
+        }
+        race_group.close();
+        check(race->cancel_if_owner_detached(race->id(), race_owner)
+                  || phase == NativeScalarFutureAwait::Phase::cancelled
+                  || phase == NativeScalarFutureAwait::Phase::completed,
+              "race teardown did not reach terminal state");
+        check(race_finalizer.ready_for_resource_reclamation(),
+              "race Future still pinned group finalization");
+        check(race_finalizer.finalized(), "race actor did not finalize");
+    }
+
     // Three terminal contenders race. Exactly one wins and no duplicate
     // resumption is accepted, regardless of scheduling order.
     for (std::uint64_t n = 1; n <= 256; ++n) {
