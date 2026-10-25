@@ -91,6 +91,20 @@ struct HostPending {
     OresNativeNioCompletion completion{};
 };
 
+class TryGate final {
+public:
+    explicit TryGate(std::mutex& gate) noexcept {
+        try {
+            lock_ = std::unique_lock<std::mutex>(gate, std::try_to_lock);
+        } catch (...) {
+            // C ABI admission is fail-closed; no C++ exception crosses it.
+        }
+    }
+    bool owns_lock() const noexcept { return lock_.owns_lock(); }
+private:
+    std::unique_lock<std::mutex> lock_{};
+};
+
 struct VmNioBackend {
     OresNativeVM* vm = nullptr;
     OresNativeNio* raw = nullptr;
@@ -319,7 +333,12 @@ extern "C" int ores_native_vm_enable_nio(
         ores_native_vm_nio_cancel_bootstrap(vm);
         return 0;
     }
-    auto* backend = new (std::nothrow) VmNioBackend(vm, raw);
+    VmNioBackend* backend = nullptr;
+    try {
+        backend = new (std::nothrow) VmNioBackend(vm, raw);
+    } catch (...) {
+        backend = nullptr;
+    }
     if (!backend) {
         ores_native_nio_close(raw);
         ores_native_vm_nio_cancel_bootstrap(vm);
@@ -339,7 +358,7 @@ extern "C" size_t ores_native_vm_nio_started(OresNativeVM* vm) {
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     return gate.owns_lock() && backend->raw
         ? ores_native_nio_started_reactors(backend->raw) : 0;
 }
@@ -350,7 +369,7 @@ extern "C" int ores_native_vm_nio_try_watch(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (!gate.owns_lock() || !backend->raw || backend->fd_reserved_locked(fd))
         return 0;
     return ores_native_nio_try_watch(backend->raw, fd, events, output);
@@ -370,7 +389,7 @@ extern "C" int ores_native_vm_nio_try_watch_actor(
 
     bool refund = true;
     {
-        std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+        TryGate gate(backend->gate);
         if (gate.owns_lock() && backend->raw
                 && !backend->fd_reserved_locked(fd)) {
             OresNativeActorNioWatch candidate{};
@@ -404,7 +423,7 @@ extern "C" int ores_native_vm_nio_try_cancel(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (!gate.owns_lock() || !backend->raw
             || backend->find_claim_locked(watch))
         return 0;
@@ -417,7 +436,7 @@ extern "C" int ores_native_vm_nio_try_cancel_actor(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (!gate.owns_lock() || !backend->raw) return 0;
     ActorClaim* claim = backend->match_claim_locked(watch);
     if (!claim || claim->state != ClaimState::watching) return 0;
@@ -430,7 +449,7 @@ extern "C" int ores_native_vm_nio_try_pop(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     return gate.owns_lock() && backend->raw
         && backend->try_pop_host_locked(output);
 }
@@ -441,7 +460,7 @@ extern "C" int ores_native_vm_nio_try_pop_actor(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     return gate.owns_lock() && backend->raw
         && backend->try_pop_actor_locked(output);
 }
@@ -452,7 +471,7 @@ extern "C" int ores_native_vm_nio_ack_actor_completion(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (!gate.owns_lock()) return 0;
     ActorClaim* claim = backend->match_claim_locked(completion.owner);
     if (!claim || claim->state != ClaimState::delivered
@@ -475,7 +494,7 @@ extern "C" size_t ores_native_vm_nio_try_pop_batch(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return 0;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (!gate.owns_lock() || !backend->raw) return 0;
     constexpr size_t max_batch = kClaimCapacity;
     const size_t limit = capacity < max_batch ? capacity : max_batch;
@@ -491,7 +510,7 @@ extern "C" int ores_native_vm_nio_completion_fd(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return -1;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     return gate.owns_lock() && backend->raw
         ? ores_native_nio_completion_fd(backend->raw, reactor) : -1;
 }
@@ -502,7 +521,7 @@ extern "C" void ores_native_vm_nio_drain_signal(
     NioBackendLease lease(vm);
     auto* backend = lease.get();
     if (!backend) return;
-    std::unique_lock<std::mutex> gate(backend->gate, std::try_to_lock);
+    TryGate gate(backend->gate);
     if (gate.owns_lock() && backend->raw)
         ores_native_nio_drain_completion_signal(backend->raw, reactor);
 }
