@@ -20,6 +20,8 @@ typedef struct {
  * the FULL -> cond_wait registration boundary, not merely entered its caller. */
 size_t ores_native_actor_scheduler_test_waiting_sends(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+size_t ores_native_actor_scheduler_test_pending_async_sends(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 #endif
 
 /* Native scheduler-owned continuation wake escrow. Each producer actor has a
