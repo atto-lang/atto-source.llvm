@@ -329,10 +329,11 @@ struct Program {
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
-// bounded multi-field i64 classes and trusted, synchronous actor send/stop.
-// Actors remain incompatible with wasm32. The only admitted source suspension
-// is one zero-local actor lifecycle await in trusted zero-argument main:
-// direct/typed get_ready readiness or explicit ActorRef.get_done().
+// bounded multi-field i64 classes and trusted actor send/stop.
+// Actors remain incompatible with wasm32. Admitted async source slices are
+// restricted to trusted zero-argument main: lifecycle get_ready/get_done and
+// direct `await ActorRef.send_async(i64)` mailbox-admission waiting. General
+// storable send_async Future<void> values remain unimplemented.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
