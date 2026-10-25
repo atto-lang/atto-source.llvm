@@ -500,7 +500,7 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         fs::write(
             &fixture,
             format!(
-                "fnc {symbol}(int n): int {{ return n; }}\n\                 pub fnc main(): int {{ return {symbol}(1); }}\n"
+                "fnc {symbol}(int n): int {{ return n; }}\npub pub fnc main(): int {{ return {symbol}(1); }}\n"
             ),
         )
         .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
@@ -521,7 +521,7 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         fs::write(
             &fixture,
             format!(
-                "define class SocketFacade as\n\                   pub {symbol}(self, int n): int {{ return n; }}\n\                 end\n\                 pub fnc main(): int {{\n\                   let SocketFacade s = new SocketFacade();\n\                   return s.{symbol}(1);\n\                 }}\n"
+                "define class SocketFacade as\npub   pub {symbol}(self, int n): int {{ return n; }}\npub end\npub pub fnc main(): int {{\npub   let SocketFacade s = new SocketFacade();\npub   return s.{symbol}(1);\npub }}\n"
             ),
         )
         .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
@@ -550,7 +550,7 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
         fs::write(
             &fixture,
             format!(
-                "fnc {symbol}(int n): int {{ return n + 1; }}\n\                 pub fnc main(): int {{ return {symbol}(41); }}\n"
+                "fnc {symbol}(int n): int {{ return n + 1; }}\npub pub fnc main(): int {{ return {symbol}(41); }}\n"
             ),
         )
         .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
