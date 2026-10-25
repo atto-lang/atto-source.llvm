@@ -31,26 +31,44 @@ def expected_prefix_last(name, actor_index, processed):
         return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
+def parse_native_decimal(value, *, signed=False):
+    """Parse only bounded, canonical ASCII C uint64_t/int64_t output."""
+    assert isinstance(value, str) and value, ("empty native integer", value)
+    negative = signed and value.startswith("-")
+    digits = value[1:] if negative else value
+    assert digits and len(digits) <= 20 and digits.isascii() and digits.isdecimal(), (
+        "invalid or oversized native integer", value)
+    assert (len(digits) == 1 or not digits.startswith("0")) and (
+        not negative or digits != "0"), ("noncanonical native integer", value)
+    number = int(value)
+    if signed:
+        assert -(1 << 63) <= number <= (1 << 63) - 1, (
+            "native signed integer overflow", value)
+    else:
+        assert 0 <= number <= (1 << 64) - 1, (
+            "native unsigned integer overflow", value)
+    return number
+
+
 def parse_actor_receipt(line):
-    """Strictly parse the complete current native stop receipt."""
+    """Strictly parse native actor completion, matching the C fprintf ABI."""
+    assert line.isascii(), ("non-ASCII actor receipt", line)
     parts = line.split()
     marker = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED"
-    assert parts and parts[0] == marker, ("missing actor receipt marker", line)
-    expected = {
-        "constructor_on_worker", "released", "ready",
-        "accepted", "processed", "abandoned", "last",
-    }
+    assert parts and parts[0] == marker and line == " ".join(parts), (
+        "noncanonical actor receipt framing", line)
+    order = (
+        "constructor_on_worker", "released", "ready", "accepted",
+        "processed", "abandoned", "last",
+    )
+    expected = set(order)
     fields = {}
     for field in parts[1:]:
         key, sep, value = field.partition("=")
         assert sep and key in expected and key not in fields, (
-            "invalid actor receipt field", field)
-        signed = key == "last" and value.startswith("-")
-        digits = value[1:] if signed else value
-        assert digits and digits.isascii() and digits.isdecimal(), (
-            "invalid integer actor receipt", field)
-        fields[key] = int(value)
-    assert set(fields) == expected, ("missing actor receipt fields", fields)
+            "unknown or repeated actor receipt field", field)
+        fields[key] = parse_native_decimal(value, signed=key == "last")
+    assert tuple(fields) == order, ("missing or reordered actor receipt fields", fields)
     assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
         "native actor constructor/release not verified", fields)
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
