@@ -1895,6 +1895,8 @@ if(BUILD_TESTING)
     # Both spellings must fail closed with no IR until implementation lands.
     oreslang_contract_test(reject_unsupported_native_io_blocking unsupported-native-io-blocking.ores --diagnostic "unknown function or wrong call arity")
     oreslang_contract_test(reject_unsupported_native_io_bare unsupported-native-io-bare.ores --diagnostic "unknown function or wrong call arity")
+    oreslang_contract_test(reject_unsupported_native_io_global_launder unsupported-native-io-global-launder.ores --diagnostic "native I/O callable name is compiler-owned")
+    oreslang_contract_test(reject_unsupported_native_io_method_launder unsupported-native-io-method-launder.ores --diagnostic "native I/O callable name is compiler-owned")
     oreslang_contract_test(reject_unverified_target_header unsupported-target-header.ores --diagnostic "native target admission unsupported")
     # Neither naming style is permitted without a typed I/O registry, async
     # transport and continuation lowering. No IR may be emitted on failure.
