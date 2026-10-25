@@ -152,6 +152,8 @@ def main():
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
+        "source-actor-await-done-console-result-reject.ores":
+            "await get_done requires side-effect-free scalar return",
         "source-actor-await-ready-send-async-reject.ores":
             "native send_async after get_ready requires continuation suspension lowering",
         "source-actor-await-ready-send-call-reject.ores":
