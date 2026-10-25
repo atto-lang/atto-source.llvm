@@ -53,13 +53,15 @@ public:
         // no-new-delivery barrier is already visible. A close that races after
         // this admission point is handled by the existing detach reconciliation
         // path; this check specifically rejects post-detach resurrection.
-        if (owner.delivery_closed())
+        if (owner.delivery_closed() || owner.resource_admission_closed())
             throw std::logic_error("scalar future owner delivery is closed");
         auto frame = std::shared_ptr<NativeScalarFutureAwait>(
             new NativeScalarFutureAwait(owner, future_id));
-        // Allocation/capability construction may race group teardown. Recheck
-        // before publishing the new frame to the caller.
-        if (owner.delivery_closed())
+        // Allocation/capability construction may race group teardown or
+        // per-actor finalization. The resource-admission seal is published
+        // before DONE settlement; delivery_closed() covers group detachment.
+        // This second check is the frame-admission linearization point.
+        if (owner.delivery_closed() || owner.resource_admission_closed())
             throw std::logic_error("scalar future owner delivery is closed");
         return frame;
     }
