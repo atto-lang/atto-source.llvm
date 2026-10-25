@@ -84,6 +84,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                         "base_sha": BASE,
                         "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
                         "workflow_blob_sha": WORKFLOW,
+                        "review_pr": 17,
                         "test_plans": {
                             "ci/test-plans/llvm-pr669.json": {
                                 "blob_sha": PLAN_BLOB,
@@ -100,6 +101,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(got["repository_id"], 42)
         self.assertEqual(got["base_sha"], BASE)
         self.assertEqual(got["workflow_blob_sha"], WORKFLOW)
+        self.assertEqual(got["review_pr"], 17)
         with self.assertRaisesRegex(v3.Denied, "not authorized"):
             v3.parse_contract(
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
@@ -413,7 +415,71 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "exceeds size limit"):
                 v3.run_bounded_gh(["/usr/bin/gh"], env={}, timeout=1)
 
-    def test_carrier_main_requires_protection_and_codeowner_review(self):
+    def carrier_review_fixture(self, *, tree=BASE_TREE, main_tree=None,
+                               author_id=424242, state="APPROVED",
+                               review_commit=None):
+        carrier = carrier_contract()
+        carrier["review_pr"] = 17
+        head_sha = "7" * 40
+        main_tree = tree if main_tree is None else main_tree
+        review_commit = head_sha if review_commit is None else review_commit
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": False,
+                    "commit": {"sha": BASE},
+                }
+            if route == "repos/trusted/ci/pulls/17":
+                return {
+                    "number": 17,
+                    "state": "closed",
+                    "merged_at": "2026-10-25T04:00:00Z",
+                    "user": {"id": author_id, "login": "carrier-author"},
+                    "head": {
+                        "sha": head_sha,
+                        "repo": {
+                            "full_name": "trusted/ci",
+                            "id": carrier["repository_id"],
+                        },
+                    },
+                    "base": {
+                        "ref": "main",
+                        "repo": {
+                            "full_name": "trusted/ci",
+                            "id": carrier["repository_id"],
+                        },
+                    },
+                }
+            if route == "repos/trusted/ci/git/commits/" + head_sha:
+                return {"sha": head_sha, "tree": {"sha": tree}}
+            if route == "repos/trusted/ci/git/commits/" + BASE:
+                return {"sha": BASE, "tree": {"sha": main_tree}}
+            if route == (
+                    "repos/trusted/ci/contents/.github/CODEOWNERS?ref=" + BASE):
+                return {
+                    "path": ".github/CODEOWNERS",
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(CARRIER_CODEOWNERS).decode(),
+                    "sha": CARRIER_CODEOWNERS_BLOB,
+                }
+            raise AssertionError(route)
+
+        reviews = [{
+            "id": 91,
+            "state": state,
+            "commit_id": review_commit,
+            "submitted_at": "2026-10-25T03:59:00Z",
+            "user": {
+                "id": v3.CARRIER_REVIEW_USER_ID,
+                "login": v3.CARRIER_REVIEW_LOGIN,
+            },
+        }]
+        return carrier, api, reviews
+
+    def test_carrier_main_accepts_protected_codeowner_mode(self):
         good_protection = {
             "required_pull_request_reviews": {
                 "require_code_owner_reviews": True,
@@ -449,20 +515,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=good_api):
-            self.assertEqual(v3.checked_carrier_main("trusted/ci", BASE), BASE)
-
-        def unprotected_api(route, method="GET", payload=None):
-            if route == "repos/trusted/ci/branches/main":
-                return {
-                    "name": "main",
-                    "protected": False,
-                    "commit": {"sha": BASE},
-                }
-            raise AssertionError(route)
-
-        with patch.object(v3, "gh_api", side_effect=unprotected_api):
-            with self.assertRaisesRegex(v3.Denied, "carrier main is not protected"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+            self.assertEqual(
+                v3.checked_carrier_main("trusted/ci", carrier_contract()), BASE
+            )
 
         weak = json.loads(json.dumps(good_protection))
         weak["required_pull_request_reviews"]["require_code_owner_reviews"] = False
@@ -480,9 +535,61 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=weak_api):
             with self.assertRaisesRegex(v3.Denied, "CODEOWNER"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier_contract())
+
+    def test_unprotected_carrier_accepts_exact_tree_independent_review(self):
+        carrier, api, reviews = self.carrier_review_fixture()
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "gh_api_list", return_value=reviews),
+        ):
+            self.assertEqual(
+                v3.checked_carrier_main("trusted/ci", carrier), BASE
+            )
+
+    def test_unprotected_carrier_requires_review_pr_and_exact_reviewed_tree(self):
+        carrier = carrier_contract()
+
+        def branch_only(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "protected": False,
+                    "commit": {"sha": BASE},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=branch_only):
+            with self.assertRaisesRegex(v3.Denied, "requires reviewed carrier PR"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
+        carrier, api, reviews = self.carrier_review_fixture(main_tree="8" * 40)
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "gh_api_list", return_value=reviews),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "tree differs"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
+    def test_unprotected_carrier_rejects_stale_review_or_reviewer_as_author(self):
+        carrier, api, reviews = self.carrier_review_fixture(state="CHANGES_REQUESTED")
+        with (
+            patch.object(v3, "gh_api", side_effect=api),
+            patch.object(v3, "gh_api_list", return_value=reviews),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "stale, late, or not approved"):
+                v3.checked_carrier_main("trusted/ci", carrier)
+
+        carrier, api, reviews = self.carrier_review_fixture(
+            author_id=v3.CARRIER_REVIEW_USER_ID
+        )
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "independent merged"):
+                v3.checked_carrier_main("trusted/ci", carrier)
 
     def test_carrier_main_rejects_bypass_or_base_drift(self):
+        carrier = carrier_contract()
+
         def api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
                 return {
@@ -510,7 +617,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=api):
             with self.assertRaisesRegex(v3.Denied, "bypasses"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier)
 
         def drift_api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/branches/main":
@@ -523,7 +630,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
 
         with patch.object(v3, "gh_api", side_effect=drift_api):
             with self.assertRaisesRegex(v3.Denied, "advanced beyond reviewed base"):
-                v3.checked_carrier_main("trusted/ci", BASE)
+                v3.checked_carrier_main("trusted/ci", carrier)
+
 
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):
