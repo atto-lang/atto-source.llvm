@@ -33,7 +33,10 @@ A source-free workflow may be used to verify that a candidate private destinatio
 
 ## Current state
 
-No private CI destination is approved by default. Until a destination is independently reviewed and merged into protected `main`, private LLVM source must remain in the source repository.
+No private CI destination is approved by default. Until a destination is
+independently reviewed and satisfies either protected carrier-main enforcement
+or the exact-tree review-attested carrier mode pinned by protected source
+governance, private LLVM source must remain in the source repository.
 
 ## Trusted admission preflight
 
@@ -46,17 +49,17 @@ python3 scripts/audit-private-ci-governance.py
 
 The opt-in `--live` preflight reads source GitHub repository metadata,
 `branches/main`, and `branches/main/protection` using a read-capable
-`GITHUB_TOKEN`, failing closed for missing permissions, missing CODEOWNER
-approval enforcement, stale-review acceptance, or missing administrator
-enforcement. It is a *necessary condition*, never a source-export grant;
-the checked destination, independent approval, policy provenance, and
-publisher still require separate verification.
+`GITHUB_TOKEN`. It intentionally diagnoses only the classic protected-main
+mode; failure there does not authorize export and does not by itself reject the
+separate exact-review-attested V3 mode. The V3 publisher performs the actual
+review-history, reviewed-tree, governance-byte, destination, and source-head
+checks.
 
-**Observed governance blocker (2026-10-19):** GitHub returned
-`protected=false` for source `main`. Ruleset reads also returned a
-plan-related 403. No source transfer should occur while actual protected-main
-enforcement cannot be independently verified. Adding CODEOWNERS text alone
-does not turn on branch protection.
+At the current audit, GitHub reports `protected=false` for source `main` and
+private rulesets unavailable on the repository plan. Therefore any real V3
+export must use an exact independently reviewed source-authority PR until the
+repository protection state changes. CODEOWNERS text alone is never treated as
+enforced review.
 
 ## Provenance and cleanup
 
@@ -82,12 +85,28 @@ symlink/submodule/unsupported modes and unsafe paths, fetches each bounded Git
 blob by SHA, and verifies the blob bytes against the Git object ID before any
 destination write.
 
-Before reading or exporting source, the publisher self-attests its own script
-bytes plus the allowlist and carrier-contract bytes against the exact protected
-source `main` commit. Source `main` must enforce CODEOWNER review,
-stale-review dismissal, at least one approval, administrator enforcement, no
-force pushes/deletions, and no PR-review bypass actors. Missing API permission
-or `protected=false` fails closed.
+Before reading or exporting source, the publisher self-attests the complete
+export-critical source-governance surface against the current source `main`.
+V3 supports two fail-closed source authority modes:
+
+1. **Protected source main.** Requires CODEOWNER review, stale-review
+   dismissal, at least one approval, administrator enforcement, no review
+   bypasses, no force pushes, and no branch deletion.
+2. **Exact review-attested source main.** When private-repository protection is
+   unavailable, the publisher requires source authority PR #958 (and future
+   governance PRs that deliberately advance that authority constant) to be
+   same-repository, merged to `main`, authored by someone other than immutable
+   reviewer ID `11139560` / login `ORESoftware`, and approved by that
+   reviewer on the exact PR head before merge. It compares every reviewed
+   governance Git entry and file byte-for-byte between that head and current
+   `main`: CODEOWNERS, allowlist, carrier contracts, governance workflow,
+   security policy, governance audit, launcher, V3 publisher, and their
+   security tests.
+
+The review-attested mode does not trust unprotected `main` generally; it
+trusts only governance bytes that remain identical to the independently
+reviewed authority head. Any mode/type/blob, reviewer-state, repository-ID, or
+governance-byte drift fails closed.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
@@ -102,11 +121,30 @@ The reviewed carrier base must contain neither
 `main` advance, delete/recreate, workflow change, or test-plan change fails
 closed until the source contract is independently reviewed again.
 
-Carrier `main` is also a live authorization boundary. The v3 publisher
-requires it to be protected with CODEOWNER review, stale-review dismissal,
-at least one approval, administrator enforcement, force-push/deletion disabled,
-and no pull-request-review bypass actors. A pinned carrier SHA is not treated as
-a substitute for live review enforcement.
+Carrier `main` is also a live authorization boundary. V3 supports two
+fail-closed carrier modes:
+
+1. **Protected carrier main.** Requires CODEOWNER review, stale-review
+   dismissal, at least one approval, administrator enforcement,
+   force-push/deletion disabled, no pull-request-review bypass actors, and the
+   exact security CODEOWNERS file.
+2. **Exact-tree review-attested carrier main.** For private repositories where
+   branch protection is unavailable, the protected source contract must include
+   an exact positive `review_pr`. That PR must be same-repository, merged to
+   carrier `main`, authored by an account other than immutable reviewer ID
+   `11139560` / login `ORESoftware`, and the latest review from that
+   reviewer must be `APPROVED` on the PR's exact head before merge. The final
+   carrier main root-tree SHA must equal the independently reviewed PR head
+   root-tree SHA exactly, and carrier CODEOWNERS must match the security
+   contract.
+
+A pinned carrier SHA by itself is **not** sufficient. The review-attested mode
+adds an independently verified exact-tree approval, so any later path, Git
+mode, blob, reviewer-state, repository-identity, or main-SHA drift fails closed.
+The exact carrier-main SHA is rechecked before every source-bearing API write;
+full carrier review/tree attestation is repeated at admission, immediately
+before executable refs, and again in the inert payload window before the
+one-use authorization ref is created.
 
 The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
 performed by a separate no-checkout job with `contents: write` that validates
