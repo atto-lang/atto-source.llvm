@@ -1,0 +1,31 @@
+define class PathSegment as
+  pub val int kind;
+  pub val String value;
+end
+define class PathPattern as
+  val Array<PathSegment> segments;
+  pub segment_at(int index) -> PathSegment {
+    return self.segments.get(index);
+  }
+end
+fnc from_closed_array() -> PathSegment {
+  val Array<PathSegment> temporary = new Array<PathSegment>();
+  temporary.add(new PathSegment(1, "segment"));
+  return temporary.get(0);
+}
+fnc local_record(bool early) -> PathSegment {
+  val PathSegment value = new PathSegment(2, "local");
+  if (early) { return new PathSegment(2, "local"); } fi
+  return value;
+}
+pub routine main(): int {
+  val Array<PathSegment> segments = new Array<PathSegment>();
+  segments.add(from_closed_array());
+  val PathPattern path = new PathPattern(segments);
+  val PathSegment first = path.segment_at(0);
+  val PathSegment second = local_record(true);
+  val PathSegment third = local_record(false);
+  stdio.println(first.value);
+  stdio.println(second.value);
+  return first.kind == 1 && third.value == "local" ? 0 : 1;
+}

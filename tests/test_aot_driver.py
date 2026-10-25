@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Native output executes without the compiler; rejected source preserves output."""
 import os
+
+def require(ok, message="native AOT driver requirement failed"):
+    if not ok:
+        raise AssertionError(message)
 from pathlib import Path
 import subprocess
 import sys
@@ -12,13 +16,13 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
     env=dict(os.environ,ORESLANG_LLVMC=compiler,CLANG=clang)
     source.write_text('fnc main(): int { return 42; }\n')
     subprocess.run([driver,str(source),str(output)],env=env,check=True)
-    assert subprocess.run([str(output)],env={'PATH':'/nonexistent'}).returncode==42
+    require(subprocess.run([str(output)],env={'PATH':'/nonexistent'}).returncode==42, "failed: subprocess.run([str(output)],env={'PATH':'/nonexistent'}).returncode==42")
     original=output.read_bytes()
     for text in ['import module spin from "spin";\n', 'this is not Oreslang\n', 'fnc helper(): int { return 42; }\n']:
         source.write_text(text)
         result=subprocess.run([driver,str(source),str(output)],env=env,capture_output=True)
-        assert result.returncode!=0
-        assert output.read_bytes()==original
+        require(result.returncode!=0, 'failed: result.returncode!=0')
+        require(output.read_bytes()==original, 'failed: output.read_bytes()==original')
     # The IR fence is a release *screen*, not linked-image certification.
     source.write_text('fnc main(): int { return 42; }\n')
     fake=root/'fake-ir-compiler.sh'
@@ -35,8 +39,9 @@ with tempfile.TemporaryDirectory(prefix='ores aot ') as directory:
         fake.chmod(0o755)
         bad_env=dict(env,ORESLANG_LLVMC=str(fake))
         bad=subprocess.run([driver,str(source),str(output)],env=bad_env,capture_output=True)
-        assert bad.returncode!=0, invalid_ir
-        assert b'STRICT_NO_GC_IR_REJECTED' in bad.stderr, bad.stderr
-        assert output.read_bytes()==original
-    assert not list(root.glob('.ores-aot.*'))
+        require(bad.returncode!=0, invalid_ir)
+        require(b'STRICT_NO_GC_IR_REJECTED' in bad.stderr, bad.stderr)
+        require(output.read_bytes()==original, 'failed: output.read_bytes()==original')
+    require(not list(root.glob('.ores-aot.*')), "failed: not list(root.glob('.ores-aot.*'))")
 print('native AOT driver: PASS')
+

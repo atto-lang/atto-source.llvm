@@ -1,0 +1,16 @@
+define module http_status as
+  define class StatusPolicy as
+    const int health_code = 200;
+    const bool enabled = true;
+    pub normalized(int code): int {
+      if (!self.enabled) { return 503; } fi
+      if (code eq self.health_code) { return self.health_code; } fi
+      if (code eq 404) { return 404; } fi
+      return 405;
+    }
+  end
+  pub fnc response_status(int code): int {
+    let StatusPolicy policy = new StatusPolicy();
+    return policy.normalized(code);
+  }
+end

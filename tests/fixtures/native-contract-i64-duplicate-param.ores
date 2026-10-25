@@ -1,0 +1,6 @@
+define contract C as
+  fnc add(int value, int value) => int;
+end
+define module M conforms C as
+  pub fnc add(int a, int b): int { return a + b; }
+end

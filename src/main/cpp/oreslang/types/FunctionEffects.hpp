@@ -53,6 +53,15 @@ struct FunctionEffects {
     constexpr FunctionEffects united(FunctionEffects rhs) const {
         return {bits | rhs.bits};
     }
+    // Native counterpart of Java Call.unresolved(...). This sentinel is
+    // deliberately NOT an authorized/known effect bit: both the inferred row
+    // and a forged declared row must fail permits() closed. A compiler must
+    // emit it for calls whose effect-bearing target cannot be proven.
+    static constexpr std::uint32_t UnresolvedCallBit = 1u << 31;
+    static constexpr FunctionEffects unresolved_call() noexcept {
+        return {UnresolvedCallBit};
+    }
+
     static FunctionEffect parse(std::string_view name) {
         if (name == "state.read") return FunctionEffect::StateRead;
         if (name == "state.write") return FunctionEffect::StateWrite;

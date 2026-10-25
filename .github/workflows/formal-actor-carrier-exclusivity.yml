@@ -1,0 +1,62 @@
+name: Formal actor carrier exclusivity
+on:
+  pull_request:
+    paths:
+      - 'docs/formal/ReentrantActorExclusiveCarrier.*'
+      - 'docs/formal/ActorDispatchIdentity.*'
+      - 'docs/formal/ACTOR_EXCLUSIVE_CARRIER_PROOF.md'
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
+      - '.github/workflows/formal-actor-carrier-exclusivity.yml'
+  push:
+    paths:
+      - 'docs/formal/ReentrantActorExclusiveCarrier.*'
+      - 'docs/formal/ActorDispatchIdentity.*'
+      - 'scripts/verify_actor_carrier_exclusivity.py'
+      - 'scripts/verify_actor_dispatch_tickets.py'
+      - '.github/workflows/formal-actor-carrier-exclusivity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-model:
+    name: Exhaustive actor carrier state exploration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run safe model and unsafe mutation counterexample
+        run: |
+          python3 scripts/verify_actor_carrier_exclusivity.py
+          python3 scripts/verify_actor_dispatch_tickets.py
+
+  tla-plus-tlc:
+    name: TLC model check both finite specifications
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download checksum-verified official TLA+ tools v1.7.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --retry 3 \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar \
+            --output /tmp/ores-tla2tools.jar
+          echo '936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  /tmp/ores-tla2tools.jar' \
+            | sha256sum --check --status
+      - name: Parse and model check actor exclusivity and dispatch identity
+        shell: bash
+        working-directory: docs/formal
+        run: |
+          set -euo pipefail
+          for name in ReentrantActorExclusiveCarrier ActorDispatchIdentity; do
+            timeout 120s java -cp /tmp/ores-tla2tools.jar tlc2.TLC \
+              -workers 1 -config "${name}.cfg" "${name}.tla"
+          done
