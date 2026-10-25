@@ -14,6 +14,27 @@ static atomic_int release_first;
 static atomic_int block_first;
 static atomic_uintptr_t carrier_probe_actor;
 static atomic_int carrier_probe_status;
+/* This foreign scheduler has a distinct domain from SourceActor's scheduler.
+ * The carrier-side wait guard must not depend on scheduler pointer equality. */
+static OresNativeActorScheduler* foreign_scheduler;
+static OresNativeActorRef foreign_ref;
+static atomic_int foreign_probe_status;
+
+static void foreign_noop(void* ctx, size_t slot, uint64_t payload) {
+    (void)ctx; (void)slot; (void)payload;
+}
+
+static int64_t foreign_wait_probe_message(
+        OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+        int64_t payload) {
+    (void)heap; (void)domain; (void)epoch;
+    CHECK(foreign_scheduler != NULL);
+    const OresNativeSendStatus status = ores_native_actor_scheduler_wait_send(
+        foreign_scheduler, foreign_ref, (uint64_t)payload);
+    atomic_store_explicit(
+        &foreign_probe_status, (int)status, memory_order_release);
+    return payload;
+}
 
 static void init_actor(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
     (void)heap; (void)domain; (void)epoch;
@@ -222,16 +243,57 @@ static void carrier_call_fails_would_deadlock(void) {
     fprintf(stderr, "SOURCE_SEND_ASYNC_DEADLOCK_PASS carrier_rejected=1\n");
 }
 
+static void cross_scheduler_carrier_cannot_park(void) {
+    atomic_store_explicit(&foreign_probe_status, -1, memory_order_release);
+    foreign_scheduler = ores_native_actor_scheduler_open(
+        1, 1, 1, foreign_noop, NULL);
+    CHECK(foreign_scheduler != NULL);
+    foreign_ref = ores_native_actor_scheduler_spawn(foreign_scheduler, 0);
+    CHECK(foreign_ref.scheduler_domain != 0);
+
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, foreign_wait_probe_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    OresNativeActorRef source_ref = {0};
+    CHECK(oreslang_source_actor_exact_scheduler_ref(actor, &source_ref));
+    CHECK(source_ref.scheduler_domain != foreign_ref.scheduler_domain);
+
+    CHECK(oreslang_source_actor_try_send_checked(actor, 83)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    while (atomic_load_explicit(
+            &foreign_probe_status, memory_order_acquire) == -1)
+        sched_yield();
+    /* Previously executing != foreign_scheduler permitted blocking here.
+     * The API is external-host-only even when the target has free slots. */
+    CHECK(atomic_load_explicit(
+        &foreign_probe_status, memory_order_acquire)
+        == ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE);
+    oreslang_source_actor_stop(actor);
+
+    CHECK(ores_native_actor_scheduler_stop(
+        foreign_scheduler, foreign_ref));
+    CHECK(ores_native_actor_scheduler_wait_done(
+        foreign_scheduler, foreign_ref));
+    ores_native_actor_scheduler_retire(foreign_scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(foreign_scheduler));
+    foreign_scheduler = NULL;
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_CROSS_SCHEDULER_DEADLOCK_PASS rejected=1\n");
+}
+
 int main(void) {
     atomic_init(&first_entered, 0);
     atomic_init(&release_first, 0);
     atomic_init(&block_first, 0);
     atomic_init(&carrier_probe_actor, (uintptr_t)0);
     atomic_init(&carrier_probe_status, -1);
+    atomic_init(&foreign_probe_status, -1);
 
     capacity_release_admits_waiter();
     stop_wakes_full_waiter_as_terminated();
     bounded_waiter_cohort_rejects_before_pin();
     carrier_call_fails_would_deadlock();
+    cross_scheduler_carrier_cannot_park();
     return 0;
 }
