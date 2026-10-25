@@ -159,6 +159,29 @@ class ContractHarnessOptimizationTests(unittest.TestCase):
         p = self.run_contract(compiler, "--no-main-link", "--clang", str(clang))
         self.assertEqual(p.returncode, 0, p.stderr)
 
+    def test_negative_rejects_infrastructure_failure_even_with_exact_diagnostic(self):
+        expected = "native opaque any/unknown unsupported"
+        failures = (
+            "Traceback (most recent call last):\\nFileNotFoundError: missing compiler",
+            "/bin/sh: compiler: command not found",
+            "fatal: No such file or directory",
+            "==1==ERROR: AddressSanitizer: heap-use-after-free",
+            "UndefinedBehaviorSanitizer: runtime error: invalid shift",
+            "Segmentation fault",
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                compiler = self.compiler(status=1, stderr=expected + "\\n" + failure)
+                for optimize in ("-O", "-OO"):
+                    with self.subTest(optimize=optimize):
+                        p = self.run_contract(compiler, "--diagnostic", expected,
+                                              optimize=optimize)
+                        self.assertNotEqual(p.returncode, 0)
+                        self.assertIn(
+                            "infrastructure failure cannot certify compiler rejection",
+                            p.stderr,
+                        )
+
     def test_valid_negative_still_passes_under_optimization(self):
         compiler = self.compiler(status=1, stderr="private class field")
         p = self.run_contract(compiler, "--diagnostic", "private class field")
