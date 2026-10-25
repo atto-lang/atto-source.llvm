@@ -1402,6 +1402,42 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Direct production-runtime proof for the first source readable await.
+        # Uses a real nonblocking pipe, delayed producer, epoll bridge, actor
+        # wake escrow, logical continuation store and physical actor cleanup.
+        add_executable(oreslang-source-actor-readable-await-runtime-test
+            tests/source_actor_readable_await_runtime_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+        target_include_directories(oreslang-source-actor-readable-await-runtime-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(oreslang-source-actor-readable-await-runtime-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING
+            ORESLANG_SOURCE_ACTOR_NIO)
+        set_target_properties(oreslang-source-actor-readable-await-runtime-test PROPERTIES
+            LINKER_LANGUAGE CXX)
+        target_compile_features(oreslang-source-actor-readable-await-runtime-test PRIVATE
+            c_std_11 cxx_std_17)
+        target_compile_options(oreslang-source-actor-readable-await-runtime-test PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(oreslang-source-actor-readable-await-runtime-test PRIVATE
+            Threads::Threads)
+        add_test(NAME source_actor_readable_await_runtime
+            COMMAND oreslang-source-actor-readable-await-runtime-test)
+        set_tests_properties(source_actor_readable_await_runtime PROPERTIES TIMEOUT 30)
+    endif()
+
     if(ORE_RT_AOT_CLANG AND ORE_RT_AOT_CXX)
         # The readable fixture links production C++ NIO objects. Keep C/IR and
         # C++ compilation on one Clang family, especially under ASan/UBSan;
