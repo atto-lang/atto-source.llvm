@@ -3718,6 +3718,10 @@ private:
                         fn.readable_await_fd > std::numeric_limits<int>::max())
                     throw std::runtime_error(
                         "await readable requires a native int file descriptor");
+                if (!fn.readable_outcome_name.empty() &&
+                        fn.readable_outcome_name == fn.actor_spawns.front().name)
+                    throw std::runtime_error(
+                        "ReadableOutcome binding cannot shadow an ActorRef");
                 if (contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
                         "await readable requires side-effect-free scalar return");
@@ -3827,6 +3831,15 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_names(stmt, params);
+            if (!fn.readable_outcome_name.empty()) {
+                if (references.count(fn.readable_outcome_name))
+                    throw std::runtime_error(
+                        "ReadableOutcome binding cannot shadow an ActorRef");
+                if (!params.insert(fn.readable_outcome_name).second)
+                    throw std::runtime_error(
+                        "duplicate ReadableOutcome binding '" +
+                        fn.readable_outcome_name + "'");
+            }
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (const auto& action : fn.actor_actions) {
@@ -3989,6 +4002,9 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_types(stmt, scalar_types);
+            if (!fn.readable_outcome_name.empty())
+                scalar_types.emplace(
+                    fn.readable_outcome_name, ScalarType::ReadableOutcome);
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send)
