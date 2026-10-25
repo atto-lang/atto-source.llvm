@@ -3465,6 +3465,30 @@ if(BUILD_TESTING)
     add_test(NAME source_actor_stop_request_join_split
         COMMAND oreslang-source-actor-stop-join-split-test)
     set_tests_properties(source_actor_stop_request_join_split PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-source-actor-await-done-trace-test
+        tests/source_actor_await_done_trace_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-await-done-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-await-done-trace-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-await-done-trace-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-await-done-trace-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-await-done-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_await_done_trace_runtime
+        COMMAND oreslang-source-actor-await-done-trace-test)
+    set_tests_properties(source_actor_await_done_trace_runtime PROPERTIES TIMEOUT 30)
 endif()
 
 # Receiver-elided source overload selector; this C++ unit is intentionally

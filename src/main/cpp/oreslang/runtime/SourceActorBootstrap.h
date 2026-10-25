@@ -30,10 +30,10 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  * for physical VM completion, retires/destroys the actor heap, releases the
  * opaque SourceActor allocation, and closes an idle source-actor VM.
  *
- * Source lowering continues to call oreslang_source_actor_stop(), which keeps
- * its existing synchronous request+join behavior. The split APIs are the
- * prerequisite for a future real await ActorRef.get_done() lowering; they are
- * not guest-callable capabilities.
+ * Source lowering without get_done continues to call oreslang_source_actor_stop(),
+ * which keeps its existing synchronous request+join behavior. get_done lowering
+ * uses request_stop plus oreslang_source_actor_await_done(); the split APIs remain
+ * trusted compiler/runtime capabilities, not guest-callable functions.
  */
 void oreslang_source_actor_request_stop(void* actor);
 void oreslang_source_actor_join_done(void* actor);
@@ -53,6 +53,22 @@ void oreslang_source_actor_stop(void* actor);
  * returns. source_token is a compiler-provided source offset/site identifier.
  */
 int64_t oreslang_source_actor_await_ready(
+    void* actor,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+
+/*
+ * Restricted compiler-generated terminal await slice:
+ *   stop actor;
+ *   await actor.get_done();
+ *
+ * The stop request has already been admitted before this call. The trusted
+ * outer host, never an actor carrier, waits for the target's physical terminal
+ * ACK. A root CONTROL suspension/resume pair preserves logical ancestry; the
+ * target actor heap and opaque SourceActor are reclaimed only after the resumed
+ * continuation has completed.
+ */
+int64_t oreslang_source_actor_await_done(
     void* actor,
     OresSourceActorContinuation continuation,
     uint64_t source_token);
