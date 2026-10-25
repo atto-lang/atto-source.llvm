@@ -1,0 +1,13 @@
+// L01 target: immutable Future<void> observer is reusable.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return total + n; }
+}
+pub fnc main(): int throws ActorTerminated {
+  const worker: ActorRef<Worker> = spawn Worker();
+  const Future<void> ready = worker.get_ready();
+  await ready;
+  await ready;
+  stop worker;
+  return 43;
+}
