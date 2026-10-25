@@ -3026,10 +3026,21 @@ private:
         if (token_.text != "<") return false;
         Lexer probe = lexer_; // already positioned immediately after '<'
         std::size_t budget = 0;
+        std::size_t nested_angles = 0;
         while (++budget <= 64) {
             const Token next = probe.next();
             if (next.kind == Kind::End) return false;
-            if (next.text == ">") return probe.next().text == "(";
+            if (next.text == "<") {
+                ++nested_angles;
+                continue;
+            }
+            if (next.text == ">") {
+                if (nested_angles != 0) {
+                    --nested_angles;
+                    continue;
+                }
+                return probe.next().text == "(";
+            }
             if (next.text == "," || next.text == "=" || next.text == "_" ||
                     next.text == "int" || next.kind == Kind::Identifier)
                 continue;
