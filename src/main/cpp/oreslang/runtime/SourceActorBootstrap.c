@@ -412,6 +412,137 @@ static void root_done_resume_turn(void) {
     group_unlock();
 }
 
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+static int same_wake_ticket(
+        OresNativeWakeTicket left, OresNativeWakeTicket right) {
+    return left.producer.scheduler_domain == right.producer.scheduler_domain
+        && left.producer.actor_slot == right.producer.actor_slot
+        && left.producer.generation == right.producer.generation
+        && left.target.scheduler_domain == right.target.scheduler_domain
+        && left.target.actor_slot == right.target.actor_slot
+        && left.target.generation == right.target.generation
+        && left.slot == right.slot
+        && left.slot_generation == right.slot_generation
+        && left.continuation_slot == right.continuation_slot
+        && left.continuation_generation == right.continuation_generation
+        && left.code_generation == right.code_generation
+        && left.descriptor_generation == right.descriptor_generation;
+}
+
+static void root_readable_suspend_turn(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    ensure(frame && !frame->done && !frame->suspend_recorded);
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle origin = {0, 0};
+    ensure(ores_native_execution_context_store_insert(
+        group.executions, &physical, &origin));
+    OresNativeContinuationHandle no_parent = {0, 0};
+    ensure(ores_native_await_trace_suspend(
+        group.executions,
+        group.continuations,
+        origin,
+        no_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT,
+        SOURCE_READABLE_CODE_GENERATION,
+        frame->source_token,
+        &frame->link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, origin));
+
+    frame->suspend_recorded = 1;
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+
+/*
+ * Scheduler wake callback for the source-root actor. NIO completion consumers
+ * only publish a generation-fenced wake; compiled guest code resumes here on
+ * the authenticated root actor lane, never on an epoll/completion thread.
+ */
+static void source_root_wake(
+        void* raw,
+        size_t slot,
+        OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome outcome) {
+    ensure(raw == &group && slot == SOURCE_GROUP_ROOT_SLOT);
+    ensure(ores_native_vm_actor_is_current_wake(
+        group.vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    ReadableAwaitFrame* frame;
+    OresSourceActorContinuation continuation;
+    SourceActor* actor;
+    OresNativeSuspensionLink link;
+
+    group_lock();
+    frame = group.pending_readable;
+    ensure(frame && frame->suspend_recorded && frame->admitted && !frame->done);
+    ensure(same_wake_ticket(ticket, frame->awaiting.wake));
+
+    if (outcome != ORES_NATIVE_WAKE_READY) {
+        ensure(ores_native_continuation_store_cancel(
+            group.continuations, frame->link.continuation));
+        frame->outcome = outcome == ORES_NATIVE_WAKE_CANCELLED ? 2 : 3;
+        frame->done = 1;
+        ensure(pthread_cond_signal(&frame->completed) == 0);
+        group_unlock();
+        return;
+    }
+
+    /*
+     * The scheduler wake proves producer/target/slot/generation authority.
+     * Only now make the persisted continuation READY. The strict ready-resume
+     * bridge below therefore cannot claim an unresolved continuation.
+     */
+    ensure(ores_native_continuation_store_notify_ready(
+        group.continuations, frame->link.continuation));
+    continuation = frame->continuation;
+    actor = frame->actor;
+    link = frame->link;
+    group_unlock();
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle resumed = {0, 0};
+    OresNativeExecutionContext logical = {0};
+    ensure(ores_native_await_trace_ready_resume_begin(
+        group.executions,
+        group.continuations,
+        physical.id,
+        link,
+        &resumed,
+        &logical));
+    ensure(same_allocation(logical.allocation, physical.allocation));
+    ensure(!ores_native_store_handle_valid(current_source_execution));
+
+    current_source_execution = resumed;
+    const int64_t result = continuation(actor);
+    current_source_execution = (OresNativeExecutionHandle){0, 0};
+
+    ensure(ores_native_await_trace_resume_finish(group.continuations, link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, resumed));
+
+    group_lock();
+    ensure(frame == group.pending_readable && !frame->done);
+    frame->outcome = 1;
+    frame->result = result;
+    frame->done = 1;
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+#endif
+
 static void initialize(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
     if (slot == SOURCE_GROUP_ROOT_SLOT) {
@@ -419,6 +550,10 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         else if (payload == SOURCE_ROOT_CONTROL_RESUME) root_resume_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_SUSPEND) root_done_suspend_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_RESUME) root_done_resume_turn();
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+        else if (payload == SOURCE_ROOT_CONTROL_READABLE_SUSPEND)
+            root_readable_suspend_turn();
+#endif
         else abort();
         return;
     }
