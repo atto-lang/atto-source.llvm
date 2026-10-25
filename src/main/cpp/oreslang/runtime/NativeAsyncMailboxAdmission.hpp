@@ -90,7 +90,7 @@ public:
                 || !wake.descriptor_generation)
             return Registration::Rejected;
 
-        std::lock_guard<std::mutex> guard(mutex_);
+        std::unique_lock<std::mutex> guard(mutex_);
         if (sealed_ || bytes > max_bytes_
                 || pending_waiters_ >= max_waiters_
                 || bytes > max_pending_bytes_ - pending_bytes_)
@@ -126,10 +126,16 @@ public:
                 entry.state = State::Transferred;
                 return Registration::Transferred;
             }
-            terminalize_failed_locked(entry);
+            OresNativeActorScheduler* failed_scheduler = entry.scheduler;
+            const OresNativeWakeTicket failed_wake = entry.wake;
             --pending_waiters_;
             pending_bytes_ -= bytes;
             clear_slot_locked(entry);
+            guard.unlock();
+            const auto status = ores_native_actor_scheduler_fail_reserved_wake(
+                failed_scheduler, failed_wake);
+            if (status == ORES_NATIVE_WAKE_INVALID)
+                throw std::logic_error("reserved async mailbox wake lost ownership");
             return Registration::Failed;
         }
 
@@ -159,12 +165,25 @@ public:
      */
     void release_acquired(std::size_t bytes) {
         if (!bytes) throw std::invalid_argument("mailbox byte charge must be positive");
-        std::lock_guard<std::mutex> guard(mutex_);
+        std::unique_lock<std::mutex> guard(mutex_);
         if (!used_frames_ || used_bytes_ < bytes)
             throw std::logic_error("async mailbox credit underflow");
         --used_frames_;
         used_bytes_ -= bytes;
-        service_waiters_locked();
+        for (;;) {
+            DeferredFailure failure{};
+            const bool progressed = service_one_waiter_locked(failure);
+            if (failure.scheduler) {
+                guard.unlock();
+                const auto status = ores_native_actor_scheduler_fail_reserved_wake(
+                    failure.scheduler, failure.wake);
+                if (status == ORES_NATIVE_WAKE_INVALID)
+                    throw std::logic_error("reserved async mailbox wake lost ownership");
+                guard.lock();
+                continue;
+            }
+            if (!progressed) break;
+        }
     }
 
     /**
@@ -174,15 +193,31 @@ public:
      * back; admission is already irrevocable after transfer.
      */
     OresNativeWakePublishStatus commit(Handle handle) {
+        OresNativeActorScheduler* scheduler = nullptr;
+        OresNativeWakeTicket wake{};
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            Slot* entry = matching_locked(handle);
+            if (!entry || entry->state != State::Transferred)
+                return ORES_NATIVE_WAKE_INVALID;
+            entry->state = State::Publishing;
+            scheduler = entry->scheduler;
+            wake = entry->wake;
+        }
+
+        // Never publish a continuation while holding mailbox accounting.
+        const auto status = ores_native_actor_scheduler_publish_wake(
+            scheduler, wake, ORES_NATIVE_WAKE_READY);
+
         std::lock_guard<std::mutex> guard(mutex_);
         Slot* entry = matching_locked(handle);
-        if (!entry || entry->state != State::Transferred)
-            return ORES_NATIVE_WAKE_INVALID;
-        const auto status = ores_native_actor_scheduler_publish_wake(
-            entry->scheduler, entry->wake, ORES_NATIVE_WAKE_READY);
+        if (!entry || entry->state != State::Publishing)
+            throw std::logic_error("async mailbox publish ownership corrupted");
         if (status == ORES_NATIVE_WAKE_PUBLISHED
                 || status == ORES_NATIVE_WAKE_PRODUCER_RETIRED)
             clear_slot_locked(*entry);
+        else
+            entry->state = State::Transferred;
         return status;
     }
 
@@ -199,7 +234,10 @@ public:
         --used_frames_;
         used_bytes_ -= entry->bytes;
         clear_slot_locked(*entry);
-        service_waiters_locked();
+        // Deliberately do not publish another producer wake while holding this
+        // lock. The newly free credit will be transferred by the next release
+        // or explicit service call; abort is an exceptional pre-publication
+        // rollback, not the normal physical-ACK fast path.
         return true;
     }
 
@@ -208,16 +246,24 @@ public:
      * descriptors remain irrevocable and must commit/abort explicitly.
      */
     void seal() {
-        std::lock_guard<std::mutex> guard(mutex_);
+        std::unique_lock<std::mutex> guard(mutex_);
         sealed_ = true;
-        for (Slot& entry : slots_) {
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            Slot& entry = slots_[i];
             if (entry.state != State::Waiting) continue;
-            terminalize_failed_locked(entry);
+            OresNativeActorScheduler* scheduler = entry.scheduler;
+            const OresNativeWakeTicket wake = entry.wake;
             if (!pending_waiters_ || pending_bytes_ < entry.bytes)
                 std::terminate();
             --pending_waiters_;
             pending_bytes_ -= entry.bytes;
             entry.state = State::Cancelled;
+            guard.unlock();
+            const auto status = ores_native_actor_scheduler_fail_reserved_wake(
+                scheduler, wake);
+            if (status == ORES_NATIVE_WAKE_INVALID)
+                throw std::logic_error("reserved async mailbox wake lost ownership");
+            guard.lock();
         }
     }
 
@@ -249,7 +295,7 @@ public:
     }
 
 private:
-    enum class State { Empty, Waiting, Transferred, Cancelled };
+    enum class State { Empty, Waiting, Transferred, Publishing, Cancelled };
     struct Slot {
         State state = State::Empty;
         std::uint64_t generation = 0;
@@ -292,13 +338,6 @@ private:
             entry.scheduler, entry.wake) != 0;
     }
 
-    void terminalize_failed_locked(Slot& entry) {
-        const auto status = ores_native_actor_scheduler_fail_reserved_wake(
-            entry.scheduler, entry.wake);
-        if (status == ORES_NATIVE_WAKE_INVALID)
-            throw std::logic_error("reserved async mailbox wake lost ownership");
-    }
-
     void compact_fifo_locked() {
         if (fifo_entries_ < max_waiters_) return;
         std::size_t write = 0;
@@ -322,7 +361,12 @@ private:
         ++fifo_entries_;
     }
 
-    void service_waiters_locked() {
+    struct DeferredFailure {
+        OresNativeActorScheduler* scheduler = nullptr;
+        OresNativeWakeTicket wake{};
+    };
+
+    bool service_one_waiter_locked(DeferredFailure& failure) {
         while (fifo_entries_) {
             const Handle queued = fifo_[fifo_head_];
             Slot* matched = matching_locked(queued);
@@ -332,12 +376,7 @@ private:
                 continue;
             }
             Slot& entry = *matched;
-            if (entry.state != State::Waiting) {
-                fifo_head_ = (fifo_head_ + 1) % max_waiters_;
-                --fifo_entries_;
-                continue;
-            }
-            if (!fits_locked(entry.bytes)) return;
+            if (!fits_locked(entry.bytes)) return false;
 
             fifo_head_ = (fifo_head_ + 1) % max_waiters_;
             --fifo_entries_;
@@ -349,18 +388,22 @@ private:
                 ++used_frames_;
                 used_bytes_ += entry.bytes;
                 entry.state = State::Transferred;
-                continue;
+                return true;
             }
 
-            // Target STOP/seal won before the irreversible transfer. Resume a
-            // live producer with FAILED instead of silently dropping its Future.
-            terminalize_failed_locked(entry);
+            // Target STOP/seal won before irreversible transfer. Remove the
+            // descriptor under the accounting lock, then publish FAILED only
+            // after the lock is released.
+            failure.scheduler = entry.scheduler;
+            failure.wake = entry.wake;
             if (!pending_waiters_ || pending_bytes_ < entry.bytes)
                 std::terminate();
             --pending_waiters_;
             pending_bytes_ -= entry.bytes;
             clear_slot_locked(entry);
+            return true;
         }
+        return false;
     }
 
     const std::size_t max_frames_;
