@@ -3925,3 +3925,15 @@ if(BUILD_TESTING)
     add_test(NAME native_failure_trace_capture_and_render COMMAND oreslang-native-failure-trace-test)
     set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
 endif()
+
+# Reconciled #73: String wire contracts remain deliberately unsupported by
+# native int-only contract lowering; assert diagnostic without Python.
+if(BUILD_TESTING)
+    foreach(fixture IN ITEMS clients-core-client-contract.ores ores-interfaces-route-contract.ores)
+        add_test(NAME "native_string_client_contract_rejected_${fixture}"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_string_contract_rejection.cmake")
+    endforeach()
+endif()
