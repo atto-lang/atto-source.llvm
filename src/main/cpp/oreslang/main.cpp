@@ -354,6 +354,7 @@ int main(int argc, char** argv) {
                           << descriptor.schema_id << '\t'
                           << descriptor.qualified_type_name << '\t'
                           << descriptor.representation << '\t'
+                          << (descriptor.validation_required ? "true" : "false") << '\t'
                           << descriptor.fingerprint << '\t'
                           << descriptor.canonical << '\n';
             }
