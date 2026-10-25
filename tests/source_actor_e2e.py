@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import fcntl
+import os
 import pathlib
 import re
 import subprocess
@@ -13,6 +15,11 @@ if not __debug__:
 
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
+
+def make_stdin_nonblocking():
+    """Child-only readiness setup: preserve runtime's mandatory O_NONBLOCK contract."""
+    flags = fcntl.fcntl(0, fcntl.F_GETFL)
+    fcntl.fcntl(0, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
 def link_nio_source_actor(args, runtime, source_dirs, ll, exe, flags):
     """Compile the real mixed C/C++ VM-NIO runtime for the readable source slice."""
@@ -289,7 +296,10 @@ def main():
             if name == "source-actor-await-readable.ores":
                 link_nio_source_actor(
                     args, runtime, source_dirs, ll, exe, flags)
-                executed = run([str(exe)], input="x")
+                executed = run(
+                    [str(exe)],
+                    input="x",
+                    preexec_fn=make_stdin_nonblocking)
             else:
                 command = [
                     args.clang, *flags, "-x", "ir", str(ll),
