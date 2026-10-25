@@ -8,7 +8,8 @@ define actor Worker as {
 pub fnc main(): int {
   const worker: ActorRef<Worker> = spawn Worker();
   await readable(0) as ReadableOutcome outcome;
-  worker.send(1);
+  worker.send(outcome == ReadableOutcome.Ready ? 1 :
+              outcome == ReadableOutcome.Cancelled ? 2 : 3);
   stop worker;
   return outcome == ReadableOutcome.Ready ? 43 :
          outcome == ReadableOutcome.Cancelled ? 44 : 45;
