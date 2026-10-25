@@ -143,7 +143,7 @@ static void concurrent_registration_and_finalization_have_one_winner() {
     CHECK(registration_wins + finalization_wins == 2000);
 }
 
-static void settlement_failure_rolls_back_terminal_resource_seal() {
+static void settlement_failure_keeps_terminal_resource_seal_retryable() {
     {
         NativeActorGroup group(191004, 1);
         auto actor = group.adopt(191004, 201, 1, [] {});
@@ -160,10 +160,14 @@ static void settlement_failure_rolls_back_terminal_resource_seal() {
         fail_after_allocations.store(-1, std::memory_order_release);
         CHECK(threw);
 
-        // A failed settlement must not leave the terminal bit permanently set.
-        actor.retain_resource_loan();
-        CHECK(actor.outstanding_resource_loans() == 1);
-        actor.release_resource_loan();
+        // A failed settlement keeps resource admission terminally sealed.
+        // Retry belongs only to the serialized finalizer; late loans must not
+        // resurrect physical state after logical termination has started.
+        bool loan_rejected = false;
+        try { actor.retain_resource_loan(); }
+        catch (const std::logic_error&) { loan_rejected = true; }
+        CHECK(loan_rejected);
+        CHECK(actor.outstanding_resource_loans() == 0);
 
         std::string retry_failure(512, 'y');
         CHECK(group.finalized(actor, std::move(retry_failure)));
@@ -191,9 +195,11 @@ static void settlement_failure_rolls_back_terminal_resource_seal() {
         fail_after_allocations.store(-1, std::memory_order_release);
         CHECK(threw);
 
-        actor.retain_resource_loan();
-        CHECK(actor.outstanding_resource_loans() == 1);
-        actor.release_resource_loan();
+        bool loan_rejected = false;
+        try { actor.retain_resource_loan(); }
+        catch (const std::logic_error&) { loan_rejected = true; }
+        CHECK(loan_rejected);
+        CHECK(actor.outstanding_resource_loans() == 0);
 
         std::string retry_failure(512, 'q');
         CHECK(finalizer.finalized(std::move(retry_failure)));
@@ -232,9 +238,11 @@ static void every_finalization_allocation_failure_is_retryable() {
 
         if (injected) {
             saw_injected_failure = true;
-            actor.retain_resource_loan();
-            CHECK(actor.outstanding_resource_loans() == 1);
-            actor.release_resource_loan();
+            bool loan_rejected = false;
+            try { actor.retain_resource_loan(); }
+            catch (const std::logic_error&) { loan_rejected = true; }
+            CHECK(loan_rejected);
+            CHECK(actor.outstanding_resource_loans() == 0);
 
             std::string retry_failure(512, 'r');
             CHECK(group.finalized(actor, std::move(retry_failure)));
@@ -259,6 +267,6 @@ int main() {
     live_group_rejects_outstanding_loan();
     recycled_numeric_ref_cannot_inspect_next_control_slot();
     concurrent_registration_and_finalization_have_one_winner();
-    settlement_failure_rolls_back_terminal_resource_seal();
+    settlement_failure_keeps_terminal_resource_seal_retryable();
     every_finalization_allocation_failure_is_retryable();
 }
