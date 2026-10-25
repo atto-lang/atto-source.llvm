@@ -251,7 +251,7 @@ private:
         expected = Phase::settling;
         if (phase_.compare_exchange_strong(
                 expected, Phase::ready,
-                std::memory_order_release, std::memory_order_acquire))
+                std::memory_order_acq_rel, std::memory_order_acquire))
             return true;
         if (expected == Phase::settling_cancelled) {
             phase_.store(Phase::cancelled, std::memory_order_release);
