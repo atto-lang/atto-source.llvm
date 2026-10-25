@@ -195,12 +195,19 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         pom = v3.git_blob_sha(b"<project/>\n")
         doc = json.loads(PLAN)
         doc["commands"] = [{
-            "argv": ["mvn", "-o", "-B", "test"],
+            "argv": ["mvn", "-o", "-C", "-B", "test"],
             "cwd": ".",
             "timeout_seconds": 300,
         }]
         with self.assertRaisesRegex(v3.Denied, "bind exact pom.xml"):
             v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+        no_checksum = json.loads(json.dumps(doc))
+        no_checksum["commands"][0]["argv"] = ["mvn", "-o", "-B", "test"]
+        with self.assertRaisesRegex(v3.Denied, "strict checksums"):
+            v3.validate_test_plan(
+                (json.dumps(no_checksum) + "\n").encode(), 669
+            )
 
         doc["maven_pom_blob_sha"] = pom
         doc["maven_prefetch_artifacts"] = [
