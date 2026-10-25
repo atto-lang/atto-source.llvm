@@ -1,0 +1,1 @@
+pub fnc main(): int { do match 1 over on 1 -> { return 1; } on _ -> { return 0; } end return 0; }

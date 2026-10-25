@@ -896,6 +896,29 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    # Dispatch return destinations are not yet lowered by the native scalar
+    # frontend. These cases must fail before emitting any LLVM IR. In
+    # particular, nb is a nonblocking channel/select modifier, not permission
+    # for await inside match/switch arms.
+    oreslang_contract_test(native_value_match_arm_result_failclosed
+        dispatch-unsupported-value-match.ores
+        --diagnostic "native value match/switch requires ARM_RESULT dispatch lowering")
+    oreslang_contract_test(native_value_switch_arm_result_failclosed
+        dispatch-unsupported-value-switch.ores
+        --diagnostic "native value match/switch requires ARM_RESULT dispatch lowering")
+    oreslang_contract_test(native_do_match_function_return_failclosed
+        dispatch-unsupported-do-match.ores
+        --diagnostic "native procedural do match/switch requires FUNCTION_RETURN dispatch lowering")
+    oreslang_contract_test(native_do_switch_function_return_failclosed
+        dispatch-unsupported-do-switch.ores
+        --diagnostic "native procedural do match/switch requires FUNCTION_RETURN dispatch lowering")
+    oreslang_contract_test(native_nb_match_rejected
+        dispatch-invalid-nb-match.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
+    oreslang_contract_test(native_nb_switch_rejected
+        dispatch-invalid-nb-switch.ores
+        --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
+
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
