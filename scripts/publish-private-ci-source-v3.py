@@ -24,8 +24,24 @@ import tempfile
 SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
 SOURCE_REPO_ID = 1410897874
 SOURCE_BRANCH = "main"
+SOURCE_REVIEW_AUTHORITY_PR = 958
+SOURCE_REVIEW_LOGIN = "ORESoftware"
+SOURCE_REVIEW_USER_ID = 11139560
 CARRIER_REVIEW_LOGIN = "ORESoftware"
 CARRIER_REVIEW_USER_ID = 11139560
+MAX_SOURCE_GOVERNANCE_FILE = 1024 * 1024
+REVIEWED_SOURCE_GOVERNANCE_PATHS = (
+    ".github/CODEOWNERS",
+    ".github/private-ci-approved-repositories.txt",
+    ".github/private-ci-carrier-contracts.json",
+    ".github/workflows/private-ci-governance.yml",
+    "docs/security/CI_PRIVATE_SOURCE_MIRRORING.md",
+    "scripts/audit-private-ci-governance.py",
+    "scripts/publish-private-ci-source-v3.py",
+    "scripts/run-in-private-ci-destination.sh",
+    "scripts/test-audit-private-ci-governance.py",
+    "scripts/test-publish-private-ci-source-v3.py",
+)
 SELF_PATH = "scripts/publish-private-ci-source-v3.py"
 POLICY_PATH = ".github/private-ci-approved-repositories.txt"
 CONTRACT_PATH = ".github/private-ci-carrier-contracts.json"
@@ -412,6 +428,173 @@ def source_protection():
                      "source protected-main SHA invalid")
 
 
+def latest_source_authority_review():
+    reviews = gh_api_list(
+        f"repos/{SOURCE_REPO}/pulls/{SOURCE_REVIEW_AUTHORITY_PR}/reviews?per_page=100"
+    )
+    if len(reviews) >= 100:
+        raise Denied("source authority review history exceeds bounded page")
+    matching = []
+    seen_ids = set()
+    for review in reviews:
+        if not isinstance(review, dict):
+            raise Denied("source authority review history malformed")
+        review_id = review.get("id")
+        if (not isinstance(review_id, int) or isinstance(review_id, bool)
+                or review_id <= 0 or review_id in seen_ids):
+            raise Denied("source authority review history has invalid IDs")
+        seen_ids.add(review_id)
+        user = review.get("user")
+        if (isinstance(user, dict)
+                and user.get("id") == SOURCE_REVIEW_USER_ID
+                and isinstance(user.get("login"), str)
+                and user["login"].casefold() == SOURCE_REVIEW_LOGIN.casefold()):
+            valid_sha(
+                review.get("commit_id"), "source authority review commit SHA"
+            )
+            submitted = github_timestamp(
+                review.get("submitted_at"), "source authority review timestamp"
+            )
+            if not isinstance(review.get("state"), str):
+                raise Denied("source authority review state invalid")
+            matching.append((submitted, review_id, review))
+    if not matching:
+        raise Denied("independent source authority review is missing")
+    matching.sort(key=lambda item: (item[0], item[1]))
+    return matching[-1][2]
+
+
+def source_governance_tree_entries(commit_sha):
+    commit_sha = valid_sha(commit_sha, "source governance commit SHA")
+    commit = gh_api(f"repos/{SOURCE_REPO}/git/commits/{commit_sha}")
+    if commit.get("sha") != commit_sha:
+        raise Denied("source governance commit identity mismatch")
+    tree_sha = valid_sha(
+        commit.get("tree", {}).get("sha"), "source governance root tree SHA"
+    )
+    listing = gh_api(f"repos/{SOURCE_REPO}/git/trees/{tree_sha}?recursive=1")
+    if (listing.get("sha") != tree_sha
+            or listing.get("truncated") is not False
+            or not isinstance(listing.get("tree"), list)):
+        raise Denied("source governance tree listing incomplete")
+
+    wanted = set(REVIEWED_SOURCE_GOVERNANCE_PATHS)
+    found = {}
+    for entry in listing["tree"]:
+        if not isinstance(entry, dict):
+            raise Denied("source governance tree entry malformed")
+        path = entry.get("path")
+        if path not in wanted:
+            continue
+        if path in found:
+            raise Denied("source governance tree has duplicate reviewed path")
+        mode = entry.get("mode")
+        kind = entry.get("type")
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise Denied("source governance path has unsafe Git type/mode: " + path)
+        found[path] = (
+            mode,
+            kind,
+            valid_sha(entry.get("sha"), "source governance blob SHA"),
+        )
+    if set(found) != wanted:
+        raise Denied("source governance tree is missing reviewed paths")
+    return found
+
+
+def review_attested_source_main_sha():
+    repo = gh_api(f"repos/{SOURCE_REPO}")
+    if (repo.get("id") != SOURCE_REPO_ID
+            or repo.get("full_name") != SOURCE_REPO
+            or repo.get("private") is not True
+            or repo.get("visibility") != "private"):
+        raise Denied("source repository identity/privacy mismatch")
+
+    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    if branch.get("name") != SOURCE_BRANCH:
+        raise Denied("source main branch identity changed")
+    main_sha = valid_sha(
+        branch.get("commit", {}).get("sha"), "source main SHA"
+    )
+
+    authority = gh_api(
+        f"repos/{SOURCE_REPO}/pulls/{SOURCE_REVIEW_AUTHORITY_PR}"
+    )
+    head = authority.get("head")
+    base = authority.get("base")
+    author = authority.get("user")
+    if (authority.get("number") != SOURCE_REVIEW_AUTHORITY_PR
+            or authority.get("state") != "closed"
+            or authority.get("merged_at") is None
+            or not isinstance(author, dict)
+            or author.get("id") == SOURCE_REVIEW_USER_ID
+            or not isinstance(head, dict)
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("full_name") != SOURCE_REPO
+            or head["repo"].get("id") != SOURCE_REPO_ID
+            or not isinstance(base, dict)
+            or base.get("ref") != SOURCE_BRANCH
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != SOURCE_REPO
+            or base["repo"].get("id") != SOURCE_REPO_ID):
+        raise Denied(
+            "source authority PR is not an independent merged same-repo main review"
+        )
+    reviewed_head = valid_sha(
+        head.get("sha"), "source authority PR head SHA"
+    )
+
+    review = latest_source_authority_review()
+    submitted = github_timestamp(
+        review.get("submitted_at"), "source authority review timestamp"
+    )
+    merged = github_timestamp(
+        authority.get("merged_at"), "source authority merge timestamp"
+    )
+    if (review.get("state") != "APPROVED"
+            or review.get("commit_id") != reviewed_head
+            or submitted > merged):
+        raise Denied("independent source authority review is stale, late, or not approved")
+
+    reviewed = source_governance_tree_entries(reviewed_head)
+    current = source_governance_tree_entries(main_sha)
+    codeowners = None
+    for path in REVIEWED_SOURCE_GOVERNANCE_PATHS:
+        if current[path] != reviewed[path]:
+            raise Denied(
+                "source governance Git entry drifted after independent review: " + path
+            )
+        reviewed_raw, reviewed_blob = remote_source_file(
+            path, reviewed_head, MAX_SOURCE_GOVERNANCE_FILE
+        )
+        current_raw, current_blob = remote_source_file(
+            path, main_sha, MAX_SOURCE_GOVERNANCE_FILE
+        )
+        if (reviewed_blob != reviewed[path][2]
+                or current_blob != current[path][2]
+                or current_blob != reviewed_blob
+                or current_raw != reviewed_raw):
+            raise Denied(
+                "source governance bytes drifted after independent review: " + path
+            )
+        if path == CODEOWNERS_PATH:
+            codeowners = current_raw
+
+    if codeowners is None:
+        raise Denied("review-attested source governance is incomplete")
+    require_source_security_codeowners(codeowners)
+    return main_sha
+
+
+def authorized_source_main_sha():
+    branch = gh_api(f"repos/{SOURCE_REPO}/branches/{SOURCE_BRANCH}")
+    if branch.get("name") != SOURCE_BRANCH:
+        raise Denied("source main branch identity changed")
+    if branch.get("protected") is True:
+        return source_protection()
+    return review_attested_source_main_sha()
+
+
 def remote_source_file(path, main_sha, max_bytes):
     item = gh_api(f"repos/{SOURCE_REPO}/contents/{path}?ref={main_sha}")
     data = decode_contents(item, path, max_bytes)
@@ -652,8 +835,8 @@ def verify_required_source_blobs(files, required):
 
 
 def protected_authority(repository, source_pr, test_plan):
-    """Attest this exact script plus local policies to protected source main."""
-    main_sha = source_protection()
+    """Attest this exact script plus local policies to authorized source main."""
+    main_sha = authorized_source_main_sha()
     remote_self, remote_self_sha = remote_source_file(
         SELF_PATH, main_sha, 512 * 1024
     )
