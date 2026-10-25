@@ -164,6 +164,62 @@ static void cancelled_slot_reuse_is_generation_fenced() {
     finish(f);
 }
 
+static void cancelled_fifo_tombstone_cannot_hide_free_credit() {
+    Fixture f;
+    setup(f);
+    NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
+    CHECK(admission.try_acquire(8));
+
+    NativeAsyncMailboxAdmission::Handle old_handle;
+    auto old_ticket = reserve(f, 51);
+    CHECK(admission.register_waiter(
+        8, f.scheduler, old_ticket, &old_handle) == Registration::Waiting);
+    CHECK(admission.cancel(old_handle));
+    admission.release_acquired(8);
+    CHECK(admission.used_frames() == 0);
+
+    NativeAsyncMailboxAdmission::Handle next_handle;
+    auto next_ticket = reserve(f, 52);
+    CHECK(admission.register_waiter(
+        8, f.scheduler, next_ticket, &next_handle) == Registration::Transferred);
+    CHECK(admission.transferred(next_handle));
+    CHECK(admission.commit(next_handle) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(f.ready.load() == 1);
+    admission.release_acquired(8);
+    finish(f);
+}
+
+static void aborted_transfer_hands_credit_to_next_waiter() {
+    Fixture f;
+    setup(f);
+    NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
+    CHECK(admission.try_acquire(8));
+
+    NativeAsyncMailboxAdmission::Handle first, second;
+    auto t1 = reserve(f, 61);
+    auto t2 = reserve(f, 62);
+    CHECK(admission.register_waiter(
+        8, f.scheduler, t1, &first) == Registration::Waiting);
+    CHECK(admission.register_waiter(
+        8, f.scheduler, t2, &second) == Registration::Waiting);
+
+    admission.release_acquired(8);
+    CHECK(admission.transferred(first));
+    CHECK(!admission.transferred(second));
+    CHECK(admission.abort_transferred(first));
+    CHECK(!admission.transferred(first));
+    CHECK(admission.transferred(second));
+    CHECK(admission.pending_waiters() == 0);
+    CHECK(admission.used_frames() == 1);
+    CHECK(admission.commit(second) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(ores_native_actor_scheduler_drain(f.scheduler));
+    CHECK(f.ready.load() == 1);
+    CHECK(f.failed.load() == 0);
+    admission.release_acquired(8);
+    finish(f);
+}
+
 static void cancel_and_credit_release_have_exactly_one_winner() {
     Fixture f;
     setup(f);
@@ -245,6 +301,8 @@ int main() {
     fifo_transfer_prevents_sync_credit_steal();
     target_stop_fails_reserved_waiter_without_false_admission();
     cancelled_slot_reuse_is_generation_fenced();
+    cancelled_fifo_tombstone_cannot_hide_free_credit();
+    aborted_transfer_hands_credit_to_next_waiter();
     cancel_and_credit_release_have_exactly_one_winner();
     seal_fails_waiters_but_not_irrevocable_transfers();
     return 0;
