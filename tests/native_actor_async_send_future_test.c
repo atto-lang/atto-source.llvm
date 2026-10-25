@@ -249,6 +249,48 @@ static void descriptor_bound_and_generation_fence(void) {
     close_one(scheduler, actor);
 }
 
+/* Admission, not eventual handler execution, settles a READY send Future.
+ * STOP may abandon queued USER data without retroactively revoking the
+ * already-issued mailbox-admission receipt. */
+static void sealed_stop_preserves_ready_admission(void) {
+    State state = {0};
+    atomic_store(&state.block, 1);
+    OresNativeActorRef actor = {0};
+    OresNativeActorScheduler* scheduler = open_one(&state, 2, &actor);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, actor, 601)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state);
+
+    OresNativeAsyncSendTicket ready = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, actor, 602, &ready) == ORES_NATIVE_SEND_ACCEPTED);
+    expect_state(scheduler, ready,
+                 ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+
+    /* The active first callback cannot exit yet. The second accepted
+     * message is queued and will be abandoned by sealed STOP. */
+    CHECK(ores_native_actor_scheduler_stop_sealed(scheduler, actor));
+    expect_state(scheduler, ready,
+                 ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(!ores_native_actor_scheduler_cancel_async_send(scheduler, ready));
+    OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
+    CHECK(ores_native_actor_scheduler_await_async_send(
+        scheduler, ready, &outcome));
+    CHECK(outcome == ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, ready));
+    OresNativeAsyncSendState stale_state = ORES_NATIVE_ASYNC_SEND_INVALID;
+    CHECK(!ores_native_actor_scheduler_async_send_status(
+        scheduler, ready, &stale_state, &outcome));
+
+    atomic_store_explicit(&state.block, 0, memory_order_release);
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, actor));
+    CHECK(atomic_load(&state.observed_count) == 1);
+    CHECK(state.observed[0] == 601);
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void live_future_fences_scheduler_destruction(void) {
     State state = {0};
     OresNativeActorRef actor = {0};
@@ -275,8 +317,9 @@ int main(void) {
     fifo_future_owns_released_credit_before_sync_sender();
     cancel_pending_never_delivers_payload();
     stop_fails_pending_but_not_ready_future();
+    sealed_stop_preserves_ready_admission();
     descriptor_bound_and_generation_fence();
     live_future_fences_scheduler_destruction();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS immediate=1 fifo=1 cancel=1 stop=1 bound=256 aba=1 destroy_fence=1");
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1");
     return 0;
 }
