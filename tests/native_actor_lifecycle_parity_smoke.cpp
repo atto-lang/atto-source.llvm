@@ -3,6 +3,7 @@
 // This does NOT certify guest repeated-await lowering or send_async.
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include <chrono>
+#include <exception>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -124,11 +125,16 @@ static void single_flight_and_control_precedence() {
     std::promise<void> entered, release;
     auto entered_future = entered.get_future();
     auto release_future = release.get_future().share();
+    std::exception_ptr holder_error;
     std::thread holder([&] {
-        CHECK(group.run_user_turn(actor, [&] {
-            entered.set_value();
-            release_future.wait(); // TEST ONLY: deterministic host-side gate
-        }) == NativeActorGroup::UserTurn::executed);
+        try {
+            CHECK(group.run_user_turn(actor, [&] {
+                entered.set_value();
+                release_future.wait(); // TEST ONLY: deterministic host-side gate
+            }) == NativeActorGroup::UserTurn::executed);
+        } catch (...) {
+            holder_error = std::current_exception();
+        }
     });
     if (entered_future.wait_for(5s) != std::future_status::ready) {
         release.set_value();
@@ -141,6 +147,7 @@ static void single_flight_and_control_precedence() {
     const auto blocked = group.run_control_turn(actor);
     release.set_value();
     holder.join();
+    if (holder_error) std::rethrow_exception(holder_error);
     CHECK(busy == NativeActorGroup::UserTurn::busy);
     CHECK(reserved);
     CHECK(blocked == NativeActorGroup::ControlTurn::busy);
@@ -149,10 +156,40 @@ static void single_flight_and_control_precedence() {
     CHECK(group.finalized(actor));
     actor.get_done().get();
 }
+static void stale_numeric_aba_cannot_authorize_new_incarnation() {
+    NativeActorGroup group(8805, 1);
+    auto old = group.adopt(8805, 1, 1, [] {});
+    CHECK(group.mark_ready(old));
+    CHECK(group.finalized(old));
+    old.get_ready().get();
+    old.get_done().get();
+
+    // Deliberately collide *all three numeric labels* to prove that the
+    // opaque shared lifetime ticket, not just numeric equality, is authority.
+    auto current = group.adopt(8805, 1, 1, [] {});
+    CHECK(old == current);
+    CHECK(!old.same_incarnation(current));
+    CHECK(group.mark_ready(current));
+    int callbacks = 0;
+    CHECK(!group.enqueue_control(old, [&] { ++callbacks; }));
+    CHECK(group.run_user_turn(old, [&] { ++callbacks; })
+          == NativeActorGroup::UserTurn::retired);
+    CHECK(!group.finalized(old));
+    CHECK(!group.enqueue_control(old, [&] { ++callbacks; }));
+    CHECK(callbacks == 0);
+    CHECK(group.run_user_turn(current, [&] { ++callbacks; })
+          == NativeActorGroup::UserTurn::executed);
+    CHECK(callbacks == 1);
+    CHECK(group.finalized(current));
+    current.get_done().get();
+    CHECK(fails([&] { old.retain_resource_loan(); }));
+}
+
 int main() {
     repeated_success_observations();
     failed_startup_replayed_to_all_observers();
     terminal_loan_and_control_fencing();
     single_flight_and_control_precedence();
+    stale_numeric_aba_cannot_authorize_new_incarnation();
     std::cout << "ACTOR_LIFECYCLE_L01_L05_HOST_PASS\n";
 }
