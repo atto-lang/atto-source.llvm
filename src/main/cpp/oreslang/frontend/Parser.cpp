@@ -1924,6 +1924,19 @@ private:
             }
             require("end");
 
+            if (arms.empty()) {
+                if (!has_fallback)
+                    fail("native procedural dispatch requires at least one arm");
+                Statement unconditional;
+                unconditional.kind = Statement::Kind::Conditional;
+                unconditional.offset = offset;
+                unconditional.condition = make_expression(
+                    Expression::Kind::Boolean, offset);
+                unconditional.condition->boolean = true;
+                unconditional.then_statements = std::move(fallback);
+                return unconditional;
+            }
+
             std::vector<Statement> tail = std::move(fallback);
             for (auto it = arms.rbegin(); it != arms.rend(); ++it) {
                 Statement conditional;
@@ -1934,17 +1947,6 @@ private:
                 conditional.else_statements = std::move(tail);
                 tail.clear();
                 tail.push_back(std::move(conditional));
-            }
-
-            if (tail.empty()) {
-                Statement unconditional;
-                unconditional.kind = Statement::Kind::Conditional;
-                unconditional.offset = offset;
-                unconditional.condition = make_expression(
-                    Expression::Kind::Boolean, offset);
-                unconditional.condition->boolean = true;
-                unconditional.then_statements = std::move(fallback);
-                return unconditional;
             }
             return std::move(tail.front());
         };
