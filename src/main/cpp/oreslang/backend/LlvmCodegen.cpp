@@ -1697,13 +1697,132 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
 
         /*
-         * A lifecycle await splits trusted-main execution at one verified point.
-         * get_ready resumes before stop; get_done requests stop first and resumes
-         * only after the scheduler's physical terminal acknowledgement. Neither
-         * path blocks an actor carrier.
+         * Lifecycle suspension stays physically outside actor carriers. A
+         * readiness->DONE sequence therefore uses two runtime bridges:
+         *   1) readiness resumes on the root CONTROL lane and may emit source
+         *      sends admitted after readiness;
+         *   2) trusted outer-host code issues the nonblocking stop request;
+         *   3) DONE suspends again and resumes only after physical quiescence.
+         *
+         * Repeated observation of either barrier is parser-collapsed to the
+         * first physical suspension.
          */
         llvm::Value* awaited_result = nullptr;
-        if (!fn.ready_await_actor.empty()) {
+        if (!fn.ready_await_actor.empty() && !fn.done_await_actor.empty()) {
+            if (fn.ready_await_actor != fn.done_await_actor)
+                throw std::runtime_error(
+                    "readiness and get_done lowering require the same ActorRef");
+
+            auto* continuation_type =
+                llvm::FunctionType::get(i64, {native_ptr}, false);
+
+            /*
+             * Final DONE continuation: it owns the scalar result. The ActorRef
+             * allocation remains alive until this callback returns, after which
+             * trusted runtime reclamation joins and destroys the actor.
+             */
+            auto* done_resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".done_continuation",
+                module);
+            auto* done_admitted =
+                llvm::BasicBlock::Create(context, "admitted", done_resume);
+            llvm::IRBuilder<> done_resumed(done_admitted);
+            auto* done_actor = &*done_resume->arg_begin();
+            done_actor->setName(fn.done_await_actor);
+
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            llvm::Value* done_result = lower(
+                *fn.result,
+                done_resumed,
+                i64,
+                no_storage,
+                no_fields,
+                declarations,
+                nullptr);
+            done_resumed.CreateRet(done_result);
+
+            /*
+             * Readiness continuation: source sends lexically between READY and
+             * DONE execute on the resumed root CONTROL lane. It returns only an
+             * internal stage token; the final function result is produced by
+             * the DONE continuation above.
+             */
+            auto* ready_resume = llvm::Function::Create(
+                continuation_type,
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".ready_continuation",
+                module);
+            auto* ready_admitted =
+                llvm::BasicBlock::Create(context, "admitted", ready_resume);
+            llvm::IRBuilder<> ready_resumed(ready_admitted);
+            auto* ready_actor = &*ready_resume->arg_begin();
+            ready_actor->setName(fn.ready_await_actor);
+
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind != ActorAction::Kind::Send) continue;
+                const auto& send = fn.actor_sends.at(action.index);
+                if (send.reference != fn.ready_await_actor)
+                    throw std::runtime_error(
+                        "await continuation references unexpected ActorRef");
+                llvm::Value* payload = lower(
+                    *send.payload,
+                    ready_resumed,
+                    i64,
+                    no_storage,
+                    no_fields,
+                    declarations,
+                    nullptr);
+                ready_resumed.CreateCall(
+                    send.await_admission ? sourceSendAsyncAwait : sourceSend,
+                    {ready_actor, payload});
+            }
+            ready_resumed.CreateRet(llvm::ConstantInt::get(i64, 0));
+
+            llvm::Value* ready_continuation_ptr =
+                builder.CreatePointerCast(ready_resume, native_ptr);
+            (void)builder.CreateCall(
+                sourceAwaitReady,
+                {
+                    actorRefs.at(fn.ready_await_actor),
+                    ready_continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.ready_await_offset))
+                },
+                "future.await.ready.stage.result");
+
+            /*
+             * Never call await_done from the readiness callback: that callback
+             * is executing on the root actor CONTROL lane. Stop admission and
+             * the second physical wait belong to trusted outer-host code.
+             */
+            for (const auto& action : fn.actor_actions) {
+                if (action.kind != ActorAction::Kind::Stop) continue;
+                const auto& stopped = fn.actor_stops.at(action.index);
+                if (stopped != fn.done_await_actor)
+                    throw std::runtime_error(
+                        "get_done continuation references unexpected ActorRef");
+                builder.CreateCall(
+                    sourceRequestStop,
+                    {actorRefs.at(stopped)});
+            }
+
+            llvm::Value* done_continuation_ptr =
+                builder.CreatePointerCast(done_resume, native_ptr);
+            awaited_result = builder.CreateCall(
+                sourceAwaitDone,
+                {
+                    actorRefs.at(fn.done_await_actor),
+                    done_continuation_ptr,
+                    llvm::ConstantInt::get(
+                        llvm::cast<llvm::IntegerType>(i64),
+                        static_cast<std::uint64_t>(fn.done_await_offset))
+                },
+                "future.await.done.result");
+        } else if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
                 llvm::FunctionType::get(i64, {native_ptr}, false);
             auto* resume = llvm::Function::Create(
