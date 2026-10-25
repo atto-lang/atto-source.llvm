@@ -14,9 +14,15 @@ using oreslang::FunctionEffects;
 
 struct Expression {};
 struct Field {
+    enum class ScalarType { I64, Bool };
     std::string name;
     bool field_mutable = true;
     std::unique_ptr<Expression> initializer = std::make_unique<Expression>();
+    ScalarType scalar_type = ScalarType::I64;
+    bool heap_owned = false, int_array = false, record_view = false;
+    bool new_class = false, move_class = false, owner_mutable = false;
+    std::string array_record_class, class_name, move_source, sum_type;
+    std::vector<int> constructor_arguments;
 };
 struct Parameter { std::string name; };
 struct Write {
@@ -43,6 +49,14 @@ struct Method {
     std::unique_ptr<Expression> result;
     std::vector<int> actor_field_writes, locals, actor_sends, actor_stops,
         actor_actions, statements, early_returns, actor_spawns;
+    enum class AwaitForm { None, DirectHasFuture };
+    AwaitForm ready_await_form = AwaitForm::None;
+    std::vector<int> generic_parameters, caught_throw_defers;
+    std::unique_ptr<Expression> scalar_while, caught_throw_value;
+    std::string ready_await_actor, done_await_actor, ready_future_name,
+        ready_future_actor, catch_binding, return_class, return_sum,
+        pending_return_type_alias, method_owner;
+    bool native_internal = false;
 };
 struct Actor {
     bool sealed_state = true;
@@ -100,6 +114,35 @@ int main() {
         a.on_message.actor_state_loan.reset();
         a.on_message.result=std::make_unique<Expression>();
         a.on_message.returns_void=true;});
+
+    // Parser-bypassing ASTs cannot smuggle other storage/lifecycle lanes.
+    must_reject([](Actor& a){a.fields.front().scalar_type=Field::ScalarType::Bool;});
+    must_reject([](Actor& a){a.fields.front().heap_owned=true;});
+    must_reject([](Actor& a){a.fields.front().int_array=true;});
+    must_reject([](Actor& a){a.fields.front().record_view=true;});
+    must_reject([](Actor& a){a.fields.front().array_record_class="R";});
+    must_reject([](Actor& a){a.fields.front().class_name="R";});
+    must_reject([](Actor& a){a.fields.front().new_class=true;});
+    must_reject([](Actor& a){a.fields.front().constructor_arguments.push_back(1);});
+    must_reject([](Actor& a){a.fields.front().move_class=true;});
+    must_reject([](Actor& a){a.fields.front().move_source="other";});
+    must_reject([](Actor& a){a.fields.front().owner_mutable=true;});
+    must_reject([](Actor& a){a.fields.front().sum_type="Option";});
+    must_reject([](Actor& a){a.on_message.generic_parameters.push_back(1);});
+    must_reject([](Actor& a){a.on_message.scalar_while=std::make_unique<Expression>();});
+    must_reject([](Actor& a){a.on_message.ready_await_actor="worker";});
+    must_reject([](Actor& a){a.on_message.done_await_actor="worker";});
+    must_reject([](Actor& a){a.on_message.ready_await_form=Method::AwaitForm::DirectHasFuture;});
+    must_reject([](Actor& a){a.on_message.ready_future_name="f";});
+    must_reject([](Actor& a){a.on_message.ready_future_actor="w";});
+    must_reject([](Actor& a){a.on_message.caught_throw_value=std::make_unique<Expression>();});
+    must_reject([](Actor& a){a.on_message.caught_throw_defers.push_back(1);});
+    must_reject([](Actor& a){a.on_message.catch_binding="err";});
+    must_reject([](Actor& a){a.on_message.return_class="R";});
+    must_reject([](Actor& a){a.on_message.return_sum="Option";});
+    must_reject([](Actor& a){a.on_message.pending_return_type_alias="Alias";});
+    must_reject([](Actor& a){a.on_message.method_owner="owner";});
+    must_reject([](Actor& a){a.on_message.native_internal=true;});
 
     must_reject([](Actor& a){a.on_message.parameters.clear();});
     must_reject([](Actor& a){a.on_message.parameters.emplace_back();});
