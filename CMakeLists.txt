@@ -754,6 +754,15 @@ if(BUILD_TESTING)
         authority-guard-unknown-pending.ores
         --diagnostic "native opaque any/unknown unsupported")
 
+    # Return-position admission must also fail closed; a parameter-only
+    # parser guard would not protect opaque return value ownership.
+    oreslang_contract_test(native_opaque_any_return_explicitly_unsupported
+        authority-return-any-pending.ores
+        --diagnostic "native opaque any/unknown unsupported")
+    oreslang_contract_test(native_opaque_unknown_return_explicitly_unsupported
+        authority-return-unknown-pending.ores
+        --diagnostic "native opaque any/unknown unsupported")
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
