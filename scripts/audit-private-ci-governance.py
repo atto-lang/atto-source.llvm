@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Source-free policy audit, NOT authorization to export private source.
 
-Only an independently reviewed protected-main publisher may export private
-source. This preflight checks local policy structure and, with --live, rejects
-unsuitable current source visibility/branch protection. No writes or transfers.
+Only the V3 publisher may authorize export. Source export always requires
+enforced protected-main governance. This preflight checks local policy
+structure; --live diagnoses that mandatory source gate. V3 may separately use
+exact review attestation for an unprotected private carrier. No writes or
+transfers.
 """
 import argparse
 import json
@@ -73,7 +75,10 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
         if "@ORESoftware" not in rules.get(path, []):
             raise GovernanceError(f"missing exact CODEOWNER: {path}")
     doc = (root / DOC_PATH).read_text(encoding="utf-8")
-    for phrase in ("protected", "private", "tree", "canary", "Direct GitHub connector"):
+    for phrase in (
+        "protected", "private", "tree", "canary",
+        "Direct GitHub connector", "review-attested",
+    ):
         if phrase not in doc:
             raise GovernanceError(f"missing documented security condition: {phrase}")
     return approved
@@ -112,7 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--live", action="store_true",
-                        help="require live source identity and protected-main checks")
+                        help="diagnose mandatory source protected-main mode; V3 separately verifies carrier review attestation")
     args = parser.parse_args()
     try:
         approved = check_policy_files(args.root)
@@ -126,7 +131,7 @@ def main() -> int:
                 _github_get("branches/main", token),
                 _github_get("branches/main/protection", token),
             )
-            print("Live source and minimum protection verified; independent approval still required.")
+            print("Mandatory source protected-main mode verified; carrier review attestation, if used, is validated separately by V3.")
         return 0
     except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
         print(f"DENIED: {exc}", file=sys.stderr)
