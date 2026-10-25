@@ -20,12 +20,22 @@ struct Field {
     bool field_mutable = true;
     std::unique_ptr<Expression> initializer = std::make_unique<Expression>();
     ScalarType scalar_type = ScalarType::I64;
+    ScalarType array_element_type = ScalarType::I64;
+    std::string pending_type_alias;
     bool heap_owned = false, int_array = false, record_view = false;
     bool new_class = false, move_class = false, owner_mutable = false;
     std::string array_record_class, class_name, move_source, sum_type;
     std::vector<int> constructor_arguments;
 };
-struct Parameter { std::string name; };
+struct Parameter {
+    enum class ScalarType { I64, Bool, String };
+    enum class Mode { Value, Borrow, BorrowMut };
+    std::string name;
+    std::string class_name, generic_type, pending_type_alias, sum_type;
+    ScalarType scalar_type = ScalarType::I64;
+    Mode mode = Mode::Value;
+    Parameter(std::string n = {}) : name(std::move(n)) {}
+};
 struct Write {
     std::string field;
     std::unique_ptr<Expression> expression = std::make_unique<Expression>();
@@ -143,6 +153,26 @@ int main() {
     };
     // Mutation regression: a forged sealed loan with an otherwise valid
     // legacy handler must still be rejected (no other missing data masks it).
+    // Reject parser-bypassing legacy storage/parameter metadata previously ignored.
+    reject_legacy([](Actor& a){a.fields.front().heap_owned=true;});
+    reject_legacy([](Actor& a){a.fields.front().int_array=true;});
+    reject_legacy([](Actor& a){a.fields.front().record_view=true;});
+    reject_legacy([](Actor& a){a.fields.front().array_record_class="R";});
+    reject_legacy([](Actor& a){a.fields.front().class_name="R";});
+    reject_legacy([](Actor& a){a.fields.front().new_class=true;});
+    reject_legacy([](Actor& a){a.fields.front().constructor_arguments.push_back(1);});
+    reject_legacy([](Actor& a){a.fields.front().move_class=true;});
+    reject_legacy([](Actor& a){a.fields.front().move_source="other";});
+    reject_legacy([](Actor& a){a.fields.front().owner_mutable=true;});
+    reject_legacy([](Actor& a){a.fields.front().sum_type="Option";});
+    reject_legacy([](Actor& a){a.fields.front().pending_type_alias="Alias";});
+    reject_legacy([](Actor& a){a.fields.front().array_element_type=Field::ScalarType::Bool;});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().scalar_type=Parameter::ScalarType::Bool;});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().mode=Parameter::Mode::BorrowMut;});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().class_name="R";});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().generic_type="T";});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().pending_type_alias="Alias";});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().sum_type="Option";});
     reject_legacy([](Actor& a){
         a.on_message.actor_state_loan=std::make_unique<Loan>();
     });
@@ -200,6 +230,15 @@ int main() {
     must_reject([](Actor& a){a.on_message.method_owner="owner";});
     must_reject([](Actor& a){a.on_message.native_internal=true;});
 
+    // Sealed actors also require an unaliased, by-value i64 message ABI.
+    must_reject([](Actor& a){a.fields.front().pending_type_alias="Alias";});
+    must_reject([](Actor& a){a.fields.front().array_element_type=Field::ScalarType::Bool;});
+    must_reject([](Actor& a){a.on_message.parameters.front().scalar_type=Parameter::ScalarType::Bool;});
+    must_reject([](Actor& a){a.on_message.parameters.front().mode=Parameter::Mode::Borrow;});
+    must_reject([](Actor& a){a.on_message.parameters.front().class_name="R";});
+    must_reject([](Actor& a){a.on_message.parameters.front().generic_type="T";});
+    must_reject([](Actor& a){a.on_message.parameters.front().pending_type_alias="Alias";});
+    must_reject([](Actor& a){a.on_message.parameters.front().sum_type="Option";});
     must_reject([](Actor& a){a.on_message.parameters.clear();});
     must_reject([](Actor& a){a.on_message.parameters.emplace_back();});
     must_reject([](Actor& a){a.on_message.parameters.front().name.clear();});
@@ -250,7 +289,7 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 6 || rejected != 81)
+    if (admitted != 6 || rejected != 108)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
