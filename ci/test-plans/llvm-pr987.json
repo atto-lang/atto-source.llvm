@@ -1,0 +1,101 @@
+{
+  "schema": "ores-private-ci-test-plan-v1",
+  "source_repo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "allowed_prs": [
+    987
+  ],
+  "status": "REVIEW_ONLY_NOT_AUTHORIZATION",
+  "commands": [
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-private-ci",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DBUILD_TESTING=ON"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "argv": [
+        "cmake",
+        "--build",
+        "build-private-ci",
+        "--parallel",
+        "2"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-c",
+        "import json,subprocess,sys\np=subprocess.run([\"ctest\",\"--test-dir\",\"build-private-ci\",\"--show-only=json-v1\"],capture_output=True,text=True)\nif p.returncode: sys.stderr.write(p.stderr); raise SystemExit(p.returncode)\nnames={t.get(\"name\") for t in json.loads(p.stdout).get(\"tests\",[])}\nrequired=[\"native_actor_lifecycle_l01_l05_host\",\"native_actor_lifecycle_l01_l05_host_asan_ubsan\",\"source_actor_stop_before_ready\",\"source_actor_stop_before_ready_asan_ubsan\",\"native_continuation_ready_cancel_resume_race\",\"native_continuation_ready_cancel_resume_race_asan_ubsan\",\"native_continuation_wake_escrow_stop_cancel_aba\",\"native_priority_user_inbox_control_isolation\",\"native_actor_resource_loan_terminal_race\",\"native_scalar_future_single_winner_control\"]\nmissing=sorted(set(required)-names)\nif missing: raise SystemExit(\"missing required LLVM PR987 CTests: \"+\",\".join(missing))\nprint(\"LLVM_PR987_CTEST_INVENTORY_PASS count=%d\"%len(required))"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "stdout_contains": "LLVM_PR987_CTEST_INVENTORY_PASS count=10"
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "tests/test_lifecycle_repeat_observer_probe.py"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-private-ci",
+        "-R",
+        "^(native_actor_lifecycle_l01_l05_host|native_actor_lifecycle_l01_l05_host_asan_ubsan|source_actor_stop_before_ready|source_actor_stop_before_ready_asan_ubsan|native_continuation_ready_cancel_resume_race|native_continuation_ready_cancel_resume_race_asan_ubsan|native_continuation_wake_escrow_stop_cancel_aba|native_priority_user_inbox_control_isolation|native_actor_resource_loan_terminal_race|native_scalar_future_single_winner_control)$",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "python3",
+        "tests/lifecycle_repeat_observer_parity_probe.py",
+        "--compiler",
+        "build-private-ci/oreslang-llvmc",
+        "--require-ir-admission"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 180
+    },
+    {
+      "argv": [
+        "python3",
+        "tests/source_actor_e2e.py",
+        "--compiler",
+        "build-private-ci/oreslang-llvmc",
+        "--clang",
+        "clang",
+        "--root",
+        "."
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-private-ci",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 3600
+    }
+  ]
+}
