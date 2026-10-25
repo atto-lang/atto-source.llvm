@@ -3087,6 +3087,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Source-compiled JVM/native declaration parity slice. This deliberately tests
+# native scalar aliases only; generic and trait/interface forms MUST fail closed.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_FORWARD_TYPE_CLANG
+        NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14 REQUIRED)
+    add_test(NAME native_declare_type_scalar_source_parity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_declare_type_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_FORWARD_TYPE_CLANG}")
+    set_tests_properties(native_declare_type_scalar_source_parity PROPERTIES TIMEOUT 120)
+endif()
+
 # Host-only native proxy slab parity with Java ActorProxyRequestSlab.
 # The borrowed arena span requires caller-owned actor-turn fencing; this is
 # not guest Oreslang lowering or a live HTTP/CONNECT transport.

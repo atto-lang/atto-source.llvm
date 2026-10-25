@@ -447,7 +447,15 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (accept("type")) {
+                parse_scalar_type_alias(exported);
+                continue;
+            }
+            if (token_.text == "trait" || token_.text == "interface")
+                fail("native trait/interface definitions require a verified type-level linker and lowering");
             if (accept("enum")) {
+                if (token_.text != "MaxActorThreads")
+                    fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
                 if (exported) fail("built-in MaxActorThreads enum cannot be public in the native subset");
                 built_in_actor_threads_enum();
                 continue;
@@ -462,6 +470,8 @@ public:
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!defined_type_aliases_.empty() || !forwards_.empty())
+                    fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
                 if (accept("conforms")) {
                     do program.conforms.push_back(identifier()); while (accept(","));
@@ -482,6 +492,14 @@ public:
                 && !(wrapped_module && token_.text == "end")) {
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (accept("declare")) {
+                parse_type_forward();
+                continue;
+            }
+            if (accept("type")) {
+                parse_scalar_type_alias(false);
+                continue;
+            }
             bool public_class = token_.text == "pub" && peek_next().text == "define";
             if (public_class) advance();
             if (accept("@")) {
@@ -496,12 +514,22 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (accept("type")) {
+                    parse_scalar_type_alias(public_class);
+                    continue;
+                }
+                if (token_.text == "trait" || token_.text == "interface")
+                    fail("native trait/interface definitions require a verified type-level linker and lowering");
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
                     fail("native serial actor requires shared HTTP/message lane lowering");
                 }
-                if (accept("enum")) built_in_actor_threads_enum();
+                if (accept("enum")) {
+                    if (token_.text != "MaxActorThreads")
+                        fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
+                    built_in_actor_threads_enum();
+                }
                 else if (accept("class")) { auto cls = class_declaration(); cls.exported = public_class; program.classes.push_back(std::move(cls)); }
                 else if (accept("actor")) program.actors.push_back(actor_declaration());
                 else if (accept_transform_pipe_modifier()) {
@@ -517,6 +545,17 @@ public:
         for (auto& method : methods_) program.functions.push_back(std::move(method));
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
+        for (const auto& forward : forwards_) {
+            if (!defined_type_aliases_.count(forward.first))
+                throw std::runtime_error("unresolved native forward type '" + forward.first + "'");
+        }
+        for (const auto& cls : program.classes)
+            if (defined_type_aliases_.count(cls.name))
+                throw std::runtime_error("native nominal class collides with type alias '" + cls.name + "'");
+        for (const auto& actor : program.actors)
+            if (defined_type_aliases_.count(actor.name))
+                throw std::runtime_error("native nominal actor collides with type alias '" + actor.name + "'");
+        resolve_scalar_type_aliases(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty())
             fail("expected at least one function or actor");
@@ -537,6 +576,136 @@ private:
         return name.rfind("Option<", 0) == 0 || name.rfind("Result<", 0) == 0;
     }
     static bool sum_variant(std::string_view name) { return name == "Some" || name == "None" || name == "Ok" || name == "Err"; }
+
+    struct ForwardType {
+        bool exported = false;
+    };
+    struct ScalarAlias {
+        std::string target;
+        bool exported = false;
+    };
+
+    void parse_type_forward() {
+        const bool exported = accept("pub");
+        if (!accept("type")) {
+            if (token_.text == "interface" || token_.text == "trait") {
+                fail("native trait/interface forward requires a verified type-level linker; unsupported");
+            }
+            fail("native declare supports only scalar type aliases; class/actor/enum/model unsupported");
+        }
+        const std::string name = identifier();
+        if (name == "String" || name == "string" || name == "int" ||
+                name == "bool" || reserved(name) || callable_nominal_name(name) ||
+                entry_builtin_name(name))
+            fail("native forward type cannot shadow builtin or reserved types");
+        if (token_.text == "<")
+            fail("native generic type alias forward requires a verified monomorphization ABI");
+        require(";");
+        if (!forwards_.emplace(name, ForwardType{exported}).second) {
+            fail("duplicate native forward type declaration '" + name + "'");
+        }
+        // Forward signatures are permitted after a matching definition in
+        // the same scope, but never change the effective export authority.
+        const auto existing = defined_type_aliases_.find(name);
+        if (existing != defined_type_aliases_.end() && existing->second.exported != exported)
+            fail("native forward type visibility mismatch for '" + name + "'");
+    }
+
+    void parse_scalar_type_alias(bool exported) {
+        if (token_.text == "int" || token_.text == "bool")
+            fail("native type alias cannot shadow a builtin or reserved language name");
+        const std::string name = identifier();
+        if (token_.text == "<")
+            fail("native generic type alias requires a verified monomorphization ABI");
+        if (name == "int" || name == "bool" || name == "string" ||
+                name == "String" || reserved(name) ||
+                callable_nominal_name(name) || entry_builtin_name(name))
+            fail("native type alias cannot shadow a builtin or reserved language name");
+        require("=");
+        std::string target;
+        if (accept("int")) target = "int";
+        else if (accept("bool")) target = "bool";
+        else if (accept("string") || accept("String")) {
+            if (token_.text == "with" || token_.text == "as")
+                fail("native refined string aliases require Zorde UTF-8/charset checks "
+                     "and proof-preserving LLVM lowering; unsupported");
+            fail("native string type alias ABI is not yet admitted");
+        } else {
+            // Do not eagerly copy the aliased layout: a forward chain may
+            // resolve after this declaration. The second pass checks cycles,
+            // missing definitions and the ultimate primitive scalar kind.
+            const std::string candidate(token_.text);
+            if (defined_type_aliases_.count(candidate) || forwards_.count(candidate))
+                target = identifier();
+            else fail("native type aliases currently require a declared int/bool scalar target");
+        }
+        if (token_.text == "with" || token_.text == "as")
+            fail("native refined aliases require checked Zorde exact-int constraint ABI "
+                 "and proof-preserving lowering; cannot erase with/as to int");
+        require(";");
+        if (defined_type_aliases_.count(name))
+            fail("duplicate native type alias definition '" + name + "'");
+        const auto forward = forwards_.find(name);
+        if (forward != forwards_.end() && forward->second.exported != exported)
+            fail("native forward type visibility mismatch for '" + name + "'");
+        defined_type_aliases_.emplace(name, ScalarAlias{std::move(target), exported});
+    }
+
+    bool accept_scalar_alias(std::string_view expected) {
+        const auto it = defined_type_aliases_.find(std::string(token_.text));
+        if (it == defined_type_aliases_.end() || it->second.target != expected) return false;
+        advance();
+        return true;
+    }
+
+    bool accept_pending_scalar_alias(std::string& name) {
+        // Generic parameters and class types are not silently treated as
+        // scalar aliases. Forward evidence must exist in this module/file.
+        const std::string candidate(token_.text);
+        if (!defined_type_aliases_.count(candidate) && !forwards_.count(candidate))
+            return false;
+        name = identifier();
+        return true;
+    }
+
+    void resolve_scalar_type_aliases(Program& program) {
+        std::unordered_set<std::string> active;
+        std::function<std::string(const std::string&, std::size_t)> resolve =
+            [&](const std::string& name, std::size_t depth) -> std::string {
+                if (depth > 64)
+                    throw std::runtime_error("native type alias resolution depth exceeds 64");
+                auto found = defined_type_aliases_.find(name);
+                if (found == defined_type_aliases_.end())
+                    throw std::runtime_error("unresolved native scalar type alias '" + name + "'");
+                const std::string target = found->second.target;
+                if (target == "int" || target == "bool") return target;
+                if (!active.insert(name).second)
+                    throw std::runtime_error("native type alias cycle involving '" + name + "'");
+                // All edges are explicit same-scope forward or alias declarations.
+                const std::string result = resolve(target, depth + 1);
+                active.erase(name);
+                found->second.target = result;
+                return result;
+            };
+        for (auto& entry : defined_type_aliases_)
+            (void)resolve(entry.first, 0);
+
+        for (auto& fn : program.functions) {
+            for (auto& param : fn.parameters) {
+                if (param.pending_type_alias.empty()) continue;
+                const std::string type = resolve(param.pending_type_alias, 0);
+                if (type == "bool" && param.mode != Parameter::Mode::Value)
+                    throw std::runtime_error("native bool borrow ABI is not yet admitted; pass bool by value");
+                param.scalar_type = type == "bool" ? ScalarType::Bool : ScalarType::I64;
+                param.pending_type_alias.clear();
+            }
+            if (!fn.pending_return_type_alias.empty()) {
+                const std::string type = resolve(fn.pending_return_type_alias, 0);
+                fn.return_type = type == "bool" ? ScalarType::Bool : ScalarType::I64;
+                fn.pending_return_type_alias.clear();
+            }
+        }
+    }
 
     Token peek_next() const {
         Lexer next_lexer = lexer_;
@@ -1129,6 +1298,8 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
+                    // Deferred scalar aliases are admitted only after full resolution.
                 } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = type_identifier();
@@ -1161,6 +1332,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+            } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
+                // Deferred scalar aliases are admitted only after full resolution.
             } else {
                 const std::size_t type_offset = token_.offset;
                 const std::string type = type_identifier();
@@ -3112,6 +3285,13 @@ private:
         }
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            // Reject hand-constructed or incorrectly deserialized programs:
+            // parser-only pending aliases never enter ownership or LLVM ABI.
+            if (!fn.pending_return_type_alias.empty())
+                throw std::runtime_error("unresolved native scalar return type before ABI admission");
+            for (const auto& parameter : fn.parameters)
+                if (!parameter.pending_type_alias.empty())
+                    throw std::runtime_error("unresolved native scalar parameter type before ABI admission");
             validate_declared_effects(fn, program);
             // Compiler-owned ABI imports and generated exports may be
             // inserted before source function definitions. LLVM silently
@@ -3621,6 +3801,8 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::unordered_map<std::string, ForwardType> forwards_;
+    std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
     std::string_view source_;
     Lexer lexer_;
     Token token_;

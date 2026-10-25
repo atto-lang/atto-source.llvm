@@ -1,0 +1,16 @@
+// Exact same source fixture in Java/GraalVM and LLVM source trees.
+// Transparent scalar aliases must resolve before backend ABI admission.
+declare type Code;
+declare type Raw;
+declare type Flag;
+
+fnc identity(Code value): Code { return value; }
+fnc ready(Flag value): Flag { return value; }
+
+define type Code = Raw;
+define type Raw = int;
+define type Flag = bool;
+
+pub fnc main(): int {
+  return ready(true) ? identity(7) : 0;
+}
