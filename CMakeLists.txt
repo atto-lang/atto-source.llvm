@@ -1449,6 +1449,29 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-source-actor-send-async-admission-test
+        tests/source_actor_send_async_admission_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-send-async-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-send-async-admission-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-send-async-admission-test PRIVATE c_std_11)
+    target_compile_options(oreslang-source-actor-send-async-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_send_async_real_mailbox_admission
+        COMMAND oreslang-source-actor-send-async-admission-test)
+    set_tests_properties(source_actor_send_async_real_mailbox_admission
+        PROPERTIES TIMEOUT 45)
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
@@ -1636,6 +1659,39 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_mailbox_completion_model
         COMMAND oreslang-actor-mailbox-completion-model-test)
     set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
+
+    # Bounded send_async credit/wake substrate; host runtime only.
+    add_executable(oreslang-native-async-mailbox-admission-test
+        tests/native_async_mailbox_admission_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-mailbox-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-mailbox-admission-test PRIVATE cxx_std_17)
+    target_compile_definitions(oreslang-native-async-mailbox-admission-test PRIVATE
+        ORESLANG_NATIVE_ASYNC_MAILBOX_TEST_PEER=1)
+    target_compile_options(oreslang-native-async-mailbox-admission-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-async-mailbox-admission-test PRIVATE Threads::Threads)
+    add_test(NAME native_async_mailbox_credit_wake_linearization
+        COMMAND oreslang-native-async-mailbox-admission-test)
+    set_tests_properties(native_async_mailbox_credit_wake_linearization PROPERTIES TIMEOUT 90)
+
+    # Frozen payload + exact target resource loan + transferred real envelope.
+    # Host runtime only; source send_async lowering remains separately gated.
+    add_executable(oreslang-native-async-envelope-ownership-test
+        tests/native_async_envelope_ownership_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-envelope-ownership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-envelope-ownership-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-async-envelope-ownership-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-async-envelope-ownership-test PRIVATE Threads::Threads)
+    add_test(NAME native_async_envelope_payload_loan_publication
+        COMMAND oreslang-native-async-envelope-ownership-test)
+    set_tests_properties(native_async_envelope_payload_loan_publication PROPERTIES TIMEOUT 90)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)

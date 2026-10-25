@@ -34,6 +34,9 @@ typedef struct {
     atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
+    /* Protected by group.mutex. Keeps the opaque allocation alive while an
+     * outer-host send_async admission wait temporarily releases that mutex. */
+    size_t async_waiters;
 } SourceActor;
 
 typedef struct {
@@ -63,6 +66,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_cond_t async_waiters_changed;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -79,7 +83,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .async_waiters_changed = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -496,6 +503,7 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(
         &instance->processed, 1, memory_order_release);
+
 }
 
 static void open_group_locked(void) {
@@ -597,13 +605,99 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
-void oreslang_source_actor_send(void* opaque, int64_t payload) {
+int oreslang_source_actor_try_send_checked(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
-    ensure(ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+    if (!instance) return ORES_NATIVE_SEND_INVALID_REF;
+    group_lock();
+    int result = ORES_NATIVE_SEND_INVALID_REF;
+    if (instance->magic == SOURCE_ACTOR_MAGIC && instance->on_message && group.vm) {
+        const size_t slot = (size_t)instance->ref.actor_slot;
+        if (slot < group.next_slot && group.actors[slot] == instance)
+            result = (int)ores_native_vm_try_send(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload);
+    }
+    group_unlock();
+    return result;
+}
+
+void oreslang_source_actor_send(void* opaque, int64_t payload) {
+    ensure(oreslang_source_actor_try_send_checked(opaque, payload)
         == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_exact_scheduler_ref(
+        void* opaque, OresNativeActorRef* out) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || !out) return 0;
+    group_lock();
+    int ok = 0;
+    if (instance->magic == SOURCE_ACTOR_MAGIC && group.vm) {
+        const size_t slot = (size_t)instance->ref.actor_slot;
+        if (slot < group.next_slot && group.actors[slot] == instance
+                && instance->ref.scheduler_domain) {
+            *out = instance->ref;
+            ok = 1;
+        }
+    }
+    group_unlock();
+    return ok;
+}
+
+int oreslang_source_actor_await_send_async_checked(
+        void* opaque, int64_t payload) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+
+    group_lock();
+    if (instance->magic != SOURCE_ACTOR_MAGIC || !group.vm
+            || !instance->on_message) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    if (slot >= group.next_slot || group.actors[slot] != instance) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+
+    /*
+     * This initial source slice uses trusted outer-host waiting. Never park a
+     * scheduler carrier: doing so could consume the worker required to return
+     * the target's mailbox credit. Full continuation suspension is a later
+     * source lowering gate.
+     */
+    OresNativeExecutionContext carrier = {0};
+    if (ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+    }
+
+    ++instance->async_waiters;
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorRef target = instance->ref;
+    group_unlock();
+
+    /*
+     * Scheduler wait_send owns the actual FULL observation + condition wait +
+     * retry under its mutex. SourceActor's pin only prevents opaque-handle/VM
+     * teardown while that trusted host wait is in flight.
+     */
+    const OresNativeSendStatus status = ores_native_vm_wait_send(
+        vm, ORES_NATIVE_VM_MAIN, target, (uint64_t)payload);
+
+    group_lock();
+    ensure(instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->async_waiters > 0);
+    --instance->async_waiters;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+    return (int)status;
+}
+
+void oreslang_source_actor_await_send_async(void* opaque, int64_t payload) {
+    ensure(oreslang_source_actor_await_send_async_checked(opaque, payload)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
 }
 
 int oreslang_source_actor_await_ready_checked(
@@ -881,6 +975,9 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
+    while (instance->async_waiters != 0)
+        ensure(pthread_cond_wait(
+            &group.async_waiters_changed, &group.mutex) == 0);
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
     ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY

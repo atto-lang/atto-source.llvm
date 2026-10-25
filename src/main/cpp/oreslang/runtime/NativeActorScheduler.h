@@ -98,6 +98,12 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted external-host backpressure bridge. MAILBOX_FULL is waited out under
+ * the scheduler mutex and retried at the exact credit-release linearization.
+ * Never call from one of this scheduler's actor carriers. Unlike repeated
+ * try_send(), transient FULL observations are not counted as rejected sends. */
+OresNativeSendStatus ores_native_actor_scheduler_wait_send(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
@@ -175,6 +181,13 @@ int ores_native_actor_scheduler_transfer_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Cancellation succeeds only while still RESERVED (not transferred). */
 int ores_native_actor_scheduler_cancel_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Terminalize a still-RESERVED async-send continuation as FAILED without
+ * requiring the target actor to remain live. This is the target STOP/seal
+ * path: no mailbox credit transferred, so admission remains rejected, but a
+ * still-live producer must resume cooperatively with the failure. Racing
+ * cancel/transfer/failure has exactly one winner. */
+OresNativeWakePublishStatus ores_native_actor_scheduler_fail_reserved_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Explicit rollback for an aborted transfer before envelope publication.
  * This is NOT late producer cancellation and must settle the send as failed. */
