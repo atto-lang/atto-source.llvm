@@ -148,7 +148,7 @@ bool reserved(std::string_view name) {
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
         "default", "eq", "neq", "nb", "select", "readch", "writech",
-        "cb", "shared", "untrusted", "type", "types", "typeof",
+        "cb", "shared", "untrusted", "type", "types", "typeof", "any", "unknown",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
@@ -2700,6 +2700,8 @@ private:
     }
 
     std::string type_identifier() {
+        if (token_.text == "any" || token_.text == "unknown")
+            fail("native opaque any/unknown unsupported: dynamic tag, ownership and capability-safe lowering required");
         auto name = identifier();
         if ((name == "Option" || name == "Result") && accept("<")) {
             NativeSumType type; type.kind = name == "Option" ? NativeSumType::Kind::Option : NativeSumType::Kind::Result;

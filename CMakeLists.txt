@@ -710,6 +710,17 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Opaque any/unknown values are not yet admitted in the strict native
+    # profile. These two exact shared source blobs require an explicit
+    # unsupported-feature diagnostic, never a generic parser failure.
+    # This is a pending-feature safety fence, NOT semantic Java/LLVM parity.
+    oreslang_contract_test(native_opaque_any_explicitly_unsupported
+        authority-guard-any-pending.ores
+        --diagnostic "native opaque any/unknown unsupported")
+    oreslang_contract_test(native_opaque_unknown_explicitly_unsupported
+        authority-guard-unknown-pending.ores
+        --diagnostic "native opaque any/unknown unsupported")
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.
