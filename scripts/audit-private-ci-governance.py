@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Source-free policy audit, NOT authorization to export private source.
 
-Only the V3 publisher may authorize export. It prefers independently reviewed
-protected-main governance and otherwise requires an exact review-attested
-authority PR. This preflight checks local policy structure; --live diagnoses
-the protected-main mode only and is not a substitute for V3 review attestation.
-No writes or transfers.
+Only the V3 publisher may authorize export. Source export always requires
+enforced protected-main governance. This preflight checks local policy
+structure; --live diagnoses that mandatory source gate. V3 may separately use
+exact review attestation for an unprotected private carrier. No writes or
+transfers.
 """
 import argparse
 import json
@@ -117,7 +117,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--live", action="store_true",
-                        help="diagnose live protected-main mode only; V3 separately verifies review-attested mode")
+                        help="diagnose mandatory source protected-main mode; V3 separately verifies carrier review attestation")
     args = parser.parse_args()
     try:
         approved = check_policy_files(args.root)
@@ -131,7 +131,7 @@ def main() -> int:
                 _github_get("branches/main", token),
                 _github_get("branches/main/protection", token),
             )
-            print("Protected-main mode verified; independent approval still required. Review-attested mode is validated only by V3.")
+            print("Mandatory source protected-main mode verified; carrier review attestation, if used, is validated separately by V3.")
         return 0
     except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
         print(f"DENIED: {exc}", file=sys.stderr)
