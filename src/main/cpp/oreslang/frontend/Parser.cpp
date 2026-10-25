@@ -1165,6 +1165,8 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (accept("await"))
+                fail("native actor await requires continuation lowering; native send_async direct await requires trusted zero-argument main");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -2166,6 +2168,9 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if ((token_.text == "const" || token_.text == "val")
+                    && peek_next().text == "Future")
+                fail("native Future<void> declaration must precede actor effects");
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2418,6 +2423,9 @@ private:
                 if (lifecycle == "send_async") {
                     if (value.name != "main" || !value.parameters.empty())
                         fail("native send_async direct await requires trusted zero-argument main");
+                    if (std::any_of(value.actor_sends.begin(), value.actor_sends.end(),
+                            [](const ActorSend& prior) { return prior.await_admission; }))
+                        fail("native source supports only one async await boundary");
                     ActorSend send;
                     send.offset = await_offset;
                     send.reference = awaited;
@@ -3043,7 +3051,8 @@ private:
             const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
-            const bool actor_send = field->name == "send" && !named_class_receiver;
+            const bool actor_send = (field->name == "send"
+                || field->name == "send_async") && !named_class_receiver;
             if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
