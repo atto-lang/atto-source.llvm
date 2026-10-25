@@ -733,10 +733,12 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
 OresNativeSendStatus ores_native_actor_scheduler_wait_send(
         OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
-    /* This primitive is intentionally external-host only. Blocking one of the
-     * scheduler's own carriers could prevent the target from returning the
-     * mailbox credit that this call is waiting for. */
-    if (executing == s) return ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
+    /* This primitive is external-host only. A carrier of ANY scheduler
+     * must not block waiting for mailbox credit in this or another scheduler:
+     * cross-scheduler actor dependency cycles can deadlock both worker pools.
+     * The authenticated TLS execution pointer is non-NULL for every actor
+     * carrier turn, including one owned by a different scheduler. */
+    if (executing != NULL) return ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
 
     lock(s);
     for (;;) {
