@@ -3869,3 +3869,18 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_string_contract_rejection.cmake")
     endforeach()
 endif()
+
+# PR #113 scoped UTF-8/JSON host C implementation: NOT native guest String ABI.
+if(BUILD_TESTING)
+  add_executable(oreslang-native-string-host-test
+    tests/native_string_test.c
+    src/main/cpp/oreslang/runtime/NativeString.c)
+  target_include_directories(oreslang-native-string-host-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-native-string-host-test PRIVATE c_std_11)
+  target_compile_options(oreslang-native-string-host-test PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  add_test(NAME native_string_utf8_json_host_contract
+    COMMAND oreslang-native-string-host-test)
+  set_tests_properties(native_string_utf8_json_host_contract PROPERTIES TIMEOUT 30)
+endif()
