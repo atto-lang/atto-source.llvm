@@ -527,6 +527,17 @@ int main(void) {
             actor_vm, ORES_NATIVE_VM_MAIN, 0);
         check(probe.actor.scheduler_domain != 0);
 
+        // VM wake authority is same-scheduler only in this slice. Do not
+        // surface the scheduler's internal cross-scheduler bridge mode.
+        OresNativeActorRef foreign_target = probe.actor;
+        ++foreign_target.scheduler_domain;
+        OresNativeWakeTicket cross_target = {0};
+        check(!ores_native_vm_actor_reserve_wake(
+            actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, foreign_target,
+            UINT64_C(201), UINT64_C(1), UINT64_C(1), UINT64_C(1),
+            &cross_target));
+        check(cross_target.slot_generation == 0);
+
         check(ores_native_vm_try_send(
             actor_vm, ORES_NATIVE_VM_MAIN, probe.actor, UINT64_C(99))
             == ORES_NATIVE_SEND_ACCEPTED);
