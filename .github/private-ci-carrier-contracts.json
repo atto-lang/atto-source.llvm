@@ -9,11 +9,47 @@
       "test_plans": {
         "ci/test-plans/llvm-pr669.json": {
           "blob_sha": "e20cd3b2a4d0c7224988b430d3209b6660486e65",
-          "allowed_prs": [669]
+          "allowed_prs": [
+            669
+          ]
         },
         "ci/test-plans/llvm-pr674.json": {
           "blob_sha": "7e68d0853d21e131a5870cc006dbf6691ace4878",
-          "allowed_prs": [674]
+          "allowed_prs": [
+            674
+          ]
+        }
+      }
+    },
+    "sonus-auris-test/clients-api-contract": {
+      "repository_id": 1323599063,
+      "base_sha": "875d4a1eb44e4ed629c5afa3014703110302df62",
+      "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
+      "workflow_blob_sha": "01de23f7c4084e33baba81aa87cc73dd6679c8e6",
+      "test_plans": {
+        "ci/test-plans/llvm-pr951.json": {
+          "blob_sha": "3ba5a8c19df89a665883033bb91d5c94911894d1",
+          "allowed_prs": [
+            951
+          ]
+        },
+        "ci/test-plans/llvm-pr955.json": {
+          "blob_sha": "0226a661b86d249bae2a3a45399936de3d721633",
+          "allowed_prs": [
+            955
+          ]
+        },
+        "ci/test-plans/llvm-pr965.json": {
+          "blob_sha": "4ea03fc928c74415132f3e160bee63af714980ee",
+          "allowed_prs": [
+            965
+          ]
+        },
+        "ci/test-plans/llvm-pr969.json": {
+          "blob_sha": "b5da7b9546d3955a87423831efb3d6502e7d8b25",
+          "allowed_prs": [
+            969
+          ]
         }
       }
     }
