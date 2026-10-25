@@ -255,6 +255,11 @@ static void release_wake_locked(OresNativeActorScheduler* s,
     credit->ticket = (OresNativeWakeTicket){0};
     maybe_finish_stopped_locked(s, i);
 }
+static void service_async_sends_locked(
+        OresNativeActorScheduler* s, size_t actor_index);
+static void fail_pending_async_sends_locked(
+        OresNativeActorScheduler* s, size_t actor_index,
+        OresNativeSendStatus outcome);
 static void* carrier(void* raw) {
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
     size_t recent_actor = SIZE_MAX;
@@ -390,10 +395,25 @@ static void* carrier(void* raw) {
             || !s->outstanding || s->completed == UINT64_MAX) abort();
         lane->active = 0;
         lane->carrier_owner_valid = 0;
+
+        /*
+         * The finishing active turn itself kept this lane in runnable_lanes.
+         * If no queued/CONTROL/WAKE work remains, retire that count BEFORE
+         * servicing a pending async-send Future. enqueue_locked() can then
+         * re-add the lane exactly once when it publishes the transferred DATA
+         * envelope. This is also the no-slot-steal linearization boundary.
+         */
+        if (!lane_has_work(lane)) {
+            if (!s->runnable_lanes) abort();
+            --s->runnable_lanes;
+        }
+
+        service_async_sends_locked(s, i);
+
         /*
          * try_send charges lane->active against USER mailbox capacity.
-         * This is therefore the exact release boundary for a capacity slot,
-         * not the earlier user callback return.
+         * Future waiters/status observers share this condition, so publish
+         * only after pending async descriptors have received first refusal.
          */
         if (pthread_cond_broadcast(&s->credit) != 0) abort();
         s->outstanding--;
@@ -409,12 +429,6 @@ static void* carrier(void* raw) {
             active_wake->ticket = (OresNativeWakeTicket){0};
             --lane->wake_live;
             ++s->wakes_completed;
-        }
-        /* A lane contributes at most one runnable turn regardless of how
-         * many DATA/CONTROL messages it owns. */
-        if (!lane_has_work(lane)) {
-            if (!s->runnable_lanes) abort();
-            --s->runnable_lanes;
         }
         if (kind == 2) ++s->control_completed;
         if (lane_has_work(lane)) pthread_cond_signal(&s->ready);
