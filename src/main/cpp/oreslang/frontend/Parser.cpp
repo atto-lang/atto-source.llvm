@@ -2206,6 +2206,8 @@ private:
                 if (lifecycle == "send_async") {
                     if (value.name != "main" || !value.parameters.empty())
                         fail("native send_async direct await requires trusted zero-argument main");
+                    if (!value.ready_await_actor.empty())
+                        fail("native send_async after get_ready requires continuation suspension lowering");
                     ActorSend send;
                     send.offset = await_offset;
                     send.reference = awaited;
