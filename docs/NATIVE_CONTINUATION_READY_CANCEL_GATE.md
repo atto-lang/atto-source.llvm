@@ -90,6 +90,48 @@ authenticate the continuation descriptors/code generations supplied to this
 bridge before a standard-library I/O operation may be admitted from Oreslang
 source.
 
+## First compiled source I/O suspension
+
+The native frontend now admits one deliberately narrow Linux-native source
+operation:
+
+```oreslang
+await readable(<integer-literal-fd>);
+```
+
+This is compiler-owned await syntax, not a user function call and not general
+stdlib I/O. Admission is restricted to exported zero-argument `main` with
+exactly one live source actor, no suspended scalar/class/array locals, one
+suspension site, and a native-int literal descriptor. General `async`,
+`suspends`, Future<T>, channels, select, socket/file wrappers and actor-method
+suspension remain fail-closed.
+
+The compiler emits a pointer-free scalar continuation with no lexical user
+frame. `SourceActorBootstrap` first persists the existing root-actor
+`OresNativeSuspensionLink`, then passes its continuation slot/generation plus
+the source-offset descriptor generation to
+`ores_native_vm_nio_try_watch_actor_await()`. The source group opts into the
+ABI-separate wake-capable VM and attaches NIO while the VM is still actor-cold;
+throughput reactor threads remain cold until the actual watch is admitted.
+
+On readiness, trusted outer host glue consumes the reactor completion and calls
+`ores_native_vm_nio_dispatch_actor_await()`. The #994 handoff transfers the
+scheduler wake, releases the old one-shot NIO/FD claim, then publishes the wake.
+Only the authenticated source-root actor callback marks the persisted
+continuation READY, claims a fresh execution context, and invokes the compiled
+continuation. Reactor/completion threads never execute guest code.
+
+The native E2E fixture uses nonblocking stdin fd 0 and supplies one byte from
+the harness. It checks compiler IR, real mixed C/C++ runtime linkage, exact
+continuation/wake receipt metadata, actor-lane resume, post-await message
+delivery, physical actor stop/reclamation, and both release and ASan/UBSan
+variants. Negative compiler fixtures reject nonliteral descriptors, suspended
+locals, a second suspension and missing actor ownership.
+
+This is still not a public portable I/O API. The literal-fd form exists to
+prove compiler → continuation → VM-NIO → scheduler → compiled-resume ownership
+end to end before typed nonblocking stream/socket abstractions are admitted.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:
