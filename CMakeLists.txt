@@ -346,6 +346,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_constraint_descriptor_v1 PROPERTIES TIMEOUT 90)
+    # Broader refinement boundary: bounded int/i64 min/max descriptors are
+    # supported, but unchecked runtime use and unimplemented refinement forms
+    # must fail before emitting LLVM IR.
+    add_test(NAME native_refinement_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
@@ -3836,4 +3844,33 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-task-continuation-gate-test)
     set_tests_properties(native_task_continuation_cancel_ready_races
         PROPERTIES TIMEOUT 60)
+endif()
+
+# #769: host-only synchronous logical snapshot of typed failure ancestry.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-failure-trace-test
+        tests/native_failure_trace_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+        src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
+    target_include_directories(oreslang-native-failure-trace-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-failure-trace-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-failure-trace-test PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_failure_trace_capture_and_render COMMAND oreslang-native-failure-trace-test)
+    set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
+endif()
+
+# Reconciled #73: String wire contracts remain deliberately unsupported by
+# native int-only contract lowering; assert diagnostic without Python.
+if(BUILD_TESTING)
+    foreach(fixture IN ITEMS clients-core-client-contract.ores ores-interfaces-route-contract.ores)
+        add_test(NAME "native_string_client_contract_rejected_${fixture}"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_string_contract_rejection.cmake")
+    endforeach()
 endif()
