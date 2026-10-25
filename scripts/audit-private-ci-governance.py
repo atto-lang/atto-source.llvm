@@ -75,7 +75,10 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
         if "@ORESoftware" not in rules.get(path, []):
             raise GovernanceError(f"missing exact CODEOWNER: {path}")
     doc = (root / DOC_PATH).read_text(encoding="utf-8")
-    for phrase in ("protected", "private", "tree", "canary", "Direct GitHub connector"):
+    for phrase in (
+        "protected", "private", "tree", "canary",
+        "Direct GitHub connector", "review-attested",
+    ):
         if phrase not in doc:
             raise GovernanceError(f"missing documented security condition: {phrase}")
     return approved
