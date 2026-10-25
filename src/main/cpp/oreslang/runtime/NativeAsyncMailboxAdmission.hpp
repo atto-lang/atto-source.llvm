@@ -224,7 +224,7 @@ public:
     // Publication failed after irrevocable transfer but before an envelope
     // became visible. This is runtime failure, not late producer cancellation.
     bool abort_transferred(Handle handle) {
-        std::lock_guard<std::mutex> guard(mutex_);
+        std::unique_lock<std::mutex> guard(mutex_);
         Slot* entry = matching_locked(handle);
         if (!entry || entry->state != State::Transferred) return false;
         if (!ores_native_actor_scheduler_abort_transferred_wake(
@@ -234,10 +234,24 @@ public:
         --used_frames_;
         used_bytes_ -= entry->bytes;
         clear_slot_locked(*entry);
-        // Deliberately do not publish another producer wake while holding this
-        // lock. The newly free credit will be transferred by the next release
-        // or explicit service call; abort is an exceptional pre-publication
-        // rollback, not the normal physical-ACK fast path.
+
+        // The rollback created real free capacity. Preserve FIFO priority by
+        // handing it directly to the next waiter before a synchronous sender
+        // can observe it. Failure wake publication still occurs unlocked.
+        for (;;) {
+            DeferredFailure failure{};
+            const bool progressed = service_one_waiter_locked(failure);
+            if (failure.scheduler) {
+                guard.unlock();
+                const auto status = ores_native_actor_scheduler_fail_reserved_wake(
+                    failure.scheduler, failure.wake);
+                if (status == ORES_NATIVE_WAKE_INVALID)
+                    throw std::logic_error("reserved async mailbox wake lost ownership");
+                guard.lock();
+                continue;
+            }
+            if (!progressed) break;
+        }
         return true;
     }
 
@@ -339,7 +353,7 @@ private:
     }
 
     void compact_fifo_locked() {
-        if (fifo_entries_ < max_waiters_) return;
+        if (!fifo_entries_) return;
         std::size_t write = 0;
         for (std::size_t n = 0; n < fifo_entries_; ++n) {
             const Handle queued = fifo_[(fifo_head_ + n) % max_waiters_];
