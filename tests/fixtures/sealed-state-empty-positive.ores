@@ -1,0 +1,7 @@
+define actor Idle as
+  state {
+  }
+  pub fnc on_message(int n): int with state.read {
+    return self.handle_state(|s| -> n);
+  }
+end
