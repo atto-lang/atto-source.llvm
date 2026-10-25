@@ -51,9 +51,20 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1), (
+        "invalid constructor receipt", fields)
+    assert fields["released"] == 1, (
+        "native actor release not verified", fields)
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    if fields["constructor_on_worker"] == 0:
+        # stop-before-start is a valid linearization: no guest constructor,
+        # readiness, DATA acceptance, or payload result may be fabricated.
+        assert fields["ready"] == 0, (
+            "unconstructed actor fabricated readiness", fields)
+        assert fields["accepted"] == 0 and fields["processed"] == 0, (
+            "unconstructed actor accepted guest DATA", fields)
+        assert fields["abandoned"] == 0 and fields["last"] == 0, (
+            "unconstructed actor fabricated payload state", fields)
     return fields
 
 def main():
@@ -249,6 +260,16 @@ def main():
             assert len(lines) == actors, (name, lines)
             receipts = [parse_actor_receipt(line) for line in lines]
             for i, receipt in enumerate(receipts):
+                # Any fixture that publishes DATA or awaits readiness must have
+                # executed construction on an actor worker. Only zero-work
+                # immediate/terminal stop fixtures may linearize before start.
+                if count not in (0, None) or name in {
+                    "source-actor-await-ready.ores",
+                    "source-actor-await-worker.ores",
+                    "source-actor-future-void-ready.ores",
+                }:
+                    assert receipt["constructor_on_worker"] == 1, (
+                        name, "guest work without worker construction", receipt)
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
                 abandoned = receipt["abandoned"]
