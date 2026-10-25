@@ -111,6 +111,20 @@ typedef struct {
  * active group, not one pool per actor.
  */
 static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+
+/*
+ * Every trusted source suspension shares one compiler-owned root actor lane.
+ * Current source admission permits only one suspension, but the runtime ABI
+ * also fails closed against overlapping host-driven readable/lifecycle frames.
+ */
+static int no_pending_readable_locked(void) {
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+    return group.pending_readable == NULL;
+#else
+    return 1;
+#endif
+}
+
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -821,7 +835,8 @@ int oreslang_source_actor_await_ready_checked(
 
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
-        && group.pending_ready == NULL && group.pending_done == NULL);
+        && group.pending_ready == NULL && group.pending_done == NULL
+        && no_pending_readable_locked());
     frame.ready_future = ores_native_vm_actor_future_open(
         group.vm,
         ORES_NATIVE_VM_MAIN,
@@ -914,7 +929,8 @@ int64_t oreslang_source_actor_await_done(
 
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
-        && group.pending_ready == NULL && group.pending_done == NULL);
+        && group.pending_ready == NULL && group.pending_done == NULL
+        && no_pending_readable_locked());
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = instance->ref;
     frame.done_future = ores_native_vm_actor_future_open(
