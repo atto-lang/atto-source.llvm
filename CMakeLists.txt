@@ -950,6 +950,12 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_target_ir_test.py"
             "$<TARGET_FILE:oreslang-llvmc>"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/constant-main.ores")
+    add_test(NAME native_explicit_android_aarch64_target_ir
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/android_aarch64_target_ir_test.py"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/android-aarch64-scalar.ores")
+    set_tests_properties(native_explicit_android_aarch64_target_ir PROPERTIES TIMEOUT 30)
     oreslang_contract_test(module_main module-main.ores --ir "demo.main")
     # Compile-time i64 contract subset: actually type-check a module before
     # emitting verified IR, then link/run a native main. Cross-unit imports and
