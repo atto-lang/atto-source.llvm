@@ -113,6 +113,124 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         with self.assertRaisesRegex(v3.Denied, "nonfinite"):
             v3.strict_json_loads('{"x":1e9999}', "fixture")
 
+    def test_reviewed_plan_is_validated_before_source_tree_read(self):
+        meta = v3.validate_test_plan(PLAN, 669)
+        self.assertEqual(meta["sha256"], hashlib.sha256(PLAN).hexdigest())
+        self.assertFalse(meta["uses_maven"])
+        self.assertEqual(meta["required_source_blobs"], {})
+
+        malformed = json.loads(PLAN)
+        malformed["commands"][0]["argv"] = ["bash", "-lc", "cat /etc/passwd"]
+        raw = (json.dumps(malformed) + "\n").encode()
+        with self.assertRaisesRegex(v3.Denied, "command invalid"):
+            v3.validate_test_plan(raw, 669)
+
+    def test_reviewed_plan_rejects_wrong_pr_unexpected_fields_and_unsafe_commands(self):
+        with self.assertRaisesRegex(v3.Denied, "authorize source PR"):
+            v3.validate_test_plan(PLAN, 670)
+
+        doc = json.loads(PLAN)
+        doc["network"] = "allow"
+        with self.assertRaisesRegex(v3.Denied, "unexpected fields"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+        for argv in (
+            ["sh", "-c", "true"],
+            ["bash", "-lc", "true"],
+            ["git", "status"],
+            ["curl", "https://example.invalid"],
+        ):
+            with self.subTest(argv=argv):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = argv
+                with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                    v3.validate_test_plan(
+                        (json.dumps(doc) + "\n").encode(), 669
+                    )
+
+        doc = json.loads(PLAN)
+        doc["commands"][0]["cwd"] = "../escape"
+        with self.assertRaisesRegex(v3.Denied, "command invalid"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+    def test_reviewed_plan_required_source_blob_is_exact(self):
+        required_sha = v3.git_blob_sha(DATA)
+        doc = json.loads(PLAN)
+        doc["required_source_blobs"] = {"src/synthetic.cpp": required_sha}
+        meta = v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+        v3.verify_required_source_blobs(
+            [("src/synthetic.cpp", "100644", required_sha, DATA)],
+            meta["required_source_blobs"],
+        )
+        with self.assertRaisesRegex(v3.Denied, "required blob"):
+            v3.verify_required_source_blobs(
+                [("src/synthetic.cpp", "100644", "0" * 40, DATA)],
+                meta["required_source_blobs"],
+            )
+
+    def test_reviewed_plan_maven_fields_are_fail_closed_and_bounded(self):
+        pom = v3.git_blob_sha(b"<project/>\n")
+        doc = json.loads(PLAN)
+        doc["commands"] = [{
+            "argv": ["mvn", "-o", "-B", "test"],
+            "cwd": ".",
+            "timeout_seconds": 300,
+        }]
+        with self.assertRaisesRegex(v3.Denied, "bind exact pom.xml"):
+            v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+
+        doc["maven_pom_blob_sha"] = pom
+        doc["maven_prefetch_artifacts"] = [
+            "org.apache.maven.surefire:surefire-junit-platform:3.5.2",
+        ]
+        meta = v3.validate_test_plan((json.dumps(doc) + "\n").encode(), 669)
+        self.assertEqual(meta["maven_pom_blob_sha"], pom)
+
+        for arg in (
+            "-s/tmp/settings.xml",
+            "--settings=/tmp/settings.xml",
+            "-Dmaven.repo.local=/tmp/m2",
+            "-DskipTests",
+        ):
+            with self.subTest(arg=arg):
+                bad = json.loads(json.dumps(doc))
+                bad["commands"][0]["argv"].insert(2, arg)
+                with self.assertRaisesRegex(v3.Denied, "trusted build controls"):
+                    v3.validate_test_plan(
+                        (json.dumps(bad) + "\n").encode(), 669
+                    )
+
+        for extras in (
+            ["bad"],
+            ["g:a:v", "g:a:v"],
+            ["g:a:v"] * (v3.MAX_MAVEN_PREFETCH_ARTIFACTS + 1),
+        ):
+            with self.subTest(extras=extras):
+                bad = json.loads(json.dumps(doc))
+                bad["maven_prefetch_artifacts"] = extras
+                with self.assertRaisesRegex(v3.Denied, "prefetch artifacts"):
+                    v3.validate_test_plan(
+                        (json.dumps(bad) + "\n").encode(), 669
+                    )
+
+    def test_publish_rejects_bad_plan_before_exact_source_tree(self):
+        bad = json.loads(PLAN)
+        bad["commands"][0]["argv"] = ["bash", "-lc", "true"]
+        raw = (json.dumps(bad) + "\n").encode()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(v3, "exact_source_tree") as source_tree,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            source_tree.assert_not_called()
+
     def test_safe_path_requires_canonical_ascii_route(self):
         self.assertEqual(
             v3.safe_path(
