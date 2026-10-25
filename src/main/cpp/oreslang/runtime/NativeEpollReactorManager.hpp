@@ -3,6 +3,7 @@
 #error "NativeEpollReactorManager requires Linux"
 #endif
 #include "oreslang/runtime/NativeEpollReactor.hpp"
+#include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -31,7 +32,15 @@ public:
     static constexpr std::size_t maximum_reactors = 4;
     enum class Profile : std::uint8_t { throughput, preallocated_rt };
     struct Watch { std::uint8_t reactor; NativeEpollReactor::Ticket ticket; };
-    struct Completion { std::uint8_t reactor; NativeEpollReactor::Completion event; };
+    struct ActorWatch { Watch watch; NativeActorRef actor; };
+    struct Completion {
+        std::uint8_t reactor;
+        NativeEpollReactor::Completion event;
+        // Present only for actor-owned watches. The reactor loan remains
+        // charged until ack_actor_completion() transfers/abandons this
+        // terminal record. Numeric actor IDs are never sufficient authority.
+        std::optional<NativeActorRef> actor;
+    };
 
     explicit NativeEpollReactorManager(std::size_t limit = maximum_reactors,
                                       Profile profile = Profile::throughput,
@@ -56,7 +65,10 @@ public:
 
     NativeEpollReactorManager(const NativeEpollReactorManager&) = delete;
     NativeEpollReactorManager& operator=(const NativeEpollReactorManager&) = delete;
-    ~NativeEpollReactorManager() noexcept { stop(); }
+    ~NativeEpollReactorManager() noexcept {
+        stop();
+        abandon_actor_claims();
+    }
 
     std::size_t started_threads() const noexcept { return started_.load(std::memory_order_acquire); }
     std::size_t limit() const noexcept { return limit_; }
@@ -65,48 +77,35 @@ public:
     /** Bounded nonparking read/write/accept readiness admission. */
     std::optional<Watch> try_watch(int fd, std::uint32_t events) noexcept {
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
-        if (!gate.owns_lock() || stopped_) return std::nullopt;
-        // Invalid/blocking descriptors must not cause cold-start thread
-        // creation. Validate before provisioning the first throughput reactor.
+        if (!gate.owns_lock()) return std::nullopt;
+        return try_watch_locked(fd, events, nullptr);
+    }
+
+    /**
+     * Actor-incarnation-bound readiness admission. Retaining the actor loan
+     * linearizes against STOP/close/finalization: if actor admission wins,
+     * DONE cannot settle until this watch's terminal record is explicitly
+     * acknowledged. If STOP wins, no epoll registration occurs.
+     */
+    std::optional<ActorWatch> try_watch_actor(
+            const NativeActorRef& actor, int fd, std::uint32_t events) noexcept {
         if (!NativeEpollReactor::can_watch(fd, events)) return std::nullopt;
-        auto count = started_.load(std::memory_order_relaxed);
-        if (count == 0) {
-            if (profile_ != Profile::throughput || !reactors_[0]->start())
-                return std::nullopt;
-            started_.store(1, std::memory_order_release);
-            count = 1;
+        try {
+            actor.retain_resource_loan();
+        } catch (...) {
+            return std::nullopt;
         }
-        // One FD can only have one outstanding readiness owner in this
-        // process-level manager, even if two different epoll instances could
-        // each register that descriptor independently. Otherwise read/write
-        // consumers might race across reactors and violate socket ownership.
-        for (const auto& claim : claimed_fds_) {
-            if (claim.occupied && claim.fd == fd) return std::nullopt;
+        std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
+        if (!gate.owns_lock()) {
+            actor.release_resource_loan();
+            return std::nullopt;
         }
-        maybe_expand_locked();
-        count = started_.load(std::memory_order_relaxed);
-        std::size_t best = 0;
-        for (std::size_t i = 1; i < count; ++i) {
-            if (reactors_[i]->pending() < reactors_[best]->pending()) best = i;
+        auto watch = try_watch_locked(fd, events, &actor);
+        if (!watch) {
+            actor.release_resource_loan();
+            return std::nullopt;
         }
-        for (std::size_t i = 0; i < count; ++i) {
-            const std::size_t index = (best + i) % count;
-            auto token = reactors_[index]->try_watch(fd, events);
-            if (token) {
-                const Watch result{static_cast<std::uint8_t>(index), *token};
-                for (auto& claim : claimed_fds_) {
-                    if (claim.occupied) continue;
-                    claim = FdClaim{true, fd, result};
-                    return result;
-                }
-                // With per-reactor capacity and one claim per active slot this
-                // must be unreachable. Revoke rather than expose an untracked
-                // readiness token if an internal accounting invariant breaks.
-                (void)reactors_[index]->try_cancel(*token);
-                return std::nullopt;
-            }
-        }
-        return std::nullopt;
+        return ActorWatch{*watch, actor};
     }
 
     bool try_cancel(Watch watch) noexcept {
@@ -116,9 +115,25 @@ public:
         // The try-lock does not park an actor or deadline-sensitive carrier.
         std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
         if (!gate.owns_lock() || stopped_) return false;
+        FdClaim* claim = find_claim_locked(watch);
+        // Actor-owned registrations require the exact incarnation capability;
+        // a bare numeric reactor ticket is not cancellation authority.
+        if (!claim || claim->actor) return false;
         const auto count = started_.load(std::memory_order_acquire);
         if (watch.reactor >= count) return false;
         return reactors_[watch.reactor]->try_cancel(watch.ticket);
+    }
+
+    bool try_cancel_actor(const ActorWatch& watch) noexcept {
+        std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
+        if (!gate.owns_lock() || stopped_) return false;
+        FdClaim* claim = find_claim_locked(watch.watch);
+        if (!claim || !claim->actor
+                || !claim->actor->same_incarnation(watch.actor))
+            return false;
+        const auto count = started_.load(std::memory_order_acquire);
+        if (watch.watch.reactor >= count) return false;
+        return reactors_[watch.watch.reactor]->try_cancel(watch.watch.ticket);
     }
 
     std::optional<Completion> try_pop() noexcept {
@@ -131,17 +146,49 @@ public:
         for (std::size_t i = 0; i < count; ++i) {
             const auto index = (first + i) % count;
             auto event = reactors_[index]->try_pop();
-            if (event) {
-                for (auto& claim : claimed_fds_) {
-                    if (!claim.occupied || claim.watch.reactor != index
-                        || claim.watch.ticket.value != event->ticket.value) continue;
-                    claim.occupied = false;
-                    break;
+            if (!event) continue;
+            std::optional<NativeActorRef> actor;
+            for (auto& claim : claimed_fds_) {
+                if (!claim.occupied || claim.watch.reactor != index
+                    || claim.watch.ticket.value != event->ticket.value) continue;
+                actor = claim.actor;
+                if (actor) {
+                    // Keep the FD claim and actor loan alive until trusted
+                    // scheduler code has transferred this completion into its
+                    // continuation/wake escrow and acknowledges that transfer.
+                    claim.completion_delivered = true;
+                } else {
+                    claim = FdClaim{};
                 }
-                return Completion{static_cast<std::uint8_t>(index), *event};
+                break;
             }
+            return Completion{static_cast<std::uint8_t>(index), *event, actor};
         }
         return std::nullopt;
+    }
+
+    /**
+     * Complete the reactor-to-scheduler ownership handoff. For actor-owned
+     * terminal records, call only after any guest continuation has acquired
+     * its own generation-fenced wake/continuation escrow. This releases the
+     * reactor's one resource loan exactly once and allows FD reuse.
+     */
+    bool ack_actor_completion(const Completion& completion) noexcept {
+        if (!completion.actor) return false;
+        std::optional<NativeActorRef> release;
+        {
+            std::unique_lock<std::mutex> gate(mu_, std::try_to_lock);
+            if (!gate.owns_lock()) return false;
+            const Watch watch{completion.reactor, completion.event.ticket};
+            FdClaim* claim = find_claim_locked(watch);
+            if (!claim || !claim->actor || !claim->completion_delivered
+                    || !claim->actor->same_incarnation(*completion.actor))
+                return false;
+            release = claim->actor;
+            *claim = FdClaim{};
+        }
+        release->release_resource_loan();
+        return true;
     }
 
     int completion_fd(std::size_t index) const noexcept {
@@ -187,7 +234,72 @@ private:
         bool occupied = false;
         int fd = -1;
         Watch watch{};
+        std::optional<NativeActorRef> actor;
+        bool completion_delivered = false;
     };
+
+    FdClaim* find_claim_locked(Watch watch) noexcept {
+        for (auto& claim : claimed_fds_) {
+            if (claim.occupied
+                    && claim.watch.reactor == watch.reactor
+                    && claim.watch.ticket.value == watch.ticket.value)
+                return &claim;
+        }
+        return nullptr;
+    }
+
+    std::optional<Watch> try_watch_locked(
+            int fd, std::uint32_t events, const NativeActorRef* actor) noexcept {
+        if (stopped_) return std::nullopt;
+        // Invalid/blocking descriptors must not cause cold-start thread
+        // creation. Validate before provisioning the first throughput reactor.
+        if (!NativeEpollReactor::can_watch(fd, events)) return std::nullopt;
+        auto count = started_.load(std::memory_order_relaxed);
+        if (count == 0) {
+            if (profile_ != Profile::throughput || !reactors_[0]->start())
+                return std::nullopt;
+            started_.store(1, std::memory_order_release);
+            count = 1;
+        }
+        for (const auto& claim : claimed_fds_) {
+            if (claim.occupied && claim.fd == fd) return std::nullopt;
+        }
+        maybe_expand_locked();
+        count = started_.load(std::memory_order_relaxed);
+        std::size_t best = 0;
+        for (std::size_t i = 1; i < count; ++i) {
+            if (reactors_[i]->pending() < reactors_[best]->pending()) best = i;
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::size_t index = (best + i) % count;
+            auto token = reactors_[index]->try_watch(fd, events);
+            if (!token) continue;
+            const Watch result{static_cast<std::uint8_t>(index), *token};
+            for (auto& claim : claimed_fds_) {
+                if (claim.occupied) continue;
+                claim.occupied = true;
+                claim.fd = fd;
+                claim.watch = result;
+                if (actor) claim.actor = *actor;
+                return result;
+            }
+            // With per-reactor capacity and one claim per active slot this
+            // must be unreachable. Revoke rather than expose an untracked
+            // readiness token if an internal accounting invariant breaks.
+            (void)reactors_[index]->try_cancel(*token);
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    void abandon_actor_claims() noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (auto& claim : claimed_fds_) {
+            if (!claim.occupied || !claim.actor) continue;
+            claim.actor->release_resource_loan();
+            claim = FdClaim{};
+        }
+    }
     // Fixed-size, process-local ownership table. No allocation on reactor
     // registration/completion paths; protected by mu_ with try-lock admission.
     static constexpr std::size_t maximum_claims =
