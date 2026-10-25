@@ -58,9 +58,9 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
          * NativeActorScheduler additionally enforces its allocation limits. */
         if (!p->on_message || !p->actor_slots || !p->mailbox_capacity
             || workers > 128) goto failed;
-        vm->schedulers[i] = ores_native_actor_scheduler_open_typed_control(
+        vm->schedulers[i] = ores_native_actor_scheduler_open_with_wakes(
             p->actor_slots, p->mailbox_capacity, workers,
-            p->on_message, p->on_control, p->on_failure, p->context);
+            p->on_message, p->on_control, p->on_failure, p->on_wake, p->context);
         if (!vm->schedulers[i]) goto failed;
         vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
             p->actor_slots, sizeof(*vm->supervisors[i]));
@@ -391,6 +391,64 @@ int ores_native_vm_actor_resource_release(
     return vm && valid_domain(domain)
         && ores_native_actor_scheduler_release_resource(
             vm->schedulers[domain], ref);
+}
+
+int ores_native_vm_actor_reserve_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef producer, OresNativeActorRef target,
+        uint64_t continuation_slot, uint64_t continuation_generation,
+        uint64_t code_generation, uint64_t descriptor_generation,
+        OresNativeWakeTicket* out) {
+    if (out) *out = (OresNativeWakeTicket){0};
+    return vm && valid_domain(domain) && out
+        && ores_native_actor_scheduler_reserve_wake(
+            vm->schedulers[domain], producer, target,
+            continuation_slot, continuation_generation,
+            code_generation, descriptor_generation, out);
+}
+int ores_native_vm_actor_transfer_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_transfer_wake(
+            vm->schedulers[domain], ticket);
+}
+int ores_native_vm_actor_cancel_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_cancel_wake(
+            vm->schedulers[domain], ticket);
+}
+int ores_native_vm_actor_abort_transferred_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_abort_transferred_wake(
+            vm->schedulers[domain], ticket);
+}
+OresNativeWakePublishStatus ores_native_vm_actor_publish_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_publish_wake(
+            vm->schedulers[domain], ticket, outcome)
+        : ORES_NATIVE_WAKE_INVALID;
+}
+int ores_native_vm_actor_is_current_wake(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_is_current_wake(
+            vm->schedulers[domain], ticket);
+}
+size_t ores_native_vm_actor_outstanding_wake_loans(
+        OresNativeVM* vm, enum OresNativeVMDomain domain,
+        OresNativeActorRef producer) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_outstanding_wake_loans(
+            vm->schedulers[domain], producer)
+        : 0;
 }
 
 int ores_native_vm_poll_done(
