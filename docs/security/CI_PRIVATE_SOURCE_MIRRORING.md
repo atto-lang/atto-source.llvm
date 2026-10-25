@@ -33,7 +33,10 @@ A source-free workflow may be used to verify that a candidate private destinatio
 
 ## Current state
 
-No private CI destination is approved by default. Until a destination is independently reviewed and merged into protected `main`, private LLVM source must remain in the source repository.
+No private CI destination is approved by default. Until a destination is
+independently reviewed and satisfies either protected carrier-main enforcement
+or the exact-tree review-attested carrier mode pinned by protected source
+governance, private LLVM source must remain in the source repository.
 
 ## Trusted admission preflight
 
@@ -102,11 +105,30 @@ The reviewed carrier base must contain neither
 `main` advance, delete/recreate, workflow change, or test-plan change fails
 closed until the source contract is independently reviewed again.
 
-Carrier `main` is also a live authorization boundary. The v3 publisher
-requires it to be protected with CODEOWNER review, stale-review dismissal,
-at least one approval, administrator enforcement, force-push/deletion disabled,
-and no pull-request-review bypass actors. A pinned carrier SHA is not treated as
-a substitute for live review enforcement.
+Carrier `main` is also a live authorization boundary. V3 supports two
+fail-closed carrier modes:
+
+1. **Protected carrier main.** Requires CODEOWNER review, stale-review
+   dismissal, at least one approval, administrator enforcement,
+   force-push/deletion disabled, no pull-request-review bypass actors, and the
+   exact security CODEOWNERS file.
+2. **Exact-tree review-attested carrier main.** For private repositories where
+   branch protection is unavailable, the protected source contract must include
+   an exact positive `review_pr`. That PR must be same-repository, merged to
+   carrier `main`, authored by an account other than immutable reviewer ID
+   `11139560` / login `ORESoftware`, and the latest review from that
+   reviewer must be `APPROVED` on the PR's exact head before merge. The final
+   carrier main root-tree SHA must equal the independently reviewed PR head
+   root-tree SHA exactly, and carrier CODEOWNERS must match the security
+   contract.
+
+A pinned carrier SHA by itself is **not** sufficient. The review-attested mode
+adds an independently verified exact-tree approval, so any later path, Git
+mode, blob, reviewer-state, repository-identity, or main-SHA drift fails closed.
+The exact carrier-main SHA is rechecked before every source-bearing API write;
+full carrier review/tree attestation is repeated at admission, immediately
+before executable refs, and again in the inert payload window before the
+one-use authorization ref is created.
 
 The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
 performed by a separate no-checkout job with `contents: write` that validates
