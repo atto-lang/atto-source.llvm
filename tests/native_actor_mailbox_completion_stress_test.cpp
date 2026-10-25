@@ -4,7 +4,6 @@
 #include "oreslang/runtime/ActorMailboxCompletion.hpp"
 
 #include <atomic>
-#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -46,8 +45,8 @@ int main() {
 
         ok(m.reserve_prepare() && m.reserve_prepare() && !m.reserve_prepare(),
            "bounded prepare capacity");
-        const auto a = m.publish([](auto seq) { assert(seq == 1); });
-        const auto b = m.publish([](auto seq) { assert(seq == 2); });
+        const auto a = m.publish([](auto seq) { if (seq != 1) throw std::logic_error("unexpected first committed sequence"); });
+        const auto b = m.publish([](auto seq) { if (seq != 2) throw std::logic_error("unexpected second committed sequence"); });
         ok(a == 1 && b == 2 && !m.reserve_prepare(),
            "monotonic publication and window backpressure");
 
@@ -72,12 +71,12 @@ int main() {
         ok(m.snapshot() == 0 && !m.reserve_prepare(),
            "failed publication preserves sequence and reservation");
         m.cancel_prepare();
-        ok(m.reserve_prepare() && m.publish([](auto seq) { assert(seq == 1); }) == 1,
+        ok(m.reserve_prepare() && m.publish([](auto seq) { if (seq != 1) throw std::logic_error("unexpected first committed sequence"); }) == 1,
            "cancel then retry preserves sequence identity");
         m.complete(1, true);
         ok(m.drain_status(1) == Status::Aborted && !m.completed_through(1),
            "aborted retirement poisons drain");
-        ok(m.reserve_prepare() && m.publish([](auto seq) { assert(seq == 2); }) == 2,
+        ok(m.reserve_prepare() && m.publish([](auto seq) { if (seq != 2) throw std::logic_error("unexpected second committed sequence"); }) == 2,
            "subsequent publisher does not erase aborted fence");
         m.complete(2);
         ok(m.drain_status(2) == Status::Aborted,
