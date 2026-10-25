@@ -254,6 +254,13 @@ struct Function {
     // continuation; it is never represented as an untyped i64 guest value.
     std::string ready_future_name;
     std::string ready_future_actor;
+    // Linear Future<void> from ActorRef.send_async(i64). Submission starts at
+    // declaration; await consumes the opaque scheduler-owned admission Future.
+    std::string send_future_name;
+    std::string send_future_actor;
+    std::unique_ptr<Expression> send_future_payload;
+    std::size_t send_future_submit_offset = 0;
+    std::size_t send_future_await_offset = 0;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
@@ -371,8 +378,8 @@ struct Program {
 // bounded multi-field i64 classes and trusted actor send/stop.
 // Actors remain incompatible with wasm32. Admitted async source slices are
 // restricted to trusted zero-argument main: lifecycle get_ready/get_done and
-// direct `await ActorRef.send_async(i64)` mailbox-admission waiting. General
-// storable send_async Future<void> values remain unimplemented.
+// direct `await ActorRef.send_async(i64)` and one linear
+// `Future<void> f = ActorRef.send_async(i64); await f;` admission token.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
