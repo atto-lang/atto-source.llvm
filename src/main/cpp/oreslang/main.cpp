@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
     bool experimental_rt_scalar_loop = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    bool android_aarch64_target = false;
     bool target_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
@@ -239,6 +240,9 @@ int main(int argc, char** argv) {
                 cortex_m_target = oreslang::TargetAbi::parse(target).experimental_cortexm_ir();
             } else if (target == "wasm32" || target == "wasm32-unknown-unknown") {
                 wasm32_target = oreslang::TargetAbi::parse("wasm32-unknown-unknown").experimental_wasm32_ir();
+            } else if (target == "aarch64-unknown-linux-android24") {
+                android_aarch64_target = oreslang::TargetAbi::parse(target)
+                    .experimental_android_aarch64_scalar_ir();
             } else {
                 try {
                     (void)oreslang::TargetAbi::parse(target);
@@ -273,7 +277,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|aarch64-unknown-linux-android24] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -291,17 +295,21 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
-        if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
+        if (experimental_rt_scalar_loop &&
+            (wasm32_target || android_aarch64_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
-        if (native_hard_rt_profile && (wasm32_target || cortex_m_target))
+        if (native_hard_rt_profile &&
+            (wasm32_target || cortex_m_target || android_aarch64_target))
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
-                                                 experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
+        auto ast = oreslang::load_native_program(
+            path, text, source_identity, experimental_owned_int,
+            experimental_rt_scalar_loop,
+            !wasm32_target && !cortex_m_target && !android_aarch64_target);
 
         if (rt_report_seen && path != nullptr && paths_alias(path, rt_report_path))
             throw std::runtime_error("rt-report path must not overwrite source input");
@@ -326,6 +334,68 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(
                     "native-hard-rt admission failed [" + report.diagnostic +
                     "]: " + report.reason);
+            }
+        }
+
+        if (android_aarch64_target) {
+            // Experimental Android AArch64 pilot: import-free i64 scalar
+            // functions only. Runtime/actors/heap/suspension remain unadmitted.
+            if (experimental_owned_int || experimental_rt_scalar_loop ||
+                !ast.module.empty() || !ast.classes.empty() || !ast.actors.empty() ||
+                !ast.cooperative_loops.empty() || ast.functions.empty())
+                throw std::runtime_error(
+                    "android aarch64 target supports only import-free scalar functions");
+            constexpr std::size_t max_functions = 32;
+            constexpr std::size_t max_parameters = 8;
+            constexpr std::size_t max_expression_nodes = 4096;
+            constexpr std::size_t max_expression_depth = 32;
+            if (ast.functions.size() > max_functions)
+                throw std::runtime_error("android aarch64 function count exceeds 32");
+            std::size_t expression_nodes = 0;
+            std::function<bool(const oreslang::Expression&, std::size_t)> scalar =
+                [&](const oreslang::Expression& expr, std::size_t depth) -> bool {
+                    if (depth > max_expression_depth ||
+                        ++expression_nodes > max_expression_nodes)
+                        throw std::runtime_error(
+                            "android aarch64 scalar expression budget exceeded");
+                    using Kind = oreslang::Expression::Kind;
+                    switch (expr.kind) {
+                        case Kind::Integer:
+                        case Kind::Variable:
+                            return true;
+                        case Kind::Negate:
+                            return expr.left && scalar(*expr.left, depth + 1);
+                        case Kind::Add:
+                        case Kind::Subtract:
+                        case Kind::Multiply:
+                            return expr.left && expr.right &&
+                                   scalar(*expr.left, depth + 1) &&
+                                   scalar(*expr.right, depth + 1);
+                        default:
+                            return false;
+                    }
+                };
+            for (const auto& fn : ast.functions) {
+                if (fn.name == "main" || fn.returns_void || !fn.result ||
+                    !fn.locals.empty() || !fn.statements.empty() ||
+                    !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                    !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                    !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                    fn.scalar_while || fn.caught_throw_value ||
+                    !fn.caught_throw_defers.empty() || fn.has_declared_effects)
+                    throw std::runtime_error(
+                        "android aarch64 target rejects main, effects or non-scalar functions");
+                if (fn.parameters.size() > max_parameters)
+                    throw std::runtime_error(
+                        "android aarch64 parameter budget exceeded");
+                for (const auto& param : fn.parameters)
+                    if (!param.class_name.empty() ||
+                        param.mode != oreslang::Parameter::Mode::Value)
+                        throw std::runtime_error(
+                            "android aarch64 target requires value int parameters");
+                if (!scalar(*fn.result, 0))
+                    throw std::runtime_error(
+                        "android aarch64 target requires bounded scalar expressions");
             }
         }
 
@@ -502,7 +572,8 @@ int main(int argc, char** argv) {
             // Tree shaking is an optimization, not conditional compilation.
             // Validate/codegen the complete admitted source once before pruning
             // so unsupported target features cannot hide in unreachable code.
-            (void)oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+            (void)oreslang::emit_verified_llvm_ir(
+                ast, wasm32_target, cortex_m_target, android_aarch64_target);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -512,7 +583,8 @@ int main(int argc, char** argv) {
             require_function_only_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
-        std::cout << oreslang::emit_verified_llvm_ir(ast, wasm32_target, cortex_m_target);
+        std::cout << oreslang::emit_verified_llvm_ir(
+            ast, wasm32_target, cortex_m_target, android_aarch64_target);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;
