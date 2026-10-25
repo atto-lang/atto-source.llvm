@@ -34,6 +34,9 @@ typedef struct {
     atomic_int join_started;
     atomic_uint_fast64_t processed;
     atomic_int_fast64_t last_result;
+    /* Protected by group.mutex. Keeps the opaque allocation alive while an
+     * outer-host send_async admission wait temporarily releases that mutex. */
+    size_t async_waiters;
 } SourceActor;
 
 typedef struct {
@@ -63,6 +66,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_cond_t mailbox_space;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -79,7 +83,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .mailbox_space = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -496,6 +503,15 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         &instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(
         &instance->processed, 1, memory_order_release);
+
+    /*
+     * Physical dequeue/handler completion has returned one scheduler mailbox
+     * credit. Serialize the notification with checked send_async's retry +
+     * cond-wait registration to prevent a lost wakeup.
+     */
+    group_lock();
+    ensure(pthread_cond_broadcast(&group.mailbox_space) == 0);
+    group_unlock();
 }
 
 static void open_group_locked(void) {
@@ -604,6 +620,88 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(ores_native_vm_try_send(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
         == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_exact_scheduler_ref(
+        void* opaque, OresNativeActorRef* out) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || !out) return 0;
+    group_lock();
+    int ok = 0;
+    if (instance->magic == SOURCE_ACTOR_MAGIC && group.vm) {
+        const size_t slot = (size_t)instance->ref.actor_slot;
+        if (slot < group.next_slot && group.actors[slot] == instance
+                && instance->ref.scheduler_domain) {
+            *out = instance->ref;
+            ok = 1;
+        }
+    }
+    group_unlock();
+    return ok;
+}
+
+int oreslang_source_actor_await_send_async_checked(
+        void* opaque, int64_t payload) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+
+    group_lock();
+    if (instance->magic != SOURCE_ACTOR_MAGIC || !group.vm
+            || !instance->on_message) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    const size_t slot = (size_t)instance->ref.actor_slot;
+    if (slot >= group.next_slot || group.actors[slot] != instance) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+
+    /*
+     * This initial vertical slice is an awaited outer-host bridge, not the
+     * eventual fully suspended producer continuation. Never park a scheduler
+     * carrier: doing so could consume the only worker capable of releasing the
+     * target mailbox credit.
+     */
+    OresNativeExecutionContext carrier = {0};
+    if (ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+    }
+
+    ++instance->async_waiters;
+    int outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    for (;;) {
+        const OresNativeSendStatus status = ores_native_vm_try_send(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload);
+        if (status == ORES_NATIVE_SEND_ACCEPTED) {
+            outcome = ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+            break;
+        }
+        if (status != ORES_NATIVE_SEND_MAILBOX_FULL) {
+            outcome = (int)status;
+            break;
+        }
+        /*
+         * deliver() and request_stop() broadcast while owning group.mutex.
+         * pthread_cond_wait atomically registers the waiter and releases that
+         * mutex, so a credit return or terminal seal cannot be lost between
+         * the failed try_send and the sleep.
+         */
+        ensure(pthread_cond_wait(&group.mailbox_space, &group.mutex) == 0);
+    }
+
+    ensure(instance->async_waiters > 0);
+    --instance->async_waiters;
+    ensure(pthread_cond_broadcast(&group.mailbox_space) == 0);
+    group_unlock();
+    return outcome;
+}
+
+void oreslang_source_actor_await_send_async(void* opaque, int64_t payload) {
+    ensure(oreslang_source_actor_await_send_async_checked(opaque, payload)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
 }
 
 int oreslang_source_actor_await_ready_checked(
@@ -849,6 +947,8 @@ void oreslang_source_actor_request_stop(void* opaque) {
      */
     ensure(ores_native_vm_stop_sealed(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    /* Wake send_async admission waiters so TERMINATED wins over stale FULL. */
+    ensure(pthread_cond_broadcast(&group.mailbox_space) == 0);
     group_unlock();
 }
 
@@ -881,6 +981,8 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
+    while (instance->async_waiters != 0)
+        ensure(pthread_cond_wait(&group.mailbox_space, &group.mutex) == 0);
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
     ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
