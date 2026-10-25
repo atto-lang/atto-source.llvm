@@ -1311,10 +1311,10 @@ if(BUILD_TESTING)
         --diagnostic "await get_ready requires a live direct ActorRef receiver")
     oreslang_contract_test(reject_source_actor_hasfuture_get_done
         source-actor-await-get-done.ores
-        --diagnostic "expected 'get_ready'")
+        --diagnostic "actor effects after await get_done are unsupported")
     oreslang_contract_test(reject_source_actor_hasfuture_double_await
         source-actor-await-worker-twice.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one async await boundary")
     # HasFuture must be a checked live actor capability, not merely an
     # identifier that happens to appear in an await expression.
     oreslang_contract_test(reject_source_actor_hasfuture_scalar_operand
@@ -1328,7 +1328,7 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_hasfuture_reuses_future
         source-actor-future-void-await-again.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one async await boundary")
     # First actual native source-level typed Future: Future<void> from a
     # single ActorRef.get_ready(). It uses the existing root CONTROL
     # continuation, not synchronous polling or a generic Future<T> ABI.
@@ -1344,22 +1344,36 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_double_ready_future
         source-actor-future-void-double-await.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one async await boundary")
     oreslang_contract_test(reject_source_actor_unspawned_ready_future
         source-actor-future-void-unspawned.ores
-        --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
+        --diagnostic "Future<void> requires previously spawned ActorRef")
     oreslang_contract_test(reject_source_actor_ready_future_shadow
         source-actor-future-void-shadow.ores
         --diagnostic "Future<void> readiness token shadows a live owner")
     oreslang_contract_test(reject_source_actor_duplicate_ready_future
         source-actor-future-void-duplicate.ores
-        --diagnostic "native source supports only one Future<void> readiness token")
+        --diagnostic "native source supports only one Future<void> token")
     oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
         source-actor-future-void-wrong-producer.ores
-        --diagnostic "expected 'get_ready'")
+        --diagnostic "Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)")
     oreslang_contract_test(reject_source_actor_ready_future_as_message
         source-actor-future-void-send.ores
         --diagnostic "unknown parameter")
+    # First stored send_async Future<void>: admission starts at declaration
+    # and the linear token must be consumed exactly once before target stop.
+    oreslang_contract_test(source_actor_send_async_future_start_ir
+        source-actor-send-async-future.ores
+        --ir "oreslang_source_actor_send_async_start")
+    oreslang_contract_test(source_actor_send_async_future_await_ir
+        source-actor-send-async-future.ores
+        --ir "oreslang_source_actor_await_send_future")
+    oreslang_contract_test(reject_source_actor_send_async_future_unused
+        source-actor-send-async-future-unused-reject.ores
+        --diagnostic "Future<void> send_async token must be awaited exactly once")
+    oreslang_contract_test(reject_source_actor_send_async_future_stop_before_await
+        source-actor-send-async-future-stop-before-await-reject.ores
+        --diagnostic "send_async Future target stopped before await")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
@@ -3614,6 +3628,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-max-threads-admission-test)
     set_tests_properties(native_actor_max_threads_source_admission
         PROPERTIES TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-source-actor-send-async-frontend-test
+        tests/source_actor_send_async_frontend_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-actor-send-async-frontend-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-actor-send-async-frontend-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-source-actor-send-async-frontend-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME source_actor_send_async_frontend_contract
+        COMMAND oreslang-source-actor-send-async-frontend-test)
+    set_tests_properties(source_actor_send_async_frontend_contract PROPERTIES TIMEOUT 20)
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
