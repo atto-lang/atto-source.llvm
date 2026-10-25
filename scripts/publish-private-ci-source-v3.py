@@ -451,6 +451,7 @@ def source_protection():
     bypasses = reviews.get("bypass_pull_request_allowances")
     if bypasses is not None:
         if (not isinstance(bypasses, dict)
+                or set(bypasses) - {"users", "teams", "apps"}
                 or any(not isinstance(bypasses.get(k, []), list)
                        or bypasses.get(k) for k in ("users", "teams", "apps"))):
             raise Denied("source main has pull-request review bypasses")
@@ -844,6 +845,7 @@ def checked_carrier_main(repository, contract):
     bypasses = reviews.get("bypass_pull_request_allowances")
     if bypasses is not None:
         if (not isinstance(bypasses, dict)
+                or set(bypasses) - {"users", "teams", "apps"}
                 or any(not isinstance(bypasses.get(k, []), list)
                        or bypasses.get(k) for k in ("users", "teams", "apps"))):
             raise Denied("carrier main has pull-request review bypasses")
