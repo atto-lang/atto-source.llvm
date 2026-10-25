@@ -1,0 +1,17 @@
+// Restricted native frontend shape of the common core integer contracts.
+// The LLVM parser currently uses guarded returns rather than Java's full
+// nested if/else AST; this is NOT verbatim Java stdlib/core.ores.
+pub fnc min_int(int left, int right): int {
+  if (left < right) { return left; } fi
+  return right;
+}
+pub fnc max_int(int left, int right): int {
+  if (left > right) { return left; } fi
+  return right;
+}
+pub fnc clamp_int(int value, int lower, int upper): int {
+  if (lower > upper) { return lower; } fi
+  if (value < lower) { return lower; } fi
+  if (value > upper) { return upper; } fi
+  return value;
+}

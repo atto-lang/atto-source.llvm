@@ -13,6 +13,17 @@
       }
     },
     {
+      "id": "native.proxy-packed-receipt",
+      "feature": "proxy.receipt-scalar-abi",
+      "source": "fixtures/proxy-packed-receipt.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "required",
+        "graal": "required"
+      }
+    },
+    {
       "id": "native.precedence",
       "feature": "numeric.precedence",
       "source": "fixtures/precedence.ores",
@@ -66,6 +77,42 @@
         "llvm": "required",
         "graal": "required"
       }
+    },
+    {
+      "id": "native.defer-lifo-cfg",
+      "feature": "control-flow.defer-lifo",
+      "source": "fixtures/native-defer-lifo-cfg.ores",
+      "kind": "native_exit",
+      "expected_exit": 111,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native execution and mutable-defer lowering have not yet been independently validated."
+    },
+    {
+      "id": "native.defer-field-return",
+      "feature": "control-flow.defer-return-snapshot",
+      "source": "fixtures/native-defer-field-return.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native mutable-field defer and return snapshot execution still requires backend validation."
+    },
+    {
+      "id": "native.try-finally-return-snapshot",
+      "feature": "control-flow.finally-return-snapshot",
+      "source": "fixtures/native-try-finally-return-snapshot.ores",
+      "kind": "native_exit",
+      "expected_exit": 42,
+      "backends": {
+        "llvm": "pending",
+        "graal": "required"
+      },
+      "pending_reason": "LLVM native try/finally return snapshot and defer ordering still require backend validation."
     },
     {
       "id": "diagnostic.unknown",

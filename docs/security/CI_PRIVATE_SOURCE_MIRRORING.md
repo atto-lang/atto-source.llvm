@@ -4,7 +4,7 @@ Never transfer private oreslang-source.llvm source into a public or internal Git
 
 ## Destination approval
 
-The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through a reviewed protected-branch change owned by `@ORESoftware`.
+The file `.github/private-ci-approved-repositories.txt` is empty by default. No cross-repository source transfer is authorized until an exact private `owner/repo` destination is added through source governance independently reviewed by `@ORESoftware` **and source `main` is protected with the required review controls**. There is no unprotected-source export fallback.
 
 Destination privacy, repository identity, workflow permissions, retention, and personnel access must be revalidated immediately before every transfer. A writable repository or successful source-free runner canary is not authorization.
 
@@ -44,13 +44,11 @@ python3 scripts/test-audit-private-ci-governance.py
 python3 scripts/audit-private-ci-governance.py
 ```
 
-The opt-in `--live` preflight reads source GitHub repository metadata,
-`branches/main`, and `branches/main/protection` using a read-capable
-`GITHUB_TOKEN`, failing closed for missing permissions, missing CODEOWNER
-approval enforcement, stale-review acceptance, or missing administrator
-enforcement. It is a *necessary condition*, never a source-export grant;
-the checked destination, independent approval, policy provenance, and
-publisher still require separate verification.
+The opt-in `--live` preflight diagnoses the mandatory source protected-main
+gate by reading source repository metadata, `branches/main`, and branch
+protection with a read-capable `GITHUB_TOKEN`. Carrier review/tree attestation
+is enforced separately by V3 when the destination carrier itself is
+unprotected. Neither check is a source-export grant.
 
 **Observed governance blocker (2026-10-19):** GitHub returned
 `protected=false` for source `main`. Ruleset reads also returned a
@@ -82,12 +80,18 @@ symlink/submodule/unsupported modes and unsafe paths, fetches each bounded Git
 blob by SHA, and verifies the blob bytes against the Git object ID before any
 destination write.
 
-Before reading or exporting source, the publisher self-attests its own script
-bytes plus the allowlist and carrier-contract bytes against the exact protected
-source `main` commit. Source `main` must enforce CODEOWNER review,
-stale-review dismissal, at least one approval, administrator enforcement, no
-force pushes/deletions, and no PR-review bypass actors. Missing API permission
-or `protected=false` fails closed.
+Before reading or exporting source, the publisher self-attests its governance
+bytes against the exact source `main` commit and requires source `main` to
+be protected. Source `main` must enforce CODEOWNER review, stale-review
+dismissal, at least one approval, administrator enforcement, no force
+pushes/deletions, and no PR-review bypass actors. If GitHub reports
+`protected=false` or the required protection cannot be verified, private
+source export is denied.
+
+There is deliberately **no review-attested fallback for the source repository**.
+A reviewed governance PR, CODEOWNERS text, or source-free carrier success cannot
+substitute for live source-main protection. The source PR under test is also
+bound separately to its exact open-PR head and complete root tree.
 
 An allowlist entry is necessary but not sufficient. The protected
 `.github/private-ci-carrier-contracts.json` additionally pins:
@@ -102,11 +106,21 @@ The reviewed carrier base must contain neither
 `main` advance, delete/recreate, workflow change, or test-plan change fails
 closed until the source contract is independently reviewed again.
 
-Carrier `main` is also a live authorization boundary. The v3 publisher
-requires it to be protected with CODEOWNER review, stale-review dismissal,
-at least one approval, administrator enforcement, force-push/deletion disabled,
-and no pull-request-review bypass actors. A pinned carrier SHA is not treated as
-a substitute for live review enforcement.
+Carrier `main` is also a live authorization boundary. Protected-main mode
+requires CODEOWNER review, stale-review dismissal, at least one approval,
+administrator enforcement, force-push/deletion disabled, and no review bypass
+actors.
+
+When carrier branch protection is unavailable, the protected source carrier
+contract must additionally pin a positive `review_pr`. That PR must be a
+same-repository PR merged to carrier `main`, independently approved by
+immutable reviewer ID `11139560` / login `ORESoftware` on its exact head
+before merge, and authored by a different valid account. The final carrier
+`main` root-tree SHA must equal the reviewed PR head root-tree SHA, and the
+carrier must contain the exact security CODEOWNERS file. The contract still
+pins the exact final carrier-main commit SHA, workflow blob, plan blob, and
+allowed source PR. Carrier `main` SHA is rechecked before every source-bearing
+write; movement during transfer fails closed.
 
 The carrier workflow keeps the source-test job at `contents: read`. Cleanup is
 performed by a separate no-checkout job with `contents: write` that validates

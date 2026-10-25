@@ -56,7 +56,7 @@ class PolicyAuditTest(unittest.TestCase):
                 (root / relative).parent.mkdir(parents=True, exist_ok=True)
             (root / audit.APPROVAL_PATH).write_text("# empty\n")
             (root / audit.OWNERS_PATH).write_text("/.github/CODEOWNERS @ORESoftware\n")
-            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector")
+            (root / audit.DOC_PATH).write_text("protected private tree canary Direct GitHub connector review-attested")
             with self.assertRaises(audit.GovernanceError):
                 audit.check_policy_files(root)
 

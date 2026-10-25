@@ -1,0 +1,67 @@
+name: LLVM 19/23 native class and String parity (macOS)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/llvm19-23-native-class-string-macos.yml'
+      # Covers frontend, backend, types, compiler entry point, and runtime.
+      # A typechecker-only change must not silently skip native execution.
+      - 'src/main/cpp/oreslang/**'
+      - 'tests/native_class_string_parity.rs'
+      - 'tests/native_source_input_admission.cpp'
+      - 'tests/fixtures/native-class-string/**'
+      - 'scripts/verify-native-class-string-macos.sh'
+      - 'scripts/compile-aot.sh'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llvm-class-string-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [19, 23]
+    runs-on: macos-15
+    timeout-minutes: 50
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Avoid the synthetic pull_request merge commit; validate PR head exactly.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact-head checkout and print immutable provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Wrong source commit: expected $expected, checked out $actual" >&2
+            exit 65
+          fi
+          echo "commit=$(git rev-parse HEAD)"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')"
+          echo "run=${{ github.run_id }}"
+      - name: Install requested LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.llvm }}" == "19" ]]; then
+            brew install llvm@19
+          else
+            brew install llvm
+          fi
+          brew --prefix llvm@19 >/dev/null || [[ "${{ matrix.llvm }}" != "19" ]]
+          rustc --version
+          cmake --version
+      - name: Compile Oreslang and run real native parity
+        shell: bash
+        run: bash scripts/verify-native-class-string-macos.sh "${{ matrix.llvm }}"

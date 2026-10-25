@@ -1,0 +1,22 @@
+define class Counter as
+  pub let int value = 1;
+end
+fnc mutate(borrow mut Counter c, int path): int {
+  defer c.value = c.value + 1;
+  defer c.value = c.value * 10;
+  if (path eq 0) { return c.value; } fi
+  return c.value;
+}
+pub fnc main(): int {
+  let mut Counter c = new Counter();
+  val first: int = mutate(rt borrow mut c, 0);
+  val second: int = mutate(rt borrow mut c, 1);
+  // Preserve the exact return-value and LIFO-mutation oracle without
+  // encoding 222 in an OS process exit status (suite limit: 0..125).
+  if (first eq 1) {
+    if (second eq 11) {
+      if (c.value eq 111) { return 42; } fi
+    } fi
+  } fi
+  return 1;
+}

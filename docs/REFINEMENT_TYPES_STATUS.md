@@ -1,56 +1,43 @@
-# Refinement types: LLVM parity contract (proposed)
+# Refinement types: LLVM/native status
 
-**Status (2026-10-17): design only; no LLVM parsing/lowering/runtime enforcement claimed.**
+**Status (2026-10-25): bounded descriptor support; broader refinement lowering remains fail-closed.**
 
-The shared source contract is [oreslang-common-source/docs/REFINEMENT_TYPES.md](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/design/refinement-types-three-syntaxes-20261017/docs/REFINEMENT_TYPES.md).
+The canonical shared contract lives in `oreslang-common-source/docs/REFINEMENT_TYPES.md`.
+This backend now has a deliberately narrow implemented slice from LLVM PR #969:
 
-The current native compiler remains an experimental subset and must **fail closed** when encountering any constrained type or newtype that it cannot prove and enforce. Merely parsing, erasing an annotation, or emitting `i64`/opaque pointers is **not** feature parity.
+- `declare type Code = int with min 0 and max 5;` and the equivalent
+  `define type` form are accepted as compile-time type declarations.
+- Direct `int`/`i64` inclusive `min`/`max` predicates normalize into the
+  compiler-owned `ores.type-constraint.v1` descriptor.
+- Descriptor identity, canonical ordering, validation-required state and
+  fingerprint are compiler-owned metadata.
+- A constrained alias still **cannot become a runtime value**. Parameters,
+  returns, alias chains and extension receivers that would erase validation
+  provenance fail closed with `CONSTRAINT_VALIDATION_BRIDGE_REQUIRED` or the
+  corresponding type-only signature bridge diagnostic.
 
-## Target source spellings
+This is not general refinement-type support. The native backend still rejects
+annotation refinements, `where` predicates, nominal `newtype`, general
+`with value ...` predicates, string/Unicode refinements, user-forgeable
+`Valid<T, Schema>` proof types, arbitrary schema-first inference, and any
+other surface without checked lowering.
 
-~~~ores
-@Size(min=10, max=10)
-type A = string;
-type B = string with length eq 10;
-type C = string where it.length == 10;
-define newtype D(string) with length eq 10;
-~~~
+## Required safety boundary
 
-- All constrained aliases normalize to one typed predicate representation; `D` additionally has a distinct nominal ID.
-- `with` accepts only recognized properties and conjunctive constant comparisons. Canonical textual comparators are `eq/ne/gt/gte/lt/lte`; symbolic aliases are `==/!=/>/>=/</<=`. `ge` and `le` are rejected. `where` accepts only pure deterministic expressions and never silently permits unvalidated values.
-- Checked `Name.try_from(Base) -> Result<Name, ConstraintError>` construction is needed for runtime values.
-- String length means Unicode **code points**, never UTF-8 bytes or Java UTF-16 units. NFC/NFD normalization is not implicit.
-- Length/size-constrained mutable references cannot be mutated or aliased unsafely.
-- Incomplete native parser and verifier must produce explicit errors, nonzero exit and **no emitted LLVM IR**, following the existing native fail-closed policy.
-- No claim of parity until LLVM+Clang runtime tests demonstrate real checked conversion, nominal rejection, Unicode correctness, unsafe boundary validation and source/ABI compatibility with Java.
+Unsupported source must fail with a nonzero compiler result, a diagnostic, and
+**no partial LLVM IR/stdout**. The current admission regression includes an
+ordinary scalar positive control, a positive `ores.type-constraint.v1`
+descriptor control, the exact runtime-validation bridge denial, and broader
+unsupported refinement forms.
 
-## Required CI evidence
+Future checked construction must bind an immutable compiler/runtime validation
+receipt to the exact nominal constrained type. Dynamic Zorde reports and wire
+schema fingerprints are not sufficient authority by themselves.
 
-1. Shared fixture corpus covering all three syntax families plus `where` and both textual/symbolic comparison tokens.
-2. Static positive/negative cases, especially contradictions, zero-length invalid values, unsupported properties and unsafe conversions.
-3. LLVM IR verification; real compiled runtime checks; absence of IR for rejected programs.
-4. Differential Java/LLVM semantic results for Unicode, error shape, newtype identity, mutation and serializer/actor boundary behavior.
-5. Clearly reported implemented versus explicitly rejected cases; no success counts awarded to skipped tests or tests that only exercise lexer rejection.
+String length semantics, when eventually implemented, are Unicode scalar
+values rather than UTF-8 byte length. No backend-specific coercion may weaken
+the shared contract.
 
-## Zorde runtime parity
-
-LLVM refinement support includes emitting/consuming the same reflection-free Zorde validator descriptor contract as the language spec. Dynamic construction, deserialization, FFI, actor DATA and other trust boundaries must execute the normalized predicate or reject the unsupported descriptor before IR/execution. Backend-specific validation semantics are not permitted.
-
-## Inclusive comparison spelling
-
-Canonical textual inclusive bounds are `gte` and `lte`; symbolic `>=` and `<=` are equivalent source spellings. Legacy `ge` and `le` are deliberately invalid and must never be accepted as aliases. Until this backend implements checked refinement lowering, both canonical/symbolic valid refinements and legacy-invalid refinements remain fail-closed admission cases rather than erased base types.
-
-## Zorde core/std-lib validation parity
-
-Oreslang standard-library `std/zorde` is the eventual public schema API;
-core provides the same normalized predicates for compile-time annotation proofs
-and runtime validation. `@MinLength(N)`/`@MaxLength(N)` and
-`@Size(min=,max=)`/`@Length(min=,max=,eq=)` lower to string Unicode
-scalar `length` comparisons. `@Min(N)`/`@Max(N)`/`@Range(min=,max=)`
-lower to integer-exact `value` bounds. Textual `gte/lte` and symbolic
-`>=/<=` must be equivalent. A float-number coercion is not acceptable for
-signed-int64 range checks.
-
-Until LLVM has exact compilation and enforced boundary schemas, all these
-annotations are included in the native fail-closed admission gate as
-unsupported. This is rejection parity only, not Zorde execution support.
+This document and the regression gate describe admission semantics only.
+Source-org zero-step Actions failures are infrastructure non-execution, not
+evidence that LLVM/Clang compilation or CTest passed.
