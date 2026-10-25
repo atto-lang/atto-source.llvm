@@ -162,6 +162,24 @@ int main() {
         must_fail("manifest symlink escape", "must reside within package directory",
                   [&] { (void)resolve(dir/"main.ores", "+/lib"); });
     }
+    {
+        const auto dir = temp / "manifest-canonical-read";
+        write_text(dir/"manifest-target.toml", "schema_version = \"1\"\n");
+        write_text(dir/"main.ores", "");
+        write_text(dir/"lib.ores", "");
+        fs::create_symlink(dir/"manifest-target.toml", dir/".ores.pkg.toml");
+        bool saw_canonical = false;
+        const auto target = oreslang::resolve_project_root_import(
+            dir/"main.ores", "+/lib",
+            [&](const fs::path& manifest) {
+                if (fs::is_symlink(fs::symlink_status(manifest)))
+                    throw std::runtime_error("manifest reader received unresolved symlink");
+                saw_canonical = fs::equivalent(manifest, dir/"manifest-target.toml");
+                return read_manifest(manifest);
+            });
+        if (!saw_canonical || target != fs::canonical(dir/"lib.ores"))
+            throw std::runtime_error("manifest canonical read binding mismatch");
+    }
 #endif
     {
         const auto dir = temp / "extension";
