@@ -25,6 +25,19 @@
 #include <string_view>
 
 
+// Compiler failures can include guest-controlled tokens and filenames.
+// Never emit terminal control bytes, unbounded exception text or the exact
+// source filesystem path in a native compiler diagnostic.
+static void print_safe_diagnostic(std::ostream& stream, std::string_view message,
+                                  std::size_t limit) {
+    const auto count = std::min(message.size(), limit);
+    for (std::size_t i = 0; i < count; ++i) {
+        const unsigned char byte = static_cast<unsigned char>(message[i]);
+        stream.put(byte >= 32 && byte < 127 ? static_cast<char>(byte) : '?');
+    }
+    if (message.size() > limit) stream << "...[truncated]";
+}
+
 static bool paths_alias(const char* source_path, const std::string& report_path) {
     std::error_code source_error;
     std::error_code report_error;
@@ -554,22 +567,37 @@ int main(int argc, char** argv) {
         if (coreLog)
             coreLog->record(oreslang::CoreLog::Level::Error,
                             oreslang::CoreLog::EventId::CompileFailed, 1);
-        std::cerr << "oreslang-llvmc: " << error.what();
+        std::cerr << "oreslang-llvmc: ";
+        std::string diagnostic = error.what();
+        if (path != nullptr && *path != '\0') {
+            const std::string source_path(path);
+            // Full host paths are private CI metadata, not error context.
+            // Replace exact input-path occurrences before rendering.
+            std::size_t found = 0;
+            while ((found = diagnostic.find(source_path, found)) != std::string::npos) {
+                diagnostic.replace(found, source_path.size(), "<source>");
+                found += sizeof("<source>") - 1;
+            }
+        }
+        print_safe_diagnostic(std::cerr, diagnostic, 2048);
         if (path != nullptr) {
-            // Report the user-selected source filename, not an absolute CI
-            // workspace path; escape terminal controls in an untrusted argv.
             std::string_view source_name(path);
             const auto slash = source_name.find_last_of("/\\");
             if (slash != std::string_view::npos) source_name.remove_prefix(slash + 1);
             std::cerr << " [file: ";
-            for (char c : source_name.substr(0, 128)) {
-                const unsigned char byte = static_cast<unsigned char>(c);
-                std::cerr << (byte < 32 || byte == 127 ? '?' : c);
-            }
+            print_safe_diagnostic(std::cerr, source_name, 128);
             std::cerr << "]";
         }
-        if (!source_module.empty()) std::cerr << " [module: " << source_module << "]";
-        if (!source_namespace.empty()) std::cerr << " [namespace: " << source_namespace << "]";
+        if (!source_module.empty()) {
+            std::cerr << " [module: ";
+            print_safe_diagnostic(std::cerr, source_module, 128);
+            std::cerr << "]";
+        }
+        if (!source_namespace.empty()) {
+            std::cerr << " [namespace: ";
+            print_safe_diagnostic(std::cerr, source_namespace, 128);
+            std::cerr << "]";
+        }
         std::cerr << '\n';
         if (coreLog) coreLog->dump(stderr);
         return 1;
