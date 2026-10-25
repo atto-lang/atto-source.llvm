@@ -128,6 +128,10 @@ public:
         if (!resume) throw std::invalid_argument("missing scalar future resume");
         if (!valid(ticket) || !parent_ref.same_incarnation(owner_))
             return false;
+        if (parent_ref.delivery_closed()) {
+            (void)cancel_if_owner_detached(ticket, parent_ref);
+            return false;
+        }
 
         auto self = shared_from_this();
         Phase expected = Phase::ready;
@@ -170,11 +174,24 @@ public:
 
         if (!enqueued) {
             expected = Phase::scheduled;
-            // Cancellation may have won while ActorGroup admission was tried.
+            // If close won during CONTROL admission, do not resurrect READY.
+            // Otherwise preserve the resolved value for bounded retry.
+            const Phase fallback = parent_ref.delivery_closed()
+                ? Phase::cancelled : Phase::ready;
             (void)phase_.compare_exchange_strong(
-                expected, Phase::ready,
+                expected, fallback,
                 std::memory_order_acq_rel, std::memory_order_acquire);
             return false;
+        }
+
+        // Close may race immediately after successful enqueue. Convert the
+        // generation-fenced barrier into cancellation while the callback is
+        // still only scheduled; the queued CONTROL then drains as a no-op.
+        if (parent_ref.delivery_closed()) {
+            expected = Phase::scheduled;
+            (void)phase_.compare_exchange_strong(
+                expected, Phase::cancelled,
+                std::memory_order_acq_rel, std::memory_order_acquire);
         }
         return true;
     }
