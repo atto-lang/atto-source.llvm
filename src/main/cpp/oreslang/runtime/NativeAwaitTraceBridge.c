@@ -139,8 +139,22 @@ int ores_native_await_trace_ready_resume_begin(
 int ores_native_await_trace_resume_finish(
         OresNativeContinuationStore* continuations,
         OresNativeSuspensionLink link) {
-    if (!continuations || !ores_native_store_handle_valid(link.continuation))
+    if (!continuations || !ores_native_store_handle_valid(link.continuation)
+            || !ores_native_store_handle_valid(link.parent))
         return 0;
+
+    /*
+     * Only the exact suspended execution may finish its physical resume.
+     * Reject forged/recycled parent generations and logical execution IDs,
+     * instead of treating the continuation handle alone as authorization.
+     */
+    OresNativeContinuationRecord record;
+    if (!ores_native_continuation_store_get(
+            continuations, link.continuation, &record)
+            || !same_handle(record.execution, link.parent)
+            || !same_execution_id(record.execution_id, link.execution_id))
+        return 0;
+
     return ores_native_continuation_store_finish_resume(
         continuations, link.continuation);
 }
