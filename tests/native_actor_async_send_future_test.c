@@ -291,6 +291,58 @@ static void sealed_stop_preserves_ready_admission(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+/* Lifecycle barriers must be external-host-only across scheduler domains.
+ * A foreign carrier may otherwise block its pool waiting for another pool,
+ * or join a scheduler during an actor turn. Use a QUIESCENT retired target
+ * so the old same-scheduler-only guard fails deterministically, without a
+ * test deadlock or thread scheduling timeout. */
+typedef struct {
+    OresNativeActorScheduler* retired_target;
+    OresNativeActorRef stopped_actor;
+    atomic_int observed;
+} CrossSchedulerLifecycleProbe;
+
+static void foreign_lifecycle_callback(
+        void* raw, size_t slot, uint64_t payload) {
+    CrossSchedulerLifecycleProbe* probe = (CrossSchedulerLifecycleProbe*)raw;
+    CHECK(slot == 0 && payload == 41);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    CHECK(!ores_native_actor_scheduler_wait_done(
+        probe->retired_target, probe->stopped_actor));
+    CHECK(!ores_native_actor_scheduler_drain(probe->retired_target));
+    CHECK(!ores_native_actor_scheduler_try_destroy(probe->retired_target));
+    atomic_store_explicit(&probe->observed, 1, memory_order_release);
+}
+
+static void cross_scheduler_carrier_rejects_host_lifecycle_barriers(void) {
+    State state = {0};
+    OresNativeActorRef stopped = {0};
+    OresNativeActorScheduler* target = open_one(&state, 1, &stopped);
+
+    CHECK(ores_native_actor_scheduler_stop(target, stopped));
+    CHECK(ores_native_actor_scheduler_wait_done(target, stopped));
+    ores_native_actor_scheduler_retire(target);
+
+    CrossSchedulerLifecycleProbe probe = {
+        .retired_target = target, .stopped_actor = stopped
+    };
+    atomic_init(&probe.observed, 0);
+    OresNativeActorScheduler* foreign = ores_native_actor_scheduler_open(
+        1, 1, 1, foreign_lifecycle_callback, &probe);
+    CHECK(foreign != NULL);
+    OresNativeActorRef carrier = ores_native_actor_scheduler_spawn(foreign, 0);
+    CHECK(carrier.scheduler_domain != 0);
+    CHECK(carrier.scheduler_domain != stopped.scheduler_domain);
+    CHECK(ores_native_actor_scheduler_try_send(foreign, carrier, 41)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(ores_native_actor_scheduler_drain(foreign));
+    CHECK(atomic_load_explicit(&probe.observed, memory_order_acquire) == 1);
+
+    /* Only the original external host may destroy the quiescent target. */
+    CHECK(ores_native_actor_scheduler_try_destroy(target));
+    close_one(foreign, carrier);
+}
+
 static void live_future_fences_scheduler_destruction(void) {
     State state = {0};
     OresNativeActorRef actor = {0};
@@ -320,6 +372,7 @@ int main(void) {
     sealed_stop_preserves_ready_admission();
     descriptor_bound_and_generation_fence();
     live_future_fences_scheduler_destruction();
+    cross_scheduler_carrier_rejects_host_lifecycle_barriers();
     puts("NATIVE_ASYNC_SEND_FUTURE_PASS immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1");
     return 0;
 }
