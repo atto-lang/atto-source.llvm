@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
+#include <new>
 
 namespace {
 constexpr std::size_t kClaimCapacity = 256;
