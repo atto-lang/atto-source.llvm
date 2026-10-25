@@ -149,7 +149,7 @@ static void contest(Fixture* f, OresNativeWakeTicket ticket, int both_cancel) {
     CHECK(pthread_join(first, NULL) == 0);
     CHECK(pthread_join(second, NULL) == 0);
     CHECK(a.won + b.won == 1);
-    if (b.won) {
+    if (!both_cancel && b.won) {
         CHECK(!ores_native_actor_scheduler_cancel_wake(f->scheduler, ticket));
         CHECK(ores_native_actor_scheduler_abort_transferred_wake(
             f->scheduler, ticket));
