@@ -103,10 +103,23 @@ public:
         if (!valid(ticket) || !parent_ref.same_capability(owner_))
             return false;
 
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (phase_ != Phase::ready) return false;
-        auto self = shared_from_this();
-        if (!parent_group.enqueue_control(parent_ref,
+        std::shared_ptr<NativeScalarFutureAwait> self;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (phase_ != Phase::ready) return false;
+            /*
+             * Publish the logical reservation before entering ActorGroup, then
+             * release the Future mutex. A carrier may dequeue CONTROL as soon
+             * as enqueue_control() returns; it must never park behind the
+             * producer/scheduler's Future bookkeeping lock.
+             */
+            phase_ = Phase::scheduled;
+            self = shared_from_this();
+        }
+
+        bool enqueued = false;
+        try {
+            enqueued = parent_group.enqueue_control(parent_ref,
                 [self, resume = std::move(resume)] {
                     Result outcome;
                     {
@@ -130,9 +143,19 @@ public:
                     if (self->phase_ != Phase::running)
                         std::terminate();
                     self->phase_ = Phase::completed;
-                }))
+                });
+        } catch (...) {
+            std::lock_guard<std::mutex> guard(mutex_);
+            if (phase_ == Phase::scheduled) phase_ = Phase::ready;
+            throw;
+        }
+
+        if (!enqueued) {
+            std::lock_guard<std::mutex> guard(mutex_);
+            // Cancellation may have won while ActorGroup admission was tried.
+            if (phase_ == Phase::scheduled) phase_ = Phase::ready;
             return false;
-        phase_ = Phase::scheduled;
+        }
         return true;
     }
 
