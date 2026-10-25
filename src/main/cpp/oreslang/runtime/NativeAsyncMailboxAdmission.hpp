@@ -16,8 +16,9 @@ namespace oreslang::runtime {
  * Host-only bounded async mailbox-credit linearization.
  *
  * This primitive owns no guest payload and is not source send_async lowering.
- * The caller must freeze/copy payload ownership and retain the target's
- * physical resource loan before registering a waiter. This class supplies the
+ * Source/runtime integration must call begin_preparation() before expensive
+ * graph validation/freeze/copy work, then retain the target's physical
+ * resource loan and arm the prepared descriptor. This class supplies the
  * missing race-free accounting boundary between:
  *   - synchronous fail-fast USER credit,
  *   - bounded FIFO producer waiters,
@@ -125,9 +126,11 @@ public:
     }
 
     /**
-     * Register a producer after its wake ticket has been RESERVED.
+     * Arm a producer descriptor after payload preparation and wake RESERVE.
      *
      * Rejected means this object did not take responsibility for the ticket.
+     * For register_prepared(), the caller still owns the PREPARING descriptor
+     * and must cancel_preparation() unless seal already detached it.
      * Waiting/Transferred/Failed consume the registration attempt. Failed has
      * already converted the reserved continuation to FAILED (or retired it if
      * the producer stopped), so the caller must release retained payload/loan.
