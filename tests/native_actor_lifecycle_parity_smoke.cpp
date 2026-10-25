@@ -21,9 +21,28 @@ static void repeated_success_observations() {
     auto actor = group.adopt(8801, 1, 1, [] {});
     auto finalizer = group.runtime_finalizer(actor);
     auto ready = actor.get_ready(), done = actor.get_done();
+    int ready_callbacks = 0, done_callbacks = 0;
+    actor.when_ready([&](const auto& result) {
+        CHECK(result.ready);
+        ++ready_callbacks; // host notification only; never guest execution
+    });
+    actor.when_ready([&](const auto& result) {
+        CHECK(result.ready);
+        ++ready_callbacks;
+    });
+    actor.when_done([&](const auto& result) {
+        CHECK(result.success);
+        ++done_callbacks;
+    });
     CHECK(ready.wait_for(0s) == std::future_status::timeout);
     CHECK(done.wait_for(0s) == std::future_status::timeout);
     CHECK(group.mark_ready(actor));
+    CHECK(ready_callbacks == 2);
+    actor.when_ready([&](const auto& result) {
+        CHECK(result.ready);
+        ++ready_callbacks;
+    });
+    CHECK(ready_callbacks == 3); // late subscriber sees settled result
     ready.get();
     ready.get();
     actor.get_ready().get();
@@ -33,6 +52,12 @@ static void repeated_success_observations() {
     group.close();
     CHECK(finalizer.ready_for_resource_reclamation());
     CHECK(finalizer.finalized());
+    CHECK(done_callbacks == 1);
+    actor.when_done([&](const auto& result) {
+        CHECK(result.success);
+        ++done_callbacks;
+    });
+    CHECK(done_callbacks == 2);
     done.get();
     done.get();
     actor.get_done().get();
@@ -46,7 +71,22 @@ static void failed_startup_replayed_to_all_observers() {
     auto actor = group.adopt(8802, 1, 1, [] {});
     auto finalizer = group.runtime_finalizer(actor);
     auto ready = actor.get_ready(), done = actor.get_done();
+    int failed_ready_callbacks = 0;
+    actor.when_ready([&](const auto& result) {
+        CHECK(!result.ready);
+        ++failed_ready_callbacks;
+    });
+    actor.when_ready([&](const auto& result) {
+        CHECK(!result.ready);
+        ++failed_ready_callbacks;
+    });
     group.stop_workers();
+    CHECK(failed_ready_callbacks == 2);
+    actor.when_ready([&](const auto& result) {
+        CHECK(!result.ready);
+        ++failed_ready_callbacks;
+    });
+    CHECK(failed_ready_callbacks == 3);
     CHECK(fails([&] { ready.get(); }));
     CHECK(fails([&] { ready.get(); }));
     CHECK(fails([&] { actor.get_ready().get(); }));
