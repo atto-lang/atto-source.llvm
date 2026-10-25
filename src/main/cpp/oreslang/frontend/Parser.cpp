@@ -1348,6 +1348,25 @@ private:
         }
         if (token_.text == "?")
             fail("native optional return type '?' requires versioned Option/default ABI lowering");
+
+        /*
+         * Actor readiness can terminate before READY publication. Preserve the
+         * typed source effect without claiming general throw/raise/panic ABI
+         * lowering.
+         */
+        if (accept("throws")) {
+            const std::string type = type_identifier();
+            if (type != "ActorTerminated")
+                fail("native typed throws supports only ActorTerminated for ActorRef readiness");
+            value.throws_types.push_back(type);
+            if (accept(","))
+                fail("native typed throws supports only one ActorTerminated type");
+        }
+        if (token_.text == "throws")
+            fail("duplicate native typed throws declaration");
+        if (token_.text == "raises" || token_.text == "panics")
+            fail("native typed exceptional effect declaration is not yet enabled");
+
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
@@ -3280,6 +3299,9 @@ private:
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
         if (!fn.has_declared_effects) return;
+        if (!fn.ready_await_actor.empty() && !fn.throws_types.empty())
+            throw std::runtime_error(
+                "await get_ready typed lifecycle effect cannot be combined with using effects");
         if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                 || !fn.done_await_actor.empty()
                 || !fn.actor_sends.empty() || !fn.actor_stops.empty()
@@ -3534,6 +3556,9 @@ private:
                     throw std::runtime_error(
                         "Future<void> readiness token shadows a live owner");
             }
+            if (fn.ready_await_actor.empty() && !fn.throws_types.empty())
+                throw std::runtime_error(
+                    "throws ActorTerminated requires ActorRef readiness await");
             if (!fn.ready_await_actor.empty()) {
                 /*
                  * First executable suspension is deliberately tiny: one actor
@@ -3573,6 +3598,13 @@ private:
                         resolution.consumes_future_token != token_form)
                     throw std::runtime_error(
                         "native HasFuture await requires verified get_ready projection");
+                if (fn.throws_types.size() != 1 ||
+                        fn.throws_types.front() != "ActorTerminated")
+                    throw std::runtime_error(
+                        "await get_ready requires throws ActorTerminated");
+                if (fn.has_declared_effects)
+                    throw std::runtime_error(
+                        "await get_ready typed lifecycle effect cannot be combined with using effects");
                 if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
                     throw std::runtime_error(
                         "await get_ready requires one source actor without suspended locals");
