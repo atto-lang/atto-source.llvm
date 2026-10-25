@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
 
@@ -74,6 +75,7 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
+    std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
@@ -98,6 +100,7 @@ struct LocalBinding {
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
+    std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
@@ -235,15 +238,26 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
+    /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    std::string done_await_actor;
+    std::size_t done_await_offset = 0;
+    // Records the syntactic protocol witness; codegen receives only a
+    // checked SourceActorReadyControl resolution, not a magic name.
+    NativeAwaitForm ready_await_form = NativeAwaitForm::None;
+    // Non-Copy lexical Future<void> from a previously spawned actor's
+    // get_ready(). The compiler consumes it into the existing CONTROL
+    // continuation; it is never represented as an untyped i64 guest value.
+    std::string ready_future_name;
+    std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string pending_return_type_alias;
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
@@ -282,6 +296,32 @@ struct ModuleContract {
     std::vector<ContractMethod> methods;
 };
 
+// Compiler-only type declarations. Neither traits nor interfaces nor
+// transparent scalar aliases create runtime values, LLVM globals or
+// constructors. The native scalar backend records the distinct source kinds
+// without claiming full generic/typeclass or cross-unit linker support.
+struct TypeOnlyDecl {
+    enum class Kind { Alias, Trait, Interface };
+    struct Constraint {
+        enum class Kind { MinInclusive, MaxInclusive };
+        Kind kind = Kind::MinInclusive;
+        std::int64_t value = 0;
+    };
+    struct Method {
+        std::string name;
+        std::vector<std::string> parameter_types;
+        std::string return_type;
+    };
+    Kind kind = Kind::Alias;
+    std::string name;
+    std::string module_name; // empty for root; captured at declaration site
+    bool exported = false;
+    std::string alias_target; // native v1 accepts int/bool or another alias
+    std::vector<Constraint> constraints; // canonical min then max, compiler-only
+    std::vector<std::string> parents;
+    std::vector<Method> methods;
+};
+
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
 // lexical cleanup or actor scheduler integration is admitted yet.
 // The host supplies a zeroed, single-owner two-i64 continuation frame.
@@ -300,14 +340,26 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+struct TypeConstraintDescriptor {
+    std::string schema_id;
+    std::string qualified_type_name;
+    std::string representation;
+    std::string canonical;
+    std::string fingerprint;
+    bool validation_required = true;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
+    std::vector<TypeOnlyDecl> type_only_declarations;
+    std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
 };
@@ -315,7 +367,8 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32. The only admitted source suspension
-// is one zero-local await ActorRef.get_ready() in trusted zero-argument main.
+// is one zero-local actor lifecycle await in trusted zero-argument main:
+// direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
