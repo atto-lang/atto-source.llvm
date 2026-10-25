@@ -1767,6 +1767,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (send.reference != fn.ready_await_actor)
                     throw std::runtime_error(
                         "await continuation references unexpected ActorRef");
+                if (send.await_admission)
+                    throw std::runtime_error(
+                        "send_async admission cannot block a READY continuation carrier");
                 llvm::Value* payload = lower(
                     *send.payload,
                     ready_resumed,
@@ -1852,9 +1855,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (send.reference != fn.ready_await_actor)
                     throw std::runtime_error(
                         "await continuation references unexpected ActorRef");
-                resumed.CreateCall(
-                    send.await_admission ? sourceSendAsyncAwait : sourceSend,
-                    {resumed_actor, payload});
+                if (send.await_admission)
+                    throw std::runtime_error(
+                        "send_async admission cannot block a READY continuation carrier");
+                resumed.CreateCall(sourceSend, {resumed_actor, payload});
             }
             llvm::Value* continuation_result = lower(
                 *fn.result,
