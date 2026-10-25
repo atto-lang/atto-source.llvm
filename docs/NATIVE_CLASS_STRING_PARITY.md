@@ -72,7 +72,8 @@ are rejected until their ownership and cleanup boundaries are lowered. String
 fields, equality, typed arrays, and nested owning results have subsequent
 native implementations; see [sum values and current lifetime limits](NATIVE_SCALAR_SUMS.md).
 Mixed-type concatenation, unpaired UTF-16 surrogates and the full
-standard-library API remain parity gaps. General local
-declarations after arbitrary control-flow statements remain unsupported.
+standard-library API remain parity gaps. [Ordered locals](NATIVE_ORDERED_LOCALS.md)
+admit scalar/sum slots and immutable records after statements; late owning
+collections and continuation-frame integration remain unsupported.
 Allocation and console I/O are visible to effect analysis and are not silently
 admitted as allocation-free hard realtime work.

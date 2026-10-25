@@ -1084,13 +1084,13 @@ private:
             if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
-                binding.owner_mutable = mode != "const";
+                binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
                 binding.name = identifier(); require("="); binding.initializer = expression();
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
-                const auto mode = token_.text; advance(); binding.owner_mutable = mode == "val" || (mode == "let" && accept("mut"));
+                const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
                 binding.sum_type = type_identifier(); binding.name = identifier(); require("="); binding.initializer = expression();
             } else if (array_effect_ahead()) {
                 binding.name = "$effect" + std::to_string(value.locals.size());
@@ -1208,6 +1208,8 @@ private:
                 // A val owns mutable scalar storage; const permits only shared
                 // loans. Preserve the distinction for native ownership checks.
                 binding.owner_mutable = token_.text == "val";
+                binding.assignable = token_.text == "let";
+                binding.owner_mutable = binding.owner_mutable || binding.assignable;
                 advance();
                 binding.name = identifier();
                 // Distinguish actor capabilities from scalar data before IR.
@@ -1283,6 +1285,39 @@ private:
         // agree at the join; checked below by the ownership verifier.
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> foreach_statement;
+        auto scoped_local = [&]() {
+            Statement statement; statement.kind = Statement::Kind::ScopedLocal;
+            statement.offset = token_.offset;
+            const bool mutable_slot = token_.text == "let";
+            const bool mutable_referent = token_.text != "const";
+            advance(); if (mutable_slot) accept("mut");
+            if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
+            if (token_.text == "Array")
+                fail("ordered owning local requires scoped region/drop lowering");
+            auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
+            local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            auto type_name = [&]() -> std::string {
+                for (const auto* scalar : {"int", "bool", "string", "String"})
+                    if (accept(scalar)) return scalar;
+                return type_identifier();
+            };
+            const std::string first = type_name(); std::string type;
+            if (accept(":")) { local->name = first; type = type_name(); }
+            else { type = first; local->name = identifier(); }
+            if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
+            if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
+            if (type == "int") local->scalar_type = ScalarType::I64;
+            else if (type == "bool") local->scalar_type = ScalarType::Bool;
+            else if (type == "String" || type == "string") local->scalar_type = ScalarType::String;
+            else if (is_sum_name(type)) local->sum_type = type;
+            else {
+                if (mutable_slot) fail("native branch-local class owner requires destructor/drop lowering");
+                local->class_name = type; local->record_view = true;
+            }
+            require("="); local->initializer = expression(); require(";");
+            if (!local->class_name.empty()) class_receivers_.insert(local->name);
+            statement.branch_local = std::move(local); return statement;
+        };
         std::size_t statement_depth = 0;
         foreach_statement = [&]() {
             Lexer look = lexer_;
@@ -1292,7 +1327,7 @@ private:
                 require("for"); require("("); require("let"); require("int");
                 loop.branch_local = std::make_unique<LocalBinding>();
                 loop.branch_local->name = identifier(); loop.branch_local->offset = loop.offset;
-                loop.branch_local->owner_mutable = true;
+                loop.branch_local->owner_mutable = true; loop.branch_local->assignable = true;
                 require("="); loop.branch_local->initializer = expression(); require(";");
                 loop.condition = expression(); require(";");
                 if (identifier() != loop.branch_local->name) fail("native index loop must update its own counter");
@@ -1370,36 +1405,15 @@ private:
                         fail("native statement follows terminal return");
                     continue;
                 }
-                if (token_.text == "let")
-                    fail("native branch-local class owner requires destructor/drop lowering");
-                if (accept("const") || accept("val")) {
-                    statement.kind = Statement::Kind::ScopedLocal;
-                    statement.branch_local = std::make_unique<LocalBinding>();
-                    statement.branch_local->offset = statement.offset;
-                    auto scoped_type_name = [&]() -> std::string {
-                        for (const auto* scalar : {"int", "bool", "string", "String"})
-                            if (accept(scalar)) return scalar;
-                        return type_identifier();
-                    };
-                    const std::string first = scoped_type_name();
-                    std::string type;
-                    if (accept(":")) { statement.branch_local->name = first; type = scoped_type_name(); }
-                    else { type = first; statement.branch_local->name = identifier(); }
-                    if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
-                    if (type == "int") statement.branch_local->scalar_type = ScalarType::I64;
-                    else if (type == "bool") statement.branch_local->scalar_type = ScalarType::Bool;
-                    else if (type == "String" || type == "string") statement.branch_local->scalar_type = ScalarType::String;
-                    else if (is_sum_name(type)) statement.branch_local->sum_type = type;
-                    else { statement.branch_local->class_name = type; statement.branch_local->record_view = true; }
-                    require("=");
-                    statement.branch_local->initializer = expression();
-                    if (!statement.branch_local->class_name.empty()) class_receivers_.insert(statement.branch_local->name);
-                    require(";");
-                    actions.push_back(std::move(statement));
+                if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                    actions.push_back(scoped_local());
                     continue;
                 }
                 auto target = primary();
-                if (target->kind == Expression::Kind::Field && accept("=")) {
+                if (target->kind == Expression::Kind::Variable && accept("=")) {
+                    statement.kind = Statement::Kind::ScalarWrite;
+                    statement.receiver = target->name; statement.expression = expression();
+                } else if (target->kind == Expression::Kind::Field && accept("=")) {
                     if (!target->left || target->left->kind != Expression::Kind::Variable)
                         fail("native conditional requires named class field");
                     statement.kind = Statement::Kind::FieldWrite;
@@ -1626,6 +1640,9 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+            if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                value.statements.push_back(scoped_local()); continue;
+            }
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
@@ -1721,7 +1738,10 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
-            if (action->kind == Expression::Kind::Field && accept("=")) {
+            if (action->kind == Expression::Kind::Variable && accept("=")) {
+                statement.kind = Statement::Kind::ScalarWrite;
+                statement.receiver = action->name; statement.expression = expression();
+            } else if (action->kind == Expression::Kind::Field && accept("=")) {
                 // No nested assignment may resolve through a flattened field.
                 if (!action->left || action->left->kind != Expression::Kind::Variable)
                     fail("native field assignment requires direct named class receiver");
@@ -2809,6 +2829,13 @@ private:
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
+            std::function<bool(const Statement&)> ordered_frame = [&](const Statement& s) {
+                return s.kind == Statement::Kind::ScopedLocal || s.kind == Statement::Kind::ScalarWrite ||
+                    std::any_of(s.then_statements.begin(), s.then_statements.end(), ordered_frame) ||
+                    std::any_of(s.else_statements.begin(), s.else_statements.end(), ordered_frame);
+            };
+            if (!fn.ready_await_actor.empty() && std::any_of(fn.statements.begin(), fn.statements.end(), ordered_frame))
+                throw std::runtime_error("native source await requires continuation-aware statement lowering");
             // Compiler-owned ABI imports and generated exports may be
             // inserted before source function definitions. LLVM silently
             // renames duplicate Function::Create symbols (e.g. abort.1),
@@ -3087,6 +3114,7 @@ private:
                     return;
                 }
                 if ((stmt.kind == Statement::Kind::FieldWrite ||
+                        stmt.kind == Statement::Kind::ScalarWrite ||
                         (stmt.kind == Statement::Kind::Defer && !stmt.receiver.empty())) &&
                         !names.count(stmt.receiver))
                     throw std::runtime_error("unknown field receiver '" + stmt.receiver + "'");
@@ -3247,6 +3275,10 @@ private:
                     const auto target = env.find(stmt.receiver + "." + stmt.field);
                     require_scalar(*stmt.expression, target == env.end() ? ScalarType::I64 : target->second,
                         "native class field write", env);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::ScalarWrite) {
+                    require_scalar(*stmt.expression, env.at(stmt.receiver), "native scalar assignment", env);
                     return;
                 }
                 if (stmt.expression)

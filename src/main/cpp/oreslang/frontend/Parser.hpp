@@ -100,6 +100,7 @@ struct LocalBinding {
     ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
     std::string sum_type;
+    bool assignable = false; // mutable lexical slot, distinct from referent capability
 };
 
 struct ClassField {
@@ -179,7 +180,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and

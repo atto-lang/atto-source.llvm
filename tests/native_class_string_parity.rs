@@ -97,6 +97,18 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt borrow mut value)==42?0:1;}", ""),
+        ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
+        ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
+        ("ordered-root-scalar-lives-through-defer", r#"fnc touch():void{stdio.print("enter;");return;}fnc observe(int value):void{stdio.print(value==42?"final;":"early;");return;}
+          fnc run(bool early):int{touch();let int value=1;defer observe(value);if early;then return value;fi value=42;return value;}
+          pub fnc main():int{val int later=run(false);val int first=run(true);return later==42&&first==1?0:1;}"#, "enter;final;enter;early;"),
+        ("ordered-root-conditional-scalar-write", r#"fnc touch():void{return;}
+          pub fnc main():int{touch();let int value=42;value=true?value+1:value+2;return value==43?0:1;}"#, ""),
+        ("ordered-root-sum-reassignment", r#"fnc touch():void{return;}pub fnc main():int{touch();let Option<int> selected=None;selected=Some(42);let Result<String,bool> checked=Err(false);checked=Ok("yes");return selected.unwrap()==42&&checked.unwrap()=="yes"?0:1;}"#, ""),
+        ("ordered-root-string-and-bool-reassignment", r#"fnc touch():void{return;}pub fnc main():int{touch();let String label="before";let bool enabled=false;label="after";enabled=true;return enabled&&label=="after"?0:1;}"#, ""),
+        ("ordered-immutable-record-result", r#"define class Info as pub val int code;pub get():int{return self.code;}end fnc touch():void{return;}fnc produce():Info{touch();val Info value=new Info(42);return value;}pub fnc main():int{val Info result=produce();return result.get()==42?0:1;}"#, ""),
+        ("ordered-local-scopes-do-not-leak", r#"fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int index=0;index<2;index=index+1){let int local=index;local=local+1;total=total+local;}if total==3;then let int local=39;total=total+local;fi return total==42?0:1;}"#, ""),
         ("contextual-pattern-function-and-parameter", "fnc pattern(int pattern):int{return pattern;}pub fnc main():int{return pattern(42)==42?0:1;}", ""),
         ("sum-mixed-guard-source-order", "fnc choose(bool first):Option<int>{if first;then return Some(1);fi if(true){return Some(2);}fi return None;}pub fnc main():int{return choose(true).unwrap()==1&&choose(false).unwrap()==2?0:1;}", ""),
         ("sum-result-schema-matrix", r#"pub routine main():int{val Result<int,int> ii=Ok(0);val Result<int,bool> ib=Err(false);val Result<bool,int> bi=Ok(false);val Result<String,bool> sb=Ok("");val Result<String,String> ss=Err("");return ii.is_ok()&&ii.unwrap()==0&&ib.is_err()&&bi.is_ok()&&!bi.unwrap()&&sb.is_ok()&&sb.unwrap()==""&&ss.is_err()?0:1;}"#, ""),
@@ -530,6 +542,11 @@ fn main() {
     assert_eq!(rt.status.code(), Some(1), "sum passthrough cannot be hard-RT certified");
     let report = String::from_utf8(rt.stdout).unwrap();
     assert!(report.contains("\"source_admitted\": false") && report.contains("RT009_SCHEDULING_UNPROVEN") && !report.contains("define "), "sum RT did not return a refusal report: {report}");
+    fs::write(scratch.0.join("ordered-rt.ores"), "define class Info as pub val int code;end fnc audit():int{if false;then return 0;fi val Info snapshot=new Info(1);return snapshot.code;}pub fnc main():int{return 0;}").unwrap();
+    let rt = run(Command::new(&compiler).args(["--rt-check", "--rt-entry=audit/0"]).arg(scratch.0.join("ordered-rt.ores")));
+    assert_eq!(rt.status.code(), Some(1), "ordered record materialization cannot be hard-RT certified");
+    let report = String::from_utf8(rt.stdout).unwrap();
+    assert!(report.contains("\"source_admitted\": false") && !report.contains("define "), "ordered record RT lacks a refusal report: {report}");
     let mut standalone_runs = 0;
     if let Some(driver) = &aot_driver {
         #[cfg(unix)] {
@@ -562,6 +579,7 @@ fn main() {
           fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
           pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
+            (include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
             (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
             (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
             (include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
@@ -587,6 +605,23 @@ fn main() {
         }
     }
     let negatives = [
+        ("ordered-const-cannot-lend-exclusively", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();const int value=42;return observe(rt borrow mut value);}".to_owned(), foo.to_owned()),
+        ("ordered-owning-array-not-hoisted", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<int>();return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-async-frame-not-on-stack", "define actor Worker as {let total:int=0;pub fnc on_message(int n):int{return n;}}pub fnc main():int{const worker:ActorRef<Worker> =spawn Worker();await worker.get_ready();let int value=1;stop worker;return value;}".to_owned(), foo.to_owned()),
+        ("ordered-borrow-mut-parameter-not-reassignable", "fnc bad(borrow mut int value):int{value=2;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-value-parameter-not-reassignable", "fnc bad(int value):int{value=2;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-local-not-visible-before-initializer", "fnc touch():void{return;}pub fnc main():int{touch();let int value=value+1;return value;}".to_owned(), foo.to_owned()),
+        ("ordered-local-not-visible-before-declaration", "fnc use(int value):void{return;}pub fnc main():int{use(value);let int value=1;return value;}".to_owned(), foo.to_owned()),
+        ("ordered-const-cannot-assign", "fnc touch():void{return;}pub fnc main():int{touch();const int value=1;value=2;return value;}".to_owned(), foo.to_owned()),
+        ("ordered-val-cannot-assign", "fnc touch():void{return;}pub fnc main():int{touch();val int value=1;value=2;return value;}".to_owned(), foo.to_owned()),
+        ("ordered-shared-borrow-cannot-assign", "fnc bad(borrow int value):int{value=2;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-bool-assignment-rejects-int", "fnc touch():void{return;}pub fnc main():int{touch();let bool value=false;value=1;return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-sum-assignment-rejects-payload", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=Some(true);return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-sum-assignment-rejects-integer", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=1;return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-branch-local-cannot-escape", "fnc touch():void{return;}pub fnc main():int{touch();if true;then let int value=1;fi return value;}".to_owned(), foo.to_owned()),
+        ("ordered-owner-cannot-be-replaced", "define class Box as pub val Array<int> values;end pub fnc main():int{val Array<int> values=new Array<int>();val Box owner=new Box(values);owner=1;return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-loop-cannot-consume-outer-owner", "fnc touch():void{return;}fnc use(int value):void{return;}pub fnc main():int{touch();let int value=1;for(let int index=0;index<2;index=index+1){use(rt take value);}return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-local-shadows-owner", "fnc touch():void{return;}pub fnc main():int{let int value=1;touch();let int value=2;return value;}".to_owned(), foo.to_owned()),
         ("sum-contract-not-int-parameter", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(Option<int> value):int{return 0;}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-contract-not-int-result", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(int value):Option<int>{return Some(value);}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-cannot-reorder-legacy-return-guards", "fnc bad():Option<int>{if(true){return Some(1);}fi if true;then return Some(2);fi return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
@@ -789,6 +824,8 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
+            "ordered-owning-array-not-hoisted" => Some("ordered owning local requires scoped region/drop lowering"),
+            "ordered-async-frame-not-on-stack" => Some("continuation-aware statement lowering"),
             "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
             "sum-contract-not-int-result" => Some("contract requires int return"),
             "owning-return-duplicate-array" => Some("live unique array"),
