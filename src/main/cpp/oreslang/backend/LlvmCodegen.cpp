@@ -41,6 +41,27 @@ std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
 
+bool contains_ready_carrier_call(const Expression* expr) {
+    if (!expr) return false;
+    if (expr->kind == Expression::Kind::SumConstruct ||
+            expr->kind == Expression::Kind::SumAccess ||
+            expr->kind == Expression::Kind::RecordConstruct ||
+            expr->kind == Expression::Kind::Call ||
+            expr->kind == Expression::Kind::ArrayCall)
+        return true;
+    if (contains_ready_carrier_call(expr->left.get()) ||
+            contains_ready_carrier_call(expr->right.get()) ||
+            contains_ready_carrier_call(expr->condition.get()) ||
+            contains_ready_carrier_call(expr->condition_lhs.get()) ||
+            contains_ready_carrier_call(expr->condition_rhs.get()) ||
+            contains_ready_carrier_call(expr->when_true.get()) ||
+            contains_ready_carrier_call(expr->when_false.get()))
+        return true;
+    for (const auto& argument : expr->arguments)
+        if (contains_ready_carrier_call(argument.get())) return true;
+    return false;
+}
+
 // Owned i64 parameters receive stack slots so the only permitted loans can
 // pass their addresses through the call ABI. Borrowed inputs already hold
 // caller-owned slot pointers: passing them to nested borrowed parameters is
@@ -1770,6 +1791,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (send.await_admission)
                     throw std::runtime_error(
                         "send_async admission cannot block a READY continuation carrier");
+                if (contains_ready_carrier_call(send.payload.get()))
+                    throw std::runtime_error(
+                        "READY continuation send payload reached codegen with a callable");
                 llvm::Value* payload = lower(
                     *send.payload,
                     ready_resumed,
@@ -1858,6 +1882,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (send.await_admission)
                     throw std::runtime_error(
                         "send_async admission cannot block a READY continuation carrier");
+                if (contains_ready_carrier_call(send.payload.get()))
+                    throw std::runtime_error(
+                        "READY continuation send payload reached codegen with a callable");
                 resumed.CreateCall(sourceSend, {resumed_actor, payload});
             }
             llvm::Value* continuation_result = lower(
