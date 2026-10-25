@@ -1286,6 +1286,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_await_readable_without_actor
         source-actor-await-readable-no-actor.ores
         --diagnostic "await readable requires one source actor without suspended locals")
+    oreslang_contract_test(reject_source_actor_await_readable_post_call_reordering
+        source-actor-await-readable-post-call-reject.ores
+        --diagnostic "await readable does not yet lower post-await non-actor statements")
     # ActorRef implements HasFuture: awaiting its capability directly
     # delegates to the same get_ready() root CONTROL continuation.
     oreslang_contract_test(source_actor_hasfuture_direct_await_ir
