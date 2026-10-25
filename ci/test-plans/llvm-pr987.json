@@ -34,11 +34,11 @@
         "python3",
         "-I",
         "-c",
-        "import json,subprocess,sys\np=subprocess.run([\"ctest\",\"--test-dir\",\"build-private-ci\",\"--show-only=json-v1\"],capture_output=True,text=True)\nif p.returncode: sys.stderr.write(p.stderr); raise SystemExit(p.returncode)\nnames={t.get(\"name\") for t in json.loads(p.stdout).get(\"tests\",[])}\nrequired=[\"native_actor_lifecycle_l01_l05_host\",\"native_actor_lifecycle_l01_l05_host_asan_ubsan\",\"source_actor_stop_before_ready\",\"source_actor_stop_before_ready_asan_ubsan\",\"native_continuation_ready_cancel_resume_race\",\"native_continuation_ready_cancel_resume_race_asan_ubsan\",\"native_continuation_wake_escrow_stop_cancel_aba\",\"native_priority_user_inbox_control_isolation\",\"native_actor_resource_loan_terminal_race\",\"native_scalar_future_single_winner_control\"]\nmissing=sorted(set(required)-names)\nif missing: raise SystemExit(\"missing required LLVM PR987 CTests: \"+\",\".join(missing))\nprint(\"LLVM_PR987_CTEST_INVENTORY_PASS count=%d\"%len(required))"
+        "import json,subprocess,sys\np=subprocess.run([\"ctest\",\"--test-dir\",\"build-private-ci\",\"--show-only=json-v1\"],capture_output=True,text=True)\nif p.returncode: sys.stderr.write(p.stderr); raise SystemExit(p.returncode)\nnames={t.get(\"name\") for t in json.loads(p.stdout).get(\"tests\",[])}\nrequired=[\"native_actor_lifecycle_l01_l05_host\",\"native_actor_lifecycle_l01_l05_host_asan_ubsan\",\"native_actor_lifecycle_l01_l05_host_tsan\",\"source_actor_stop_before_ready\",\"source_actor_stop_before_ready_asan_ubsan\",\"native_continuation_ready_cancel_resume_race\",\"native_continuation_ready_cancel_resume_race_asan_ubsan\",\"native_continuation_wake_escrow_stop_cancel_aba\",\"native_priority_user_inbox_control_isolation\",\"native_actor_resource_loan_terminal_race\",\"native_scalar_future_single_winner_control\"]\nmissing=sorted(set(required)-names)\nif missing: raise SystemExit(\"missing required LLVM PR987 CTests: \"+\",\".join(missing))\nprint(\"LLVM_PR987_CTEST_INVENTORY_PASS count=%d\"%len(required))"
       ],
       "cwd": ".",
       "timeout_seconds": 120,
-      "stdout_contains": "LLVM_PR987_CTEST_INVENTORY_PASS count=10"
+      "stdout_contains": "LLVM_PR987_CTEST_INVENTORY_PASS count=11"
     },
     {
       "argv": [
@@ -55,7 +55,7 @@
         "--test-dir",
         "build-private-ci",
         "-R",
-        "^(native_actor_lifecycle_l01_l05_host|native_actor_lifecycle_l01_l05_host_asan_ubsan|source_actor_stop_before_ready|source_actor_stop_before_ready_asan_ubsan|native_continuation_ready_cancel_resume_race|native_continuation_ready_cancel_resume_race_asan_ubsan|native_continuation_wake_escrow_stop_cancel_aba|native_priority_user_inbox_control_isolation|native_actor_resource_loan_terminal_race|native_scalar_future_single_winner_control)$",
+        "^(native_actor_lifecycle_l01_l05_host|native_actor_lifecycle_l01_l05_host_asan_ubsan|native_actor_lifecycle_l01_l05_host_tsan|source_actor_stop_before_ready|source_actor_stop_before_ready_asan_ubsan|native_continuation_ready_cancel_resume_race|native_continuation_ready_cancel_resume_race_asan_ubsan|native_continuation_wake_escrow_stop_cancel_aba|native_priority_user_inbox_control_isolation|native_actor_resource_loan_terminal_race|native_scalar_future_single_winner_control)$",
         "--output-on-failure"
       ],
       "cwd": ".",
