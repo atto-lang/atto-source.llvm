@@ -47,7 +47,7 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 include(CTest)
 if(BUILD_TESTING)
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
-    # for native ActorRef readiness and its one-shot Future<void> token.
+    # for native ActorRef readiness and its immutable Future<void> observer.
     # Independently runnable without LLVM libraries or a guest scheduler.
     add_executable(oreslang-native-hasfuture-contract-test
         tests/native_has_future_contract_test.cpp)
@@ -1303,7 +1303,7 @@ if(BUILD_TESTING)
         source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
     oreslang_contract_test(reject_source_actor_unused_ready_future
         source-actor-future-void-unused.ores
-        --diagnostic "Future<void> readiness token must be awaited exactly once")
+        --diagnostic "Future<void> readiness observer must be observed through its producer barrier")
     oreslang_contract_test(reject_source_actor_wrong_ready_future
         source-actor-future-void-wrong-name.ores
         --diagnostic "native Future<void> await requires its declared readiness token")
