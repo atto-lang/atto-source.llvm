@@ -2581,12 +2581,9 @@ private:
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
-            if (operation == "borrow" && accept("mut")) {
-                if (mutable_borrow) fail("duplicate mutable borrow qualifier");
-                // Accept the existing shared corpus spelling while adding
-                // canonical rt mut borrow. Both lower to the identical loan;
-                // removing the older spelling needs a coordinated migration.
-                mutable_borrow = true;
+            if (!mutable_borrow && operation == "borrow" &&
+                    token_.text == "mut") {
+                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
             }
             auto result = make_expression(
                 operation == "copy" ? Expression::Kind::Copy :
