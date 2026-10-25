@@ -1433,6 +1433,10 @@ if(BUILD_TESTING)
         Threads::Threads)
     target_compile_options(oreslang-source-actor-capability-runtime-test PRIVATE
         -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    # The physical-DONE witness is test-only and must never ship in a source
+    # guest/production bootstrap, including optimized or AOT builds.
+    target_compile_definitions(oreslang-source-actor-capability-runtime-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING)
     add_test(NAME source_actor_capability_runtime
         COMMAND oreslang-source-actor-capability-runtime-test)
     set_tests_properties(source_actor_capability_runtime PROPERTIES TIMEOUT 30)
