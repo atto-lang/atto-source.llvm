@@ -1402,21 +1402,25 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
-    if(ORE_CLANG)
+    if(ORE_RT_AOT_CLANG AND ORE_RT_AOT_CXX)
+        # The readable fixture links production C++ NIO objects. Keep C/IR and
+        # C++ compilation on one Clang family, especially under ASan/UBSan;
+        # mixing Clang instrumentation with an arbitrary GCC C++ linker can
+        # produce toolchain-runtime failures unrelated to Oreslang semantics.
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}"
-                --cxx "${CMAKE_CXX_COMPILER}"
+                --clang "${ORE_RT_AOT_CLANG}"
+                --cxx "${ORE_RT_AOT_CXX}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 180)
         add_test(NAME source_actor_compiled_native_asan_ubsan
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
-                --clang "${ORE_CLANG}"
-                --cxx "${CMAKE_CXX_COMPILER}"
+                --clang "${ORE_RT_AOT_CLANG}"
+                --cxx "${ORE_RT_AOT_CXX}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
