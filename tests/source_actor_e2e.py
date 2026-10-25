@@ -264,10 +264,12 @@ def main():
             assert len(lines) == actors, (name, lines)
             receipts = [parse_actor_receipt(line) for line in lines]
             for i, receipt in enumerate(receipts):
-                # Any fixture that publishes DATA or awaits readiness must have
-                # executed construction on an actor worker. Only zero-work
-                # immediate/terminal stop fixtures may linearize before start.
-                if count not in (0, None) or name in {
+                # Construction is required before guest work actually
+                # executes, and readiness-await fixtures explicitly prove READY.
+                # DATA may be admitted before STOP wins; in that race every
+                # accepted frame is abandoned, which parse_actor_receipt
+                # already checks fail-closed.
+                if receipt["processed"] > 0 or name in {
                     "source-actor-await-ready.ores",
                     "source-actor-await-worker.ores",
                     "source-actor-future-void-ready.ores",
