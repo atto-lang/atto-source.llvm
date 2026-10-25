@@ -238,9 +238,9 @@ fn main() {
             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"),
         (
             "imported-owning-class-return",
-            r#"import class Box from './owned-box.ores';
-              fnc make_box():Box{val Array<int> values=new Array<int>();values.add(42);return new Box(values);}
-              pub routine main():int{val Box value=make_box();val Box copied=value.copy();return value.values.get(0)==42&&copied.values.get(0)==42?0:1;}"#,
+            r#"import class OwnedBox from './owned-box.ores';
+              fnc make_box():OwnedBox{val Array<int> values=new Array<int>();values.add(42);return new OwnedBox(values);}
+              pub routine main():int{val OwnedBox value=make_box();val OwnedBox copied=value.copy();return value.values.get(0)==42&&copied.values.get(0)==42?0:1;}"#,
             "",
         ),
         (
@@ -510,7 +510,7 @@ fn main() {
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
-        fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
+        fs::write(scratch.0.join("owned-box.ores"), "define pub class OwnedBox as pub val Array<int> values;pub copy():OwnedBox{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new OwnedBox(copied);}end").unwrap();
         let captures_fixture = include_str!("fixtures/native-class-string/nested-owned-capture.ores")
             .replace("pub routine main():int", "pub fnc verify_capture():int");
         fs::write(scratch.0.join("captures.ores"), format!("define module captures as\n{captures_fixture}\nend\n")).unwrap();
