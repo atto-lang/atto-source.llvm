@@ -101,16 +101,6 @@ static size_t saturate_real_mailbox(void* actor) {
     return queued;
 }
 
-static AwaitThread start_waiter(void* actor, pthread_t* thread) {
-    AwaitThread waiter = {.actor = actor, .status = -1};
-    atomic_init(&waiter.started, 0);
-    atomic_init(&waiter.done, 0);
-    CHECK(pthread_create(thread, NULL, await_send, &waiter) == 0);
-    while (!atomic_load_explicit(&waiter.started, memory_order_acquire))
-        sched_yield();
-    return waiter;
-}
-
 static void capacity_release_admits_waiter(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
