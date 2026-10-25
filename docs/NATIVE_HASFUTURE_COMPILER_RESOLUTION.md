@@ -19,6 +19,11 @@ unsupported. A `Future<void>` producer must also match the exact actor
 identity being awaited, not merely assert a boolean provenance flag. The validator performs identity and provenance checks before
 lowering; it does not trust the spelling of `HasFuture`.
 
+All admitted readiness spellings can fail when stop wins before READY
+publication. The enclosing native source function must therefore declare
+`throws ActorTerminated`. The compiler resolves the receiver/provenance first,
+so invalid await targets retain their precise HasFuture/ActorRef diagnostic.
+
 The resolver is a **closed-world compiler contract**, not full arbitrary
 user-defined `HasFuture` interface implementation lookup, not new scheduler
 runtime code, and not typed `Future<int>` frames. Those require proven
