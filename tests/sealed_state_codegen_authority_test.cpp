@@ -113,5 +113,24 @@ int main() {
         p.actors.front().on_message.actor_field_writes.push_back(std::move(write));
     });
 
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->mode =
+            static_cast<ActorStateLoan::Mode>(255);
+    });
+    rejects([](Program& p) {
+        LocalBinding legacy;
+        legacy.name = "other";
+        legacy.initializer = integer(1);
+        p.actors.front().on_message.locals.push_back(std::move(legacy));
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_stops.push_back("other");
+    });
+    rejects([](Program& p) {
+        Statement legacy;
+        legacy.kind = Statement::Kind::Call;
+        p.actors.front().on_message.statements.push_back(std::move(legacy));
+    });
+
     return 0;
 }
