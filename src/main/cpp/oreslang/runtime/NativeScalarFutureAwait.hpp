@@ -92,7 +92,26 @@ public:
                 || !parent_ref.same_incarnation(owner_)
                 || !parent_ref.delivery_closed())
             return false;
-        return cancel(ticket);
+
+        /*
+         * Detachment is authoritative even if a producer has already won the
+         * PENDING->SETTLING transition but has not published READY yet.
+         * Publish a deferred teardown request first, then either cancel the
+         * currently visible cancellable phase or let settle() consume it.
+         */
+        cancel_on_settle_.store(true, std::memory_order_release);
+        Phase observed = phase_.load(std::memory_order_acquire);
+        for (;;) {
+            if (observed == Phase::settling)
+                return true; // settle() will publish CANCELLED before returning.
+            if (observed == Phase::running || observed == Phase::completed
+                    || observed == Phase::cancelled)
+                return false;
+            if (phase_.compare_exchange_weak(
+                    observed, Phase::cancelled,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return true;
+        }
     }
 
     Phase phase() const noexcept {
@@ -180,12 +199,19 @@ private:
             return false;
         result_ = outcome;
         phase_.store(Phase::ready, std::memory_order_release);
+        if (cancel_on_settle_.load(std::memory_order_acquire)) {
+            expected = Phase::ready;
+            (void)phase_.compare_exchange_strong(
+                expected, Phase::cancelled,
+                std::memory_order_acq_rel, std::memory_order_acquire);
+        }
         return true;
     }
 
     const NativeActorRef owner_;
     const NativeScalarFutureId id_;
     std::atomic<Phase> phase_{Phase::pending};
+    std::atomic<bool> cancel_on_settle_{false};
     Result result_;
 };
 
