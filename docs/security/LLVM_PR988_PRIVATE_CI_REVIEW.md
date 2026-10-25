@@ -9,9 +9,9 @@ proposed carrier as part of this proposal.
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
 - Exact source commit for first qualification:
-  `fd97fe8216218fcdc5b3225f005fde4de439bb40`
+  `07913b5a7cf64afff5d8aa7801fb2d3c96882699`
 - Exact source Git tree:
-  `1b12d87a9dfe0e516720511506b6baa740408c11`
+  `ba3f106c00fcba13b68ee39fc58b202c802d04a1`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -59,10 +59,19 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 ## Freshness and reconciliation
 
 This proposal tracks LLVM #988's current-main two-parent reconciliation at
-`fd97fe8216218fcdc5b3225f005fde4de439bb40`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
+`07913b5a7cf64afff5d8aa7801fb2d3c96882699`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
 `tests/contract.py` and `tests/test_contract_harness.py` fail-closed
 infrastructure diagnostic checks, two byte-identical canonical parameter
 fixtures, and two new opaque return-position fixtures.
+A subsequent #988 hardening round adds `--parser-diagnostic` to the four
+opaque-type admission CTests, requiring the native compiler's exact single-line
+`oreslang-llvmc: <expected> at byte N` error format. Wrapper-prefixed output,
+multiple stderr lines and malformed offsets are rejected by new fake-compiler
+regressions under Python `-O` and `-OO`. These tests have **not** been executed
+with a native LLVM compiler or via hosted CI, and changing the pinned source
+head/tree requires renewed independent security review. A standalone local
+matching-predicate check is not a native or committed-harness test pass.
+
 Native LLVM include/link and wake-test repairs were already present on newer
 `main` and were deliberately not rolled back. Any subsequent PR-head/tree
 change invalidates this proposal's exact source identity and requires renewed
