@@ -449,38 +449,128 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
     let fixture = temp.path.join("probe.ores");
-    // These names must remain rejected until typed effects, native continuation
-    // lowering, and nonblocking transports are implemented together.
+    // These names are the concrete future standard-I/O spellings named by the
+    // native async-only contract. They must remain unavailable as calls AND
+    // impossible to impersonate as user declarations until registry/effect/
+    // continuation lowering lands together.
     let operations = [
-        ("read blocking", "read_text_blocking(1)"),
-        ("read async", "read_text_async(1)"),
-        ("write blocking", "write_text_blocking(1)"),
-        ("write async", "write_text_async(1)"),
-        ("TCP connect blocking", "connect_blocking(1)"),
-        ("TCP connect async", "connect_async(1)"),
-        ("TCP read blocking", "read_line_blocking(1)"),
-        ("TCP read async", "read_line_async(1)"),
-        ("TCP write blocking", "socket_write_text_blocking(1)"),
-        ("TCP write async", "socket_write_text_async(1)"),
-        ("HTTP GET blocking", "http_get_text_blocking(1)"),
-        ("HTTP GET async", "http_get_text_async(1)"),
-        ("HTTP POST blocking", "http_post_text_blocking(1)"),
-        ("HTTP POST async", "http_post_text_async(1)"),
-        ("stdio blocking", "println_blocking(1)"),
-        ("stdio async", "println_async(1)"),
+        ("legacy read", "read_text"),
+        ("legacy write", "write_text"),
+        ("read blocking", "read_text_blocking"),
+        ("read async", "read_text_async"),
+        ("write blocking", "write_text_blocking"),
+        ("write async", "write_text_async"),
+        ("TCP connect blocking", "connect_blocking"),
+        ("TCP connect async", "connect_async"),
+        ("TCP read blocking", "read_line_blocking"),
+        ("TCP read async", "read_line_async"),
+        ("TCP write blocking", "socket_write_text_blocking"),
+        ("TCP write async", "socket_write_text_async"),
+        ("HTTP GET blocking", "http_get_text_blocking"),
+        ("HTTP GET async", "http_get_text_async"),
+        ("HTTP POST blocking", "http_post_text_blocking"),
+        ("HTTP POST async", "http_post_text_async"),
+        ("stdio blocking", "println_blocking"),
+        ("stdio async", "println_async"),
     ];
-    for (name, operation) in operations {
-        fs::write(&fixture, format!("pub fnc main(): int {{ return {operation}; }}\n"))
-            .map_err(|e| format!("{name}: write fixture: {e}"))?;
+
+    for (name, symbol) in operations {
+        // Undefined use must still fail before IR.
+        fs::write(
+            &fixture,
+            format!("pub fnc main(): int {{ return {symbol}(1); }}\n"),
+        )
+        .map_err(|e| format!("{name}: write undefined-call fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
-        require(!out.status.success(),
-            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)))?;
-        require(stdout(&out).trim().is_empty(),
-            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)))?;
-        require(stderr(&out).contains("unknown function or wrong call arity"),
-            format!("{name}: missing explicit rejection diagnostic: {}", stderr(&out)))?;
+        require(
+            !out.status.success(),
+            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)),
+        )?;
+        require(
+            stdout(&out).trim().is_empty(),
+            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)),
+        )?;
+        require(
+            stderr(&out).contains("unknown function or wrong call arity"),
+            format!("{name}: missing undefined-call rejection diagnostic: {}", stderr(&out)),
+        )?;
+
+        // A same-unit global declaration must not launder the reserved I/O
+        // identity into ordinary synchronous call lowering.
+        fs::write(
+            &fixture,
+            format!(
+                "fnc {symbol}(int n): int {{ return n; }}\n\                 pub fnc main(): int {{ return {symbol}(1); }}\n"
+            ),
+        )
+        .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: global declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+
+        // The same name cannot be hidden behind a nominal receiver either.
+        fs::write(
+            &fixture,
+            format!(
+                "define class SocketFacade as\n\                   pub {symbol}(self, int n): int {{ return n; }}\n\                 end\n\                 pub fnc main(): int {{\n\                   let SocketFacade s = new SocketFacade();\n\                   return s.{symbol}(1);\n\                 }}\n"
+            ),
+        )
+        .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: method declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
     }
-    println!("Native async-only I/O boundary: {} unsupported native bindings fail closed", operations.len());
+
+    // Do not reserve arbitrary suffixes. These are ordinary synchronous user
+    // functions; the standard-I/O identity set above is the safety boundary.
+    let positives = [
+        ("blocking suffix", "pure_math_blocking"),
+        ("async suffix", "checksum_async"),
+        ("similar I/O-looking suffix", "read_textish_async"),
+    ];
+    for (name, symbol) in positives {
+        fs::write(
+            &fixture,
+            format!(
+                "fnc {symbol}(int n): int {{ return n + 1; }}\n\                 pub fnc main(): int {{ return {symbol}(41); }}\n"
+            ),
+        )
+        .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            out.status.success() && stdout(&out).starts_with("; ModuleID"),
+            format!(
+                "{name}: ordinary user suffix was over-reserved; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+    }
+
+    println!(
+        "Native async-only I/O boundary: {} reserved standard spellings reject undefined/global/method laundering; {} user suffix controls compile",
+        operations.len(),
+        positives.len()
+    );
     Ok(())
 }
 
