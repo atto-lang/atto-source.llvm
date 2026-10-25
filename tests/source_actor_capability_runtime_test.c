@@ -183,11 +183,23 @@ int main(void) {
     pthread_t done_thread;
     assert(pthread_create(
         &done_thread, NULL, await_held_parent_done, held_parent) == 0);
-    for (unsigned attempt = 0; attempt < 100000u; ++attempt) {
-        assert(atomic_load_explicit(
-            &parent_done_callbacks, memory_order_acquire) == 0);
+    /*
+     * Wait for the exact parent VM terminal ACK, not a guessed amount of
+     * scheduler time. At this point parent VM DONE is real, yet its child
+     * is held in a live turn; the root continuation must still be blocked.
+     */
+    unsigned observed_parent_vm_done = 0;
+    for (unsigned attempt = 0; attempt < 1000000u; ++attempt) {
+        observed_parent_vm_done =
+            oreslang_source_actor_test_parent_vm_done_observed();
+        if (observed_parent_vm_done != 0) break;
         sched_yield();
     }
+    assert(observed_parent_vm_done == 1);
+    assert(atomic_load_explicit(
+        &held_child_finished, memory_order_acquire) == 0);
+    assert(atomic_load_explicit(
+        &parent_done_callbacks, memory_order_acquire) == 0);
     atomic_store_explicit(&held_child_release, 1, memory_order_release);
     assert(pthread_join(done_thread, NULL) == 0);
     assert(atomic_load_explicit(
