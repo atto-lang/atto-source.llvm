@@ -102,6 +102,24 @@ int main() {
     legacy.front().on_message.actor_state_loan.reset();
     legacy.front().on_message.result=std::make_unique<Expression>();
     must_admit(std::move(legacy));
+    // Confirm validation visits every actor, not just the first.
+    auto mixed = valid();
+    auto second = valid();
+    second.front().sealed_state = false;
+    second.front().on_message.actor_state_loan.reset();
+    second.front().on_message.result = std::make_unique<Expression>();
+    mixed.push_back(std::move(second.front()));
+    must_admit(std::move(mixed));
+    auto malformed_second = valid();
+    auto malformed_actor = valid();
+    malformed_actor.front().on_message.parameters.clear();
+    malformed_second.push_back(std::move(malformed_actor.front()));
+    bool rejected_second = false;
+    try { oreslang::verify_sealed_actor_state_shape(malformed_second); }
+    catch (const std::runtime_error&) { rejected_second = true; }
+    if (!rejected_second)
+        throw std::runtime_error("malformed second actor was admitted");
+    ++rejected;
 
     must_reject([](Actor& a){a.sealed_state=false;});
     must_reject([](Actor& a){a.sealed_state=false;
@@ -187,6 +205,8 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
+    if (admitted != 5 || rejected != 67)
+        throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
 }
