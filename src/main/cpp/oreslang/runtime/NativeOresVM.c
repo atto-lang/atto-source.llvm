@@ -414,7 +414,12 @@ int ores_native_vm_actor_reserve_wake(
         uint64_t code_generation, uint64_t descriptor_generation,
         OresNativeWakeTicket* out) {
     if (out) *out = (OresNativeWakeTicket){0};
+    /* This VM surface deliberately does not expose the scheduler's internal
+     * cross-scheduler target mode. A separate authenticated bridge is required
+     * before a continuation may target another scheduler/domain. */
     return vm && valid_domain(domain) && out
+        && producer.scheduler_domain != 0
+        && target.scheduler_domain == producer.scheduler_domain
         && ores_native_actor_scheduler_reserve_wake(
             vm->schedulers[domain], producer, target,
             continuation_slot, continuation_generation,
