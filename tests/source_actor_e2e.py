@@ -96,6 +96,8 @@ def expected_prefix_last(name, actor_index, processed):
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
+    if name == "source-actor-await-readable-failed.ores":
+        return 3 if processed else 0
     return sum([1, 2][:processed])
 
 def parse_actor_receipt(line):
@@ -158,6 +160,7 @@ def main():
     if sys.platform.startswith("linux"):
         positives.append(("source-actor-await-readable.ores", 1, 1, 1))
         positives.append(("source-actor-await-readable-outcome.ores", 1, 1, 1))
+        positives.append(("source-actor-await-readable-failed.ores", 1, 1, 3))
     negatives = {
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
@@ -292,6 +295,7 @@ def main():
             if name in {
                 "source-actor-await-readable.ores",
                 "source-actor-await-readable-outcome.ores",
+                "source-actor-await-readable-failed.ores",
             }:
                 assert "oreslang_source_actor_await_readable" in guest.stdout, name
                 assert "readable_continuation" in guest.stdout, name
@@ -302,7 +306,10 @@ def main():
                                if "define internal i64 @main.readable_continuation" in line]
                 assert len(definitions) == 1 and definitions[0].count("i64") >= 2, (
                     name, "typed readable continuation must carry outcome", definitions)
-                if name == "source-actor-await-readable-outcome.ores":
+                if name in {
+                    "source-actor-await-readable-outcome.ores",
+                    "source-actor-await-readable-failed.ores",
+                }:
                     assert "readable.outcome" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
@@ -318,6 +325,7 @@ def main():
             if name in {
                 "source-actor-await-readable.ores",
                 "source-actor-await-readable-outcome.ores",
+                "source-actor-await-readable-failed.ores",
             }:
                 link_nio_source_actor(
                     args, runtime, source_dirs, ll, exe, flags)
@@ -364,11 +372,16 @@ def main():
             if name in {
                 "source-actor-await-readable.ores",
                 "source-actor-await-readable-outcome.ores",
+                "source-actor-await-readable-failed.ores",
             }:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READABLE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
-                assert "outcome=1 fd=0" in trace_lines[0], trace_lines[0]
+                expected_outcome = (
+                    "outcome=3 fd=2147483647"
+                    if name == "source-actor-await-readable-failed.ores"
+                    else "outcome=1 fd=0")
+                assert expected_outcome in trace_lines[0], trace_lines[0]
                 assert "continuation_slot=" in trace_lines[0], trace_lines[0]
                 assert "wake_generation=" in trace_lines[0], trace_lines[0]
                 assert "root_slot=63" in trace_lines[0], trace_lines[0]
