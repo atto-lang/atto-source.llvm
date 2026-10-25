@@ -35,6 +35,11 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+/* Deterministic test-only cancellation of the one currently admitted readable
+ * await. Returns 1 only if the exact actor-owned one-shot watch was cancelled. */
+int oreslang_source_actor_test_cancel_readable_await(void);
+#endif
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
@@ -114,6 +119,26 @@ int64_t oreslang_source_actor_await_done(
  * from that authenticated actor lane. This symbol is implemented only in the
  * ORESLANG_SOURCE_ACTOR_NIO build used by the compiled readiness gate.
  */
+typedef enum {
+    ORES_SOURCE_READABLE_AWAIT_READY = 1,
+    ORES_SOURCE_READABLE_AWAIT_CANCELLED = 2,
+    ORES_SOURCE_READABLE_AWAIT_TERMINATED = 3,
+    ORES_SOURCE_READABLE_AWAIT_FAILED = 4
+} OresSourceReadableAwaitOutcome;
+
+/*
+ * Typed host/runtime projection for the readable suspension. READY is the only
+ * outcome that executes continuation. CANCELLED / TERMINATED / FAILED retire
+ * the persisted continuation without executing guest code and report through
+ * the enum. result is written only for READY.
+ */
+OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
+    void* actor,
+    int64_t fd,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+
 int64_t oreslang_source_actor_await_readable(
     void* actor,
     int64_t fd,
