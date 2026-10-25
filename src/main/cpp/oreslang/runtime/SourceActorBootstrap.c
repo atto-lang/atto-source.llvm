@@ -613,12 +613,23 @@ void* oreslang_source_actor_spawn(
     return instance;
 }
 
-void oreslang_source_actor_send(void* opaque, int64_t payload) {
+int oreslang_source_actor_try_send_checked(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC
-        && instance->on_message);
-    ensure(ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+    if (!instance) return ORES_NATIVE_SEND_INVALID_REF;
+    group_lock();
+    int result = ORES_NATIVE_SEND_INVALID_REF;
+    if (instance->magic == SOURCE_ACTOR_MAGIC && instance->on_message && group.vm) {
+        const size_t slot = (size_t)instance->ref.actor_slot;
+        if (slot < group.next_slot && group.actors[slot] == instance)
+            result = (int)ores_native_vm_try_send(
+                group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload);
+    }
+    group_unlock();
+    return result;
+}
+
+void oreslang_source_actor_send(void* opaque, int64_t payload) {
+    ensure(oreslang_source_actor_try_send_checked(opaque, payload)
         == ORES_NATIVE_SEND_ACCEPTED);
 }
 
