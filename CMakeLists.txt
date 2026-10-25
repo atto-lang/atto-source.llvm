@@ -346,6 +346,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_constraint_descriptor_v1 PROPERTIES TIMEOUT 90)
+    # Broader refinement boundary: bounded int/i64 min/max descriptors are
+    # supported, but unchecked runtime use and unimplemented refinement forms
+    # must fail before emitting LLVM IR.
+    add_test(NAME native_refinement_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
