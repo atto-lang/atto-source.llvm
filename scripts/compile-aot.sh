@@ -54,3 +54,4 @@ else
 fi
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s (LTO mode: %s)\n' "$output_file" "$lto"
+
