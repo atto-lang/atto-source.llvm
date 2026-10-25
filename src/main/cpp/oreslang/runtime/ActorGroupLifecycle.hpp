@@ -530,8 +530,16 @@ public:
                     rejection.ref, std::move(rejection.result));
             for (auto& item : workers_) {
                 Entry& worker = item.second;
-                if (worker.phase != Phase::stopping)
+                if (worker.phase != Phase::stopping) {
+                    // STOP is the logical terminal admission boundary. Race it
+                    // atomically with resource/message admission: a retain that
+                    // wins just before this seal is counted and may drain; a
+                    // retain after the seal is rejected.
+                    worker.ref.ticket_->resource_state.fetch_or(
+                        NativeActorRef::terminal_resource_bit,
+                        std::memory_order_acq_rel);
                     worker.phase = Phase::stopping;
+                }
             }
         }
         for (auto& rejection : rejections)
