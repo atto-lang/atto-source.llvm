@@ -236,7 +236,8 @@ def main():
                          if "call i64 @oreslang_source_actor_await_ready(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name in {"source-actor-await-done.ores",
-                        "source-actor-await-done-twice.ores"}:
+                        "source-actor-await-done-twice.ores",
+                        "source-actor-await-ready-done.ores"}:
                 assert "oreslang_source_actor_request_stop" in guest.stdout, name
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
