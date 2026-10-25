@@ -85,6 +85,7 @@ def main():
         ("source-actor-future-void-await-again.ores", 1, 2, 3),
         ("source-actor-future-void-await-worker-instead.ores", 1, 2, 3),
         ("source-actor-await-done.ores", 1, 0, None),
+        ("source-actor-await-done-twice.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
@@ -194,6 +195,7 @@ def main():
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
+                "source-actor-await-done-twice.ores",
                 "source-actor-send-async.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
@@ -231,11 +233,15 @@ def main():
                 calls = [line for line in guest.stdout.splitlines()
                          if "call i64 @oreslang_source_actor_await_ready(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
-            if name == "source-actor-await-done.ores":
+            if name in {"source-actor-await-done.ores",
+                        "source-actor-await-done-twice.ores"}:
                 assert "oreslang_source_actor_request_stop" in guest.stdout, name
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i64 @oreslang_source_actor_await_done(" in line]
+                assert len(calls) == 1, (name, "expected one reusable DONE barrier", calls)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
