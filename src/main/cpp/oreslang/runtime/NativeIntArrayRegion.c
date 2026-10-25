@@ -471,6 +471,54 @@ void oreslang_int_array_commit_many(
     }
 }
 
+OresNativeIntArrayStatus oreslang_int_array_try_transfer_many(
+        OresNativeIntArrayRegion* source_region,
+        OresNativeIntArrayRegion* destination_region, uint64_t n,
+        OresNativeIntArrayHandle* const destinations[],
+        OresNativeIntArrayHandle* const sources[]) {
+    if (!source_region || !destination_region || source_region == destination_region ||
+            n > MAX_ARRAY_SLOTS || (n && (!destinations || !sources))) fail_closed();
+    validate_region_accounting(source_region);
+    validate_region_accounting(destination_region);
+    IntArraySlot* from[MAX_ARRAY_SLOTS] = {0};
+    IntArraySlot* into[MAX_ARRAY_SLOTS] = {0};
+    uint64_t reserved = 0;
+    for (uint64_t i = 0; i < n; ++i) {
+        if (!destinations[i] || !sources[i] || *destinations[i] ||
+                destinations[i] == sources[i]) fail_closed();
+        from[i] = require_slot(source_region, *sources[i]);
+        reserved += from[i]->capacity;
+        for (uint64_t j = 0; j < i; ++j)
+            if (from[i] == from[j] || destinations[i] == destinations[j] ||
+                    sources[i] == sources[j] || destinations[i] == sources[j] ||
+                    sources[i] == destinations[j]) fail_closed();
+    }
+    if (n > MAX_ARRAY_SLOTS - destination_region->live_count ||
+            reserved > REGION_ELEMENT_BUDGET - destination_region->reserved_elements)
+        return ORES_NATIVE_ARRAY_LIMIT;
+    uint64_t empty = 0;
+    for (size_t i = 0; i < MAX_ARRAY_SLOTS && empty < n; ++i)
+        if (!destination_region->arrays[i].token)
+            into[empty++] = &destination_region->arrays[i];
+    if (empty != n) fail_closed();
+    // No fallible operation follows preparation. Backing data is never wiped
+    // during transfer: only the retired metadata is cleared. Its new owner
+    // remains responsible for the eventual backing scrub/drop.
+    for (uint64_t i = 0; i < n; ++i) {
+        *into[i] = *from[i];
+        erase_bytes(from[i], sizeof(*from[i]));
+        *destinations[i] = into[i]->token;
+        *sources[i] = 0;
+    }
+    source_region->live_count -= n;
+    source_region->reserved_elements -= reserved;
+    destination_region->live_count += n;
+    destination_region->reserved_elements += reserved;
+    validate_region_accounting(source_region);
+    validate_region_accounting(destination_region);
+    return ORES_NATIVE_ARRAY_OK;
+}
+
 void oreslang_int_array_region_close(OresNativeIntArrayRegion* region) {
     validate_region_accounting(region);
     if (region->live_count || region->reserved_elements)

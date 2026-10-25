@@ -88,5 +88,20 @@ int main() {
     c.state_loan_live_across_suspend = false;
     CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
             == CriticalStateAdmission::Accept);
+
+    // Trusted admission must not accept forged/reserved bits in either the
+    // inferred callback row or the caller's upper-bound "using" row.
+    constexpr std::uint32_t UNKNOWN = 1u << 31;
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::EffectExceedsUsing);
+    c.inferred = row(READ | UNKNOWN);
+    CHECK(admit_critical_handle_state(c, row(READ | UNKNOWN))
+            == CriticalStateAdmission::EffectExceedsUsing);
+    CHECK(admit_critical_handle_state(c, row(READ | SUSPEND))
+            == CriticalStateAdmission::EffectExceedsUsing);
+    c.inferred = row(READ);
+    CHECK(admit_critical_handle_state(c, row(READ))
+            == CriticalStateAdmission::Accept);
     return 0;
 }

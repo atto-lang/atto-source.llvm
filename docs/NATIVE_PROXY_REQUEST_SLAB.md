@@ -1,0 +1,48 @@
+# Native proxy request slab — LLVM host substrate
+
+Status: **physical preallocated primitive-column implementation**, not guest-source lowering or a running reverse/forward HTTP proxy.
+
+`ProxyRequestSlab.hpp` requires an externally owned `std::span<std::uint32_t>` with an exact, checked capacity. It packs eight request fields in **SoA** or 16/32/64-lane **AoSoA**, plus eight fixed pin-receipt lanes per logical request. No heap allocation occurs during `admit`, `pin`, `settle`, `retire` or metadata access. Reclamation uses an O(1) free list. Slot incarnation and receipt serial advance without wrap, preventing delayed completion from affecting reused physical storage. A RETIRING slot is not reusable until all pin receipts are retired. Closing fails while live requests remain and scrubs the backing span after they drain.
+
+The paired Java/GraalVM implementation is [ActorProxyRequestSlab](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1941). Java PRIVATE actors use charged direct actor-arena memory, Java SHARED actors use charged primitive JVM arrays. The LLVM host-only reference does **not yet** call `ActorShardBudget` or the native scheduler's exact-generation actor-turn guard. The caller must provide a charged actor-owned arena, keep it alive longer than the slab, and serialize all mutations to a single logical actor turn. Unsafe foreign carrier calls or reclamation before external I/O drains remain release blockers; this type alone is **not** an actor security/capability boundary. No pointers are exported to the guest language.
+
+## Reproducible native smoke
+
+```sh
+c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+  -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp -o /tmp/native-proxy-slab
+/tmp/native-proxy-slab
+```
+
+For sanitizer coverage, use `-g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined`. Tests cover SoA and tile-16/32/64 AoSoA, full-capacity backpressure, two independent pin claims, retirement while pinned, out-of-order and replayed receipts, old ticket rejection after reuse, complete scrub and seeded 12,000-step churn over eight capacities. This standalone test ran locally under GCC strict C++20 and ASan/UBSan and printed `NATIVE_PROXY_REQUEST_SLAB_OK`. It does **not** establish LLVM guest compiler parity, cross-actor safety, optimized end-to-end latency or HTTP wire correctness.
+
+The `native_proxy_request_slab_host_only` CTest target plus exact-head native CI will reproduce this proof when runners are available. Next steps: actor scheduler fencing, quota-owned arena allocation, guest Oreslang native API lowering, transport completion/drain integration, JDK25 Maven runtime JUnit and exact-head LLVM compiler tests; then measure p99/p99.9 and allocations before choosing default lane sizes.
+
+## Actor-scheduler enforcement added after initial PR
+
+`ActorOwnedProxyRequestSlab.hpp` now wraps the slab, denying every method unless the **exact native scheduler and actor generation** are executing a turn. The wrapper atomically charges `ActorShardBudget` plus VM quota before allocating a primitive backing vector. All normal request operations remain allocation-free; explicit `close` requires quiescence, and destructor aborts rather than freeing backing with live requests. On successful teardown, backing is scrubbed and released **before** budget refund. Foreign actor carriers, outside-host calls and stale actor generations are rejected. The budget ledger and native scheduler must outlive the wrapper, and actor cancellation must first join all external I/O and pending callbacks; a forced process abort is not graceful recovery.
+
+The new `native_actor_proxy_slab_generation_and_quota` CTest runs against the repository's real `NativeActorScheduler.c`, including owner-turn checks, a tiny-budget reject, a pinned cancellation, a different actor attempting to settle a receipt, and post-retirement quota refunds for SoA and AoSoA 16/32/64. Exact-head GitHub Actions also compiles this test with the C scheduler compiled as C.
+
+Local verification **does not establish actual CTest/runner success**: the new header and test passed GCC strict C++20 against an API-compatible, deterministic fake native scheduler; an ASan/UBSan run of that fake-scheduler test also passed. The original allocation-free underlying slab passed its standalone real-header smoke. The real native scheduler plus budget integration must be executed on an authorized repository runner or local complete checkout. The `std::vector` backing is charged native host memory, **not yet an actor-heap allocation from `ActorArena`**; true arena placement and source-level Oreslang compiler lowering remain P0.
+
+**Unresolved callback provenance:** the 64-bit receipt contains lane + serial, not a global slab identity. The transport/mailbox completion dispatcher must bind the receipt to the owning slab/actor generation and reject incorrectly routed receipts. Never accept external/user input as receipt authority or pass raw cross-actor pointers.
+
+
+## Physical actor arena pages and completion provenance (latest stack)
+
+The native `ActorOwnedProxyRequestSlab` now stores **all eight SoA/AoSoA request columns and the fixed receipt ledger in actual persistent `OresActorArena` slots**. The independent `std::vector` mirror has been removed from this adapter. The backing is paged at the existing 1 MiB per-persistent-slot limit, with total padded slot capacity charged atomically to the exact actor and VM budgets before opening the arena. Construction assigns an owner identity derived from the exact scheduler actor slot/generation and allocates persistent handles while that actor turn is active. Every public adapter operation re-enters an arena turn and the arena verifies domain, epoch and the current physical carrier; this permits actor migration across turns and denies unauthenticated raw access. `close()` requires no live requests and scrubs all physical words; teardown retires/zeroes/frees the arena **before** refunding actor and VM quota.
+
+**Critical performance limitation:** the existing checked `ActorArena` read/write calls acquire a small internal spin lock and copy each scalar; the adapter currently enters/leaves an arena turn per request operation. This is a correctness-first storage integration, not proof of zero-overhead/no-lock hot-path performance. Follow with a compiler/runtime internal **turn-scoped batch/column kernel** once all lifecycle tests pass; never export raw pointers or allow writable cross-actor aliasing.
+
+The completion adapter now returns a by-value `Receipt` containing exact actor scheduler domain, actor slot, actor generation, slab identity, request ticket, and raw claim serial. A received completion must be dispatched to its owning actor, and the adapter rejects wrong slab/actor/request provenance, stale request incarnations, duplicate completion and late arrivals. The host-only raw `ProxyRequestSlab` method remains available only within the trusted actor adapter; **do not lower raw claim settlement into guest Oreslang**. This envelope is correlation metadata, **not a cryptographic capability** or permission to consume untrusted network-provided receipt values. The native scheduler regression deliberately creates the same raw receipt in two separate slabs and verifies cross-slab delivery is rejected.
+
+The updated tests and CMake/CI targets link the repository's real `ActorArena.c` and `NativeActorScheduler.c`. **No passing exact-head CI result or full native scheduler test is claimed** until executable evidence exists. A successful local stub-backed test of the *previous version* is not a passing test of these new changes. Real guest compiler lowering, I/O completion dispatcher, network transport and p99 performance remain unimplemented.
+
+## Terminal cancellation: quiescent fallback cleanup (latest hardening)
+
+An actor can settle/retire all requests and still miss an explicit `close()` if terminal cancellation skips application cleanup. The owner adapter now provides **one narrowly fenced fallback** when its trusted host destructor runs after the exact scheduler-done retirement fence: if `ActorShardBudget.retired()` is true and the slab has **zero live requests**, the destructor enters a fresh checked `ActorArena` turn, scrubs the authoritative physical slot words, then retires/frees the arena before refunding both ledgers. The fallback is forbidden while an actor remains active or any request is live; those remain fail-stop instead of risking use-after-free. The host must not use this to bypass real external I/O quiescence: scheduler retirement must occur only after all callback sources, pins, wakers and external I/O have joined.
+
+The full native scheduler regression deliberately omits `other_slab.close()` after all its pins and requests drain. It destroys that slab **only after** `retire_actor_shard_budget_after_done` succeeds and asserts that both actor and VM quota return to zero. A passing complete native CTest/ASan run is still required; previous isolated checks did not execute this new fallback.
+
+**Private CI policy remains restrictive:** source Java [issue #1501](https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1501) still has no approved exact destination, and security authority [PR #1724](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1724) is held; a successful alternative-org *source-free* runner probe does not authorize private-tree copying. Do not mirror these source files until the independent review and immutable carrier contract explicitly cover the destination and this PR.
