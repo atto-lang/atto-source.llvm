@@ -139,7 +139,7 @@ static void* contend(void* raw) {
     return NULL;
 }
 static void contest(Fixture* f, OresNativeWakeTicket ticket, int both_cancel) {
-    atomic_int go = ATOMIC_VAR_INIT(0);
+    atomic_int go = 0;
     Contender a = {f->scheduler, ticket, &go, 0, 0};
     Contender b = {f->scheduler, ticket, &go, !both_cancel, 0};
     pthread_t first, second;

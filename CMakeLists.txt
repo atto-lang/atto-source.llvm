@@ -346,6 +346,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
             --compiler "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_type_constraint_descriptor_v1 PROPERTIES TIMEOUT 90)
+    # Broader refinement boundary: bounded int/i64 min/max descriptors are
+    # supported, but unchecked runtime use and unimplemented refinement forms
+    # must fail before emitting LLVM IR.
+    add_test(NAME native_refinement_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
@@ -3530,7 +3538,8 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
     target_include_directories(oreslang-native-actor-max-threads-admission-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-actor-max-threads-admission-test PRIVATE ${ORE_LLVM_LIBS})
     target_compile_features(oreslang-native-actor-max-threads-admission-test PRIVATE cxx_std_17)
     target_compile_options(oreslang-native-actor-max-threads-admission-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
