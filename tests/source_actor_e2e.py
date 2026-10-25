@@ -57,13 +57,17 @@ def parse_actor_receipt(line):
         "native actor release not verified", fields)
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
     if fields["constructor_on_worker"] == 0:
-        # stop-before-start is a valid linearization: no guest constructor,
-        # readiness, DATA acceptance, or payload result may be fabricated.
+        # stop-before-start is a valid linearization. DATA may already have
+        # passed bounded admission before STOP wins, but no guest handler may
+        # run: every admitted frame must be abandoned and no payload result
+        # may be fabricated.
         assert fields["ready"] == 0, (
             "unconstructed actor fabricated readiness", fields)
-        assert fields["accepted"] == 0 and fields["processed"] == 0, (
-            "unconstructed actor accepted guest DATA", fields)
-        assert fields["abandoned"] == 0 and fields["last"] == 0, (
+        assert fields["processed"] == 0, (
+            "unconstructed actor processed guest DATA", fields)
+        assert fields["accepted"] == fields["abandoned"], (
+            "unconstructed actor did not abandon every admitted frame", fields)
+        assert fields["last"] == 0, (
             "unconstructed actor fabricated payload state", fields)
     return fields
 
