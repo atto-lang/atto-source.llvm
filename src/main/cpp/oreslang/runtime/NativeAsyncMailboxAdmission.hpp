@@ -64,14 +64,52 @@ public:
     ~NativeAsyncMailboxAdmission() noexcept {
         std::lock_guard<std::mutex> guard(mutex_);
         if (used_frames_ != 0 || used_bytes_ != 0
-                || pending_waiters_ != 0 || pending_bytes_ != 0)
+                || active_descriptors_ != 0 || pending_waiters_ != 0
+                || pending_bytes_ != 0)
             std::terminate();
         for (const Slot& entry : slots_) {
-            if (entry.state == State::Waiting
+            if (entry.state == State::Preparing
+                    || entry.state == State::Waiting
                     || entry.state == State::Transferred
                     || entry.state == State::Publishing)
                 std::terminate();
         }
+    }
+
+    /**
+     * Reserve one target-side producer descriptor BEFORE graph validation,
+     * byte estimation, freezing/copying or wake reservation. This mirrors the
+     * Java AsyncSendAdmissionLoan: the advertised producer cap covers the
+     * entire pre-publication cohort rather than only already-frozen waiters.
+     */
+    bool begin_preparation(Handle* out) {
+        if (out) *out = {};
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (sealed_ || active_descriptors_ >= max_waiters_) return false;
+        const std::size_t slot = find_empty_slot_locked();
+        if (slot == max_waiters_) return false;
+        Slot& entry = slots_[slot];
+        if (entry.generation == std::numeric_limits<std::uint64_t>::max())
+            return false;
+        ++entry.generation;
+        if (!entry.generation) std::terminate();
+        entry.state = State::Preparing;
+        entry.bytes = 0;
+        entry.scheduler = nullptr;
+        entry.wake = {};
+        ++active_descriptors_;
+        if (out) *out = Handle{slot, entry.generation};
+        return true;
+    }
+
+    bool cancel_preparation(Handle handle) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        Slot* entry = matching_locked(handle);
+        if (!entry || entry->state != State::Preparing) return false;
+        if (!active_descriptors_) std::terminate();
+        --active_descriptors_;
+        entry->state = State::Cancelled;
+        return true;
     }
 
     // Synchronous send remains fail-fast. Existing async waiters have priority
@@ -94,30 +132,26 @@ public:
      * already converted the reserved continuation to FAILED (or retired it if
      * the producer stopped), so the caller must release retained payload/loan.
      */
-    Registration register_waiter(
+    Registration register_prepared(
+            Handle handle,
             std::size_t bytes,
             OresNativeActorScheduler* scheduler,
-            OresNativeWakeTicket wake,
-            Handle* out) {
-        if (out) *out = {};
+            OresNativeWakeTicket wake) {
         if (!bytes || !scheduler || !wake.slot_generation
                 || !wake.descriptor_generation)
             return Registration::Rejected;
 
         std::unique_lock<std::mutex> guard(mutex_);
+        Slot* entry_ptr = matching_locked(handle);
+        if (!entry_ptr || entry_ptr->state != State::Preparing)
+            return Registration::Rejected;
+        Slot& entry = *entry_ptr;
         if (sealed_ || bytes > max_bytes_
                 || pending_waiters_ >= max_waiters_
                 || bytes > max_pending_bytes_ - pending_bytes_)
             return Registration::Rejected;
 
         compact_fifo_locked();
-        const std::size_t slot = find_empty_slot_locked();
-        if (slot == max_waiters_) return Registration::Rejected;
-        Slot& entry = slots_[slot];
-        if (entry.generation == std::numeric_limits<std::uint64_t>::max())
-            return Registration::Rejected;
-        ++entry.generation;
-        if (!entry.generation) std::terminate();
         entry.state = State::Waiting;
         entry.bytes = bytes;
         entry.scheduler = scheduler;
@@ -125,16 +159,12 @@ public:
         pending_bytes_ += bytes;
         ++pending_waiters_;
 
-        Handle handle{slot, entry.generation};
-        if (out) *out = handle;
-
         // No earlier waiter may be bypassed. If this is the only waiter and a
         // full credit is available now, transfer immediately under the same
         // accounting mutex that synchronous admission uses.
         if (pending_waiters_ == 1 && fifo_entries_ == 0 && fits_locked(bytes)) {
             if (transfer_locked(entry)) {
                 --pending_waiters_;
-                pending_bytes_ -= bytes;
                 ++used_frames_;
                 used_bytes_ += bytes;
                 entry.state = State::Transferred;
@@ -143,7 +173,9 @@ public:
             OresNativeActorScheduler* failed_scheduler = entry.scheduler;
             const OresNativeWakeTicket failed_wake = entry.wake;
             --pending_waiters_;
+            if (pending_bytes_ < bytes || !active_descriptors_) std::terminate();
             pending_bytes_ -= bytes;
+            --active_descriptors_;
             clear_slot_locked(entry);
             guard.unlock();
             const auto status = ores_native_actor_scheduler_fail_reserved_wake(
@@ -153,8 +185,30 @@ public:
             return Registration::Failed;
         }
 
-        push_fifo_locked(slot);
+        push_fifo_locked(handle.slot);
         return Registration::Waiting;
+    }
+
+    // Convenience for host callers which have already completed preparation.
+    // Source send_async lowering should use begin_preparation() first so costly
+    // payload work is bounded by the target-side descriptor quota.
+    Registration register_waiter(
+            std::size_t bytes,
+            OresNativeActorScheduler* scheduler,
+            OresNativeWakeTicket wake,
+            Handle* out) {
+        Handle handle{};
+        if (!begin_preparation(&handle)) {
+            if (out) *out = {};
+            return Registration::Rejected;
+        }
+        if (out) *out = handle;
+        const auto result = register_prepared(handle, bytes, scheduler, wake);
+        if (result == Registration::Rejected) {
+            if (!cancel_preparation(handle))
+                throw std::logic_error("async mailbox preparation ownership lost");
+        }
+        return result;
     }
 
     // Producer cancellation wins only while the descriptor is still WAITING.
@@ -168,6 +222,8 @@ public:
             std::terminate();
         --pending_waiters_;
         pending_bytes_ -= entry->bytes;
+        if (!active_descriptors_) std::terminate();
+        --active_descriptors_;
         entry->state = State::Cancelled;
         return true;
     }
@@ -209,6 +265,7 @@ public:
     OresNativeWakePublishStatus commit(Handle handle) {
         OresNativeActorScheduler* scheduler = nullptr;
         OresNativeWakeTicket wake{};
+        std::size_t retained_bytes = 0;
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Slot* entry = matching_locked(handle);
@@ -217,6 +274,7 @@ public:
             entry->state = State::Publishing;
             scheduler = entry->scheduler;
             wake = entry->wake;
+            retained_bytes = entry->bytes;
         }
 
         // Never publish a continuation while holding mailbox accounting.
@@ -228,10 +286,15 @@ public:
         if (!entry || entry->state != State::Publishing)
             throw std::logic_error("async mailbox publish ownership corrupted");
         if (status == ORES_NATIVE_WAKE_PUBLISHED
-                || status == ORES_NATIVE_WAKE_PRODUCER_RETIRED)
+                || status == ORES_NATIVE_WAKE_PRODUCER_RETIRED) {
+            if (pending_bytes_ < retained_bytes || !active_descriptors_)
+                std::terminate();
+            pending_bytes_ -= retained_bytes;
+            --active_descriptors_;
             clear_slot_locked(*entry);
-        else
+        } else {
             entry->state = State::Transferred;
+        }
         return status;
     }
 
@@ -247,6 +310,10 @@ public:
         if (!used_frames_ || used_bytes_ < entry->bytes) std::terminate();
         --used_frames_;
         used_bytes_ -= entry->bytes;
+        if (pending_bytes_ < entry->bytes || !active_descriptors_)
+            std::terminate();
+        pending_bytes_ -= entry->bytes;
+        --active_descriptors_;
         clear_slot_locked(*entry);
 
         // The rollback created real free capacity. Preserve FIFO priority by
@@ -278,13 +345,21 @@ public:
         sealed_ = true;
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             Slot& entry = slots_[i];
+            if (entry.state == State::Preparing) {
+                if (!active_descriptors_) std::terminate();
+                --active_descriptors_;
+                entry.state = State::Cancelled;
+                continue;
+            }
             if (entry.state != State::Waiting) continue;
             OresNativeActorScheduler* scheduler = entry.scheduler;
             const OresNativeWakeTicket wake = entry.wake;
-            if (!pending_waiters_ || pending_bytes_ < entry.bytes)
+            if (!pending_waiters_ || pending_bytes_ < entry.bytes
+                    || !active_descriptors_)
                 std::terminate();
             --pending_waiters_;
             pending_bytes_ -= entry.bytes;
+            --active_descriptors_;
             entry.state = State::Cancelled;
             guard.unlock();
             const auto status = ores_native_actor_scheduler_fail_reserved_wake(
@@ -309,6 +384,10 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         return used_bytes_;
     }
+    std::size_t active_descriptors() const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return active_descriptors_;
+    }
     std::size_t pending_waiters() const {
         std::lock_guard<std::mutex> guard(mutex_);
         return pending_waiters_;
@@ -323,7 +402,7 @@ public:
     }
 
 private:
-    enum class State { Empty, Waiting, Transferred, Publishing, Cancelled };
+    enum class State { Empty, Preparing, Waiting, Transferred, Publishing, Cancelled };
     struct Slot {
         State state = State::Empty;
         std::uint64_t generation = 0;
@@ -412,7 +491,6 @@ private:
                 if (!pending_waiters_ || pending_bytes_ < entry.bytes)
                     std::terminate();
                 --pending_waiters_;
-                pending_bytes_ -= entry.bytes;
                 ++used_frames_;
                 used_bytes_ += entry.bytes;
                 entry.state = State::Transferred;
@@ -428,6 +506,8 @@ private:
                 std::terminate();
             --pending_waiters_;
             pending_bytes_ -= entry.bytes;
+            if (!active_descriptors_) std::terminate();
+            --active_descriptors_;
             clear_slot_locked(entry);
             return true;
         }
@@ -448,6 +528,7 @@ private:
 
     std::size_t used_frames_ = 0;
     std::size_t used_bytes_ = 0;
+    std::size_t active_descriptors_ = 0;
     std::size_t pending_waiters_ = 0;
     std::size_t pending_bytes_ = 0;
     bool sealed_ = false;
