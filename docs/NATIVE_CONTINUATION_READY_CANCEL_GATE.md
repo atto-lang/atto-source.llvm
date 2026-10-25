@@ -52,6 +52,44 @@ carriers on the final completion condition variable. This does not establish
 `Future<T>`, `Task`, arbitrary values across suspension, or guest
 `select` support.
 
+## Actor-owned NIO wake handoff
+
+The native VM now has an **opt-in**, ABI-separate wake-capable constructor.
+The original `OresNativeVMConfig` layout and `ores_native_vm_open()`
+semantics remain unchanged; hosts that need continuation wake escrow supply
+`OresNativeVMWakeConfig` to `ores_native_vm_open_with_wakes()`.
+
+For an actor-owned one-shot readiness wait, the VM-NIO bridge uses this
+physical ownership sequence:
+
+1. reserve one generation-fenced scheduler wake for the exact producer actor;
+2. retain one exact ActorRef external-resource loan;
+3. admit the bounded epoll watch;
+4. consume READY/CANCELLED/STOPPED into the bounded actor NIO claim;
+5. TRANSFER the scheduler wake, which is the irreversible ownership handoff;
+6. release/free the NIO resource and FD claim, then drop the NIO claim mutex;
+7. PUBLISH READY/CANCELLED/FAILED so the continuation becomes runnable only
+   after the old FD claim is gone.
+
+A TRANSFERRED wake itself fences physical actor DONE, so step 6 introduces no
+lifetime gap. Publishing after the NIO claim is released is required: the actor
+wake may run immediately on another carrier and must be able to re-arm the same
+FD without racing the previous one-shot claim.
+
+If STOP wins before TRANSFER, transfer fails, the still-RESERVED wake is
+cancelled, the NIO resource loan is released, and no actor wake callback runs.
+If STOP wins after TRANSFER, scheduler publication consumes the transferred
+wake as `PRODUCER_RETIRED` without executing guest code. VM close joins the
+reactor first, cancels or aborts every remaining await wake, releases the NIO
+loans, and only then drains schedulers.
+
+This is **runtime suspension framing**, not source-level async I/O parity.
+Actor source handlers remain synchronous and the compiler still rejects general
+`async`/`suspends` I/O lowering. A later compiler slice must allocate and
+authenticate the continuation descriptors/code generations supplied to this
+bridge before a standard-library I/O operation may be admitted from Oreslang
+source.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:
