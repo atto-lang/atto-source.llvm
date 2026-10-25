@@ -896,22 +896,40 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
-    # Dispatch return destinations are not yet lowered by the native scalar
-    # frontend. These cases must fail before emitting any LLVM IR. In
-    # particular, nb is a nonblocking channel/select modifier, not permission
-    # for await inside match/switch arms.
-    oreslang_contract_test(native_value_match_arm_result_failclosed
-        dispatch-unsupported-value-match.ores
-        --diagnostic "native value match/switch requires ARM_RESULT dispatch lowering")
-    oreslang_contract_test(native_value_switch_arm_result_failclosed
-        dispatch-unsupported-value-switch.ores
-        --diagnostic "native value match/switch requires ARM_RESULT dispatch lowering")
-    oreslang_contract_test(native_do_match_function_return_failclosed
-        dispatch-unsupported-do-match.ores
-        --diagnostic "native procedural do match/switch requires FUNCTION_RETURN dispatch lowering")
-    oreslang_contract_test(native_do_switch_function_return_failclosed
-        dispatch-unsupported-do-switch.ores
-        --diagnostic "native procedural do match/switch requires FUNCTION_RETURN dispatch lowering")
+    # Scalar dispatch parity. Value forms lower to lazy conditional-expression
+    # CFG (ARM_RESULT); do forms lower to structured statement CFG where Return
+    # keeps FUNCTION_RETURN semantics. General async suspension is still gated
+    # by the native continuation subsystem and must fail before IR.
+    oreslang_contract_test(native_value_match_arm_result
+        dispatch-value-match-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_value_switch_arm_result
+        dispatch-value-switch-run.ores --ir "cmp.eq.i1")
+    oreslang_contract_test(native_do_match_function_return
+        dispatch-do-match-run.ores --ir "return.snapshot.slot")
+    oreslang_contract_test(native_do_switch_function_return
+        dispatch-do-switch-run.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_arm_result_runtime
+            dispatch-value-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_value_switch_arm_result_runtime
+            dispatch-value-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_function_return_runtime
+            dispatch-do-match-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_switch_function_return_runtime
+            dispatch-do-switch-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_value_switch_requires_default
+        dispatch-value-switch-nonexhaustive.ores
+        --diagnostic "native value switch requires a default arm")
+    oreslang_contract_test(native_value_switch_duplicate_case_rejected
+        dispatch-value-switch-duplicate.ores
+        --diagnostic "duplicate native value switch case")
+    oreslang_contract_test(native_value_dispatch_type_mismatch_rejected
+        dispatch-value-arm-type-mismatch.ores
+        --diagnostic "ternary arms require a common scalar type")
+    oreslang_contract_test(native_dispatch_async_arm_not_yet_lowered
+        dispatch-async-arm-unsupported.ores
+        --diagnostic "native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering")
     oreslang_contract_test(native_nb_match_rejected
         dispatch-invalid-nb-match.ores
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
