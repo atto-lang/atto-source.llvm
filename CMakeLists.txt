@@ -1395,6 +1395,7 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
+                --cxx "${CMAKE_CXX_COMPILER}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
@@ -1416,7 +1417,6 @@ if(BUILD_TESTING)
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
-                --cxx "${CMAKE_CXX_COMPILER}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
         add_test(NAME native_ready_future_void_guest_asan_ubsan
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
