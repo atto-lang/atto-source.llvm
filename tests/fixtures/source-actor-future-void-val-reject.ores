@@ -1,0 +1,10 @@
+define actor Worker as {
+  pub fnc on_message(int n): int { return n; }
+}
+pub fnc main(): int throws ActorTerminated {
+  const worker: ActorRef<Worker> = spawn Worker();
+  val Future<void> ready = worker.get_ready();
+  await ready;
+  stop worker;
+  return 43;
+}

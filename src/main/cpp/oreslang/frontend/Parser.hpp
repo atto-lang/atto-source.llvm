@@ -252,17 +252,20 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
+    /*
+     * Restricted lifecycle slice: one readiness barrier may be observed
+     * repeatedly; get_done remains a separate single physical-finalization
+     * suspension until the general continuation state machine exists.
+     */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
     std::string done_await_actor;
     std::size_t done_await_offset = 0;
-    // Records the syntactic protocol witness; codegen receives only a
-    // checked SourceActorReadyControl resolution, not a magic name.
+    // Records the first checked readiness witness. Equivalent later
+    // observations do not allocate another CONTROL continuation.
     NativeAwaitForm ready_await_form = NativeAwaitForm::None;
-    // Non-Copy lexical Future<void> from a previously spawned actor's
-    // get_ready(). The compiler consumes it into the existing CONTROL
-    // continuation; it is never represented as an untyped i64 guest value.
+    // Immutable, non-escaping Future<void> observer from a spawned actor's
+    // get_ready(); never represented as an untyped i64 guest value.
     std::string ready_future_name;
     std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
@@ -287,6 +290,12 @@ struct Function {
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    /*
+     * Narrow typed exceptional-effect metadata. Actor readiness can terminate
+     * before publication; general throw/raise/panic lowering remains
+     * fail-closed until the shared unwind ABI is executable.
+     */
+    std::vector<std::string> throws_types;
     std::string return_sum;
 };
 

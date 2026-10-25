@@ -63,7 +63,12 @@ fn main() {
 
     for (index, name) in ["source-actor-await-ready.ores",
                           "source-actor-await-worker.ores",
-                          "source-actor-future-void-ready.ores"].iter().enumerate() {
+                          "source-actor-await-worker-twice.ores",
+                          "source-actor-await-get-ready-twice.ores",
+                          "source-actor-future-void-ready.ores",
+                          "source-actor-future-void-double-await.ores",
+                          "source-actor-future-void-await-again.ores",
+                          "source-actor-future-void-await-worker-instead.ores"].iter().enumerate() {
         let fixture = root.join("tests/fixtures").join(name);
         let source = run(Command::new(&compiler).arg(&fixture), "compile guest");
         let ir = String::from_utf8(source.stdout).expect("LLVM IR must be UTF-8");

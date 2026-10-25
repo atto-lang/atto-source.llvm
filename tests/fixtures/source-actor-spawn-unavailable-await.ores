@@ -2,7 +2,7 @@ define actor Worker as {
   const base: int = 42;
   pub fnc on_message(int n): int { return base + n; }
 }
-pub fnc main(): int {
+pub fnc main(): int throws ActorTerminated {
   const worker = spawn Worker();
   const retained: int = 7;
   await worker.get_ready();

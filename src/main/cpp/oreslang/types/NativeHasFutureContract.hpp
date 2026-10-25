@@ -24,19 +24,21 @@ struct NativeAwaitDescriptor {
     std::string_view actor_identity;
     bool live_actor = false;
     bool verified_get_ready_provenance = false;
-    bool future_token_unconsumed = false;
+    bool verified_future_observer = false;
     // Bind a Future<void> to the exact actor capability that produced it.
     std::string_view future_producer_actor_identity;
 };
 struct NativeAwaitResolution {
     NativeAwaitAbi abi = NativeAwaitAbi::Unsupported;
     bool returns_void = false;
-    bool consumes_future_token = false;
+    bool uses_future_observer = false;
 };
 
 // A successful resolution is compiler evidence of both a known statically
-// admitted receiver shape and the exact native continuation ABI. It is NOT
-// a runtime poll, a host blocking await, or a trait-name string comparison.
+// admitted receiver shape and the exact native continuation ABI. A
+// Future<void> readiness value is an immutable observer, not a consumable
+// language token. It is NOT a runtime poll, a host blocking await, or a
+// trait-name string comparison.
 constexpr NativeAwaitResolution resolve_native_has_future(
         const NativeAwaitDescriptor& candidate) noexcept {
     if (candidate.nominal_type.empty() || candidate.actor_identity.empty() ||
@@ -49,7 +51,7 @@ constexpr NativeAwaitResolution resolve_native_has_future(
     if (candidate.kind == NativeAwaitTargetKind::FutureVoid &&
             candidate.form == NativeAwaitForm::FutureValue &&
             candidate.verified_get_ready_provenance &&
-            candidate.future_token_unconsumed &&
+            candidate.verified_future_observer &&
             candidate.future_producer_actor_identity == candidate.actor_identity) {
         return {NativeAwaitAbi::SourceActorReadyControl, true, true};
     }

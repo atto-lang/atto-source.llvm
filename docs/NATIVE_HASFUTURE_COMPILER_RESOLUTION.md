@@ -11,13 +11,23 @@ admits only three known native source shapes:
 | --- | --- | --- | --- |
 | `await worker;` | Live `ActorRef<Worker>` implementing `HasFuture` | SourceActorReadyControl | void |
 | `await worker.get_ready();` | Same ActorRef readiness method | SourceActorReadyControl | void |
-| `const Future<void> ready = worker.get_ready(); await ready;` | Non-Copy token verified to originate from the same live actor | SourceActorReadyControl | void |
+| `const Future<void> ready = worker.get_ready(); await ready;` | Immutable observer verified to originate from the same live actor | SourceActorReadyControl | void |
 
-Unknown, scalar, class, `Future<int>`, unlive/stale ActorRefs, forged and consumed
-Future tokens, implicit `get_done()` or unverified nominal trait names remain
-unsupported. A `Future<void>` producer must also match the exact actor
+Unknown, scalar, class, `Future<int>`, unlive/stale ActorRefs, forged,
+mutable or escaping Future observers, implicit `get_done()` or unverified
+nominal trait names remain unsupported. A `Future<void>` producer must also match the exact actor
 identity being awaited, not merely assert a boolean provenance flag. The validator performs identity and provenance checks before
 lowering; it does not trust the spelling of `HasFuture`.
+
+All admitted readiness spellings can fail when stop wins before READY
+publication. The enclosing native source function must therefore declare
+`throws ActorTerminated`. The compiler resolves the receiver/provenance first,
+so invalid await targets retain their precise HasFuture/ActorRef diagnostic.
+
+Readiness observation is non-consuming: repeated observation of the same
+verified ActorRef readiness barrier may reuse the same compiled CONTROL
+continuation. The resolver's observer bit records verified Future provenance;
+it is not a one-shot ownership token.
 
 The resolver is a **closed-world compiler contract**, not full arbitrary
 user-defined `HasFuture` interface implementation lookup, not new scheduler
