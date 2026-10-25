@@ -63,7 +63,10 @@ public:
     void release_resource_loan() const noexcept {
         auto current = ticket_->resource_state.load(std::memory_order_acquire);
         for (;;) {
-            if (current == 0 || (current & terminal_resource_bit))
+            // Terminal sealing blocks NEW loans but must not strand loans
+            // admitted before STOP/close/finalization. The low 63 bits remain
+            // a drainable count while the high bit stays sticky.
+            if ((current & (terminal_resource_bit - 1)) == 0)
                 std::terminate();
             if (ticket_->resource_state.compare_exchange_weak(
                     current, current - 1, std::memory_order_acq_rel,
@@ -436,18 +439,21 @@ public:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t resource_state = 0;
-            if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    resource_state, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
-                // A prior serialized finalization attempt may already have
-                // sealed resource admission before settlement threw. Keep the
-                // seal sticky so late loans cannot resurrect physical state,
-                // but allow this owner to retry unfinished terminal settlement.
-                if (resource_state != NativeActorRef::terminal_resource_bit
-                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
-                    return false;
-            }
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
             try {
                 // Close may settle readiness after detaching the worker table,
                 // outside the group lock. The ticket mutex decides the winner.
@@ -546,11 +552,21 @@ public:
             if (closed_) return;
             closed_ = true;
             detached.swap(workers_);
-            // Publish only AFTER detaching group ownership. The runtime-held
-            // finalizer may retire an actor following true physical quiescence.
-            for (const auto& item : detached)
+            // Closing the group is a terminal resource-admission fence.
+            // Atomically preserve any already-admitted loan count while
+            // blocking every later retain. Those existing loans may still
+            // release after this bit is set; DONE waits for the count to drain.
+            //
+            // Publish detached_from_group only after the admission seal, so a
+            // RuntimeFinalizer can never observe detachment while a stale
+            // holder is still permitted to register fresh physical work.
+            for (const auto& item : detached) {
+                item.second.ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
                 item.second.ref.ticket_->detached_from_group.store(
                     true, std::memory_order_release);
+            }
         }
         for (auto& item : detached) {
             Entry& worker = item.second;
@@ -644,18 +660,21 @@ private:
                 || ref.ticket_->control_active.load(std::memory_order_acquire)
                 || ref.ticket_->control_reserved.load(std::memory_order_acquire))
                 return false;
-            std::uint64_t resource_state = 0;
-            if (!ref.ticket_->resource_state.compare_exchange_strong(
-                    resource_state, NativeActorRef::terminal_resource_bit,
-                    std::memory_order_acq_rel, std::memory_order_acquire)) {
-                // A prior serialized finalization attempt may already have
-                // sealed resource admission before settlement threw. Keep the
-                // seal sticky so late loans cannot resurrect physical state,
-                // but allow this owner to retry unfinished terminal settlement.
-                if (resource_state != NativeActorRef::terminal_resource_bit
-                        || ref.ticket_->physically_done.load(std::memory_order_acquire))
-                    return false;
-            }
+            // Seal resource admission even when existing loans remain. A
+            // failed finalization attempt is a terminal boundary: already
+            // admitted loans may drain, but no stale holder may create new
+            // physical work and starve DONE indefinitely.
+            const std::uint64_t resource_state =
+                ref.ticket_->resource_state.fetch_or(
+                    NativeActorRef::terminal_resource_bit,
+                    std::memory_order_acq_rel);
+            if ((resource_state & (NativeActorRef::terminal_resource_bit - 1)) != 0)
+                return false;
+            // The terminal-only state is also the retry marker after an
+            // allocation failure during readiness/DONE settlement.
+            if ((resource_state & NativeActorRef::terminal_resource_bit)
+                    && ref.ticket_->physically_done.load(std::memory_order_acquire))
+                return false;
             try {
                 ActorReadyResult rejected{false,
                     failure.empty() ? "actor terminated before ready" : failure};
