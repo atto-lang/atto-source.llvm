@@ -15,6 +15,9 @@
 
 namespace oreslang::runtime {
 
+template <typename T>
+class NativeAsyncEnvelopeTxn;
+
 /**
  * Host-runtime-only, independently bounded URGENT/NORMAL/BULK user inbox.
  *
@@ -152,7 +155,8 @@ public:
      *
      * This is a runtime-only capability boundary; source code cannot invoke it.
      */
-    bool offer_owned_preloaned_to(const NativeActorRef& target, Lane lane,
+    bool offer_owned_preloaned_to(PreloanedPublicationTag,
+                                  const NativeActorRef& target, Lane lane,
                                   std::unique_ptr<T>& value,
                                   std::size_t bytes) {
         AdmissionGuard admission(*this, &target, false);
@@ -326,6 +330,11 @@ public:
     }
 
 private:
+    struct PreloanedPublicationTag {
+        PreloanedPublicationTag() = default;
+    };
+    friend class NativeAsyncEnvelopeTxn<T>;
+
     // Prevent a send started before bind_target() from publishing into a
     // newly bound actor. Drop the fairness lock BEFORE moving a payload: its
     // user-supplied move constructor may re-enter the inbox. RAII makes all
