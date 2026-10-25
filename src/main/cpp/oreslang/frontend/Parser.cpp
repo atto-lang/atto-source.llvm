@@ -2016,6 +2016,21 @@ private:
                 require(".");
                 const std::string lifecycle = identifier();
                 require("(");
+                if (lifecycle == "send_async") {
+                    if (value.name != "main" || !value.parameters.empty())
+                        fail("native send_async direct await requires trusted zero-argument main");
+                    ActorSend send;
+                    send.offset = await_offset;
+                    send.reference = awaited;
+                    send.payload = expression();
+                    send.await_admission = true;
+                    require(")");
+                    require(";");
+                    value.actor_sends.push_back(std::move(send));
+                    value.actor_actions.push_back({ActorAction::Kind::Send,
+                                                   value.actor_sends.size() - 1});
+                    continue;
+                }
                 require(")");
                 require(";");
                 if (lifecycle == "get_ready") {
@@ -2028,7 +2043,7 @@ private:
                     value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
                 } else {
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
+                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done/send_async is lowered");
                 }
                 continue;
             }
