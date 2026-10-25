@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -27,6 +28,8 @@ typedef struct {
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
     atomic_int initialized;
+    atomic_int startup_state;
+    atomic_int constructor_started;
     atomic_int stop_requested;
     atomic_int join_started;
     atomic_uint_fast64_t processed;
@@ -42,6 +45,7 @@ typedef struct {
     uint64_t source_token;
     int suspend_recorded;
     int done;
+    int outcome;
     int64_t result;
 } ReadyAwaitFrame;
 
@@ -79,6 +83,47 @@ static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+static atomic_int test_hold_initialization;
+static atomic_int test_initialization_entered;
+static atomic_int test_hold_readiness_publication;
+static atomic_int test_readiness_publication_entered;
+
+void oreslang_source_actor_test_hold_initialization(int hold) {
+    if (hold) {
+        atomic_store_explicit(
+            &test_initialization_entered, 0, memory_order_release);
+        atomic_store_explicit(
+            &test_hold_initialization, 1, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &test_hold_initialization, 0, memory_order_release);
+    }
+}
+
+int oreslang_source_actor_test_initialization_entered(void) {
+    return atomic_load_explicit(
+        &test_initialization_entered, memory_order_acquire);
+}
+
+void oreslang_source_actor_test_hold_readiness_publication(int hold) {
+    if (hold) {
+        atomic_store_explicit(
+            &test_readiness_publication_entered, 0, memory_order_release);
+        atomic_store_explicit(
+            &test_hold_readiness_publication, 1, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &test_hold_readiness_publication, 0, memory_order_release);
+    }
+}
+
+int oreslang_source_actor_test_readiness_publication_entered(void) {
+    return atomic_load_explicit(
+        &test_readiness_publication_entered, memory_order_acquire);
+}
+#endif
+
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
@@ -99,17 +144,33 @@ static SourceActor* lookup(size_t index) {
     return actor;
 }
 
-static void complete_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
+int oreslang_source_actor_ready_status(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC) return -1;
+    return atomic_load_explicit(
+        &instance->startup_state, memory_order_acquire);
+}
+
+static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
-    if (!frame->suspend_recorded
-            || atomic_load_explicit(
-                &frame->actor->initialized, memory_order_acquire) != 1)
+    if (!frame->suspend_recorded) return;
+
+    const int startup_state = atomic_load_explicit(
+        &frame->actor->startup_state, memory_order_acquire);
+    int future_status = ORES_NATIVE_FUTURE_PENDING;
+    if (startup_state == ORES_SOURCE_ACTOR_STARTUP_READY)
+        future_status = ORES_NATIVE_FUTURE_READY;
+    else if (startup_state
+            == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY)
+        future_status = ORES_NATIVE_FUTURE_FAILED;
+    else
         return;
+
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_PENDING) {
         ensure(ores_native_actor_future_complete(
-            frame->ready_future, ORES_NATIVE_FUTURE_READY));
+            frame->ready_future, future_status));
     }
 }
 
@@ -145,7 +206,7 @@ static void root_suspend_turn(void) {
     ensure(ores_native_execution_context_store_release(
         group.executions, origin));
     frame->suspend_recorded = 1;
-    complete_ready_if_admitted_locked(frame);
+    settle_ready_if_admitted_locked(frame);
     group_unlock();
 }
 
@@ -154,13 +215,15 @@ static void root_resume_turn(void) {
     OresSourceActorContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
+    int future_status;
 
     group_lock();
     frame = group.pending_ready;
     ensure(frame && frame->suspend_recorded && !frame->done);
     ensure(frame->ready_future != NULL);
-    ensure(ores_native_actor_future_status(frame->ready_future)
-        == ORES_NATIVE_FUTURE_READY);
+    future_status = ores_native_actor_future_status(frame->ready_future);
+    ensure(future_status == ORES_NATIVE_FUTURE_READY
+        || future_status == ORES_NATIVE_FUTURE_FAILED);
     continuation = frame->continuation;
     actor = frame->actor;
     link = frame->link;
@@ -183,14 +246,20 @@ static void root_resume_turn(void) {
         &logical));
 
     /*
-     * The logical resumed context must describe the physical root actor turn,
-     * not the child whose readiness happened to complete the Future.
+     * Even failed readiness resumes once on the root CONTROL lane so the
+     * persisted logical suspension can be retired without leaking trace state.
+     * Guest continuation code runs only for successful readiness.
      */
     ensure(same_allocation(logical.allocation, physical.allocation));
-    ensure(!ores_native_store_handle_valid(current_source_execution));
-    current_source_execution = resumed;
-    const int64_t result = continuation(actor);
-    current_source_execution = (OresNativeExecutionHandle){0, 0};
+    int64_t result = 0;
+    int outcome = ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY;
+    if (future_status == ORES_NATIVE_FUTURE_READY) {
+        ensure(!ores_native_store_handle_valid(current_source_execution));
+        current_source_execution = resumed;
+        result = continuation(actor);
+        current_source_execution = (OresNativeExecutionHandle){0, 0};
+        outcome = ORES_SOURCE_ACTOR_STARTUP_READY;
+    }
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
     ensure(ores_native_execution_context_store_release(
@@ -198,6 +267,7 @@ static void root_resume_turn(void) {
 
     group_lock();
     ensure(frame == group.pending_ready && !frame->done);
+    frame->outcome = outcome;
     frame->result = result;
     frame->done = 1;
     ensure(pthread_cond_signal(&frame->completed) == 0);
@@ -299,21 +369,90 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
 
     ensure(payload == 0);
     SourceActor* instance = lookup(slot);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (atomic_load_explicit(
+            &test_hold_initialization, memory_order_acquire)) {
+        atomic_store_explicit(
+            &test_initialization_entered, 1, memory_order_release);
+        while (atomic_load_explicit(
+                &test_hold_initialization, memory_order_acquire))
+            sched_yield();
+    }
+#endif
+
+    /*
+     * Match Java ActorRef.stop(): startup admission and stop admission
+     * linearize under the same group mutex. The reserved initialization
+     * CONTROL turn survives mailbox sealing, but stop-before-start skips guest
+     * construction completely.
+     */
+    group_lock();
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
+            memory_order_release);
+        ReadyAwaitFrame* frame = group.pending_ready;
+        if (frame && frame->actor == instance)
+            settle_ready_if_admitted_locked(frame);
+        group_unlock();
+        return;
+    }
+
+    int expected = ORES_SOURCE_ACTOR_STARTUP_PENDING;
+    ensure(atomic_compare_exchange_strong_explicit(
+        &instance->startup_state,
+        &expected,
+        ORES_SOURCE_ACTOR_STARTUP_INITIALIZING,
+        memory_order_acq_rel,
+        memory_order_acquire));
+    atomic_store_explicit(
+        &instance->constructor_started, 1, memory_order_release);
+    group_unlock();
+
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     instance->constructor(instance->heap, turn.domain, turn.epoch);
     ores_actor_i64_heap_leave(instance->heap, turn);
-    atomic_store_explicit(&instance->initialized, 1, memory_order_release);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    if (atomic_load_explicit(
+            &test_hold_readiness_publication, memory_order_acquire)) {
+        atomic_store_explicit(
+            &test_readiness_publication_entered, 1, memory_order_release);
+        while (atomic_load_explicit(
+                &test_hold_readiness_publication, memory_order_acquire))
+            sched_yield();
+    }
+#endif
 
     /*
-     * Registration may happen before or after initialization. The group mutex
-     * makes completion one-shot without holding a scheduler lock across guest
-     * construction. source_actor_stop never waits while holding this mutex.
+     * Stop may race an already-running constructor. Re-enter the same group
+     * mutex before publishing readiness: if stop acquired it first, readiness
+     * fails; if this turn publishes READY first, a later stop cannot retroactively
+     * change the already-settled readiness observer.
      */
     group_lock();
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY,
+            memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &instance->initialized, 1, memory_order_release);
+        atomic_store_explicit(
+            &instance->startup_state,
+            ORES_SOURCE_ACTOR_STARTUP_READY,
+            memory_order_release);
+    }
+
     ReadyAwaitFrame* frame = group.pending_ready;
     if (frame && frame->actor == instance)
-        complete_ready_if_admitted_locked(frame);
+        settle_ready_if_admitted_locked(frame);
     group_unlock();
 }
 
@@ -402,6 +541,21 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+
+    /*
+     * SourceActor is dynamically allocated. Initialize every C11 atomic
+     * explicitly instead of relying on calloc byte patterns to stand in for
+     * atomic object initialization.
+     */
+    atomic_init(&instance->initialized, 0);
+    atomic_init(
+        &instance->startup_state, ORES_SOURCE_ACTOR_STARTUP_PENDING);
+    atomic_init(&instance->constructor_started, 0);
+    atomic_init(&instance->stop_requested, 0);
+    atomic_init(&instance->join_started, 0);
+    atomic_init(&instance->processed, 0);
+    atomic_init(&instance->last_result, 0);
+
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref =
@@ -427,13 +581,14 @@ void oreslang_source_actor_send(void* opaque, int64_t payload) {
         == ORES_NATIVE_SEND_ACCEPTED);
 }
 
-int64_t oreslang_source_actor_await_ready(
+int oreslang_source_actor_await_ready_checked(
         void* opaque,
         OresSourceActorContinuation continuation,
-        uint64_t source_token) {
+        uint64_t source_token,
+        int64_t* result_out) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
-    ensure(continuation != NULL);
+    ensure(continuation != NULL && result_out != NULL);
 
     /*
      * This outer wait is trusted top-level ABI glue, never guest-carrier
@@ -463,7 +618,7 @@ int64_t oreslang_source_actor_await_ready(
 
     /*
      * First root turn captures/suspends its scheduler-minted ExecutionId.
-     * Future completion cannot resume until this CONTROL turn has published
+     * Future settlement cannot resume until this CONTROL turn has published
      * the OresNativeSuspensionLink.
      */
     ensure(ores_native_vm_publish_control(
@@ -477,7 +632,9 @@ int64_t oreslang_source_actor_await_ready(
 
     ensure(group.pending_ready == &frame);
     group.pending_ready = NULL;
-    const int64_t result = frame.result;
+    const int outcome = frame.outcome;
+    if (outcome == ORES_SOURCE_ACTOR_STARTUP_READY)
+        *result_out = frame.result;
 
     ores_native_actor_future_destroy(frame.ready_future);
     ensure(ores_native_continuation_store_release(
@@ -489,10 +646,27 @@ int64_t oreslang_source_actor_await_ready(
     ensure(pthread_cond_destroy(&frame.completed) == 0);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_AWAIT_READY_TRACE_PASS execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
+        "SOURCE_AWAIT_READY_TRACE_PASS outcome=%d execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
+        outcome,
         SOURCE_GROUP_ROOT_SLOT,
         (unsigned long long)source_token);
 #endif
+    return outcome;
+}
+
+int64_t oreslang_source_actor_await_ready(
+        void* opaque,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    const int outcome = oreslang_source_actor_await_ready_checked(
+        opaque, continuation, source_token, &result);
+    /*
+     * Existing source lowering has no typed ActorTerminated projection yet.
+     * Fail closed instead of hanging or running the continuation after failed
+     * readiness; checked host/runtime callers can observe the failure exactly.
+     */
+    ensure(outcome == ORES_SOURCE_ACTOR_STARTUP_READY);
     return result;
 }
 
@@ -626,6 +800,12 @@ void oreslang_source_actor_request_stop(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
 
+    /*
+     * Stop admission shares the group mutex with startup/readiness publication
+     * so exactly one side wins the stop-vs-ready linearization point.
+     * This phase still never waits for physical completion.
+     */
+    group_lock();
     int expected = 0;
     ensure(atomic_compare_exchange_strong_explicit(
         &instance->stop_requested,
@@ -634,12 +814,6 @@ void oreslang_source_actor_request_stop(void* opaque) {
         memory_order_acq_rel,
         memory_order_acquire));
 
-    /*
-     * Stop admission is serialized with group metadata, but this phase never
-     * waits for physical completion. A future source get_done continuation
-     * must be able to observe the actor between requested and quiescent.
-     */
-    group_lock();
     const size_t slot = (size_t)instance->ref.actor_slot;
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
@@ -682,8 +856,11 @@ void oreslang_source_actor_join_done(void* opaque) {
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
-    ensure(atomic_load_explicit(
-        &instance->initialized, memory_order_acquire) == 1);
+    const int startup_state = atomic_load_explicit(
+        &instance->startup_state, memory_order_acquire);
+    ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
+        || startup_state
+            == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
     ensure(ores_native_vm_poll_done(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
 
@@ -706,7 +883,10 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 released=1 accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=%d released=1 ready=%d accepted=%llu processed=%llu abandoned=%llu last=%lld\n",
+        atomic_load_explicit(
+            &instance->constructor_started, memory_order_acquire),
+        startup_state == ORES_SOURCE_ACTOR_STARTUP_READY,
         (unsigned long long)terminal.accepted_user_messages,
         (unsigned long long)terminal.processed_user_messages,
         (unsigned long long)terminal.abandoned_user_messages,
