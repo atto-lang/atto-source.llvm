@@ -1,0 +1,14 @@
+pub fnc helper(): int {
+  return 1;
+}
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return total + n; }
+}
+pub fnc main(): int throws ActorTerminated {
+  const worker = spawn Worker();
+  await worker.get_ready();
+  worker.send(helper());
+  stop worker;
+  return 43;
+}
