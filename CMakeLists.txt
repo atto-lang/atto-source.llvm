@@ -1297,7 +1297,7 @@ if(BUILD_TESTING)
         --ir "readable_continuation")
     oreslang_contract_test(source_actor_await_readable_failed_outcome_ir
         source-actor-await-readable-failed.ores
-        --ir "ReadableOutcome")
+        --ir "readable.outcome")
     oreslang_contract_test(reject_source_actor_await_readable_outcome_int_compare
         source-actor-await-readable-outcome-int-compare-reject.ores
         --diagnostic "equality operands require the same scalar type")
