@@ -1,4 +1,10 @@
 #include "oreslang/runtime/TaskContinuationGate.hpp"
+#if defined(__linux__)
+#include "oreslang/runtime/NativeEpollReactorManager.hpp"
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <cassert>
@@ -455,6 +461,117 @@ static void close_disarms_concurrent_revocation() {
     }
 }
 
+#if defined(__linux__)
+static void reactor_completion_handoff_precedes_actor_done() {
+    NativeActorGroup group(990001, 1);
+    auto actor = group.adopt(990001, 1, 1, [] {});
+    assert(group.mark_ready(actor));
+    NativeEpollReactorManager manager(1);
+
+    int pipefd[2]{-1, -1};
+    assert(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+    auto watch = manager.try_watch_actor(actor, pipefd[0], EPOLLIN);
+    assert(watch);
+    assert(actor.outstanding_resource_loans() == 1);
+
+    Stores stores;
+    auto task = TaskCancellation::root();
+    const auto link = stores.suspend(16000);
+    TaskContinuationGate gate(
+        task, stores.executions, stores.continuations, link, 11,
+        {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+
+    assert(::write(pipefd[1], "x", 1) == 1);
+    std::optional<NativeEpollReactorManager::Completion> completion;
+    for (int retry = 0; retry < 3000 && !completion; ++retry) {
+        completion = manager.try_pop();
+        if (!completion) std::this_thread::yield();
+    }
+    assert(completion && completion->actor
+           && completion->actor->same_incarnation(actor));
+    assert(completion->event.outcome == NativeEpollReactor::Outcome::ready);
+
+    group.stop_workers();
+    assert(!group.finalized(actor));
+
+    // First acquire generation-checked continuation readiness ownership.
+    assert(gate.notify_ready());
+    assert(stores.state(link) == ORES_CONTINUATION_READY);
+    // Only after READY escrow exists may the reactor's physical loan leave.
+    assert(manager.ack_actor_completion(*completion));
+    assert(!manager.ack_actor_completion(*completion));
+    assert(actor.outstanding_resource_loans() == 0);
+    assert(group.finalized(actor));
+    actor.get_done().get();
+
+    OresNativeExecutionHandle resumed{};
+    assert(gate.try_resume(physical(16001), &resumed));
+    assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    assert(gate.finish_resume());
+    assert(ores_native_execution_context_store_release(
+        stores.executions, resumed));
+    gate.close();
+    stores.release(link);
+    task->retire();
+
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+}
+
+static void reactor_completion_cancel_before_enqueue_releases_safely() {
+    NativeActorGroup group(990002, 1);
+    auto actor = group.adopt(990002, 1, 1, [] {});
+    assert(group.mark_ready(actor));
+    NativeEpollReactorManager manager(1);
+
+    int pipefd[2]{-1, -1};
+    assert(::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0);
+    auto watch = manager.try_watch_actor(actor, pipefd[0], EPOLLIN);
+    assert(watch);
+
+    Stores stores;
+    auto parent = TaskCancellation::root();
+    auto child = parent->child();
+    const auto link = stores.suspend(17000);
+    TaskContinuationGate gate(
+        child, stores.executions, stores.continuations, link, 11,
+        {ORES_ALLOCATION_DOMAIN_ACTOR, 88, 3, 4});
+
+    assert(::write(pipefd[1], "x", 1) == 1);
+    std::optional<NativeEpollReactorManager::Completion> completion;
+    for (int retry = 0; retry < 3000 && !completion; ++retry) {
+        completion = manager.try_pop();
+        if (!completion) std::this_thread::yield();
+    }
+    assert(completion && completion->actor
+           && completion->actor->same_incarnation(actor));
+
+    // Completion exists, but cancellation wins before the scheduler publishes
+    // READY. The continuation is irrevocably cancelled, so no guest resume can
+    // own this terminal record; releasing the reactor loan is now safe.
+    assert(parent->cancel("nio-cancel-after-completion"));
+    assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+    assert(!gate.notify_ready());
+
+    group.stop_workers();
+    assert(!group.finalized(actor));
+    assert(manager.ack_actor_completion(*completion));
+    assert(actor.outstanding_resource_loans() == 0);
+    assert(group.finalized(actor));
+    actor.get_done().get();
+
+    OresNativeExecutionHandle resumed{};
+    assert(!gate.try_resume(physical(17001), &resumed));
+    gate.close();
+    stores.release(link);
+    child->retire();
+    parent->retire();
+
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+}
+#endif
+
 int main() {
     revokes_pending_and_drains_children();
     late_task_cancel_cannot_reenter_claimed_guest();
@@ -466,5 +583,9 @@ int main() {
     only_claiming_gate_can_finish_execution();
     completion_cancel_and_resume_cancel_races();
     close_disarms_concurrent_revocation();
+#if defined(__linux__)
+    reactor_completion_handoff_precedes_actor_done();
+    reactor_completion_cancel_before_enqueue_releases_safely();
+#endif
     std::puts("NATIVE_TASK_CONTINUATION_GATE_PASS");
 }
