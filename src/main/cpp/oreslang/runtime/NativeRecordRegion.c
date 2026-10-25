@@ -92,6 +92,13 @@ static const Record* lookup(int64_t handle, int64_t schema) {
     return record;
 }
 
+int64_t ores_record_check_shape(int64_t handle, int64_t schema, int64_t fields) {
+    if (fields < 0 || fields > FIELD_LIMIT) { region.failed = 1; return 1; }
+    const Record* record = lookup(handle, schema);
+    if (!record || record->count != (uint64_t)fields) { region.failed = 1; return 1; }
+    return 0;
+}
+
 int64_t ores_record_check(int64_t handle, int64_t schema) {
     return lookup(handle, schema) ? 0 : 1;
 }

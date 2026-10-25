@@ -521,7 +521,7 @@ pub fnc main(): int { return 42; }
   pub let Array<int> items = new Array<int>();
 end
 pub fnc main(): int { return 42; }
-""", "expected 'int'"),
+""", "native Array<int> field requires mut referent capability"),
     "exceed-64-array-quota": ("""define class Shelf as
 """ + "".join(f"  let mut Array<int> item{i} = new Array<int>();\n"
                for i in range(8)) + """end

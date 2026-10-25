@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
 
@@ -14,6 +15,15 @@ namespace oreslang {
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
 enum class ScalarType { I64, Bool, String };
+
+// Sum payloads are values, never untyped integer handles or class pointers.
+struct NativeSumType {
+    enum class Kind { Option, Result };
+    Kind kind = Kind::Option;
+    std::string name;
+    ScalarType value_type = ScalarType::I64;
+    ScalarType error_type = ScalarType::I64;
+};
 
 struct GenericTypeArgument {
     std::string name; // empty for positional arguments
@@ -33,7 +43,7 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
     };
     Kind kind;
     std::size_t offset = 0;
@@ -57,6 +67,7 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    mutable std::string sum_type;
 };
 
 struct Parameter {
@@ -64,8 +75,10 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
+    std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
+    std::string sum_type;
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
@@ -88,6 +101,7 @@ struct LocalBinding {
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
     std::size_t offset = 0;
+    std::string sum_type;
 };
 
 struct ClassField {
@@ -96,12 +110,14 @@ struct ClassField {
     std::unique_ptr<Expression> initializer_expression;
     bool public_member = false;
     ScalarType scalar_type = ScalarType::I64;
+    std::string class_name; // unique inline nested class, never a raw handle
     bool int_array = false; // owned opaque handle; never exposed as an int
     bool final_field = false; // fixed field slot: writes rejected by ownership checker
     bool mutable_referent = false; // val aliases final mut; independent of slot fixedness
     bool constructor_argument = false; // declaration-only field supplied by implicit positional constructor
     ScalarType array_element_type = ScalarType::I64;
     std::string array_record_class;
+    std::string sum_type;
 };
 
 struct ClassMethod {
@@ -165,7 +181,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach };
+    enum class Kind { Call, FieldWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -174,6 +190,8 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // ForIndex: branch_local initializer, condition and checked next value.
+    std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
     // function: rt array_commit_filled(class_owner, length, v0, v1, v2, v3).
     // Exactly four Array<int> fields in class declaration order.
@@ -218,15 +236,26 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
+    /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    std::string done_await_actor;
+    std::size_t done_await_offset = 0;
+    // Records the syntactic protocol witness; codegen receives only a
+    // checked SourceActorReadyControl resolution, not a magic name.
+    NativeAwaitForm ready_await_form = NativeAwaitForm::None;
+    // Non-Copy lexical Future<void> from a previously spawned actor's
+    // get_ready(). The compiler consumes it into the existing CONTROL
+    // continuation; it is never represented as an untyped i64 guest value.
+    std::string ready_future_name;
+    std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string pending_return_type_alias;
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
@@ -239,6 +268,7 @@ struct Function {
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    std::string return_sum;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
@@ -291,12 +321,14 @@ struct Program {
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<std::string> conforms;
+    std::vector<NativeSumType> sum_types;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
 // Actors remain incompatible with wasm32. The only admitted source suspension
-// is one zero-local await ActorRef.get_ready() in trusted zero-argument main.
+// is one zero-local actor lifecycle await in trusted zero-argument main:
+// direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 

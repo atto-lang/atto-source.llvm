@@ -1,9 +1,10 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
-    path::PathBuf,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 struct Scratch(PathBuf);
 impl Drop for Scratch {
@@ -15,6 +16,84 @@ fn run(command: &mut Command) -> Output {
     command
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
+}
+// Negative admission is adversarial: a broken O_NONBLOCK/fstat guard must
+// fail the test quickly rather than consume an entire macOS/Linux CI job.
+// Redirect both streams to files/null to avoid pipe-buffer deadlocks.
+#[cfg(unix)]
+fn run_bounded_no_ir(command: &mut Command, scratch: &Path, label: &str) {
+    let stdout_path = scratch.join("bounded-negative-stdout");
+    let stdout = fs::File::create(&stdout_path).expect("create negative output file");
+    let mut child = command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{label}: cannot spawn compiler: {error}"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        match child.try_wait().expect("poll child") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{label}: compiler blocked beyond eight seconds");
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    assert_eq!(status.code(), Some(1), "{label}: expected a rejected source");
+    assert_eq!(fs::metadata(&stdout_path).unwrap().len(), 0,
+               "{label}: compiler emitted partial IR");
+    fs::remove_file(&stdout_path).unwrap();
+}
+
+// Exercise the generated function boundary, including a callee that never
+// reads its parameter. Invalid descriptors must abort before any payload use.
+fn check_sum_boundary(compiler: &str, clang: &str, runtime: &str, scratch: &std::path::Path, sanitize: bool) {
+    use std::os::unix::process::ExitStatusExt;
+    let source = scratch.join("sum-boundary.ores");
+    fs::write(&source, "fnc validate(Option<int> item):int{return 42;}fnc inspect(Option<int> item):int{return item.unwrap_or(7);}pub fnc main():int{return 0;}").unwrap();
+    let generated = run(Command::new(compiler).arg(&source));
+    assert!(generated.status.success(), "sum boundary IR: {}", String::from_utf8_lossy(&generated.stderr));
+    let ir = String::from_utf8(generated.stdout).unwrap().replace("@main(", "@unused_os_main(");
+    let ir = if sanitize { ir.lines().map(|line| if line.starts_with("define ") {
+        format!("{} sanitize_address {{\n", line.strip_suffix('{').unwrap())
+    } else { format!("{line}\n") }).collect::<String>() } else { ir };
+    let path = scratch.join("sum-boundary.ll");
+    fs::write(&path, ir).unwrap();
+    let harness = scratch.join("sum-boundary.c");
+    fs::write(&harness, r#"#include "oreslang/runtime/NativeRecordRegion.h"
+#include <stdint.h>
+#include <stdlib.h>
+extern int64_t validate(int64_t);
+extern int64_t inspect(int64_t);
+int main(int argc,char** argv) {
+  if(argc!=2 || ores_record_region_begin()!=0) return 90;
+  int mode=atoi(argv[1]);
+  const int64_t fields[3]={mode==1?0:mode==5?-1:mode==6?2:1,mode==1?INT64_MAX:42,0};
+  int64_t value=ores_record_new(mode==3?2:1,mode==4?1:mode==8?3:2,fields);
+  if(mode==2){if(ores_record_region_end()!=0||ores_record_region_begin()!=0)return 91;}
+  if(mode==7)value=0;
+  if(validate(value)!=42 || inspect(value)!=(mode==1?7:42))return 92;
+  return ores_record_region_end()!=0?93:0;
+}
+"#).unwrap();
+    let binary = scratch.join("sum-boundary");
+    let runtime_root = PathBuf::from(runtime).parent().unwrap().to_path_buf();
+    let mut link = Command::new(clang);
+    link.args(["-O1", "-g"]);
+    if sanitize { link.args(["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]); }
+    let linked = run(link.args(["-x", "ir"]).arg(path).args(["-x", "c", "-std=c11", "-I"])
+        .arg(runtime_root.parent().unwrap().parent().unwrap()).arg(harness)
+        .arg(runtime_root.join("NativeRecordRegion.c")).args(["-pthread", "-o"]).arg(&binary));
+    assert!(linked.status.success(), "sum boundary link: {}", String::from_utf8_lossy(&linked.stderr));
+    for mode in 0..9 {
+        let output = run(Command::new(&binary).arg(mode.to_string()));
+        if mode < 2 { assert!(output.status.success(), "sum boundary valid case {mode}"); }
+        else { assert_eq!(output.status.signal(), Some(6), "sum boundary invalid case {mode}: {}", String::from_utf8_lossy(&output.stderr)); }
+        assert!(output.stdout.is_empty() && output.stderr.is_empty(), "sum boundary diagnostic: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    println!("PASS generated sum ABI: present/absent payloads, stale generation, schema, arity, invalid tags and null rejection");
 }
 fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
@@ -49,6 +128,58 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("contextual-pattern-function-and-parameter", "fnc pattern(int pattern):int{return pattern;}pub fnc main():int{return pattern(42)==42?0:1;}", ""),
+        ("sum-mixed-guard-source-order", "fnc choose(bool first):Option<int>{if first;then return Some(1);fi if(true){return Some(2);}fi return None;}pub fnc main():int{return choose(true).unwrap()==1&&choose(false).unwrap()==2?0:1;}", ""),
+        ("sum-result-schema-matrix", r#"pub routine main():int{val Result<int,int> ii=Ok(0);val Result<int,bool> ib=Err(false);val Result<bool,int> bi=Ok(false);val Result<String,bool> sb=Ok("");val Result<String,String> ss=Err("");return ii.is_ok()&&ii.unwrap()==0&&ib.is_err()&&bi.is_ok()&&!bi.unwrap()&&sb.is_ok()&&sb.unwrap()==""&&ss.is_err()?0:1;}"#, ""),
+        ("imported-canonical-sum-identity", r#"import module sums from './sums.ores';pub routine main():int{val Option<String> item=sums.choose(true);val Result<bool,String> result=sums.checked(false);return item.unwrap()=="module"&&result.is_err()?0:1;}"#, ""),
+        ("actual-routing-option-capture", include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
+        ("sum-zero-false-empty-distinguish-absence", r#"pub routine main():int{val Option<int> zero=Some(0);val Option<bool> no=Some(false);val Option<String> empty=Some("");val Option<int> absent=None;val Result<bool,bool> ok=Ok(false);val Result<bool,bool> err=Err(false);return zero.is_some()&&zero.unwrap()==0&&no.is_some()&&!no.unwrap()&&empty.is_some()&&empty.unwrap()==""&&absent.is_none()&&ok.is_ok()&&!ok.unwrap()&&err.is_err()?0:1;}"#, ""),
+        ("sum-typed-parameters-and-returns", r#"fnc relay(Option<int> item):Option<int>{return item;}fnc observe(borrow Option<int> item):int{return item.unwrap_or(7);}fnc result(bool ok):Result<String,int>{return ok?Ok("yes"):Err(0);}pub routine main():int{val Option<int> item=Some(42);val Option<int> copy=relay(item);val Result<String,int> good=result(true);val Result<String,int> bad=result(false);return observe(rt borrow copy)==42&&item.unwrap()==42&&good.unwrap()=="yes"&&bad.unwrap_or("no")=="no"?0:1;}"#, ""),
+        ("sum-fallback-is-eager", r#"fnc fallback():int{stdio.print("fallback;");return 17;}pub routine main():int{val Option<int> yes=Some(42);val Option<int> no=None;val Result<int,String> good=Ok(29);val Result<int,String> bad=Err("missing");return yes.unwrap_or(fallback())==42&&no.unwrap_or(fallback())==17&&good.unwrap_or(fallback())==29&&bad.unwrap_or(fallback())==17?0:1;}"#, "fallback;fallback;fallback;fallback;"),
+        ("sum-fields-and-source-ordered-guards", r#"define class Holder as pub let Option<int> value;pub pattern():Option<int>{return self.value;}pub replace(mut self)(Option<int> value):void{self.value=value;return;}end fnc choose_sum(bool early):Option<int>{if early;then return None;fi for(let int index=0;index<2;index=index+1){if index==1;then return Some(index);fi}return None;}pub routine main():int{val Holder pattern=new Holder(None);val Option<int> chosen=choose_sum(false);pattern.replace(Some(42));return pattern.pattern().unwrap()==42&&choose_sum(true).is_none()&&chosen.unwrap()==1?0:1;}"#, ""),
+        ("sum-fields-and-contextual-construction", r#"define class Holder as pub val Option<int> missing;pub val Option<bool> available;pub val Result<String,int> result;end pub routine main():int{val Holder holder=new Holder(None,Some(false),Err(0));val Option<int> inferred=Some(9);return holder.missing.is_none()&&holder.available.is_some()&&!holder.available.unwrap()&&holder.result.is_err()&&inferred.unwrap()==9?0:1;}"#, ""),
+        ("nested-multiple-children-offsets-and-return-regions", r#"define class Data as pub val Array<int> values;pub val String label;pub read():int{return self.values.get(0);}end
+          define class Pair as pub val int leading;pub val Data left;pub val int gap;pub val Data right;end
+          fnc make_data(int n,String label):Data{val Array<int> values=new Array<int>();values.add(n);return new Data(values,label);}
+          fnc make_pair():Pair{val Data left=make_data(13,"left");val Data right=make_data(29,"right");return new Pair(7,left,11,right);}
+          fnc add_data(borrow Data a,borrow Data b):int{return a.read()+b.read();}
+          pub fnc main():int{val Pair pair=make_pair();return pair.leading==7&&pair.gap==11&&pair.left.label=="left"&&pair.right.label=="right"&&add_data(rt borrow pair.left,rt borrow pair.right)==42?0:1;}"#, ""),
+        ("imported-nested-owned-capture", r#"import module captures from './captures.ores';pub routine main():int{return captures.verify_capture();}"#, "id\n"),
+        ("nested-immutable-record-array-iteration", r#"define class Leaf as pub val int code;pub read():int{return self.code;}end define class Outer as pub val Leaf leaf;end
+          define class Counter as pub let int sum=0;end
+          pub fnc main():int{val Array<Outer> values=new Array<Outer>();values.add(new Outer(new Leaf(7)));values.add(new Outer(new Leaf(11)));let mut Counter count=new Counter();for(const item of values){count.sum=count.sum+item.leaf.read();}return count.sum==18?0:1;}"#, ""),
+        ("nested-owned-capture-return-and-move", include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
+        ("nested-constructor-result-and-grandchild", r#"define class Data as pub val Array<int> values;pub val String label;pub read():int{return self.values.get(0);}end
+          define class Envelope as pub val Data data;pub val int tag;pub read():int{return self.data.read();}end
+          define class Root as pub val Envelope envelope;pub read():int{return self.envelope.read();}end
+          fnc make_envelope():Envelope{val Array<int> values=new Array<int>();values.add(42);val Data data=new Data(values,"nested");return new Envelope(data,7);}
+          fnc make_root():Root{val Envelope envelope=make_envelope();return new Root(envelope);}
+          fnc read_data(borrow Data data):int{return data.read();}
+          pub routine main():int{val Root root=make_root();return root.read()==42&&read_data(rt borrow root.envelope.data)==42&&root.envelope.tag==7&&root.envelope.data.label=="nested"?0:1;}"#, ""),
+        ("nested-projection-exclusively-mutates-array", r#"define class Data as pub val Array<int> values;pub edit(mut self)(int value):void{self.values.set(0,value);return;}end
+          define class Outer as pub val Data data;end
+          pub routine main():int{val Array<int> values=new Array<int>();values.add(1);val Data data=new Data(values);val Outer outer=new Outer(data);outer.data.edit(42);return outer.data.values.get(0)==42?0:1;}"#, ""),
+        ("nested-immutable-scalar-result", r#"define class Leaf as pub val String name;pub read():String{return self.name;}end
+          define class Outer as pub val Leaf leaf;pub read():String{return self.leaf.read();}end
+          fnc make_outer():Outer{val Leaf leaf=new Leaf("value");return new Outer(leaf);}
+          pub routine main():int{val Outer outer=make_outer();return outer.read()=="value"&&outer.leaf.name=="value"?0:1;}"#, ""),
+        ("imported-module-routing-validation", r#"import module paths from './paths.ores';pub routine main():int{return paths.verify_paths();}"#, ""),
+        ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
+          fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
+          pub fnc main():int{let mut Counter counter=new Counter();update(rt borrow mut counter);return counter.value==99?0:1;}"#, ""),
+        ("foreach-return-releases-loan-before-defer", r#"define class Box as pub val Array<int> values;pub let int code=7;end
+          fnc pick(borrow mut Box owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt borrow mut owner);return selected==7&&owner.code==99?0:1;}"#, ""),
+        ("index-loop-branch-exits-and-string-result", r#"fnc choose_text(bool first):String{for(let int index=0;index<1;index=index+1){if(first){val String result="yes";return result;}else{val String result="no";return result;}fi}return "empty";}
+          pub fnc main():int{return choose_text(true)=="yes"&&choose_text(false)=="no"?0:1;}"#, ""),
+        ("index-loop-update-order-and-zero-iterations", r#"define class Counter as pub let int value=0;end
+          pub fnc main():int{let mut Counter counter=new Counter();for(let int index=0;index<4;index=index+1){counter.value=counter.value+index;}
+          for(let int index=4;index<4;index=index+1){counter.value=999;}return counter.value==6?0:1;}"#, ""),
+        ("actual-routing-path-validation", include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
+        ("foreach-return-unwinds-scopes", r#"fnc first(bool fill):int{val Array<int> values=new Array<int>();if(fill){values.add(42);}else{}fi for(const item of values){return item;}return 0;}pub fnc main():int{return first(true)==42&&first(false)==0?0:1;}"#, ""),
+        ("index-return-snapshot-before-deferred-field-write", r#"define class Counter as pub let int value=7;end
+          fnc choose(borrow mut Counter counter):int{defer counter.value=99;for(let int index=0;index<3;index=index+1){if index==1;then val int selected=counter.value;return selected;fi}return -1;}
+          pub fnc main():int{let mut Counter counter=new Counter();val selected:int=choose(rt borrow mut counter);return selected==7&&counter.value==99?0:1;}"#, ""),
         ("nested-read-loans-release-after-loop", r#"define class Counter as pub let int total=0;end
           pub routine main():int{val Array<int> values=new Array<int>();values.add(1);values.add(2);let mut Counter counter=new Counter();
           for(const first of values){for(const second of values){counter.total=counter.total+first+second;}}values.add(3);return counter.total==12&&values.size==3?0:1;}"#, ""),
@@ -67,6 +198,32 @@ fn main() {
           b.add(30);return count.value==69&&b.size==3?0:1;}"#, ""),
 
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
+        ("user-two-argument-println",
+            r#"import class Foo from './main-1.ores';
+               pub routine main():int {
+                 stdio.println("hello world");
+                 val Foo f = new Foo();
+                 val string x = f.bar();
+                 stdio.println("x", x);
+                 return 0;
+               }"#,
+            "hello world\nxhiiii 2hiiii\n"),
+        ("variadic-console-evaluation-order",
+            r#"fnc mark(string s):string{stdio.print(s);return s;}
+               pub routine main():int{
+                 stdio.println(mark("a"), mark("b"), "c");
+                 return 0;
+               }"#,
+            "ababc\n"),
+        ("variadic-print-utf8-nul",
+            r#"pub routine main():int{
+                 stdio.print("A", "\u0000", "é");
+                 return 0;
+               }"#,
+            "A\0é"),
+        ("variadic-console-at-boundary-32",
+            r#"pub fnc main():int{stdio.println("x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x");return 0;}"#,
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"),
         (
             "imported-owning-class-return",
             r#"import class Box from './owned-box.ores';
@@ -251,6 +408,39 @@ fn main() {
             "health\nmissing\nmethod\n",
         ),
         (
+            "template-quote-vectors",
+            r#"pub fnc main():int{
+                stdio.print("abc");stdio.print("|");
+                stdio.print("'abc'");stdio.print("|");
+                stdio.print('\"abc\"');stdio.print("|");
+                stdio.print(`'\"abc\"'`);return 0;}"#,
+            "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "template-two-parameter-interpolation",
+            r#"fnc render(string bar,string star):string{return `${bar} is ${star}`;}
+              pub fnc main():int{stdio.println(render("Mars","bright"));return 0;}"#,
+            "Mars is bright\n",
+        ),
+        (
+            "template-nested-expression-and-quotes",
+            r#"pub fnc main():int{val string word="ok";stdio.print(`before:${`inside:${word}`}:after`);
+              stdio.print("|");stdio.print(`${"}"+"{"}`);return 0;}"#,
+            "before:inside:ok:after|}{",
+        ),
+        (
+            "template-escapes",
+            r#"pub fnc main():int{stdio.print(`line\n\t\${literal}\`\u00e9`);return 0;}"#,
+            "line\n\t${literal}`é",
+        ),
+        (
+            "template-left-to-right-once",
+            r#"fnc first():string{stdio.print("1");return "A";}
+              fnc second():string{stdio.print("2");return "B";}
+              pub fnc main():int{stdio.print(`${first()}-${second()}`);return 0;}"#,
+            "12A-B",
+        ),
+        (
             "source-effect-order",
             r#"fnc mark():string{stdio.print("method;");return "a";}
           pub fnc main():int{stdio.print("before;");val string a=mark();stdio.print("after;");
@@ -286,12 +476,33 @@ fn main() {
         "sum(rt borrow parent,rt borrow child)",
         "sum(right:rt borrow child,left:rt borrow parent)",
     );
-    let native_only = [("named-borrows-distinguish-array-regions", named_source.as_str(), "")];
+    // The pinned Java parser still requires an initializer for final class fields.
+    let native_only = [
+        // Java currently treats variant calls in field defaults as unproven
+        // effects; native lowering recognizes literal compiler-owned variants.
+        ("literal-sum-field-defaults", r#"define class Holder as pub val Option<int> missing=None;pub val Option<bool> available=Some(false);pub val Result<String,int> result=Err(0);end pub routine main():int{val Holder holder=new Holder();return holder.missing.is_none()&&holder.available.is_some()&&!holder.available.unwrap()&&holder.result.is_err()?0:1;}"#, ""),
+        ("named-borrows-distinguish-array-regions", named_source.as_str(), ""),
+        ("readonly-nested-child-retains-read-access", r#"define class Data as pub val Array<int> values;pub read():int{return self.values.get(0);}end define class Outer as pub final Data child;end
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(42);val Data child=new Data(values);val Outer outer=new Outer(child);return outer.child.read()==42&&outer.child.values.size==1?0:1;}"#, ""),
+    ];
     let mut comparisons = 0;
-    for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).enumerate() {
+    let mut guest_address_checks = false;
+    let panics = [
+        ("sum-none-unwrap-controlled-abort", "pub routine main():int{val Option<int> item=None;return item.unwrap();}", ""),
+        ("sum-err-unwrap-controlled-abort", "pub routine main():int{val Result<int,String> item=Err(\"missing\");return item.unwrap();}", ""),
+    ];
+    for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
+        let expects_panic = case_index >= positives.len() + native_only.len();
         fs::write(scratch.0.join("main.ores"), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class Box as pub val Array<int> values;pub copy():Box{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new Box(copied);}end").unwrap();
+        let captures_fixture = include_str!("fixtures/native-class-string/nested-owned-capture.ores")
+            .replace("pub routine main():int", "pub fnc verify_capture():int");
+        fs::write(scratch.0.join("captures.ores"), format!("define module captures as\n{captures_fixture}\nend\n")).unwrap();
+        let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
+            .replace("pub routine main(): int", "pub fnc verify_paths(): int");
+        fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
         let path = scratch.0.join("main.ores");
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
@@ -306,13 +517,34 @@ fn main() {
             if let Some((label, _)) = line.split_once(':') {
                 if !line.starts_with(' ') { block = label; }
             }
-            if line.contains(".arm.stack") && line.contains("alloca ") {
+            if [".arm.stack", "record.fields", "record.argument", "sum.fields"].iter().any(|name| line.contains(name)) && line.contains("alloca ") {
                 assert_eq!(block, "entry", "{name}: scope slot allocated on a control-flow edge");
             }
         }
         let ir = scratch.0.join("program.ll");
         let binary = scratch.0.join("program");
-        fs::write(&ir, generated.stdout).unwrap();
+        let raw_ir = std::str::from_utf8(&generated.stdout).unwrap();
+        // Clang's -fsanitize flag alone does not mark imported LLVM IR
+        // functions for ASan. Mark every definition, then verify that actual
+        // guest-memory check calls are emitted (not just runtime linking).
+        let checked_ir = if sanitize {
+            raw_ir.lines().map(|line| {
+                if line.starts_with("define ") {
+                    format!("{} sanitize_address {{\n", line.strip_suffix('{').expect("function definition"))
+                } else { format!("{line}\n") }
+            }).collect::<String>()
+        } else { raw_ir.to_owned() };
+        fs::write(&ir, checked_ir).unwrap();
+        if sanitize && *name == "nested-constructor-result-and-grandchild" {
+            let checked = run(Command::new(&clang).args(["-O1", "-S", "-emit-llvm", "-fsanitize=address", "-x", "ir"])
+                .arg(&ir).args(["-o", "-"]));
+            assert!(checked.status.success(), "guest ASan: {}", String::from_utf8_lossy(&checked.stderr));
+            let instrumented = String::from_utf8_lossy(&checked.stdout);
+            assert!(["call void @__asan_report_load8", "call void @__asan_report_store8",
+                "call void @__asan_report_load_n", "call void @__asan_report_store_n"].iter().any(|call| instrumented.contains(call)),
+                "guest LLVM memory accesses were not instrumented");
+            guest_address_checks = true;
+        }
         if binary.exists() {
             fs::remove_file(&binary).unwrap();
         }
@@ -345,6 +577,13 @@ fn main() {
         );
         for _ in 0..5 {
             let native = run(&mut Command::new(&binary));
+            if expects_panic {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(native.status.signal(), Some(6), "{name}: expected explicit SIGABRT: {}", String::from_utf8_lossy(&native.stderr));
+                assert!(native.stdout.is_empty());
+                assert!(native.stderr.is_empty(), "{name}: unexpected memory/runtime failure: {}", String::from_utf8_lossy(&native.stderr));
+                continue;
+            }
             assert_eq!(
                 native.status.code(),
                 Some(0),
@@ -358,8 +597,13 @@ fn main() {
                 String::from_utf8_lossy(&native.stderr)
             );
         }
-        if let Some(launcher) = java.as_ref().filter(|_| case_index < positives.len()) {
+        if let Some(launcher) = java.as_ref().filter(|_| case_index < positives.len() || expects_panic) {
             let reference = run(Command::new(launcher).arg(&path));
+            if expects_panic {
+                assert!(!reference.status.success(), "Java {name}: invalid unwrap succeeded");
+                comparisons += 1;
+                continue;
+            }
             assert_eq!(
                 reference.status.code(),
                 Some(0),
@@ -370,6 +614,12 @@ fn main() {
             comparisons += 1;
         }
     }
+    check_sum_boundary(&compiler, &clang, &runtime, &scratch.0, sanitize);
+    fs::write(scratch.0.join("sum-rt.ores"), "fnc relay(Option<int> item):Option<int>{return item;}pub fnc main():int{return 0;}").unwrap();
+    let rt = run(Command::new(&compiler).args(["--rt-check", "--rt-entry=relay/1"]).arg(scratch.0.join("sum-rt.ores")));
+    assert_eq!(rt.status.code(), Some(1), "sum passthrough cannot be hard-RT certified");
+    let report = String::from_utf8(rt.stdout).unwrap();
+    assert!(report.contains("\"source_admitted\": false") && report.contains("RT009_SCHEDULING_UNPROVEN") && !report.contains("define "), "sum RT did not return a refusal report: {report}");
     let mut standalone_runs = 0;
     if let Some(driver) = &aot_driver {
         #[cfg(unix)] {
@@ -402,6 +652,9 @@ fn main() {
           fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
           pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
         for (source, expected) in [
+            (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
+            (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
+            (include_str!("fixtures/native-class-string/routing-path-validation.ores"), ""),
             (include_str!("fixtures/native-class-string/typed-array-iteration.ores"), "foo\nid\n"),
             (scalar_record, ""),
             (owning_int, ""),
@@ -424,6 +677,64 @@ fn main() {
         }
     }
     let negatives = [
+        ("sum-contract-not-int-parameter", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(Option<int> value):int{return 0;}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
+        ("sum-contract-not-int-result", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(int value):Option<int>{return Some(value);}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
+        ("sum-cannot-reorder-legacy-return-guards", "fnc bad():Option<int>{if(true){return Some(1);}fi if true;then return Some(2);fi return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-cannot-forge-from-int", "pub fnc main():int{val Option<int> item=1;return 0;}".to_owned(), foo.to_owned()),
+        ("sum-cannot-return-as-int", "pub fnc main():int{val Option<int> item=Some(1);return item;}".to_owned(), foo.to_owned()),
+        ("sum-cannot-use-as-bool", "pub fnc main():int{val Option<bool> item=Some(true);return item?0:1;}".to_owned(), foo.to_owned()),
+        ("sum-cannot-cross-payload-types", "fnc read(Option<int> item):int{return item.unwrap();}pub fnc main():int{val Option<bool> item=Some(true);return read(item);}".to_owned(), foo.to_owned()),
+        ("sum-cannot-cross-error-types", "fnc read(Result<int,String> item):int{return item.unwrap();}pub fnc main():int{val Result<int,bool> item=Ok(1);return read(item);}".to_owned(), foo.to_owned()),
+        ("sum-wrong-variant", "pub fnc main():int{val Option<int> item=Ok(1);return 0;}".to_owned(), foo.to_owned()),
+        ("sum-wrong-payload", "pub fnc main():int{val Option<int> item=Some(true);return 0;}".to_owned(), foo.to_owned()),
+        ("sum-wrong-error-payload", "pub fnc main():int{val Result<int,String> item=Err(1);return 0;}".to_owned(), foo.to_owned()),
+        ("sum-wrong-fallback", "pub fnc main():int{val Option<int> item=None;return item.unwrap_or(true);}".to_owned(), foo.to_owned()),
+        ("sum-wrong-method", "pub fnc main():int{val Option<int> item=None;return item.is_err()?0:1;}".to_owned(), foo.to_owned()),
+        ("sum-wrong-method-arity", "pub fnc main():int{val Option<int> item=None;return item.is_none(1)?0:1;}".to_owned(), foo.to_owned()),
+        ("sum-wrong-constructor-arity", "pub fnc main():int{val Option<int> item=Some(1,2);return 0;}".to_owned(), foo.to_owned()),
+        ("sum-no-inferred-none", "pub fnc main():int{val item=None;return 0;}".to_owned(), foo.to_owned()),
+        ("sum-no-nominal-shadow", "define class Option as val int value;end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-owned-class-payload-boundary", "define class Box as val Array<int> values;end fnc bad():Option<Box>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-nested-payload-boundary", "fnc bad():Option<Option<int>>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-not-os-status", "pub fnc main():Option<int>{return Some(0);}".to_owned(), foo.to_owned()),
+        ("sum-constructor-cannot-reinterpret-scalar", "define class Box as val Option<int> item;constructor(int item){self.item=item;}end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("nested-explicit-constructor-cannot-reinterpret-scalar", r#"define class Child as pub val int value;end define class Outer as val Child child;constructor(int child){self.child=child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-depth-forward-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
+        ("nested-depth-reverse-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).rev().map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
+        ("nested-expanded-layout-bound", format!("define class Child as {}end define class Outer as val Child child;val int extra;end pub fnc main():int{{return 0;}}", (0..16).map(|i| format!("val int field_{i};")).collect::<String>()), foo.to_owned()),
+        ("final-primitive-projection-cannot-borrow-mut", r#"define class Counter as pub val int value;end fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val Counter counter=new Counter(1);return observe(rt borrow mut counter.value);}"#.to_owned(), foo.to_owned()),
+        ("readonly-child-edge-cannot-borrow-mut", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);edit(rt borrow mut outer.child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("readonly-child-edge-cannot-mutate-array", r#"define class Child as pub val Array<int> values;end define class Outer as pub final Child child;end pub fnc main():int{val Array<int> values=new Array<int>();val Child child=new Child(values);val Outer outer=new Outer(child);outer.child.values.add(1);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-duplicate-child-owner", r#"define class Child as pub val Array<int> values;end define class Pair as val Child first;val Child second;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Pair pair=new Pair(child,child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-child-use-after-move", r#"define class Child as pub val Array<int> values;end define class Outer as val Child child;end pub fnc main():int{val Array<int> a=new Array<int>();val Child child=new Child(a);val Outer outer=new Outer(child);return child.values.size;}"#.to_owned(), foo.to_owned()),
+        ("nested-borrowed-child-consumption", r#"define class Child as pub val Array<int> values;end define class Outer as val Child child;end fnc bad(borrow Child child):int{val Outer outer=new Outer(child);return 0;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-wrong-nominal-child", r#"define class A as pub val int value;end define class B as pub val int value;end define class Outer as val A child;end pub fnc main():int{val B child=new B(1);val Outer outer=new Outer(child);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-integer-forged-child", r#"define class Child as pub val int value;end define class Outer as val Child child;end pub fnc main():int{val Outer outer=new Outer(1);return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-parent-private-edge", r#"define class Child as pub val int value;end define class Outer as val Child child;end pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return outer.child.value;}"#.to_owned(), foo.to_owned()),
+        ("nested-child-private-edge", r#"define class Child as val int value;end define class Outer as pub val Child child;pub leak():int{return self.child.value;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-private-child-loan", r#"define class Child as pub val int value;end define class Outer as val Child child;end fnc read(borrow Child child):int{return child.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return read(rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
+        ("nested-shared-to-exclusive-escalation", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;end fnc edit(borrow mut Child child):void{child.values.add(1);return;}fnc bad(borrow Outer outer):void{edit(rt borrow mut outer.child);return;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-projection-alias-conflict", r#"define class Child as pub val int value;end define class Outer as pub val Child child;end fnc pair(borrow mut Child a,borrow Child b):int{return b.value;}pub fnc main():int{val Child child=new Child(1);val Outer outer=new Outer(child);return pair(rt borrow mut outer.child,rt borrow outer.child);}"#.to_owned(), foo.to_owned()),
+        ("nested-owning-field-cannot-escape-by-value", r#"define class Child as pub val Array<int> values;end define class Outer as pub val Child child;pub leak():Child{return self.child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-cycle", r#"define class Node as val Node child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-indirect-cycle", r#"define class A as val B child;end define class B as val A child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-mutable-child-slot", r#"define class Child as pub let int value=1;end define class Outer as val Child child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-fieldless-identity", r#"define class Empty as end define class Outer as val Empty child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("nested-unknown-child-type", r#"define class Outer as val Missing child;end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+
+        ("index-loop-shadows-live-local", r#"pub fnc main():int{val index:int=0;for(let int index=0;index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-counter-escape", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){}return index;}"#.to_owned(), foo.to_owned()),
+        ("index-initializer-wrong-type", r#"pub fnc main():int{for(let int index="bad";index<1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-condition-wrong-type", r#"pub fnc main():int{for(let int index=0;index+1;index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-update-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=true){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-updates-other-counter", r#"pub fnc main():int{val other:int=0;for(let int index=0;index<1;other=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-backedge-consumes-outer", r#"fnc consume(int n):void{return;}pub fnc main():int{val external_value:int=42;for(let int index=0;index<2;index=index+1){consume(rt take external_value);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("index-condition-consumes-counter", r#"fnc yes(int n):bool{return true;}pub fnc main():int{for(let int index=0;yes(rt take index);index=index+1){}return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-return-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){return true;}return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-return-ownership-transfer", r#"pub fnc main():int{val external_value:int=42;for(let int index=0;index<1;index=index+1){return rt take external_value;}return 0;}"#.to_owned(), foo.to_owned()),
+        ("late-defer-after-conditional-return", r#"fnc cleanup():void{return;}pub fnc main():int{for(let int index=0;index<1;index=index+1){return 0;}defer cleanup();return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-owning-class-return", r#"define class Box as pub val Array<int> values;end fnc bad():Box{val Array<int> values=new Array<int>();val Box box=new Box(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+
         ("iteration-backedge-consumes-scalar-owner", r#"fnc consume(int value):void{return;}pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val outer:int=42;for(const item of values){consume(rt take outer);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-record-alias-without-borrow", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const item of a){val Item other=item;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source", r#"pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);for(const n of a){a.add(n);}return 0;}"#.to_owned(), foo.to_owned()),
@@ -438,7 +749,6 @@ fn main() {
         ("scoped-mutable-record-snapshot", r#"define class Item as pub let int value=1;end pub fnc main():int{val Item i=new Item();if(true){val Item j=i;}else{}fi return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-write", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const n of a){n.value=2;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-break-without-cleanup", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){break;}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-return-without-cleanup", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){return n;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-non-array-source", r#"pub fnc main():int{val int a=1;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
 
         ("owning-return-duplicate-array", "define class Pair as val Array<int> a;val Array<int> b;end fnc bad():Pair{val Array<int> values=new Array<int>();return new Pair(values,values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
@@ -496,6 +806,26 @@ fn main() {
             foo.to_owned(),
         ),
         (
+            "template-non-string-interpolation",
+            r#"pub fnc main():int{val string x=`${5}`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-empty-interpolation",
+            r#"pub fnc main():int{val string x=`${   }`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-invalid-escape",
+            r#"pub fnc main():int{val string x=`\q`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-unclosed-interpolation",
+            r#"pub fnc main():int{val string x=`${"x"`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
             "private-method",
             exact.replace("f.bar()", "f.foo()"),
             foo.to_owned(),
@@ -528,6 +858,17 @@ fn main() {
         (
             "bad-concat",
             r#"pub fnc main():int{val string x="bad"+true;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-type-mismatch",
+            r#"pub fnc main():int{stdio.println("a", 2);return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-too-many-args",
+            format!("pub fnc main():int{{stdio.println({});return 0;}}",
+                    vec!["\"x\""; 33].join(",")),
             foo.to_owned(),
         ),
         (
@@ -569,6 +910,8 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
+            "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
+            "sum-contract-not-int-result" => Some("contract requires int return"),
             "owning-return-duplicate-array" => Some("live unique array"),
             "owning-return-borrowed-field" => Some("named lexical array"),
             "owning-return-deferred-source-reuse" => Some("borrow of moved class"),
@@ -602,6 +945,74 @@ fn main() {
             "{name}: internal compiler failure"
         );
     }
+    let mut interpolation_bomb =
+        "pub fnc main():int{val string x=`".to_owned();
+    for _ in 0..1025 { interpolation_bomb.push_str("${\"x\"}"); }
+    interpolation_bomb.push_str("`;return 0;}");
+
+    let brace_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{}0{}}}`;return 0;}}",
+        "{".repeat(257),
+        "}".repeat(257),
+    );
+
+    let mut nested = "\"x\"".to_owned();
+    for _ in 0..34 { nested = format!("`${{{nested}}}`"); }
+    let nesting_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{nested}}}`;return 0;}}"
+    );
+
+    for (name, source, diagnostic) in [
+        ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
+        ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
+        ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
+    ] {
+        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        assert_eq!(rejected.status.code(), Some(1), "{name}: must fail closed");
+        assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(diagnostic),
+            "{name}: wrong diagnostic: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
+    // Native module admission must bind to the opened regular-file inode.
+    // FIFOs must not block compilation; a hard-link alias must not bypass
+    // self-import detection. Ordinary regular symlinks remain supported.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let entry = scratch.0.join("main.ores");
+        let imported = scratch.0.join("main-1.ores");
+        let library = scratch.0.join("library.ores");
+        fs::write(&entry, exact).unwrap();
+        fs::remove_file(&imported).unwrap();
+
+        let made_fifo = Command::new("mkfifo").arg(&imported).status().unwrap();
+        assert!(made_fifo.success(), "could not prepare FIFO import test");
+        run_bounded_no_ir(Command::new(&compiler).arg(&entry),
+                          &scratch.0, "FIFO import");
+        fs::remove_file(&imported).unwrap();
+
+        fs::hard_link(&entry, &imported).unwrap();
+        let rejected = run(Command::new(&compiler).arg(&entry));
+        assert_eq!(rejected.status.code(), Some(1), "self hard-link import admitted");
+        assert!(rejected.stdout.is_empty(), "self hard-link import emitted partial IR");
+        fs::remove_file(&imported).unwrap();
+
+        fs::write(&library, foo).unwrap();
+        symlink("library.ores", &imported).unwrap();
+        let allowed = run(Command::new(&compiler).arg(&entry));
+        assert!(
+            allowed.status.success() && !allowed.stdout.is_empty(),
+            "regular symlink import should remain supported: {}",
+            String::from_utf8_lossy(&allowed.stderr)
+        );
+        fs::remove_file(&imported).unwrap();
+        fs::remove_file(&library).unwrap();
+    }
     fs::write(
         scratch.0.join("main.ores"),
         r#"pub fnc main():int{stdio.print("host only");return 0;}"#,
@@ -628,5 +1039,7 @@ fn main() {
             String::from_utf8_lossy(&rejected.stderr)
         );
     }
-    println!("PASS class/string parity: {} common-source positives, {} native-only positives (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), negatives.len());
+    assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
+    if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
+    println!("PASS class/string parity: {} common-source positives, {} native-only positives, {} controlled-panic cases (five native executions each), {} no-IR rejections plus two target boundaries and two Unix filesystem boundary rejections, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), panics.len(), negatives.len());
 }
