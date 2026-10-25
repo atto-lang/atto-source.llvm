@@ -1581,6 +1581,20 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-mailbox-completion-stress-test)
     set_tests_properties(native_actor_mailbox_completion_stress PROPERTIES TIMEOUT 90)
 
+    # Independent per-frame oracle for randomized prepare/publish/rollback,
+    # out-of-order completion and terminal abort across window sizes 1..64.
+    add_executable(oreslang-actor-mailbox-randomized-model-test
+        tests/native_actor_mailbox_randomized_model_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-randomized-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-mailbox-randomized-model-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-mailbox-randomized-model-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-randomized-model-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_randomized_model
+        COMMAND oreslang-actor-mailbox-randomized-model-test)
+    set_tests_properties(native_actor_mailbox_randomized_model PROPERTIES TIMEOUT 30)
+
     # End-to-end host lifecycle proof across priority dequeue, STOP/detach,
     # queued terminal abort, checked-out ACK, resource-loan drain and DONE.
     add_executable(oreslang-native-actor-mailbox-lifecycle-test
