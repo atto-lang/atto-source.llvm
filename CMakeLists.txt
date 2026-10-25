@@ -557,6 +557,15 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Executable Oreslang method fixtures, using Rust-only tooling.
+    if(ORE_CLANG)
+        add_test(NAME native_inline_self_receiver_arity_aot
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+                native-inline-self-arity
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}")
+        set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
@@ -3268,4 +3277,19 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-record-region-test PRIVATE Threads::Threads)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
+endif()
+
+# Receiver-elided source overload selector; this C++ unit is intentionally
+# independent of LLVM libraries and can be compiled on minimal hosts.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-callable-selector-test
+        tests/native_callable_selector_test.cpp)
+    target_include_directories(oreslang-native-callable-selector-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-callable-selector-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-callable-selector-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_callable_selector_source_arity
+        COMMAND oreslang-native-callable-selector-test)
+    set_tests_properties(native_callable_selector_source_arity PROPERTIES TIMEOUT 10)
 endif()

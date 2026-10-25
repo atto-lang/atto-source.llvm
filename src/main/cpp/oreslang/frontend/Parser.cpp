@@ -1,3 +1,4 @@
+#include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/OwnershipChecker.hpp"
@@ -139,7 +140,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -667,13 +668,18 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
+            // Formatter may insert 'mtd', but method identity and receiver
+            // erasure must remain unchanged. Never consume it as a class field.
+            const bool method_marker = accept("mtd");
             const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
+            if (method_marker && !method_ahead)
+                fail("native mtd marker must precede a method signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
                 signature.name = method.name.substr(result.name.size() + 1);
-                signature.arity = method.parameters.size() - 1;
+                signature.arity = native_source_value_arity(method.parameters.size(), true);
                 signature.public_member = publicly_visible;
                 signature.mutable_receiver = method.parameters.front().mode == Parameter::Mode::BorrowMut;
                 for (const auto& prior : result.methods)
@@ -983,10 +989,26 @@ private:
             Parameter receiver;
             receiver.name = "self"; receiver.class_name = owner; receiver.mode = Parameter::Mode::Borrow;
             if (accept("mut")) {
-                require("self"); require(")"); require("(");
+                require("self");
                 receiver.mode = Parameter::Mode::BorrowMut;
-            } else if (token_.text == "self") {
-                fail("native explicit read receiver type unsupported; omit self for a read method");
+                if (accept(",")) {
+                    if (token_.text == ")")
+                        fail("native explicit self receiver must be followed by a parameter after ','");
+                } else if (token_.text == ")" && peek_next().text == "(") {
+                    // Keep legacy method(mut self)(params) syntax.
+                    require(")"); require("(");
+                } else if (token_.text != ")") {
+                    fail("native explicitly typed mutable self receiver unsupported");
+                }
+            } else if (accept("self")) {
+                // The receiver already occupies the first hidden ABI parameter.
+                // A declaration-level self marker consumes no source argument.
+                if (accept(",")) {
+                    if (token_.text == ")")
+                        fail("native explicit self receiver must be followed by a parameter after ','");
+                } else if (token_.text != ")") {
+                    fail("native explicitly typed read self receiver unsupported");
+                }
             }
             value.parameters.push_back(std::move(receiver));
         }
@@ -1027,7 +1049,8 @@ private:
         }
         for (const auto& parameter : value.parameters)
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
-        if (!accept(":")) require("->");
+        const bool arrow_return_type = !accept(":");
+        if (arrow_return_type) require("->");
         value.returns_void = accept("void");
         if (!value.returns_void) {
             if (accept("int")) {
@@ -1071,6 +1094,32 @@ private:
         if (accept("requires")) {
             // Never accept an uncertified realtime property as a mere annotation.
             fail("native requires clause awaits verified WCET/allocation/blocking analysis");
+        }
+        // End-delimited class methods use the same Function / hidden-receiver
+        // representation as braced methods. Until general structured-body
+        // lowering is shared, permit only an empty/return-only void body or
+        // one scalar terminal return; reject every other statement.
+        // This is not an alternate arity or method ABI.
+        if (token_.text == "::") {
+            if (owner.empty()) fail("native '::' body requires a class method");
+            if (!arrow_return_type)
+                fail("native '::' method requires '->' return syntax");
+            require("::");
+            if (value.returns_void) {
+                if (accept("return")) {
+                    if (!accept(";") && token_.text != "end")
+                        fail("native end-delimited void method requires terminal return");
+                }
+            } else {
+                require("return");
+                value.result = expression();
+                if (!accept(";") && token_.text != "end")
+                    fail("native end-delimited method requires terminal return");
+            }
+            if (token_.text != "end")
+                fail("native end-delimited method supports only one terminal return");
+            require("end");
+            return value;
         }
         require("{");
         auto array_effect_ahead = [&] {
@@ -1551,10 +1600,12 @@ private:
                 }
                 continue;
             }
-            // A void program entrypoint may fall through with success status 0.
-            // Other functions retain their existing explicit-return requirement.
+            // Instance void methods may have empty bodies or fall through,
+            // just as in the Java reference frontend. The native entrypoint
+            // also retains its existing implicit-success fallthrough. Non-void
+            // functions continue to require an explicit final return.
             if (token_.text == "}" && value.returns_void &&
-                    value.name == "main" && value.parameters.empty()) {
+                    ((!owner.empty()) || (value.name == "main" && value.parameters.empty()))) {
                 require("}");
                 return value;
             }
