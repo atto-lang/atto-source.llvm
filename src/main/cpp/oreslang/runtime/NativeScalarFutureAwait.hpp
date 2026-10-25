@@ -104,8 +104,9 @@ public:
         for (;;) {
             if (observed == Phase::settling)
                 return true; // settle() will publish CANCELLED before returning.
-            if (observed == Phase::running || observed == Phase::completed
-                    || observed == Phase::cancelled)
+            if (observed == Phase::cancelled)
+                return true; // teardown is already reconciled.
+            if (observed == Phase::running || observed == Phase::completed)
                 return false;
             if (phase_.compare_exchange_weak(
                     observed, Phase::cancelled,
