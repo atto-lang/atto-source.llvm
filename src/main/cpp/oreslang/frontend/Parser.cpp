@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <functional>
 #include <cctype>
 #include <stdexcept>
@@ -1994,9 +1995,45 @@ private:
             }
             return result;
         }
+        if (token_.text == "+") {
+            // Unary plus is an int-only identity, not a truthy or String
+            // coercion. Reuse typed addition with a side-effect-free zero
+            // operand: the existing scalar checker then rejects +bool and
+            // +String before any LLVM IR is published. Nested plus remains
+            // subject to the same expression-depth budget as unary minus.
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::Add, offset);
+            expr->left = make_expression(Expression::Kind::Integer, offset);
+            expr->left->integer = 0;
+            expr->right = unary();
+            return expr;
+        }
         if (token_.text == "-") {
             const auto offset = token_.offset;
             advance();
+            // Exact i64 minimum has positive magnitude 2^63, so it cannot
+            // first pass the positive signed-literal parser. Keep the
+            // exception local to a directly negated, valid decimal token.
+            // Padded leading-zero spellings are valid only when separated
+            // by a digit on both sides of each underscore.
+            if (token_.kind == Kind::Integer) {
+                std::string digits(token_.text);
+                if (!digits.empty() && digits.back() != '_' &&
+                    digits.find("__") == std::string::npos) {
+                    digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                    // Zero-padded decimal spellings denote the same magnitude.
+                    // Removing the padding only inside the direct-negation
+                    // exception preserves all positive i64 overflow checks.
+                    digits.erase(0, digits.find_first_not_of('0'));
+                    if (digits == "9223372036854775808") {
+                        auto expr = make_expression(Expression::Kind::Integer, offset);
+                        expr->integer = std::numeric_limits<std::int64_t>::min();
+                        advance();
+                        return expr;
+                    }
+                }
+            }
             auto expr = make_expression(Expression::Kind::Negate, offset);
             expr->left = unary();
             return expr;
