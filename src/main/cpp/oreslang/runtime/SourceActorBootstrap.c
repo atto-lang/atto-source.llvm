@@ -776,8 +776,15 @@ int oreslang_source_actor_send_async_start_checked(
 
     SourceSendFuture* future = NULL;
     for (size_t i = 0; i < ORES_SOURCE_SEND_ASYNC_MAX_WAITERS; ++i) {
+        /*
+         * The source ABI exposes an opaque pointer, not a (slot,generation)
+         * pair. Never recycle a wrapper address within one actor lifetime:
+         * otherwise a stale trusted-host pointer could alias a newer Future.
+         * The current compiler admits at most one stored send Future; 256
+         * one-shot wrapper capabilities leave ample bounded headroom.
+         */
         if (!instance->send_futures[i].live
-                && instance->send_futures[i].generation != UINT64_MAX) {
+                && instance->send_futures[i].generation == 0) {
             future = &instance->send_futures[i];
             break;
         }
