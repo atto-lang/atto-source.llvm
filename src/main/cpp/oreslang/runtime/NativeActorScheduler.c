@@ -820,7 +820,7 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     return ref;
 }
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
-    OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
+        OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
     lock(s);
     OresNativeSendStatus status;
@@ -831,16 +831,17 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
-            status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
-                || !execution_slot_available_locked(s)) {
-            status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
-            /* enqueue_locked and stop() arbitrate under this same lock.
-             * A successful admission precedes stop, even if processing later
-             * fails; a stop that wins first is always rejected. */
-            if (enqueue_locked(s, (size_t)actor.actor_slot, payload)) {
+            /* Older async producers own first refusal on any free target
+             * credit. A racing synchronous sender may never steal it. */
+            service_async_sends_locked(s, (size_t)actor.actor_slot);
+            if (lane->queued + lane->active >= s->per_actor_capacity) {
+                status = ORES_NATIVE_SEND_MAILBOX_FULL;
+            } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+                    || !execution_slot_available_locked(s)) {
+                status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+            } else if (enqueue_locked(
+                    s, (size_t)actor.actor_slot, payload)) {
                 status = ORES_NATIVE_SEND_ACCEPTED;
             } else {
                 /* enqueue_locked already counted this rejected admission. */
@@ -850,19 +851,16 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         }
     }
     if (status != ORES_NATIVE_SEND_ACCEPTED && !counted_in_enqueue
-        && s->rejected != UINT64_MAX)
-        s->rejected++;
+            && s->rejected != UINT64_MAX)
+        ++s->rejected;
     unlock(s);
     return status;
 }
 OresNativeSendStatus ores_native_actor_scheduler_wait_send(
         OresNativeActorScheduler* s, OresNativeActorRef actor, uint64_t payload) {
     if (!s) return ORES_NATIVE_SEND_INVALID_REF;
-    /* This primitive is external-host only. A carrier of ANY scheduler
-     * must not block waiting for mailbox credit in this or another scheduler:
-     * cross-scheduler actor dependency cycles can deadlock both worker pools.
-     * The authenticated TLS execution pointer is non-NULL for every actor
-     * carrier turn, including one owned by a different scheduler. */
+    /* Compatibility host bridge only. A carrier of ANY scheduler must not
+     * park here; cooperative producer futures use submit_async instead. */
     if (executing != NULL) return ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
 
     lock(s);
@@ -875,33 +873,29 @@ OresNativeSendStatus ores_native_actor_scheduler_wait_send(
             ActorLane* lane = &s->actors[actor.actor_slot];
             if (s->retired || lane->retired) {
                 status = ORES_NATIVE_SEND_TERMINATED;
-            } else if (lane->queued + lane->active >= s->per_actor_capacity) {
-                /*
-                 * credit is broadcast only after an actual capacity-affecting
-                 * scheduler transition while this same mutex is held. The
-                 * failed FULL observation and cond-wait registration therefore
-                 * have no check-then-sleep lost-wakeup window.
-                 */
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-                ++lane->test_waiting_sends;
-#endif
-                if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-                if (!lane->test_waiting_sends) abort();
-                --lane->test_waiting_sends;
-#endif
-                continue;
-            } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
-                    || !execution_slot_available_locked(s)) {
-                status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
-            } else if (enqueue_locked(
-                    s, (size_t)actor.actor_slot, payload)) {
-                status = ORES_NATIVE_SEND_ACCEPTED;
             } else {
-                /* enqueue_locked already counted this terminal admission
-                 * failure (for example carrier growth/resource exhaustion). */
-                counted_in_enqueue = 1;
-                status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+                service_async_sends_locked(s, (size_t)actor.actor_slot);
+                if (lane->queued + lane->active >= s->per_actor_capacity) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+                    ++lane->test_waiting_sends;
+#endif
+                    if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+                    if (!lane->test_waiting_sends) abort();
+                    --lane->test_waiting_sends;
+#endif
+                    continue;
+                }
+                if (s->accepted >= UINT64_MAX - s->reserved_wakes
+                        || !execution_slot_available_locked(s)) {
+                    status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+                } else if (enqueue_locked(
+                        s, (size_t)actor.actor_slot, payload)) {
+                    status = ORES_NATIVE_SEND_ACCEPTED;
+                } else {
+                    counted_in_enqueue = 1;
+                    status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+                }
             }
         }
 
@@ -911,6 +905,171 @@ OresNativeSendStatus ores_native_actor_scheduler_wait_send(
         unlock(s);
         return status;
     }
+}
+OresNativeSendStatus ores_native_actor_scheduler_submit_async(
+        OresNativeActorScheduler* s, OresNativeActorRef target,
+        uint64_t payload, OresNativeAsyncSendTicket* out) {
+    if (!out) return ORES_NATIVE_SEND_INVALID_REF;
+    *out = (OresNativeAsyncSendTicket){0};
+    if (!s) return ORES_NATIVE_SEND_INVALID_REF;
+
+    lock(s);
+    if (!matching(s, target)) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_INVALID_REF;
+    }
+
+    ActorLane* lane = &s->actors[target.actor_slot];
+    if (s->retired || lane->retired) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_TERMINATED;
+    }
+
+    service_async_sends_locked(s, (size_t)target.actor_slot);
+
+    if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
+
+    size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
+    for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
+        AsyncSendCredit* candidate = &lane->async_sends[i];
+        if (candidate->state == ORES_NATIVE_ASYNC_SEND_INVALID
+                && candidate->generation != UINT64_MAX) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
+
+    const int must_wait = lane->async_pending != 0
+        || lane->queued + lane->active >= s->per_actor_capacity;
+    if (must_wait && lane->next_async_sequence == 0) {
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
+
+    AsyncSendCredit* credit = &lane->async_sends[slot];
+    ++credit->generation;
+    if (!credit->generation) abort();
+    credit->payload = payload;
+    credit->sequence = 0;
+    credit->outcome = ORES_NATIVE_SEND_MAILBOX_FULL;
+    ++lane->async_live;
+
+    *out = (OresNativeAsyncSendTicket){
+        .target = target,
+        .slot = slot,
+        .generation = credit->generation
+    };
+
+    if (!must_wait) {
+        if (enqueue_locked(s, (size_t)target.actor_slot, payload)) {
+            credit->state = ORES_NATIVE_ASYNC_SEND_READY;
+            credit->outcome = ORES_NATIVE_SEND_ACCEPTED;
+        } else {
+            credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
+            credit->outcome = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        }
+    } else {
+        credit->state = ORES_NATIVE_ASYNC_SEND_PENDING;
+        credit->sequence = lane->next_async_sequence;
+        lane->next_async_sequence = lane->next_async_sequence == UINT64_MAX
+            ? 0 : lane->next_async_sequence + 1;
+        ++lane->async_pending;
+    }
+
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
+    unlock(s);
+    /* ACCEPTED means Future creation succeeded; READY means message admission. */
+    return ORES_NATIVE_SEND_ACCEPTED;
+}
+
+int ores_native_actor_scheduler_async_send_status(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket,
+        OresNativeAsyncSendState* state_out,
+        OresNativeSendStatus* outcome_out) {
+    if (!s || !state_out || !outcome_out) return 0;
+    lock(s);
+    AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
+    if (!credit) {
+        unlock(s);
+        return 0;
+    }
+    *state_out = credit->state;
+    *outcome_out = credit->outcome;
+    unlock(s);
+    return 1;
+}
+
+int ores_native_actor_scheduler_await_async_send(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket,
+        OresNativeSendStatus* outcome_out) {
+    if (!s || !outcome_out || executing != NULL) return 0;
+    lock(s);
+    for (;;) {
+        AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
+        if (!credit) {
+            unlock(s);
+            return 0;
+        }
+        if (credit->state != ORES_NATIVE_ASYNC_SEND_PENDING) {
+            *outcome_out = credit->outcome;
+            unlock(s);
+            return 1;
+        }
+        if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
+    }
+}
+
+int ores_native_actor_scheduler_cancel_async_send(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
+    const int ok = credit && credit->state == ORES_NATIVE_ASYNC_SEND_PENDING;
+    if (ok) {
+        ActorLane* lane = &s->actors[ticket.target.actor_slot];
+        if (!lane->async_pending) abort();
+        --lane->async_pending;
+        credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
+        credit->outcome = ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
+        credit->sequence = 0;
+        if (pthread_cond_broadcast(&s->credit) != 0) abort();
+    }
+    unlock(s);
+    return ok;
+}
+
+int ores_native_actor_scheduler_release_async_send(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
+    const int ok = credit
+        && credit->state != ORES_NATIVE_ASYNC_SEND_PENDING
+        && credit->state != ORES_NATIVE_ASYNC_SEND_INVALID;
+    if (ok) {
+        ActorLane* lane = &s->actors[ticket.target.actor_slot];
+        if (!lane->async_live) abort();
+        --lane->async_live;
+        credit->state = ORES_NATIVE_ASYNC_SEND_INVALID;
+        credit->outcome = ORES_NATIVE_SEND_INVALID_REF;
+        credit->sequence = 0;
+        credit->payload = 0;
+        if (pthread_cond_broadcast(&s->credit) != 0) abort();
+    }
+    unlock(s);
+    return ok;
 }
 
 int ores_native_actor_scheduler_is_carrier_thread(void) {
