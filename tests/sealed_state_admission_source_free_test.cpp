@@ -141,6 +141,11 @@ int main() {
         catch (const std::runtime_error&) { ++rejected; return; }
         throw std::runtime_error("invalid legacy actor AST was admitted");
     };
+    // Mutation regression: a forged sealed loan with an otherwise valid
+    // legacy handler must still be rejected (no other missing data masks it).
+    reject_legacy([](Actor& a){
+        a.on_message.actor_state_loan=std::make_unique<Loan>();
+    });
     reject_legacy([](Actor& a){a.fields.clear();});
     reject_legacy([](Actor& a){a.fields.front().initializer.reset();});
     reject_legacy([](Actor& a){a.fields.front().name.clear();});
@@ -238,7 +243,7 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 6 || rejected != 79)
+    if (admitted != 6 || rejected != 80)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
