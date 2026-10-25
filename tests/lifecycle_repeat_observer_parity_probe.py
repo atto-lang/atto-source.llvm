@@ -25,7 +25,7 @@ def lifecycle_calls(ir, symbol):
     # LLVM prints a real call as "call i64 @..." (possibly with attributes).
     # Declarations, source comments and symbol-name text are not execution.
     pattern = re.compile(
-        r"\\bcall\\s+(?:[A-Za-z_0-9]+\\s+)+@" + re.escape(symbol) + r"\\s*\\("
+        r"\bcall\s+(?:[A-Za-z_0-9]+\s+)+@" + re.escape(symbol) + r"\s*\("
     )
     return [line for line in ir.splitlines()
             if not line.lstrip().startswith(";") and pattern.search(line)]
