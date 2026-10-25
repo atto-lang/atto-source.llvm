@@ -40,6 +40,10 @@ static void init_actor(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) 
     (void)heap; (void)domain; (void)epoch;
 }
 
+static int64_t passthrough_message(
+    OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
+    int64_t payload);
+
 static int64_t blocking_message(
         OresActorI64Heap* heap, uint64_t domain, uint64_t epoch,
         int64_t payload) {
