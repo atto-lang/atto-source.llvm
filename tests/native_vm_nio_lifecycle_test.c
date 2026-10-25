@@ -443,6 +443,17 @@ int main(void) {
             &probe.bare_watch_result, memory_order_acquire) == 0);
         check(ores_native_vm_nio_started(actor_vm) == 0);
 
+        // Legacy VM construction is intentionally wake-free: the new wake
+        // table is opt-in and must not silently change existing VM semantics.
+        OresNativeWakeTicket unsupported_wake = {0};
+        check(!ores_native_vm_actor_reserve_wake(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref, actor_ref,
+            UINT64_C(1), UINT64_C(1), UINT64_C(1), UINT64_C(1),
+            &unsupported_wake));
+        check(unsupported_wake.slot_generation == 0);
+        check(ores_native_vm_actor_outstanding_wake_loans(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref) == 0);
+
         check(ores_native_vm_actor_resource_retain(
             actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
         check(ores_native_vm_stop_sealed(
