@@ -9,9 +9,9 @@ proposed carrier as part of this proposal.
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
 - Exact source commit for first qualification:
-  `d3d7b6640e7712a420b45ab32d678a436cbab8ce`
+  `65c59c3fb38c889a1cb8b1856e0b140e2c2f8b20`
 - Exact source Git tree:
-  `cef059282e074a9bcc976b3d81c9b75959c757fd`
+  `447a627f9cd7bc96bc4c61268d117e8565e9a365`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -53,6 +53,16 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 7. Fail closed on Actions zero-step failures, skipped checks, missing
    tools, parser failures unrelated to the expected diagnostic, stale
    source, or any discrepancy in Git tree SHA.
+
+## Freshness and reconciliation
+
+This proposal tracks LLVM #988's current-main two-parent reconciliation at
+`65c59c3fb38c889a1cb8b1856e0b140e2c2f8b20`. The resulting PR diff contains only `Parser.cpp`, the CTest
+registrations in `CMakeLists.txt`, and two byte-identical guest fixtures.
+Native LLVM include/link and wake-test repairs were already present on newer
+`main` and were deliberately not rolled back. Any subsequent PR-head/tree
+change invalidates this proposal's exact source identity and requires renewed
+security review before transfer.
 
 ## Claims expressly out of scope
 
