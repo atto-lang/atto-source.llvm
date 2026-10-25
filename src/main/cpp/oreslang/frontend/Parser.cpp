@@ -2441,6 +2441,24 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // Dispatch forms are intentionally fail-closed in the current native
+        // scalar frontend. Keep the semantic categories distinct so a future
+        // parser extension cannot accidentally lower ARM_RESULT as an ordinary
+        // FUNCTION_RETURN, and do not repurpose `nb` as an async-arm marker.
+        if (token_.text == "do") {
+            const std::string next = peek_next().text;
+            if (next == "match" || next == "switch")
+                fail("native procedural do match/switch requires FUNCTION_RETURN dispatch lowering");
+        }
+        if (token_.text == "nb") {
+            const std::string next = peek_next().text;
+            if (next == "match" || next == "switch")
+                fail("native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms");
+        }
+        if (token_.text == "match" || token_.text == "switch")
+            fail("native value match/switch requires ARM_RESULT dispatch lowering");
+
         if (accept("new")) {
             auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
             expr->name = type_identifier();
