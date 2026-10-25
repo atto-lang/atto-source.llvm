@@ -76,6 +76,10 @@ int main() {
     rejects(program("const Future<void> pending = worker.send_async(1); "
                     "stop worker; await pending; return 43;"),
             "send_async Future target stopped before await");
+    rejects(program("worker.send(9); "
+                    "const Future<void> pending = worker.send_async(1); "
+                    "await pending; stop worker; return 43;"),
+            "native send_async Future<void> declaration must precede actor effects");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
             "native source supports only one direct ActorRef lifecycle await");
@@ -100,5 +104,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=15\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=16\n";
 }
