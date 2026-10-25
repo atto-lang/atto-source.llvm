@@ -285,6 +285,43 @@ fn callable_nominal(compiler: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn nominal_type_binders(compiler: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-nominal-type-binders-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("nominal-binder.ores");
+    let cases = [
+        "define class _ as end\n",
+        "define actor _ as\n  let count: int = 0;\n  pub fnc on_message(int value): int { return value; }\nend\n",
+        "define contract _ as\n  fnc execute(int value) => int;\nend\n",
+    ];
+    for body in cases {
+        let full_source = format!("{body}pub fnc main(): int {{ return 0; }}\n");
+        fs::write(&source, full_source).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("wildcard '_' cannot be declared as a nominal type name"),
+            format!(
+                "wildcard nominal declaration must fail before IR emission: {body:?}; status={:?}; stdout={}; stderr={}",
+                out.status.code(), stdout(&out), stderr(&out)
+            ),
+        )?;
+    }
+
+    fs::write(
+        &source,
+        "define class Ordinary as\n  pub let int value = 1;\nend\npub fnc main(): int { return 0; }\n",
+    ).map_err(|e| e.to_string())?;
+    let good = run(compiler, [source.as_os_str()])?;
+    require(
+        good.status.success() && stderr(&good).is_empty() && stdout(&good).starts_with("; ModuleID"),
+        format!("ordinary nominal declaration regressed: stdout={} stderr={}", stdout(&good), stderr(&good)),
+    )?;
+
+    println!("PASS 3 negative native nominal wildcard declarations and one positive class");
+    Ok(())
+}
+
 fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-aot-").map_err(|e| e.to_string())?;
     let source = temp.path.join("main.ores");
@@ -447,6 +484,189 @@ fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// Executable source-to-AOT proof for receiver-erased method selectors. The
+// native frontend stores a hidden receiver in its ABI, not source arity.
+fn native_inline_self_arity(compiler: &Path, clang: &Path) -> Result<(), String> {
+    let temp = TempDir::new("ores-inline-self-").map_err(|e| e.to_string())?;
+    let source = temp.path.join("methods.ores");
+    let ir = temp.path.join("methods.ll");
+    let executable = temp.path.join("methods-native");
+
+    let positives = [
+        (
+            "exact-empty-void",
+            "define class X1 as\n  foo():void {}\nend\n\
+             define class X2 as\n  foo(self):void {}\nend\n\
+             pub fnc main():int { return 42; }\n",
+        ),
+        (
+            "public-void-dispatch",
+            "define class X1 as\n  pub foo():void {}\nend\n\
+             define class X2 as\n  pub foo(self):void {}\nend\n\
+             pub fnc main():int {\n  let X1 x1=new X1();\n  let X2 x2=new X2();\n  x1.foo();\n  x2.foo();\n  return 42;\n}\n",
+        ),
+        (
+            "mixed-method-arities",
+            "define class Counter as\n  let int value=20;\n\
+             pub read():int{return self.value;}\n\
+             pub read(self, int n):int{return self.value+n;}\nend\n\
+             pub fnc main():int {let Counter c=new Counter();return c.read()+c.read(2);}\n",
+        ),
+        (
+            "mtd-optional-receiver-arity",
+            "define class X as\n  pub mtd read(self):int{return 42;}\n\
+             pub read(self,int n):int{return n;}\nend\n\
+             pub fnc main():int {let X x=new X();return x.read()+x.read(0);}\n",
+        ),
+        (
+            "mtd-arrow-end-delimited",
+            "define class X as\n  pub mtd zero(self) -> void ::\n  end\n\
+             pub mtd answer(self) -> int ::\n    return 42;\n  end\n\
+             pub mtd echo(self,int value) -> int ::\n    return value;\n  end\n\
+             end\n\
+             pub fnc main():int {let X x=new X();x.zero();return x.answer()+x.echo(0);}\n",
+        ),
+        (
+            "mutable-inline-self",
+            "define class Counter as\n  let int value=40;\n\
+             pub bump(mut self, int n):void{self.value=self.value+n;return;}\n\
+             pub read(self):int{return self.value;}\nend\n\
+             pub fnc main():int {let mut Counter c=new Counter();c.bump(2);return c.read();}\n",
+        ),
+    ];
+    for (name, program) in positives {
+        fs::write(&source, program).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            out.status.success() && stdout(&out).starts_with("; ModuleID"),
+            format!("{name}: compiler rejected source or did not emit IR: {}", stderr(&out)),
+        )?;
+        if name == "mixed-method-arities" {
+            let symbols = stdout(&out);
+            require(
+                symbols.contains("Counter.read$arity0")
+                    && symbols.contains("Counter.read$arity1")
+                    && !symbols.contains("Counter.read$arity2"),
+                "overloaded method symbols must use caller-visible 0/1 arity, not hidden-ABI 1/2",
+            )?;
+        }
+        fs::write(&ir, &out.stdout).map_err(|e| e.to_string())?;
+        let linked = run(
+            clang,
+            [
+                OsStr::new("-O1"),
+                ir.as_os_str(),
+                OsStr::new("-o"),
+                executable.as_os_str(),
+            ],
+        )?;
+        require(
+            linked.status.success(),
+            format!("{name}: clang failed: {}", stderr(&linked)),
+        )?;
+        let executed = run(&executable, [] as [&OsStr; 0])?;
+        require(
+            executed.status.code() == Some(42),
+            format!("{name}: native return status {:?}, stderr={}", executed.status.code(), stderr(&executed)),
+        )?;
+    }
+
+    let negatives = [
+        (
+            "duplicate-zero-slot",
+            "define class X as foo():void {} foo(self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "duplicate-one-slot",
+            "define class X as foo(int n):void {} foo(self,int n):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "explicit-call-site-receiver-is-not-erased",
+            "define class X as\n  pub foo(self,int n):int{return n;}\n\
+             pub wrong(self):int{return self.foo(self,5);}\nend\n\
+             pub fnc main():int {let X x=new X();return x.wrong();}\n",
+            "unknown method or wrong explicit call arity 'foo'",
+        ),
+        (
+            "mtd-duplicate-zero-slot",
+            "define class X as mtd foo():void {} foo(self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+        (
+            "mtd-without-method-signature",
+            "define class X as mtd int x=3; end\n\
+             pub fnc main():int{return 42;}\n",
+            "native mtd marker must precede a method signature",
+        ),
+        (
+            "end-delimited-colon-must-be-arrow",
+            "define class X as mtd foo():void :: end end\n\
+             pub fnc main():int{return 42;}\n",
+            "native '::' method requires '->' return syntax",
+        ),
+        (
+            "end-delimited-missing-double-colon",
+            "define class X as mtd foo(self) -> int return 42; end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected '{'",
+        ),
+        (
+            "end-delimited-as-is-not-double-colon",
+            "define class X as mtd foo(self) -> int as return 42; end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected '{'",
+        ),
+        (
+            "end-delimited-nontrivial-void-body",
+            "define class X as mtd foo() -> void :: stdio.println(42); end end\n\
+             pub fnc main():int{return 42;}\n",
+            "native end-delimited method supports only one terminal return",
+        ),
+        (
+            "end-delimited-nonvoid-missing-return",
+            "define class X as mtd foo() -> int :: end end\n\
+             pub fnc main():int{return 42;}\n",
+            "expected 'return'",
+        ),
+        (
+            "trailing-receiver-comma",
+            "define class X as foo(self,):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "explicit self receiver must be followed by a parameter",
+        ),
+        (
+            "typed-read-receiver-unsupported",
+            "define class X as foo(self X):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "explicitly typed read self receiver unsupported",
+        ),
+        (
+            "duplicate-mutable-self",
+            "define class X as foo():void {} foo(mut self):void {} end\n\
+             pub fnc main():int{return 42;}\n",
+            "duplicate native method name/arity",
+        ),
+    ];
+    for (name, program, diagnostic) in negatives {
+        fs::write(&source, program).map_err(|e| e.to_string())?;
+        let out = run(compiler, [source.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains(diagnostic),
+            format!("{name}: expected rejection '{diagnostic}'; status={:?}, stdout={}, stderr={}",
+                out.status.code(), stdout(&out), stderr(&out)),
+        )?;
+    }
+    println!("native inline self: 6 compiled/AOT-executed positive cases, 13 fail-closed negatives");
+    Ok(())
+}
+
 fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, String> {
     args.get(index)
         .map(PathBuf::from)
@@ -460,9 +680,18 @@ fn real_main() -> Result<(), String> {
             let compiler = path_arg(&args, 2, "usage: realtime-profile <compiler>")?;
             realtime_profile(&compiler)
         }
+        Some("nominal-type-binders") => {
+            let compiler = path_arg(&args, 2, "usage: nominal-type-binders <compiler>")?;
+            nominal_type_binders(&compiler)
+        }
         Some("callable-nominal") => {
             let compiler = path_arg(&args, 2, "usage: callable-nominal <compiler>")?;
             callable_nominal(&compiler)
+        }
+        Some("native-inline-self-arity") => {
+            let compiler = path_arg(&args, 2, "usage: native-inline-self-arity <compiler> <clang>")?;
+            let clang = path_arg(&args, 3, "usage: native-inline-self-arity <compiler> <clang>")?;
+            native_inline_self_arity(&compiler, &clang)
         }
         Some("native-async-io-boundary") => {
             let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
@@ -491,7 +720,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }
