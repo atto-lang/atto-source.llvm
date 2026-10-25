@@ -1,0 +1,126 @@
+{
+  "schema": "oreslang.actor.lifecycle.conformance/1",
+  "authority": "language semantics; test availability is separate from pass evidence",
+  "invariants": {
+    "single_flight": "At most one native carrier executes guest code for an actor at any instant",
+    "ready": "Direct await actor means READY; ready observer can be awaited repeatedly; stop-before-ready fails as ActorTerminated",
+    "done": "DONE is a distinct reusable observation of physical finalization; requesting STOP is not DONE",
+    "terminal": "No fresh message, borrowed view, resource loan, or generation-stale wake is admitted after terminal fence",
+    "wake": "A bounded async sender is resumed only by actual refunded mailbox capacity, with one authenticated reserved wake ticket"
+  },
+  "scenarios": [
+    {
+      "id": "L01",
+      "trace": [
+        "spawn A",
+        "publish READY A",
+        "await A",
+        "await A",
+        "await A.get_ready() twice"
+      ],
+      "expected": [
+        "all succeed",
+        "no ActorRef consumption"
+      ]
+    },
+    {
+      "id": "L02",
+      "trace": [
+        "spawn A",
+        "READY A",
+        "observe DONE A (pending)",
+        "STOP A",
+        "drain turns CONTROL loans",
+        "physical DONE A",
+        "await DONE A repeatedly",
+        "await READY A after DONE"
+      ],
+      "expected": [
+        "DONE pending until physical finalization",
+        "repeat observations succeed"
+      ]
+    },
+    {
+      "id": "L03",
+      "trace": [
+        "spawn A",
+        "hold constructor",
+        "register two ready observers",
+        "STOP A",
+        "attempt READY A",
+        "physical DONE A"
+      ],
+      "expected": [
+        "both readiness observers fail ActorTerminated",
+        "zero ready success callbacks",
+        "DONE settles failure after quiescence"
+      ]
+    },
+    {
+      "id": "L04",
+      "trace": [
+        "spawn A@g",
+        "acquire one loan and CONTROL",
+        "request STOP",
+        "attempt finalize (rejected)",
+        "release outstanding work",
+        "publish DONE",
+        "re-admit loan or stale A@g callback (rejected)"
+      ],
+      "expected": [
+        "no premature DONE",
+        "no resource resurrection",
+        "no ABA acceptance"
+      ]
+    },
+    {
+      "id": "L05",
+      "trace": [
+        "hold USER turn A",
+        "attempt concurrent USER A",
+        "enqueue CONTROL A",
+        "attempt CONTROL while USER active",
+        "release turn",
+        "run CONTROL"
+      ],
+      "expected": [
+        "busy (not thread-blocking) before release",
+        "one executing guest turn per actor",
+        "CONTROL executes once"
+      ]
+    },
+    {
+      "id": "L06",
+      "trace": [
+        "fill mailbox A@g",
+        "reserve B sender descriptor and authenticated wake ticket",
+        "register B pending atomically with slot accounting",
+        "ACK existing A delivery releases real credit",
+        "TRANSFER one B ticket under same lock",
+        "commit envelope or abort transfer",
+        "publish scheduler wake once",
+        "try duplicate and stale generation wake"
+      ],
+      "expected": [
+        "no check-then-sleep",
+        "no inline guest work on ACK thread",
+        "exactly-once delivery or terminal failure",
+        "payload and loan refunds on rejection"
+      ]
+    }
+  ],
+  "required_evidence": [
+    "exact commit SHA and root tree",
+    "executed build/test steps, exit codes and logs",
+    "Java JUnit",
+    "LLVM compiler to IR to Clang guest execution",
+    "strict native CTest",
+    "ASan/UBSan plus applicable TSan",
+    "L06 connected mailbox ACK to scheduler wake",
+    "Java/LLVM differential trace"
+  ],
+  "known_gaps": [
+    "LLVM guest source repeated await lowering",
+    "LLVM mailbox refund to send_async scheduler wake connection"
+  ]
+}
