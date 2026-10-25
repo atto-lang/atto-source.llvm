@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 
 SOURCE = "ores-truffle-oreslang/oreslang-source.llvm"
+SOURCE_ID = 1410897874
 APPROVAL_PATH = Path(".github/private-ci-approved-repositories.txt")
 OWNERS_PATH = Path(".github/CODEOWNERS")
 DOC_PATH = Path("docs/security/CI_PRIVATE_SOURCE_MIRRORING.md")
@@ -34,6 +35,7 @@ REQUIRED_OWNERS = {
     "/scripts/test-publish-private-ci-source.py",
 }
 DESTINATION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z", re.ASCII)
+SHA40 = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
 
 
 class GovernanceError(ValueError):
@@ -80,19 +82,51 @@ def check_policy_files(root: Path) -> tuple[str, ...]:
 
 
 def check_live_metadata(repo_data: dict, branch_data: dict, protection_data: dict) -> None:
-    if repo_data.get("full_name") != SOURCE or repo_data.get("private") is not True:
+    if (
+        repo_data.get("full_name") != SOURCE
+        or repo_data.get("id") != SOURCE_ID
+        or repo_data.get("private") is not True
+    ):
         raise GovernanceError("source identity or visibility is not private and exact")
     if repo_data.get("default_branch") != "main":
         raise GovernanceError("unexpected default branch")
+    if repo_data.get("archived") is True or repo_data.get("disabled") is True:
+        raise GovernanceError("source repository is not active")
+
     if branch_data.get("name") != "main" or branch_data.get("protected") is not True:
         raise GovernanceError("protected main is not enforced")
-    reviews = protection_data.get("required_pull_request_reviews") or {}
+    commit = branch_data.get("commit") or {}
+    if not isinstance(commit, dict) or not SHA40.fullmatch(str(commit.get("sha", ""))):
+        raise GovernanceError("protected main commit SHA is missing or invalid")
+
+    reviews = protection_data.get("required_pull_request_reviews")
+    if not isinstance(reviews, dict):
+        raise GovernanceError("pull-request review protection missing")
     if reviews.get("require_code_owner_reviews") is not True:
         raise GovernanceError("required CODEOWNER reviews not enforced")
     if reviews.get("dismiss_stale_reviews") is not True:
         raise GovernanceError("stale reviews are not dismissed")
+
+    approval_count = reviews.get("required_approving_review_count")
+    if type(approval_count) is not int or approval_count < 1:
+        raise GovernanceError("positive approving review count not enforced")
+
+    bypass = reviews.get("bypass_pull_request_allowances")
+    if not isinstance(bypass, dict):
+        raise GovernanceError("review bypass policy unavailable")
+    if any(bypass.get(kind) for kind in ("users", "teams", "apps")):
+        raise GovernanceError("review bypass allowances are not empty")
+
     if (protection_data.get("enforce_admins") or {}).get("enabled") is not True:
         raise GovernanceError("administrator protection not enforced")
+
+    force_pushes = protection_data.get("allow_force_pushes")
+    if not isinstance(force_pushes, dict) or force_pushes.get("enabled") is not False:
+        raise GovernanceError("force pushes are not explicitly forbidden")
+
+    deletions = protection_data.get("allow_deletions")
+    if not isinstance(deletions, dict) or deletions.get("enabled") is not False:
+        raise GovernanceError("branch deletion is not explicitly forbidden")
 
 
 def _github_get(path: str, token: str) -> dict:
