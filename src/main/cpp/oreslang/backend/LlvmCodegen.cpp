@@ -2317,7 +2317,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         values.emplace(param, pslot);
         if (actor.sealed_state) {
             if (!actor.on_message.actor_state_loan || actor.on_message.result ||
-                    !actor.on_message.actor_field_writes.empty())
+                    !actor.on_message.actor_field_writes.empty() ||
+                    !actor.on_message.locals.empty() ||
+                    !actor.on_message.actor_sends.empty() ||
+                    !actor.on_message.actor_stops.empty() ||
+                    !actor.on_message.actor_actions.empty() ||
+                    !actor.on_message.statements.empty() ||
+                    !actor.on_message.early_returns.empty() ||
+                    !actor.on_message.actor_spawns.empty())
                 throw std::runtime_error(
                     "sealed actor state reached codegen without one scoped loan");
             const auto& loan = *actor.on_message.actor_state_loan;
@@ -2333,6 +2340,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     throw std::runtime_error(
                         "sealed actor state codegen rejected malformed state schema");
             }
+            if (loan.mode != ActorStateLoan::Mode::Read &&
+                    loan.mode != ActorStateLoan::Mode::Write)
+                throw std::runtime_error("invalid sealed actor state loan mode");
             if (loan.mode == ActorStateLoan::Mode::Read) {
                 if (!actor.on_message.declared_effects.has(FunctionEffect::StateRead) ||
                         !loan.writes.empty())
