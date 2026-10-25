@@ -917,11 +917,14 @@ static void stop_vs_bound_send_admission_has_one_winner() {
 
         if (accepted) {
             ++send_wins;
+            CHECK(inbox.snapshot() == 1);
             CHECK(actor.outstanding_resource_loans() == 1);
             CHECK(!group.finalized(actor));
             auto receipt = inbox.try_receive();
-            CHECK(receipt);
+            CHECK(receipt && receipt->sequence() == 1);
             CHECK(receipt->acknowledge_released());
+            CHECK(inbox.completed_through(1));
+            CHECK(inbox.used_frames(SendLane::Normal) == 0);
             CHECK(actor.outstanding_resource_loans() == 0);
         } else {
             ++stop_wins;
@@ -983,11 +986,15 @@ static void stop_vs_bound_owned_send_preserves_sender_ownership() {
         if (accepted) {
             ++send_wins;
             CHECK(!owner);
+            CHECK(inbox.snapshot() == 1);
             CHECK(actor.outstanding_resource_loans() == 1);
             CHECK(!group.finalized(actor));
             auto receipt = inbox.try_receive();
-            CHECK(receipt && receipt->value() == static_cast<int>(trial));
+            CHECK(receipt && receipt->sequence() == 1
+                  && receipt->value() == static_cast<int>(trial));
             CHECK(receipt->acknowledge_released());
+            CHECK(inbox.completed_through(1));
+            CHECK(inbox.used_frames(Lane::Bulk) == 0);
             CHECK(actor.outstanding_resource_loans() == 0);
         } else {
             ++stop_wins;
