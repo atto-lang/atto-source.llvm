@@ -449,6 +449,99 @@ static void root_done_resume_turn(void) {
     group_unlock();
 }
 
+static void root_send_suspend_turn(void) {
+    group_lock();
+    SendAwaitFrame* frame = group.pending_send;
+    ensure(frame && !frame->done && !frame->suspend_recorded);
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle origin = {0, 0};
+    ensure(ores_native_execution_context_store_insert(
+        group.executions, &physical, &origin));
+    OresNativeContinuationHandle no_parent = {0, 0};
+    ensure(ores_native_await_trace_suspend(
+        group.executions,
+        group.continuations,
+        origin,
+        no_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT,
+        1,
+        frame->source_token,
+        &frame->link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, origin));
+
+    frame->suspend_recorded = 1;
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+
+static void root_send_resume_turn(void) {
+    SendAwaitFrame* frame;
+    OresSourceActorContinuation continuation;
+    SourceActor* actor;
+    OresNativeSuspensionLink link;
+    int future_status;
+    int send_outcome;
+
+    group_lock();
+    frame = group.pending_send;
+    ensure(frame && frame->suspend_recorded && !frame->done);
+    ensure(frame->resume_future != NULL);
+    future_status = ores_native_actor_future_status(frame->resume_future);
+    ensure(future_status == ORES_NATIVE_FUTURE_READY
+        || future_status == ORES_NATIVE_FUTURE_FAILED);
+    continuation = frame->continuation;
+    actor = frame->actor;
+    link = frame->link;
+    send_outcome = frame->outcome;
+    group_unlock();
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle resumed = {0, 0};
+    OresNativeExecutionContext logical = {0};
+    ensure(ores_native_await_trace_ready_resume_begin(
+        group.executions,
+        group.continuations,
+        physical.id,
+        link,
+        &resumed,
+        &logical));
+    ensure(same_allocation(logical.allocation, physical.allocation));
+
+    int64_t result = 0;
+    if (future_status == ORES_NATIVE_FUTURE_READY) {
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+        ensure(!ores_native_store_handle_valid(current_source_execution));
+        current_source_execution = resumed;
+        result = continuation(actor);
+        current_source_execution = (OresNativeExecutionHandle){0, 0};
+    } else {
+        ensure(send_outcome != ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    }
+
+    ensure(ores_native_await_trace_resume_finish(group.continuations, link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, resumed));
+
+    group_lock();
+    ensure(frame == group.pending_send && !frame->done);
+    frame->result = result;
+    frame->done = 1;
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+
 static void initialize(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group);
     if (slot == SOURCE_GROUP_ROOT_SLOT) {
@@ -456,6 +549,8 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         else if (payload == SOURCE_ROOT_CONTROL_RESUME) root_resume_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_SUSPEND) root_done_suspend_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_RESUME) root_done_resume_turn();
+        else if (payload == SOURCE_ROOT_CONTROL_SEND_SUSPEND) root_send_suspend_turn();
+        else if (payload == SOURCE_ROOT_CONTROL_SEND_RESUME) root_send_resume_turn();
         else abort();
         return;
     }
