@@ -166,8 +166,10 @@ public:
                 });
         } catch (...) {
             expected = Phase::scheduled;
+            const Phase fallback = parent_ref.delivery_closed()
+                ? Phase::cancelled : Phase::ready;
             (void)phase_.compare_exchange_strong(
-                expected, Phase::ready,
+                expected, fallback,
                 std::memory_order_acq_rel, std::memory_order_acquire);
             throw;
         }
