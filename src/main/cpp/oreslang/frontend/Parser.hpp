@@ -75,6 +75,7 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
+    std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
@@ -252,6 +253,7 @@ struct Function {
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string pending_return_type_alias;
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
