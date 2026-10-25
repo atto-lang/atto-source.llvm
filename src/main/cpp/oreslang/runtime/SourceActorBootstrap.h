@@ -35,6 +35,9 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* TEST-ONLY physical parent VM terminal ACK witness. Unlike parent get_done,
+ * this intentionally does not imply the owned child subtree has joined. */
+unsigned oreslang_source_actor_test_parent_vm_done_observed(void);
 #endif
 
 #define ORES_SOURCE_ACTOR_CAPABILITY_SLOTS 8u
