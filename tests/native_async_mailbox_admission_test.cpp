@@ -268,9 +268,11 @@ static void preparation_quota_bounds_work_before_payload_freeze() {
     CHECK(admission.sealed());
     CHECK(admission.active_descriptors() == 1);
     CHECK(admission.pending_bytes() == 8);
+    auto late_wake = reserve(f, 72);
     CHECK(admission.register_prepared(
-        second, 8, f.scheduler, OresNativeWakeTicket{}) == Registration::Rejected);
+        second, 8, f.scheduler, late_wake) == Registration::Rejected);
     CHECK(!admission.cancel_preparation(second));
+    CHECK(ores_native_actor_scheduler_cancel_wake(f.scheduler, late_wake));
 
     CHECK(admission.commit(reused) == ORES_NATIVE_WAKE_PUBLISHED);
     CHECK(admission.active_descriptors() == 0);
