@@ -1793,6 +1793,8 @@ private:
                 } else if (future_method == "send_async") {
                     if (value.name != "main" || !value.parameters.empty())
                         fail("native send_async Future<void> requires trusted zero-argument main");
+                    if (!value.actor_actions.empty() || !value.statements.empty())
+                        fail("native send_async Future<void> declaration must precede actor effects");
                     value.send_future_name = future_name;
                     value.send_future_actor = future_actor;
                     value.send_future_submit_offset = token_.offset;
