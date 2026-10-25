@@ -45,6 +45,13 @@ size_t ores_native_vm_test_waiting_sends(
         ? ores_native_actor_scheduler_test_waiting_sends(vm->schedulers[domain], actor)
         : 0;
 }
+size_t ores_native_vm_test_pending_async_sends(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_test_pending_async_sends(
+            vm->schedulers[domain], actor)
+        : 0;
+}
 #endif
 
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
@@ -347,6 +354,50 @@ OresNativeSendStatus ores_native_vm_wait_send(
         ? ores_native_actor_scheduler_wait_send(
             vm->schedulers[domain], ref, payload)
         : ORES_NATIVE_SEND_INVALID_REF;
+}
+
+OresNativeSendStatus ores_native_vm_submit_async(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t payload,
+    OresNativeAsyncSendTicket* out) {
+    if (out) *out = (OresNativeAsyncSendTicket){0};
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_submit_async(
+            vm->schedulers[domain], ref, payload, out)
+        : ORES_NATIVE_SEND_INVALID_REF;
+}
+
+int ores_native_vm_async_send_status(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket,
+    OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_async_send_status(
+            vm->schedulers[domain], ticket, state_out, outcome_out);
+}
+
+int ores_native_vm_await_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_await_async_send(
+            vm->schedulers[domain], ticket, outcome_out);
+}
+
+int ores_native_vm_cancel_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_cancel_async_send(
+            vm->schedulers[domain], ticket);
+}
+
+int ores_native_vm_release_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_release_async_send(
+            vm->schedulers[domain], ticket);
 }
 
 static int vm_stop(
