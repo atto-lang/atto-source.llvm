@@ -305,10 +305,14 @@ int main() {
           "per-actor finalized READY settle failed");
     check(!finalized_owner.delivery_closed(),
           "delivery closed before per-actor finalization");
+    check(!finalized_owner.resource_admission_closed(),
+          "resource admission sealed before per-actor finalization");
     check(finalized_group.finalized(finalized_owner),
           "per-actor finalization failed");
     check(finalized_owner.delivery_closed(),
           "per-actor finalization did not publish delivery barrier");
+    check(finalized_owner.resource_admission_closed(),
+          "per-actor finalization did not seal resource admission");
     bool finalized_open_rejected = false;
     try {
         (void)NativeScalarFutureAwait::open(finalized_owner, 72);
@@ -336,6 +340,63 @@ int main() {
     check(sibling_turns == 1, "live sibling did not execute");
     check(finalized_group.finalized(live_sibling),
           "live sibling did not finalize");
+
+    // Future admission races physical finalization. If open linearizes first,
+    // later finalization is ordinary lifecycle and explicit detach
+    // reconciliation must terminalize the frame. If finalization seals
+    // resources first, open must fail closed before publishing the frame.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        NativeActorGroup open_race_group(14000 + iteration, 1);
+        auto open_race_owner = open_race_group.adopt(
+            14000 + iteration, 1, 1, [] {});
+        check(open_race_group.mark_ready(open_race_owner),
+              "open/finalize race owner not ready");
+
+        std::atomic<int> start_open_race{0};
+        std::shared_ptr<NativeScalarFutureAwait> opened;
+        bool open_rejected = false;
+        bool finalized_won = false;
+
+        std::thread opener([&] {
+            while (!start_open_race.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try {
+                opened = NativeScalarFutureAwait::open(
+                    open_race_owner, 6000 + iteration);
+            } catch (const std::logic_error&) {
+                open_rejected = true;
+            }
+        });
+        std::thread finalizer_thread([&] {
+            while (!start_open_race.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            finalized_won = open_race_group.finalized(open_race_owner);
+        });
+
+        start_open_race.store(1, std::memory_order_release);
+        opener.join();
+        finalizer_thread.join();
+
+        check(finalized_won, "open/finalize race did not finalize actor");
+        check(open_rejected || bool(opened),
+              "open/finalize race produced no admission outcome");
+        check(!(open_rejected && opened),
+              "open/finalize race both rejected and returned frame");
+        check(open_race_owner.resource_admission_closed(),
+              "open/finalize race did not seal resource admission");
+        check(open_race_owner.delivery_closed(),
+              "open/finalize race did not publish delivery barrier");
+
+        if (opened) {
+            check(opened->cancel_if_owner_detached(
+                      opened->id(), open_race_owner),
+                  "open winner was not reconciled after finalization");
+            check(opened->phase() == NativeScalarFutureAwait::Phase::cancelled,
+                  "open/finalize race leaked nonterminal Future");
+            check(!opened->complete(opened->id(), iteration),
+                  "finalized Future resurrected");
+        }
+    }
 
     // Group close may drop an already-reserved CONTROL callback. The Future
     // must observe that generation-fenced loss and become cancellable rather
