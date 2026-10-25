@@ -37,7 +37,7 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, String, ReadableOutcomeLiteral, Console, Variable,
+        Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
         Add, Subtract, Multiply,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
