@@ -70,6 +70,7 @@ struct Method {
     bool native_internal = false;
 };
 struct Actor {
+    std::string name = "Counter";
     bool sealed_state = true;
     std::vector<Field> fields;
     Method on_message;
