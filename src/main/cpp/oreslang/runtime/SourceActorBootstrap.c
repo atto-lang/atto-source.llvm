@@ -158,7 +158,7 @@ size_t oreslang_source_actor_test_waiting_sends(void* opaque) {
     if (instance->magic == SOURCE_ACTOR_MAGIC && group.vm
             && instance->ref.actor_slot < group.next_slot
             && group.actors[instance->ref.actor_slot] == instance)
-        count = ores_native_vm_test_waiting_sends(
+        count = ores_native_vm_test_pending_async_sends(
             group.vm, ORES_NATIVE_VM_MAIN, instance->ref);
     group_unlock();
     return count;
@@ -695,21 +695,18 @@ int oreslang_source_actor_await_send_async_checked(
     }
 
     /*
-     * This initial source slice uses trusted outer-host waiting. Never park a
-     * scheduler carrier: doing so could consume the worker required to return
-     * the target's mailbox credit. Full continuation suspension is a later
-     * source lowering gate.
+     * The Future itself is scheduler-owned and nonblocking, but this checked
+     * direct-await compatibility wrapper waits for its terminal state. Never
+     * park any actor carrier on that host observation.
      */
     if (ores_native_actor_scheduler_is_carrier_thread()) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
     }
 
-    /*
-     * The interim source bridge parks an outer host thread per pending
-     * producer, so keep the cohort bounded exactly like the Java runtime.
-     * Refuse before pinning the actor or entering scheduler wait_send.
-     */
+    /* Pin the opaque SourceActor/VM while the externally awaited Future is
+     * live. The scheduler independently enforces the same 256 descriptor
+     * cohort for nonblocking submissions. */
     if (instance->async_waiters >= ORES_SOURCE_SEND_ASYNC_MAX_WAITERS) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
@@ -719,13 +716,16 @@ int oreslang_source_actor_await_send_async_checked(
     const OresNativeActorRef target = instance->ref;
     group_unlock();
 
-    /*
-     * Scheduler wait_send owns the actual FULL observation + condition wait +
-     * retry under its mutex. SourceActor's pin only prevents opaque-handle/VM
-     * teardown while that trusted host wait is in flight.
-     */
-    const OresNativeSendStatus status = ores_native_vm_wait_send(
-        vm, ORES_NATIVE_VM_MAIN, target, (uint64_t)payload);
+    OresNativeAsyncSendTicket ticket = {0};
+    OresNativeSendStatus outcome = ores_native_vm_submit_async(
+        vm, ORES_NATIVE_VM_MAIN, target, (uint64_t)payload, &ticket);
+    if (outcome == ORES_NATIVE_SEND_ACCEPTED) {
+        ensure(ticket.generation != 0);
+        ensure(ores_native_vm_await_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket, &outcome));
+        ensure(ores_native_vm_release_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket));
+    }
 
     group_lock();
     ensure(instance->magic == SOURCE_ACTOR_MAGIC
@@ -733,7 +733,7 @@ int oreslang_source_actor_await_send_async_checked(
     --instance->async_waiters;
     ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
     group_unlock();
-    return (int)status;
+    return (int)outcome;
 }
 
 void oreslang_source_actor_await_send_async(void* opaque, int64_t payload) {
