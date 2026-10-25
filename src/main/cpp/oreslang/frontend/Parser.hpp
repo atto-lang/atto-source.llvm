@@ -268,6 +268,12 @@ struct Function {
     bool native_internal = false; // linker-owned private imported implementation
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
+    /*
+     * Narrow typed exceptional-effect metadata. Actor readiness can terminate
+     * before publication; general throw/raise/panic lowering remains
+     * fail-closed until the shared unwind ABI is executable.
+     */
+    std::vector<std::string> throws_types;
     std::string return_sum;
 };
 
