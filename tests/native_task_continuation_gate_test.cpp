@@ -15,6 +15,11 @@
 
 using oreslang::runtime::TaskCancellation;
 using oreslang::runtime::TaskContinuationGate;
+#if defined(__linux__)
+using oreslang::runtime::NativeActorGroup;
+using oreslang::runtime::NativeEpollReactor;
+using oreslang::runtime::NativeEpollReactorManager;
+#endif
 
 struct Stores {
     OresNativeExecutionContextStore* executions =
