@@ -2585,8 +2585,7 @@ private:
             advance();
             require(".");
             const std::string variant = identifier();
-            auto expr = make_expression(
-                Expression::Kind::ReadableOutcomeLiteral, offset);
+            auto expr = make_expression(Expression::Kind::Integer, offset);
             if (variant == "Ready") expr->integer = 1;
             else if (variant == "Cancelled") expr->integer = 2;
             else if (variant == "Failed") expr->integer = 3;
@@ -2985,7 +2984,6 @@ private:
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
-            case Expression::Kind::ReadableOutcomeLiteral:
                 return;
             case Expression::Kind::Console:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
@@ -3164,13 +3162,11 @@ private:
                 return expr.kind == Expression::Kind::SumAccess ? expr.resolved_type : ScalarType::I64;
 
             case Expression::Kind::Integer:
-                return ScalarType::I64;
+                return expr.resolved_type;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
-            case Expression::Kind::ReadableOutcomeLiteral:
-                return expr.resolved_type = ScalarType::ReadableOutcome;
             case Expression::Kind::Console:
                 require_type(validate_scalar_expression(*expr.left, variables, functions, depth + 1), ScalarType::String, "stdio");
                 return ScalarType::I64;
