@@ -105,6 +105,41 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 raw, "trusted/ci", 670, "ci/test-plans/llvm-pr669.json"
             )
 
+    def test_staged_sonus_policy_authorizes_only_reviewed_pr_plans(self):
+        root = Path(__file__).resolve().parents[1]
+        allow = (root / ".github/private-ci-approved-repositories.txt").read_bytes()
+        v3.parse_allowlist(
+            allow,
+            "sonus-auris-test/clients-api-contract",
+        )
+
+        raw = (root / ".github/private-ci-carrier-contracts.json").read_bytes()
+        plans = {
+            951: "ci/test-plans/llvm-pr951.json",
+            955: "ci/test-plans/llvm-pr955.json",
+            965: "ci/test-plans/llvm-pr965.json",
+            969: "ci/test-plans/llvm-pr969.json",
+        }
+        for pr, plan in plans.items():
+            with self.subTest(pr=pr):
+                got = v3.parse_contract(
+                    raw,
+                    "sonus-auris-test/clients-api-contract",
+                    pr,
+                    plan,
+                )
+                self.assertEqual(got["repository_id"], 1323599063)
+                self.assertRegex(got["base_sha"], r"^[0-9a-f]{40}$")
+                self.assertRegex(got["workflow_blob_sha"], r"^[0-9a-f]{40}$")
+                self.assertRegex(got["test_plan_blob_sha"], r"^[0-9a-f]{40}$")
+                with self.assertRaisesRegex(v3.Denied, "not authorized"):
+                    v3.parse_contract(
+                        raw,
+                        "sonus-auris-test/clients-api-contract",
+                        999999,
+                        plan,
+                    )
+
     def test_strict_json_rejects_duplicate_and_nonfinite_values(self):
         with self.assertRaisesRegex(v3.Denied, "duplicate JSON key"):
             v3.strict_json_loads('{"x":1,"x":2}', "fixture")
