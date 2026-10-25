@@ -6,9 +6,14 @@ The `NativeScalarFutureAwait` frame carries one signed 64-bit scalar value or
 a positive failure code. It is pinned in a shared allocation, qualified by a
 four-part `(runtime_id, actor_id, generation, future_id)` ticket. Competing
 completion, failure and cancellation transitions have exactly one winner.
-A scheduled callback transitions to an explicit `running` phase at CONTROL
-entry; cancellation is rejected from that point onward, and the frame becomes
-`completed` only after the callback exits (including exceptional exit).
+The frame state is atomically arbitrated: `pending -> settling -> ready ->
+scheduled -> running -> completed`, with `cancelled` terminal from pending,
+ready, or scheduled. The transient `settling` state gives one producer sole
+write authority for the result before READY is published with release
+semantics. A scheduled callback claims RUNNING with acquire/release semantics,
+so the actor carrier never needs a Future mutex. Cancellation is rejected once
+RUNNING begins, and the frame becomes COMPLETED only after callback exit
+(including exceptional exit).
 A producer thread may settle the frame but may **never execute a guest
 continuation**. Scheduling and teardown authenticate the exact shared
 `ActorRef` ticket capability in addition to numeric runtime/actor/generation
