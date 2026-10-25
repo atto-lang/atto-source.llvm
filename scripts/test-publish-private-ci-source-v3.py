@@ -292,6 +292,105 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             },
         )
 
+    def test_blocking_incidents_require_exact_closed_completed_identity(self):
+        repository_url = "https://api.github.com/repos/" + v3.BLOCKING_INCIDENT_REPO
+
+        def issue(number, *, state="closed", reason="completed"):
+            return {
+                "id": v3.BLOCKING_INCIDENT_IDS[number],
+                "number": number,
+                "repository_url": repository_url,
+                "url": repository_url + "/issues/" + str(number),
+                "html_url": (
+                    "https://github.com/" + v3.BLOCKING_INCIDENT_REPO
+                    + "/issues/" + str(number)
+                ),
+                "state": state,
+                "state_reason": reason,
+            }
+
+        def api(route, method="GET", payload=None):
+            self.assertEqual(method, "GET")
+            self.assertIsNone(payload)
+            if route == "repos/" + v3.BLOCKING_INCIDENT_REPO:
+                return {
+                    "id": v3.BLOCKING_INCIDENT_REPOSITORY_ID,
+                    "full_name": v3.BLOCKING_INCIDENT_REPO,
+                    "private": True,
+                    "visibility": "private",
+                    "archived": False,
+                    "disabled": False,
+                    "fork": False,
+                }
+            prefix = "repos/" + v3.BLOCKING_INCIDENT_REPO + "/issues/"
+            if route.startswith(prefix):
+                return issue(int(route[len(prefix):]))
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            v3.require_resolved_blocking_incidents()
+
+        def open_api(route, method="GET", payload=None):
+            if route == "repos/" + v3.BLOCKING_INCIDENT_REPO:
+                return {
+                    "id": v3.BLOCKING_INCIDENT_REPOSITORY_ID,
+                    "full_name": v3.BLOCKING_INCIDENT_REPO,
+                    "private": True,
+                    "visibility": "private",
+                    "archived": False,
+                    "disabled": False,
+                    "fork": False,
+                }
+            prefix = "repos/" + v3.BLOCKING_INCIDENT_REPO + "/issues/"
+            number = int(route[len(prefix):])
+            return issue(number, state="open" if number == 77 else "closed",
+                         reason=None if number == 77 else "completed")
+
+        with patch.object(v3, "gh_api", side_effect=open_api):
+            with self.assertRaisesRegex(v3.Denied, "#77 remains unresolved"):
+                v3.require_resolved_blocking_incidents()
+
+        def wrong_identity(route, method="GET", payload=None):
+            if route == "repos/" + v3.BLOCKING_INCIDENT_REPO:
+                return {
+                    "id": v3.BLOCKING_INCIDENT_REPOSITORY_ID,
+                    "full_name": v3.BLOCKING_INCIDENT_REPO,
+                    "private": True,
+                    "visibility": "private",
+                    "archived": False,
+                    "disabled": False,
+                    "fork": False,
+                }
+            prefix = "repos/" + v3.BLOCKING_INCIDENT_REPO + "/issues/"
+            number = int(route[len(prefix):])
+            value = issue(number)
+            if number == 127:
+                value["id"] += 1
+            return value
+
+        with patch.object(v3, "gh_api", side_effect=wrong_identity):
+            with self.assertRaisesRegex(v3.Denied, "identity invalid"):
+                v3.require_resolved_blocking_incidents()
+
+    def test_publish_blocks_before_source_tree_when_incident_open(self):
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, PLAN)),
+            patch.object(
+                v3, "require_resolved_blocking_incidents",
+                side_effect=v3.Denied("blocking P0 incident #22 remains unresolved"),
+            ),
+            patch.object(v3, "exact_source_tree") as source_tree,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "#22 remains unresolved"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            source_tree.assert_not_called()
+
     def test_carrier_codeowners_require_exact_security_ownership(self):
         v3.require_carrier_security_codeowners(CARRIER_CODEOWNERS)
         with self.assertRaisesRegex(v3.Denied, "fully security-owned"):
@@ -719,6 +818,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
             patch.object(v3, "require_exact_ref"),
+            patch.object(v3, "require_resolved_blocking_incidents") as incidents,
             patch.object(v3, "gh_api", side_effect=api),
         ):
             result = v3.publish(
@@ -729,6 +829,10 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 now=dt.datetime(2026, 10, 20, tzinfo=dt.timezone.utc),
             )
 
+        self.assertGreaterEqual(
+            incidents.call_count, 8,
+            "incident closure must be rechecked throughout carrier publication",
+        )
         self.assertEqual(result["branch"], "ci/oreslang-" + SOURCE_TREE)
         self.assertEqual(
             result["authorization_ref"], "ci/authorized-" + CARRIER_COMMIT
@@ -840,6 +944,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             patch.object(v3, "recheck_destination_identity"),
             patch.object(v3, "verify_published_root_and_commit"),
             patch.object(v3, "require_handoff_refs_absent"),
+            patch.object(v3, "require_resolved_blocking_incidents"),
             patch.object(v3, "gh_api", side_effect=api),
         ]
         if verify_source_pr is not None:
@@ -880,7 +985,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             ],
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "PR head moved"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -913,7 +1018,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or False,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "ambiguous ref transport failure"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
@@ -948,7 +1053,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             api,
             delete_exact_ref=lambda *args: deleted.append(args) or True,
         )
-        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
             with self.assertRaisesRegex(v3.Denied, "authorization ref"):
                 v3.publish(
                     "trusted/ci", 669, "9" * 40,
