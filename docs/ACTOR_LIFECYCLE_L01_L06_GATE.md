@@ -27,8 +27,8 @@ python3 tests/lifecycle_repeat_observer_parity_probe.py \
 ```
 
 The three `source-actor-lifecycle-repeat-*-target.ores` programs must
-ultimately emit correct LLVM IR *and* link/run via Clang with two actual
-continuation resumes. IR success alone is insufficient. A compile-time
+ultimately emit correct LLVM IR *and* link/run via Clang with two source-level observations per fixture but exactly one
+coalesced native readiness/DONE bridge invocation per logical barrier. IR success alone is insufficient. A compile-time
 rejection counts as an open implementation gap. The current one-await source
 admission restriction is not language authority. Preserve negative no-IR
 checks for bogus ActorRef receivers, forged/escaped tokens, invalid effects,
@@ -87,15 +87,19 @@ ledger, protected-branch and incident gates independently pass.
 A review-only immutable candidate command plan is staged at
 `ci/test-plans/llvm-pr987.json`, `allowed_prs=[987]`.
 It is *not* installed in the carrier, and its presence is not an approval.
-The plan is deliberately red: it requires the source compiler to emit two
-real guest bridge calls for each repeated-observer fixture, and runs the
+The plan is deliberately red at the exact tested #931/#987 stack: it requires the source compiler to admit repeated observations and emit one
+coalesced guest bridge call per observed lifecycle barrier, and runs the
 independent compiler-to-Clang native source suite. Merely generating valid
 LLVM IR cannot pass the full L01/L02 gate.
 
-The hardened `tests/lifecycle_repeat_observer_parity_probe.py` does not
-accept one generated await, a declaration/comment mentioning the bridge,
-more than two calls, invalid LLVM text, or partial IR on a rejected compile.
-Eight source-free local harness tests covered these probe outcomes. They
+The hardened `tests/lifecycle_repeat_observer_parity_probe.py` requires exactly
+one real coalesced bridge call per lifecycle barrier, excluding declarations
+and comments; zero or multiple calls, invalid LLVM text, and partial IR from a
+failed compile are rejected. Ten source-free regression tests exercise the probe.
+IR bridge shape alone is not proof that either observation actually resumed.
+The current #931 source compiler still rejects repeated readiness observations;
+#948 is the separate proposed non-consuming/coalescing fix. DONE remains a
+physically distinct barrier, never an alias of READY. They
 do **not** certify actual LLVM compiler behavior. The native host CTest now
 also registers distinct Linux TSan and ASan/UBSan variants; actual
 native compilation/sanitizer execution remains outstanding.
