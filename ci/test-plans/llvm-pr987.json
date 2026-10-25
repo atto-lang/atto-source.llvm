@@ -4,7 +4,6 @@
   "allowed_prs": [
     987
   ],
-  "status": "REVIEW_ONLY_NOT_AUTHORIZATION",
   "commands": [
     {
       "argv": [
