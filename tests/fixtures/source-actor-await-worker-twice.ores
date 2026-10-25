@@ -6,7 +6,7 @@ define actor Worker as {
     return total;
   }
 }
-pub fnc main(): int {
+pub fnc main(): int throws ActorTerminated {
   const worker: ActorRef<Worker> = spawn Worker();
   await worker;
   await worker;
