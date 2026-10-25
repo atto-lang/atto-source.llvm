@@ -29,20 +29,30 @@ static bool injected_allocation_failure() {
     return false;
 }
 
-void* operator new(std::size_t size) {
+// Keep replacement allocation/deallocation calls observable at -O1/-O2.
+// Inlining these malloc/free-backed fault-injection operators into libstdc++
+// makes GCC diagnose the intentionally paired replacements as mismatched.
+#if defined(__GNUC__) || defined(__clang__)
+#define ORES_TEST_NOINLINE __attribute__((noinline))
+#else
+#define ORES_TEST_NOINLINE
+#endif
+
+ORES_TEST_NOINLINE void* operator new(std::size_t size) {
     if (injected_allocation_failure()) throw std::bad_alloc();
     if (void* p = std::malloc(size)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void* operator new[](std::size_t size) {
+ORES_TEST_NOINLINE void operator delete(void* p) noexcept { std::free(p); }
+ORES_TEST_NOINLINE void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+ORES_TEST_NOINLINE void* operator new[](std::size_t size) {
     if (injected_allocation_failure()) throw std::bad_alloc();
     if (void* p = std::malloc(size)) return p;
     throw std::bad_alloc();
 }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+ORES_TEST_NOINLINE void operator delete[](void* p) noexcept { std::free(p); }
+ORES_TEST_NOINLINE void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+#undef ORES_TEST_NOINLINE
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("actor resource loan race: " #x); } while (false)
 
