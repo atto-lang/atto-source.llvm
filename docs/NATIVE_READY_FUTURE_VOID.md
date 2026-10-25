@@ -11,7 +11,9 @@ stop worker;
 return 43;
 ```
 
-All three readiness spellings require the containing function to declare `throws ActorTerminated`; this composes with the stop-before-ready failure contract from the lifecycle stack.
+Readiness can fail if the actor terminates before READY publication, so the
+enclosing native source function must declare `throws ActorTerminated`.
+`get_done()` remains the separate physical-finalization barrier.
 
 Three admitted spellings have identical readiness semantics:
 `await worker;`, `await worker.get_ready();`, and
@@ -22,9 +24,10 @@ HasFuture trait/interface dispatch for arbitrary objects. Awaiting a worker
 is not awaiting its `get_done()` lifecycle completion.
 
 The compiler represents the typed lexical Future as a non-Copy, actor-affine
-capability, not an int or heap pointer. The binding must be `const`; mutable
-`val Future<void>` and `let Future<void>` forms fail closed so reassignment
-cannot create a second producer/consumer edge.
+capability, not an int or heap pointer. The binding itself must be `const`;
+mutable `val Future<void>` and `let Future<void>` readiness aliases are
+rejected before IR generation because reassignment would invalidate the
+single-producer/single-consumer proof.
 The ready Future is consumed once, before all post-await sends and stops,
 into the existing compiled root CONTROL continuation. The execution uses
 `oreslang_source_actor_await_ready` with its continuation provenance and
@@ -32,12 +35,6 @@ scheduler-generated CONTROL turn; the actor carrier does not spin or block.
 The surrounding actor API remains the restricted one-actor, zero-suspended-
 local, scalar-return slice. The token may not be copied, shadowed, reassigned,
 passed as a parameter, returned, or sent between actors.
-
-The source `Future<void>` token does **not** use `NativeScalarFutureAwait`.
-That #920 frame is a host-only pinned i64 result prerequisite with its own
-ticket and CONTROL scheduling tests. Readiness continues through the
-SourceActorBootstrap/NativeActorFuture path and the strict continuation
-READY/CLAIMED arbitration; sharing an invariant does not imply ABI identity.
 
 This is **not** general `Future<T>` or `async fnc` lowering. In particular,
 there is no compiler-owned scalar result Future, suspendable local scalar,

@@ -119,6 +119,7 @@ int ores_native_await_trace_resume_begin(
         OresNativeSuspensionLink link,
         OresNativeExecutionHandle* out_execution,
         OresNativeExecutionContext* out_context) {
+    /* Direct host trace bootstrap, not a permission to wake an unresolved Future. */
     return resume_begin_checked(executions, continuations,
         resumed_execution_id, link, out_execution, out_context, 0);
 }
@@ -130,6 +131,7 @@ int ores_native_await_trace_ready_resume_begin(
         OresNativeSuspensionLink link,
         OresNativeExecutionHandle* out_execution,
         OresNativeExecutionContext* out_context) {
+    /* A scheduler wake must never claim PENDING or CANCELLED work. */
     return resume_begin_checked(executions, continuations,
         resumed_execution_id, link, out_execution, out_context, 1);
 }

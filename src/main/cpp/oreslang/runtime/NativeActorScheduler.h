@@ -13,6 +13,34 @@ typedef struct {
     uint64_t generation;
 } OresNativeActorRef;
 
+/* Native scheduler-owned continuation wake escrow. Each producer actor has a
+ * finite, preallocated pool, separate from DATA and supervisor CONTROL. This
+ * is a trusted host ABI: source guest programs cannot mint wake tickets.
+ * Source-level send_async lowering and physical message loans are NOT supplied
+ * by these scheduling primitives alone.
+ */
+enum { ORES_NATIVE_WAKE_CREDITS_PER_ACTOR = 8 };
+typedef enum {
+    ORES_NATIVE_WAKE_READY = 1,
+    ORES_NATIVE_WAKE_CANCELLED = 2,
+    ORES_NATIVE_WAKE_FAILED = 3
+} OresNativeWakeOutcome;
+typedef struct {
+    OresNativeActorRef producer;
+    OresNativeActorRef target;
+    uint64_t slot; /* per-producer preallocated wake slot, zero-based */
+    uint64_t slot_generation;
+    uint64_t continuation_slot;
+    uint64_t continuation_generation;
+    uint64_t code_generation;
+    uint64_t descriptor_generation;
+} OresNativeWakeTicket;
+typedef enum {
+    ORES_NATIVE_WAKE_INVALID = 0,
+    ORES_NATIVE_WAKE_PUBLISHED = 1,
+    ORES_NATIVE_WAKE_PRODUCER_RETIRED = 2
+} OresNativeWakePublishStatus;
+
 typedef enum {
     ORES_NATIVE_TERMINATION_STOPPED = 1,
     ORES_NATIVE_TERMINATION_RUNTIME_RETIRED = 2
@@ -100,10 +128,20 @@ int ores_native_actor_scheduler_wait_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+typedef void (*OresNativeActorWakeFn)(
+    void* ctx, size_t actor_index, OresNativeWakeTicket ticket,
+    OresNativeWakeOutcome outcome);
 /* One reserved CONTROL message per actor, independent of normal-mail
  * capacity; only an admitted actor lane may invoke the CONTROL handler.
  * CONTROL callbacks never run on a failed child's carrier by direct call.
  */
+/* Variant with a dedicated continuation wake callback. The callback is
+ * dispatched under the producer's authenticated single-flight actor claim,
+ * never inline from completion, admission or cancellation threads. */
+OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
+    size_t actor_count, size_t per_actor_capacity, size_t workers,
+    OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control,
+    OresNativeActorPanicFn on_panic, OresNativeActorWakeFn on_wake, void* ctx);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
@@ -115,6 +153,45 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
  * payload) to the parent. Returns 0 if the reserved slot is full or if the
  * target is stale/stopped; caller must retry or explicitly escalate.
  */
+/* Reserve the exact future delivery credit BEFORE registering a bounded
+ * pending mailbox producer. All worker pthreads are made serviceable during
+ * reservation, so transfer->publish cannot fail on late worker creation.
+ * target/continuation/descriptor identities are immutable ABA fences.
+ * A reserved or transferred ticket blocks producer physical DONE; it does not
+ * occupy the supervisor CONTROL slot or the USER mailbox.
+ *
+ * The mailbox-accounting lock must serialize TRANSFER with mailbox credit
+ * handoff and cancellation. For same-scheduler targets, TRANSFER revalidates
+ * the exact live target incarnation so STOP cannot become a false admission.
+ * Wake mutation APIs fail closed when invoked on a scheduler created without
+ * wake support. No guest/user callback runs in these functions.
+ */
+int ores_native_actor_scheduler_reserve_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef producer,
+    OresNativeActorRef target, uint64_t continuation_slot,
+    uint64_t continuation_generation, uint64_t code_generation,
+    uint64_t descriptor_generation, OresNativeWakeTicket* out);
+int ores_native_actor_scheduler_transfer_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Cancellation succeeds only while still RESERVED (not transferred). */
+int ores_native_actor_scheduler_cancel_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Explicit rollback for an aborted transfer before envelope publication.
+ * This is NOT late producer cancellation and must settle the send as failed. */
+int ores_native_actor_scheduler_abort_transferred_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* After transfer, publication cannot fail due to capacity or allocation.
+ * If STOP won first it consumes the reserved ticket as a terminal failure,
+ * without scheduling user code or fabricating successful delivery. */
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
+    OresNativeWakeOutcome outcome);
+int ores_native_actor_scheduler_is_current_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+size_t ores_native_actor_scheduler_outstanding_wake_loans(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef producer);
+uint64_t ores_native_actor_scheduler_wakes_completed(
+    OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_publish_control(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent, uint64_t payload);
 /* Child must be a valid actor in the same scheduler, distinct from parent.

@@ -289,7 +289,7 @@ int main() {
     auto reused_future = NativeScalarFutureAwait::open(reused_owner, 81);
     check(reused_future->complete(reused_future->id(), 12),
           "reused generation Future not settled");
-    check(!detached_owner.same_capability(reused_owner),
+    check(!detached_owner.same_incarnation(reused_owner),
           "distinct actor lifetimes shared capability ticket");
     check(!reused_future->try_schedule(
               reused_future->id(), reused_group, detached_owner,

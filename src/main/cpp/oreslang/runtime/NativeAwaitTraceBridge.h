@@ -35,9 +35,10 @@ int ores_native_await_trace_resume_begin(
     OresNativeExecutionContext* out_context);
 
 /*
- * Future-backed scheduler wakeup. Unlike the legacy causal-trace path, this
- * refuses to resume until the producer has published terminal readiness and
- * atomically competes with cancellation.
+ * Scheduler-only Future wakeup path. Unlike the legacy direct causal trace
+ * resume, this refuses to resume until the owning producer has published
+ * READY in NativeContinuationStore, and atomically competes with cancellation.
+ * Call only after the scheduler admitted the correct actor CONTROL turn.
  */
 int ores_native_await_trace_ready_resume_begin(
     OresNativeExecutionContextStore* executions,

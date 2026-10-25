@@ -84,11 +84,3 @@ Native `select` additionally needs a single winner across *all* registered
 channel/timeout/cancel arms and losing-arm detachment; independently claiming
 one continuation per arm is not select correctness. Java/GraalVM ↔ LLVM
 source-execution fixtures and exact-head sanitizer evidence remain mandatory.
-
-## Integration note for #931
-
-The reconciled lifecycle stack extends the gate beyond the original #913 slice:
-- successful readiness publishes continuation READY;
-- stop-before-ready terminal failure also publishes continuation READY solely so root CONTROL cleanup can retire the suspension without executing guest continuation code;
-- get_done physical terminal ACK publishes continuation READY before its root CONTROL resume can claim;
-- direct HasFuture await and lexical const Future<void> readiness reuse the same guarded source path.

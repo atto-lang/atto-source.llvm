@@ -151,6 +151,18 @@ int oreslang_source_actor_ready_status(void* opaque) {
         &instance->startup_state, memory_order_acquire);
 }
 
+typedef struct {
+    OresNativeActorFuture* future;
+    int status;
+} SourceReadyFutureCommit;
+
+static int commit_source_ready_future(void* raw) {
+    SourceReadyFutureCommit* commit = (SourceReadyFutureCommit*)raw;
+    return commit
+        && commit->future
+        && ores_native_actor_future_complete(commit->future, commit->status);
+}
+
 static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame && frame == group.pending_ready);
     if (!frame->suspend_recorded) return;
@@ -169,19 +181,21 @@ static void settle_ready_if_admitted_locked(ReadyAwaitFrame* frame) {
     ensure(frame->ready_future != NULL);
     if (ores_native_actor_future_status(frame->ready_future)
             == ORES_NATIVE_FUTURE_PENDING) {
-        ensure(ores_native_actor_future_complete(
-            frame->ready_future, future_status));
         /*
-         * This READY state belongs to the logical continuation, not the actor
-         * startup outcome. Both READY and FAILED Future terminals must make
-         * the root CONTROL cleanup resumable; guest continuation execution is
-         * still suppressed below for TERMINATED_BEFORE_READY.
-         *
-         * group.mutex remains held here, so the reserved CONTROL callback
-         * cannot enter root_resume_turn before this publication is visible.
+         * Serialize the fallible Future outcome commit and continuation READY
+         * publication against cancellation under the continuation-store lock.
+         * Both successful readiness and TERMINATED_BEFORE_READY must wake the
+         * root CONTROL lane exactly once; only the Future outcome differs.
          */
-        ensure(ores_native_continuation_store_notify_ready(
-            group.continuations, frame->link.continuation));
+        SourceReadyFutureCommit commit = {
+            .future = frame->ready_future,
+            .status = future_status
+        };
+        ensure(ores_native_continuation_store_commit_ready(
+            group.continuations,
+            frame->link.continuation,
+            commit_source_ready_future,
+            &commit));
     }
 }
 
@@ -342,7 +356,7 @@ static void root_done_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_ready_resume_begin(
+    ensure(ores_native_await_trace_resume_begin(
         group.executions,
         group.continuations,
         physical.id,
@@ -514,11 +528,7 @@ static void open_group_locked(void) {
     }
     group.vm = ores_native_vm_open(&cfg);
     ensure(group.vm != NULL);
-    /*
-     * VM CONTROL must exist before root actor admission. This service only
-     * signals scheduler conditions; guest constructors and continuations still
-     * execute exclusively on bounded actor/root CONTROL lanes.
-     */
+    /* Wake-only CONTROL service must exist before root actor admission. */
     ensure(ores_native_vm_start_main_control_loop(group.vm));
 
     /*
@@ -754,13 +764,6 @@ int64_t oreslang_source_actor_await_done(
         == ORES_NATIVE_FUTURE_PENDING);
     ensure(ores_native_actor_future_complete(
         frame.done_future, ORES_NATIVE_FUTURE_READY));
-    /*
-     * get_done is Future-backed too: physical terminal ACK must publish the
-     * continuation as scheduler-resumable before the root CONTROL turn can
-     * claim it. Holding group.mutex closes the completion/wakeup race.
-     */
-    ensure(ores_native_continuation_store_notify_ready(
-        group.continuations, frame.link.continuation));
 
     while (!frame.done)
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);

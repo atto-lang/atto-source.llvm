@@ -1,9 +1,10 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
-    path::PathBuf,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 struct Scratch(PathBuf);
 impl Drop for Scratch {
@@ -16,6 +17,36 @@ fn run(command: &mut Command) -> Output {
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
 }
+// Negative admission is adversarial: a broken O_NONBLOCK/fstat guard must
+// fail the test quickly rather than consume an entire macOS/Linux CI job.
+// Redirect both streams to files/null to avoid pipe-buffer deadlocks.
+#[cfg(unix)]
+fn run_bounded_no_ir(command: &mut Command, scratch: &Path, label: &str) {
+    let stdout_path = scratch.join("bounded-negative-stdout");
+    let stdout = fs::File::create(&stdout_path).expect("create negative output file");
+    let mut child = command
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{label}: cannot spawn compiler: {error}"));
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        match child.try_wait().expect("poll child") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{label}: compiler blocked beyond eight seconds");
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    assert_eq!(status.code(), Some(1), "{label}: expected a rejected source");
+    assert_eq!(fs::metadata(&stdout_path).unwrap().len(), 0,
+               "{label}: compiler emitted partial IR");
+    fs::remove_file(&stdout_path).unwrap();
+}
+
 // Exercise the generated function boundary, including a callee that never
 // reads its parameter. Invalid descriptors must abort before any payload use.
 fn check_sum_boundary(compiler: &str, clang: &str, runtime: &str, scratch: &std::path::Path, sanitize: bool) {
@@ -167,6 +198,32 @@ fn main() {
           b.add(30);return count.value==69&&b.size==3?0:1;}"#, ""),
 
         ("exact-user-program", exact, "hello world\nhiiii 2hiiii"),
+        ("user-two-argument-println",
+            r#"import class Foo from './main-1.ores';
+               pub routine main():int {
+                 stdio.println("hello world");
+                 val Foo f = new Foo();
+                 val string x = f.bar();
+                 stdio.println("x", x);
+                 return 0;
+               }"#,
+            "hello world\nxhiiii 2hiiii\n"),
+        ("variadic-console-evaluation-order",
+            r#"fnc mark(string s):string{stdio.print(s);return s;}
+               pub routine main():int{
+                 stdio.println(mark("a"), mark("b"), "c");
+                 return 0;
+               }"#,
+            "ababc\n"),
+        ("variadic-print-utf8-nul",
+            r#"pub routine main():int{
+                 stdio.print("A", "\u0000", "é");
+                 return 0;
+               }"#,
+            "A\0é"),
+        ("variadic-console-at-boundary-32",
+            r#"pub fnc main():int{stdio.println("x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x");return 0;}"#,
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"),
         (
             "imported-owning-class-return",
             r#"import class Box from './owned-box.ores';
@@ -349,6 +406,39 @@ fn main() {
                 return 0;
               }"#,
             "health\nmissing\nmethod\n",
+        ),
+        (
+            "template-quote-vectors",
+            r#"pub fnc main():int{
+                stdio.print("abc");stdio.print("|");
+                stdio.print("'abc'");stdio.print("|");
+                stdio.print('\"abc\"');stdio.print("|");
+                stdio.print(`'\"abc\"'`);return 0;}"#,
+            "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "template-two-parameter-interpolation",
+            r#"fnc render(string bar,string star):string{return `${bar} is ${star}`;}
+              pub fnc main():int{stdio.println(render("Mars","bright"));return 0;}"#,
+            "Mars is bright\n",
+        ),
+        (
+            "template-nested-expression-and-quotes",
+            r#"pub fnc main():int{val string word="ok";stdio.print(`before:${`inside:${word}`}:after`);
+              stdio.print("|");stdio.print(`${"}"+"{"}`);return 0;}"#,
+            "before:inside:ok:after|}{",
+        ),
+        (
+            "template-escapes",
+            r#"pub fnc main():int{stdio.print(`line\n\t\${literal}\`\u00e9`);return 0;}"#,
+            "line\n\t${literal}`é",
+        ),
+        (
+            "template-left-to-right-once",
+            r#"fnc first():string{stdio.print("1");return "A";}
+              fnc second():string{stdio.print("2");return "B";}
+              pub fnc main():int{stdio.print(`${first()}-${second()}`);return 0;}"#,
+            "12A-B",
         ),
         (
             "source-effect-order",
@@ -716,6 +806,26 @@ fn main() {
             foo.to_owned(),
         ),
         (
+            "template-non-string-interpolation",
+            r#"pub fnc main():int{val string x=`${5}`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-empty-interpolation",
+            r#"pub fnc main():int{val string x=`${   }`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-invalid-escape",
+            r#"pub fnc main():int{val string x=`\q`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "template-unclosed-interpolation",
+            r#"pub fnc main():int{val string x=`${"x"`;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
             "private-method",
             exact.replace("f.bar()", "f.foo()"),
             foo.to_owned(),
@@ -748,6 +858,17 @@ fn main() {
         (
             "bad-concat",
             r#"pub fnc main():int{val string x="bad"+true;return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-type-mismatch",
+            r#"pub fnc main():int{stdio.println("a", 2);return 0;}"#.to_owned(),
+            foo.to_owned(),
+        ),
+        (
+            "variadic-console-too-many-args",
+            format!("pub fnc main():int{{stdio.println({});return 0;}}",
+                    vec!["\"x\""; 33].join(",")),
             foo.to_owned(),
         ),
         (
@@ -824,6 +945,74 @@ fn main() {
             "{name}: internal compiler failure"
         );
     }
+    let mut interpolation_bomb =
+        "pub fnc main():int{val string x=`".to_owned();
+    for _ in 0..1025 { interpolation_bomb.push_str("${\"x\"}"); }
+    interpolation_bomb.push_str("`;return 0;}");
+
+    let brace_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{}0{}}}`;return 0;}}",
+        "{".repeat(257),
+        "}".repeat(257),
+    );
+
+    let mut nested = "\"x\"".to_owned();
+    for _ in 0..34 { nested = format!("`${{{nested}}}`"); }
+    let nesting_bomb = format!(
+        "pub fnc main():int{{val string x=`${{{nested}}}`;return 0;}}"
+    );
+
+    for (name, source, diagnostic) in [
+        ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
+        ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
+        ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
+    ] {
+        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        assert_eq!(rejected.status.code(), Some(1), "{name}: must fail closed");
+        assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(diagnostic),
+            "{name}: wrong diagnostic: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
+    // Native module admission must bind to the opened regular-file inode.
+    // FIFOs must not block compilation; a hard-link alias must not bypass
+    // self-import detection. Ordinary regular symlinks remain supported.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let entry = scratch.0.join("main.ores");
+        let imported = scratch.0.join("main-1.ores");
+        let library = scratch.0.join("library.ores");
+        fs::write(&entry, exact).unwrap();
+        fs::remove_file(&imported).unwrap();
+
+        let made_fifo = Command::new("mkfifo").arg(&imported).status().unwrap();
+        assert!(made_fifo.success(), "could not prepare FIFO import test");
+        run_bounded_no_ir(Command::new(&compiler).arg(&entry),
+                          &scratch.0, "FIFO import");
+        fs::remove_file(&imported).unwrap();
+
+        fs::hard_link(&entry, &imported).unwrap();
+        let rejected = run(Command::new(&compiler).arg(&entry));
+        assert_eq!(rejected.status.code(), Some(1), "self hard-link import admitted");
+        assert!(rejected.stdout.is_empty(), "self hard-link import emitted partial IR");
+        fs::remove_file(&imported).unwrap();
+
+        fs::write(&library, foo).unwrap();
+        symlink("library.ores", &imported).unwrap();
+        let allowed = run(Command::new(&compiler).arg(&entry));
+        assert!(
+            allowed.status.success() && !allowed.stdout.is_empty(),
+            "regular symlink import should remain supported: {}",
+            String::from_utf8_lossy(&allowed.stderr)
+        );
+        fs::remove_file(&imported).unwrap();
+        fs::remove_file(&library).unwrap();
+    }
     fs::write(
         scratch.0.join("main.ores"),
         r#"pub fnc main():int{stdio.print("host only");return 0;}"#,
@@ -852,5 +1041,5 @@ fn main() {
     }
     assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
     if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
-    println!("PASS class/string parity: {} common-source positives, {} native-only positives, {} controlled-panic cases (five native executions each), {} no-IR rejections plus two target boundaries, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), panics.len(), negatives.len());
+    println!("PASS class/string parity: {} common-source positives, {} native-only positives, {} controlled-panic cases (five native executions each), {} no-IR rejections plus two target boundaries and two Unix filesystem boundary rejections, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), panics.len(), negatives.len());
 }

@@ -10,6 +10,7 @@ pub fnc main(): int {
   const worker: ActorRef<Worker> = spawn Worker();
   const Future<void> ready = worker.get_ready();
   await ready;
+  await worker;
   worker.send(1);
   worker.send(2);
   stop worker;

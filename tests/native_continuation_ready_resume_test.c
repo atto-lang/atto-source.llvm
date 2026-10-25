@@ -24,6 +24,75 @@ typedef struct {
     int won;
 } RaceArgs;
 
+typedef struct {
+    int calls;
+    int result;
+} ReadyCommitProbe;
+
+static int ready_commit_probe(void* raw) {
+    ReadyCommitProbe* probe = (ReadyCommitProbe*)raw;
+    ++probe->calls;
+    return probe->result;
+}
+
+
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    int calls;
+} ReentryProbe;
+
+static int reentry_probe(void* raw) {
+    ReentryProbe* probe = (ReentryProbe*)raw;
+    OresNativeContinuationRecord ignored = {0};
+    ++probe->calls;
+    /* Must fail immediately rather than deadlock on the held store lock. */
+    return !ores_native_continuation_store_get(
+        probe->store, probe->handle, &ignored);
+}
+
+
+typedef struct {
+    atomic_int entered;
+    atomic_int release;
+} BlockingCommitProbe;
+
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    BlockingCommitProbe* probe;
+    int won;
+} CommitRaceArgs;
+
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    int won;
+} CancelRaceArgs;
+
+static int blocking_ready_commit(void* raw) {
+    BlockingCommitProbe* probe = (BlockingCommitProbe*)raw;
+    atomic_store_explicit(&probe->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&probe->release, memory_order_acquire)) {
+        /* Hold the producer commit open while cancellation contends. */
+    }
+    return 1;
+}
+
+static void* commit_ready_contender(void* raw) {
+    CommitRaceArgs* race = (CommitRaceArgs*)raw;
+    race->won = ores_native_continuation_store_commit_ready(
+        race->store, race->handle, blocking_ready_commit, race->probe);
+    return NULL;
+}
+
+static void* cancel_ready_contender(void* raw) {
+    CancelRaceArgs* race = (CancelRaceArgs*)raw;
+    race->won = ores_native_continuation_store_cancel(
+        race->store, race->handle);
+    return NULL;
+}
+
 static void* contender(void* raw) {
     RaceArgs* race = (RaceArgs*)raw;
     while (!atomic_load_explicit(race->go, memory_order_acquire)) {
@@ -52,7 +121,6 @@ static void race_pair(RaceArgs* first, RaceArgs* second) {
     atomic_store_explicit(&go, 1, memory_order_release);
     check(pthread_join(one, NULL) == 0);
     check(pthread_join(two, NULL) == 0);
-    check(first->won + second->won == 1);
 }
 
 static OresNativeContinuationHandle publish(
@@ -83,9 +151,149 @@ int main(void) {
     check(ores_native_execution_context_store_insert(
         executions, &context, &execution));
 
+    /*
+     * The producer commit and READY publication form one transaction relative
+     * to cancellation. A failed producer commit leaves PENDING unchanged.
+     */
+    OresNativeContinuationRecord record = {0};
+    ReadyCommitProbe probe = {0, 1};
+    OresNativeContinuationHandle transactional_ready =
+        publish(continuations, execution);
+    check(ores_native_continuation_store_commit_ready(
+        continuations, transactional_ready, ready_commit_probe, &probe));
+    check(probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, transactional_ready, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(
+        continuations, transactional_ready));
+    check(ores_native_continuation_store_release(
+        continuations, transactional_ready));
+
+    probe = (ReadyCommitProbe){0, 0};
+    OresNativeContinuationHandle failed_commit =
+        publish(continuations, execution);
+    check(!ores_native_continuation_store_commit_ready(
+        continuations, failed_commit, ready_commit_probe, &probe));
+    check(probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, failed_commit, &record));
+    check(record.state == ORES_CONTINUATION_PENDING);
+    check(ores_native_continuation_store_cancel(continuations, failed_commit));
+    check(ores_native_continuation_store_release(continuations, failed_commit));
+
+
+    OresNativeContinuationHandle reentry =
+        publish(continuations, execution);
+    ReentryProbe reentry_probe_state = {continuations, reentry, 0};
+    check(ores_native_continuation_store_commit_ready(
+        continuations, reentry, reentry_probe, &reentry_probe_state));
+    check(reentry_probe_state.calls == 1);
+    check(ores_native_continuation_store_get(continuations, reentry, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(continuations, reentry));
+    check(ores_native_continuation_store_release(continuations, reentry));
+
+
+    /*
+     * Cross-store re-entry is also rejected: otherwise concurrent callbacks
+     * could acquire A->B and B->A and deadlock even though neither re-enters
+     * its own store.
+     */
+    OresNativeExecutionContextStore* other_executions =
+        ores_native_execution_context_store_open(2);
+    check(other_executions != NULL);
+    OresNativeExecutionContext other_context = context;
+    other_context.id.runtime_domain = 99;
+    other_context.id.execution = 1;
+    other_context.allocation.domain = 99;
+    other_context.allocation.owner = 4;
+    OresNativeExecutionHandle other_execution = {0, 0};
+    check(ores_native_execution_context_store_insert(
+        other_executions, &other_context, &other_execution));
+    OresNativeContinuationStore* other_continuations =
+        ores_native_continuation_store_open(1, other_executions);
+    check(other_continuations != NULL);
+    OresNativeContinuationHandle other_handle =
+        publish(other_continuations, other_execution);
+
+    OresNativeContinuationHandle cross_store_reentry =
+        publish(continuations, execution);
+    ReentryProbe cross_store_probe = {
+        other_continuations, other_handle, 0
+    };
+    check(ores_native_continuation_store_commit_ready(
+        continuations, cross_store_reentry,
+        reentry_probe, &cross_store_probe));
+    check(cross_store_probe.calls == 1);
+    check(ores_native_continuation_store_get(
+        continuations, cross_store_reentry, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_get(
+        other_continuations, other_handle, &record));
+    check(record.state == ORES_CONTINUATION_PENDING);
+
+    check(ores_native_continuation_store_cancel(
+        continuations, cross_store_reentry));
+    check(ores_native_continuation_store_release(
+        continuations, cross_store_reentry));
+    check(ores_native_continuation_store_cancel(
+        other_continuations, other_handle));
+    check(ores_native_continuation_store_release(
+        other_continuations, other_handle));
+    check(ores_native_continuation_store_close(other_continuations));
+    check(ores_native_execution_context_store_release(
+        other_executions, other_execution));
+    check(ores_native_execution_context_store_close(other_executions));
+
+
+    /*
+     * Deterministic commit-vs-cancel contention. The producer callback blocks
+     * while commit_ready owns the continuation-store lock. Cancellation may
+     * only proceed after READY is published, so both calls may succeed but
+     * the final state must be CANCELLED rather than READY being written over
+     * an intervening cancellation.
+     */
+    OresNativeContinuationHandle serialized_commit =
+        publish(continuations, execution);
+    BlockingCommitProbe blocking_probe = {
+        .entered = ATOMIC_VAR_INIT(0),
+        .release = ATOMIC_VAR_INIT(0)
+    };
+    CommitRaceArgs commit_race = {
+        continuations, serialized_commit, &blocking_probe, 0
+    };
+    pthread_t commit_thread;
+    check(pthread_create(
+        &commit_thread, NULL, commit_ready_contender, &commit_race) == 0);
+    while (!atomic_load_explicit(
+            &blocking_probe.entered, memory_order_acquire)) {
+        /* Wait until the fallible producer commit runs under the store lock. */
+    }
+    CancelRaceArgs cancel_race = {continuations, serialized_commit, 0};
+    pthread_t cancel_thread;
+    check(pthread_create(
+        &cancel_thread, NULL, cancel_ready_contender, &cancel_race) == 0);
+    atomic_store_explicit(&blocking_probe.release, 1, memory_order_release);
+    check(pthread_join(commit_thread, NULL) == 0);
+    check(pthread_join(cancel_thread, NULL) == 0);
+    check(commit_race.won);
+    check(cancel_race.won);
+    check(ores_native_continuation_store_get(
+        continuations, serialized_commit, &record));
+    check(record.state == ORES_CONTINUATION_CANCELLED);
+    check(!ores_native_continuation_store_notify_ready(
+        continuations, serialized_commit));
+    check(!ores_native_continuation_store_try_claim_ready_resume(
+        continuations, serialized_commit, NULL));
+    check(!ores_native_continuation_store_finish_resume(
+        continuations, serialized_commit));
+    check(ores_native_continuation_store_release(
+        continuations, serialized_commit));
+
     /* A not-yet-ready Future must not claim the source continuation. */
     OresNativeContinuationHandle pending = publish(continuations, execution);
-    OresNativeContinuationRecord record = {0};
+    record = (OresNativeContinuationRecord){0};
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, &record));
     check(ores_native_continuation_store_notify_ready(continuations, pending));
@@ -105,11 +313,62 @@ int main(void) {
     /* Cancellation before Future readiness is irrevocable. */
     OresNativeContinuationHandle cancelled = publish(continuations, execution);
     check(ores_native_continuation_store_cancel(continuations, cancelled));
+    ReadyCommitProbe cancelled_probe = {0, 1};
+    check(!ores_native_continuation_store_commit_ready(
+        continuations, cancelled, ready_commit_probe, &cancelled_probe));
+    check(cancelled_probe.calls == 0);
     check(!ores_native_continuation_store_notify_ready(continuations, cancelled));
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, cancelled, NULL));
     check(ores_native_continuation_store_release(continuations, cancelled));
     check(!ores_native_continuation_store_get(continuations, cancelled, &record));
+
+    /*
+     * READY is still cancellable until a resume claim linearizes. Both
+     * notify_ready() and cancel() may therefore report success in sequence;
+     * the observable terminal state must be CANCELLED and unclaimable.
+     */
+    OresNativeContinuationHandle ready_then_cancel =
+        publish(continuations, execution);
+    check(ores_native_continuation_store_notify_ready(
+        continuations, ready_then_cancel));
+    check(ores_native_continuation_store_cancel(
+        continuations, ready_then_cancel));
+    check(ores_native_continuation_store_get(
+        continuations, ready_then_cancel, &record));
+    check(record.state == ORES_CONTINUATION_CANCELLED);
+    check(!ores_native_continuation_store_try_claim_ready_resume(
+        continuations, ready_then_cancel, NULL));
+    check(ores_native_continuation_store_release(
+        continuations, ready_then_cancel));
+
+
+    /*
+     * ABA regression: a released handle must never affect a reused slot.
+     * Capacity two ensures repeated publication eventually reuses it.
+     */
+    OresNativeContinuationHandle stale = cancelled;
+    int observed_reused_slot = 0;
+    for (int reuse = 0; reuse < 8; ++reuse) {
+        OresNativeContinuationHandle current = publish(continuations, execution);
+        check(!ores_native_continuation_store_notify_ready(continuations, stale));
+        check(!ores_native_continuation_store_cancel(continuations, stale));
+        check(!ores_native_continuation_store_try_claim_ready_resume(
+            continuations, stale, NULL));
+        check(!ores_native_continuation_store_finish_resume(
+            continuations, stale));
+        check(!ores_native_continuation_store_get(continuations, stale, &record));
+        check(ores_native_continuation_store_get(continuations, current, &record));
+        check(record.state == ORES_CONTINUATION_PENDING);
+        if (current.slot == stale.slot) {
+            observed_reused_slot = 1;
+            check(current.generation != stale.generation);
+            check(!ores_native_continuation_store_release(continuations, stale));
+        }
+        check(ores_native_continuation_store_cancel(continuations, current));
+        check(ores_native_continuation_store_release(continuations, current));
+    }
+    check(observed_reused_slot);
 
     /*
      * Stress two distinct linearization windows:
@@ -122,12 +381,20 @@ int main(void) {
         RaceArgs cancel = {continuations, handle, NULL, 1, 0, 0};
         RaceArgs complete = {continuations, handle, NULL, 0, 0, 0};
         race_pair(&cancel, &complete);
+        check(cancel.won || complete.won);
         check(ores_native_continuation_store_get(continuations, handle, &record));
         if (cancel.won) {
+            /*
+             * notify_ready may linearize first and still report success;
+             * cancellation is allowed to win afterward while READY remains
+             * unclaimed. What matters is the terminal state, not that only
+             * one transition API returned success.
+             */
             check(record.state == ORES_CONTINUATION_CANCELLED);
             check(!ores_native_continuation_store_try_claim_ready_resume(
                 continuations, handle, NULL));
         } else {
+            check(complete.won);
             check(record.state == ORES_CONTINUATION_READY);
             check(ores_native_continuation_store_try_claim_ready_resume(
                 continuations, handle, NULL));
@@ -143,6 +410,7 @@ int main(void) {
         RaceArgs canceller = {continuations, ready, NULL, 1, 0, 0};
         RaceArgs claimer = {continuations, ready, NULL, 0, 1, 0};
         race_pair(&canceller, &claimer);
+        check(canceller.won + claimer.won == 1);
         check(ores_native_continuation_store_get(continuations, ready, &record));
         if (claimer.won) {
             check(record.state == ORES_CONTINUATION_CLAIMED);

@@ -82,7 +82,7 @@ public:
             NativeScalarFutureId ticket,
             const NativeActorRef& parent_ref) noexcept {
         if (!valid(ticket)
-                || !parent_ref.same_capability(owner_)
+                || !parent_ref.same_incarnation(owner_)
                 || !parent_ref.delivery_closed())
             return false;
         return cancel(ticket);
@@ -100,7 +100,7 @@ public:
                       const NativeActorRef& parent_ref,
                       Resume resume) {
         if (!resume) throw std::invalid_argument("missing scalar future resume");
-        if (!valid(ticket) || !parent_ref.same_capability(owner_))
+        if (!valid(ticket) || !parent_ref.same_incarnation(owner_))
             return false;
 
         std::shared_ptr<NativeScalarFutureAwait> self;
