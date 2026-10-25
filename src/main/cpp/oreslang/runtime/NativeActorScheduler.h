@@ -171,8 +171,12 @@ int ores_native_actor_scheduler_fifo_carriers_ready(
  * residency, or WCET. Must run before any message/control admission. */
 int ores_native_actor_scheduler_prestart_carriers(
     OresNativeActorScheduler* scheduler);
-/* Compatibility spelling for RT VM bootstrap; delegates to the stronger
- * current prestart-carriers invariant rather than maintaining another state. */
+/* Cold, one-way RT VM bootstrap. Requires zero existing carriers and no
+ * admitted/runnable work; an ordinary or partially completed throughput
+ * prestart cannot be promoted into RT. A pthread-create failure poisons this
+ * scheduler instance so later DATA/CONTROL admission cannot retry allocation.
+ * This is necessary but not sufficient for hard-RT: OS policy, CPU/IRQ
+ * isolation, memory residency and WCET remain separate qualification gates. */
 int ores_native_actor_scheduler_prestart_realtime(
     OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_all_carriers_started(
