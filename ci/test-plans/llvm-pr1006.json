@@ -1,0 +1,210 @@
+{
+  "schema": "ores-private-ci-test-plan-v1",
+  "source_repo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "allowed_prs": [
+    1006
+  ],
+  "commands": [
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-pr1006-gcc",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DBUILD_TESTING=ON",
+        "-DCMAKE_C_COMPILER=gcc",
+        "-DCMAKE_CXX_COMPILER=g++"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "argv": [
+        "cmake",
+        "--build",
+        "build-pr1006-gcc",
+        "--parallel",
+        "2"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "python3",
+        "-I",
+        "-c",
+        "import json,subprocess,sys\np=subprocess.run(['ctest','--test-dir','build-pr1006-gcc','--show-only=json-v1'],capture_output=True,text=True)\nif p.returncode:sys.stderr.write(p.stderr);raise SystemExit(p.returncode)\nrequired=[\"source_actor_capability_runtime\",\"native_vm_nio_lifecycle_and_rt_prestart\",\"native_epoll_reactor_generation_completion\",\"native_epoll_reactor_manager_rt_preallocated\",\"native_epoll_reactor_c_abi\",\"native_actor_resource_loan_terminal_race\",\"source_actor_stop_before_ready\",\"reject_unsupported_native_io_global_launder\",\"reject_unsupported_native_io_method_launder\"]\nactual={x.get('name') for x in json.loads(p.stdout).get('tests',[])}\nmissing=sorted(set(required)-actual)\nif missing:raise SystemExit('MISSING_PR1006_CTEST: '+','.join(missing))\nprint('LLVM_PR1006_CTEST_INVENTORY_PASS count=%d'%len(required))"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 120,
+      "stdout_contains": "LLVM_PR1006_CTEST_INVENTORY_PASS count=9"
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-gcc",
+        "-R",
+        "^(source_actor_capability_runtime|native_vm_nio_lifecycle_and_rt_prestart|native_epoll_reactor_generation_completion|native_epoll_reactor_manager_rt_preallocated|native_epoll_reactor_c_abi|native_actor_resource_loan_terminal_race|source_actor_stop_before_ready|reject_unsupported_native_io_global_launder|reject_unsupported_native_io_method_launder)$",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "python3",
+        "tests/source_actor_e2e.py",
+        "--compiler",
+        "build-pr1006-gcc/oreslang-llvmc",
+        "--clang",
+        "clang",
+        "--root",
+        "."
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-gcc",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-pr1006-clang",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DBUILD_TESTING=ON",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "argv": [
+        "cmake",
+        "--build",
+        "build-pr1006-clang",
+        "--parallel",
+        "2"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-clang",
+        "-R",
+        "^(source_actor_capability_runtime|native_vm_nio_lifecycle_and_rt_prestart|native_epoll_reactor_generation_completion|native_epoll_reactor_manager_rt_preallocated|native_epoll_reactor_c_abi|native_actor_resource_loan_terminal_race|source_actor_stop_before_ready|reject_unsupported_native_io_global_launder|reject_unsupported_native_io_method_launder)$",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-clang",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-pr1006-asan",
+        "-DBUILD_TESTING=ON",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++",
+        "-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "argv": [
+        "cmake",
+        "--build",
+        "build-pr1006-asan",
+        "--parallel",
+        "2"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-asan",
+        "-R",
+        "^(source_actor_capability_runtime|native_vm_nio_lifecycle_and_rt_prestart|native_epoll_reactor_generation_completion|native_epoll_reactor_manager_rt_preallocated|native_epoll_reactor_c_abi|native_actor_resource_loan_terminal_race|source_actor_stop_before_ready|reject_unsupported_native_io_global_launder|reject_unsupported_native_io_method_launder)$",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "cmake",
+        "-S",
+        ".",
+        "-B",
+        "build-pr1006-tsan",
+        "-DBUILD_TESTING=ON",
+        "-DCMAKE_C_COMPILER=clang",
+        "-DCMAKE_CXX_COMPILER=clang++",
+        "-DCMAKE_C_FLAGS=-fsanitize=thread -fno-omit-frame-pointer",
+        "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer",
+        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 600
+    },
+    {
+      "argv": [
+        "cmake",
+        "--build",
+        "build-pr1006-tsan",
+        "--parallel",
+        "2"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "ctest",
+        "--test-dir",
+        "build-pr1006-tsan",
+        "-R",
+        "^(source_actor_capability_runtime|native_vm_nio_lifecycle_and_rt_prestart|native_epoll_reactor_generation_completion|native_actor_resource_loan_terminal_race)$",
+        "--output-on-failure"
+      ],
+      "cwd": ".",
+      "timeout_seconds": 1800
+    }
+  ]
+}
