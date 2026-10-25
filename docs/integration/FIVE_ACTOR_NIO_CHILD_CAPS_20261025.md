@@ -92,3 +92,69 @@ Private source **must not** be mirrored to other GitHub organizations without
 separate reviewed destination allowlist/carrier authorization, protected refs,
 and resolution of source-exposure incidents. All staging writes here remain
 within the original private LLVM repository.
+
+## 2026-10-25 current-head audit: parent DONE vs child physical retirement
+
+**Confirmed source-order bug in the preceding integration head:** the
+`oreslang_source_actor_await_done()` root CONTROL continuation was settled
+after the parent's VM terminal ACK but *before*
+`oreslang_source_actor_join_done()` stopped and physically joined its
+constructor-owned children. Hence guest code could observe parent DONE while
+a child still executed its own guest turn. The synchronous stop code waited
+for children eventually, but that was too late for DONE observer semantics.
+
+**Semantic hardening:** `SourceActorBootstrap.c` now shares a bounded
+`source_actor_join_owned_children(parent)` helper between synchronous
+stop and `await_done`. The latter calls it **after** the parent's
+`ores_native_vm_wait_done` and **before**
+`ores_native_actor_future_complete`, outside `group.mutex`. Each owned
+child is stopped and joined, then its pointer cleared under the mutex so
+the later parent reclamation does not accidentally join a freed child.
+The same helper is used by plain synchronous stop. Nothing changes the
+reactor watch claim/generation or STOP-vs-resource-loan code.
+
+**Adversarial executable fixture authored:** the existing
+`tests/source_actor_capability_runtime_test.c` now creates a parent whose
+constructor owns a child and whose child handler stays active behind an
+atomic gate. A separate trusted host thread awaits the parent DONE
+continuation. That callback asserts the child handler finished; the test
+checks it has not run during the hold and then releases the child to let
+physical joins complete. Existing positive peer-capability and nested
+child-send tests remain.
+
+**Audit performed on committed tree:** 11/11 static invariants passed:
+parent VM ACK -> physical child JOIN -> root DONE publication -> parent
+reclamation; synchronous stop shares the helper; mutex is not held
+during joins; child slots cleared; CTest includes the regression;
+previous native NIO bridge Git blob remains unchanged; unsupported
+standard-I/O callable spoofing still fails closed. These are not
+compiled or executed native test results.
+
+**Actual CI evidence:** the exact-head LLVM compiler Actions run
+`40225745839` returned `failure` with `steps=null` on its first
+attempt and on manual rerun (job `121266959560`); no compiler code was
+executed. The alternate private
+`ores-otel-test/next-loggers-runtime-conformance` source-free verifier
+run `40158547876` was manually rerun and passed in job
+`121266976173` with **11 real steps**, while `verify-carrier` was
+correctly skipped. This demonstrates funded carrier *capacity*, NOT
+private source execution or test parity.
+
+**Source privacy HOLD is grounded, not guessed:** destination allowlist
+`.github/private-ci-approved-repositories.txt` is empty (blob
+`3f7e029aa9de0bcd15b8f22e035fbf83c325de96`); carrier contract
+blob `4d8eb20a6931315bfb86d7188dfcc7bd54498d94`
+does not authorize #998. Source and candidate carrier main both report
+`protected=false`; independently investigated private-source exposure
+incidents platform-conformance #22, #77 and #127 remain OPEN. Even
+tokenless connector Git-object copying would breach this policy.
+
+**Mainline composition HOLD:** on initial audit the integration branch
+was 29 commits ahead / **79 behind** rapidly advancing LLVM `main`.
+Do not transplant its older actor scheduler/VM implementation onto main
+without forward-porting and reviewing every conflict conceptually.
+Require an independently authorized executor to compile the exact
+integrated source with strict GCC/Clang C/C++, CTest, ASan/UBSan and
+applicable TSan; source-to-LLVM-IR-to-Clang positive/negative guest
+programs; real STOP/child/NIO/ABA races; Java parity; and actual run
+steps/logs. Keep PR draft until qualified.
