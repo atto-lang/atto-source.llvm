@@ -1,6 +1,7 @@
 #include "oreslang/backend/SealedStateAdmission.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -121,6 +122,38 @@ int main() {
         throw std::runtime_error("malformed second actor was admitted");
     ++rejected;
 
+    // Immutable legacy scalar fields are permitted; malformed legacy ASTs
+    // must be rejected before native codegen dereferences their storage.
+    auto immutable_legacy = valid();
+    immutable_legacy.front().sealed_state = false;
+    immutable_legacy.front().fields.front().field_mutable = false;
+    immutable_legacy.front().on_message.actor_state_loan.reset();
+    immutable_legacy.front().on_message.result = std::make_unique<Expression>();
+    must_admit(std::move(immutable_legacy));
+    auto reject_legacy = [&](const std::function<void(Actor&)>& mutate) {
+        auto actors = valid();
+        auto& actor = actors.front();
+        actor.sealed_state = false;
+        actor.on_message.actor_state_loan.reset();
+        actor.on_message.result = std::make_unique<Expression>();
+        mutate(actor);
+        try { oreslang::verify_sealed_actor_state_shape(actors); }
+        catch (const std::runtime_error&) { ++rejected; return; }
+        throw std::runtime_error("invalid legacy actor AST was admitted");
+    };
+    reject_legacy([](Actor& a){a.fields.clear();});
+    reject_legacy([](Actor& a){a.fields.front().initializer.reset();});
+    reject_legacy([](Actor& a){a.fields.front().name.clear();});
+    reject_legacy([](Actor& a){a.fields.front().name="state";});
+    reject_legacy([](Actor& a){a.fields.front().name="n";});
+    reject_legacy([](Actor& a){a.fields.emplace_back();a.fields.back().name="count";});
+    reject_legacy([](Actor& a){a.fields.front().scalar_type=Field::ScalarType::Bool;});
+    reject_legacy([](Actor& a){a.on_message.parameters.front().name.clear();});
+    reject_legacy([](Actor& a){a.on_message.name="wrong";});
+    reject_legacy([](Actor& a){a.on_message.exported=false;});
+    reject_legacy([](Actor& a){a.on_message.return_type=Method::Return::Bool;});
+    reject_legacy([](Actor& a){for(int i=0;i<16;++i){a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
+
     must_reject([](Actor& a){a.sealed_state=false;});
     must_reject([](Actor& a){a.sealed_state=false;
         a.on_message.actor_state_loan.reset();});
@@ -205,7 +238,7 @@ int main() {
         a.on_message.actor_state_loan->writes.back().expression.reset();});
     must_reject([](Actor& a){a.fields.clear();
         for (int i=0;i<17;i++) {a.fields.emplace_back();a.fields.back().name="f"+std::to_string(i);}});
-    if (admitted != 5 || rejected != 67)
+    if (admitted != 6 || rejected != 79)
         throw std::runtime_error("sealed-state admission case count changed");
     std::cout << "Sealed-state admission: " << admitted << " valid / "
               << rejected << " rejected: PASS\n";
