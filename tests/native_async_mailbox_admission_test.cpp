@@ -259,6 +259,7 @@ static void cancel_and_credit_release_have_exactly_one_winner() {
             CHECK(admission.transferred(handle));
             CHECK(admission.used_frames() == 1);
             CHECK(admission.commit(handle) == ORES_NATIVE_WAKE_PUBLISHED);
+            CHECK(ores_native_actor_scheduler_drain(f.scheduler));
             admission.release_acquired(8);
         }
         CHECK(admission.pending_waiters() == 0);
