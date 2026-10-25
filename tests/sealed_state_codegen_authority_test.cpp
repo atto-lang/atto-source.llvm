@@ -131,6 +131,13 @@ int main() {
             static_cast<ActorStateLoan::Mode>(255);
     });
     rejects([](Program& p) {
+        auto& method = p.actors.front().on_message;
+        method.actor_state_loan->mode =
+            static_cast<ActorStateLoan::Mode>(255);
+        method.declared_effects.bits =
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+    });
+    rejects([](Program& p) {
         LocalBinding legacy;
         legacy.name = "other";
         legacy.initializer = integer(1);
