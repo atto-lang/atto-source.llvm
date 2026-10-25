@@ -282,6 +282,12 @@ int main(void) {
     check(ores_native_continuation_store_get(
         continuations, serialized_commit, &record));
     check(record.state == ORES_CONTINUATION_CANCELLED);
+    check(!ores_native_continuation_store_notify_ready(
+        continuations, serialized_commit));
+    check(!ores_native_continuation_store_try_claim_ready_resume(
+        continuations, serialized_commit, NULL));
+    check(!ores_native_continuation_store_finish_resume(
+        continuations, serialized_commit));
     check(ores_native_continuation_store_release(
         continuations, serialized_commit));
 
