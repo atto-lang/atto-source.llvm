@@ -8,6 +8,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.*'
       - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
       - 'tests/source_actor_e2e.py'
+      - 'tests/test_source_actor_receipts.py'
       - 'tests/fixtures/source-actor-*.ores'
       - '.github/workflows/source-actor-owned-drop.yml'
   workflow_dispatch:
@@ -36,6 +37,12 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
           test -n "$(git rev-parse 'HEAD^{tree}')"
 
+      - name: Reject forged native receipt prefixes and duplicate fields
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/test_source_actor_receipts.py
+
       - name: Install LLVM C++ compiler and native linker
         run: |
           set -euo pipefail
@@ -58,6 +65,8 @@ jobs:
             --clang clang --root . | tee "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
 
@@ -73,6 +82,8 @@ jobs:
             --clang clang --root . --sanitize |
             tee "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
@@ -98,10 +109,12 @@ jobs:
               root / "source-actor-owned-drop-sanitized.log",
           ]
           marker = "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1"
+          isolation_marker = "PASS native source actor: source-actor-two-owned-heaps.ores actors 2"
           final = "PASS current-source actor lowering and physical heap reclamation"
           for path in logs:
               output = path.read_text()
-              if output.count(marker) != 1 or output.count(final) != 1:
+              if (output.count(marker) != 1 or output.count(isolation_marker) != 1
+                      or output.count(final) != 1):
                   raise SystemExit("source actor native execution marker missing or duplicated")
           sha = git("rev-parse", "HEAD")
           if sha != os.environ["EXPECTED_HEAD"]:
@@ -113,6 +126,7 @@ jobs:
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
               "tests/source_actor_e2e.py",
               "tests/fixtures/source-actor-scoped-owned-i64.ores",
+              "tests/fixtures/source-actor-two-owned-heaps.ores",
           ]
           receipt = {
               "schema": "oreslang.native_source_actor_owned_drop_v1",
@@ -124,6 +138,7 @@ jobs:
               "source_blobs": {p: git("hash-object", p) for p in files},
               "release_native_execution_verified": True,
               "asan_ubsan_native_execution_verified": True,
+              "two_actor_owned_heaps_native_execution_verified": True,
               "ffi_await_unwind_ownership_verified": False,
               "java_net_backend_verified": False,
               "zero_gc_full_backend_verified": False,

@@ -2803,6 +2803,41 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_nonblocking_ready_queue
         COMMAND oreslang-native-actor-ready-queue-test)
     set_tests_properties(native_actor_nonblocking_ready_queue PROPERTIES TIMEOUT 30)
+    # Scheduler-owned producer continuation wake escrow: independent from
+    # supervisor CONTROL and USER mail capacity. Native host substrate only.
+    add_executable(oreslang-native-continuation-wake-escrow-test
+        tests/native_continuation_wake_escrow_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-continuation-wake-escrow-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-continuation-wake-escrow-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-continuation-wake-escrow-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_escrow_stop_cancel_aba
+        COMMAND oreslang-native-continuation-wake-escrow-test)
+    set_tests_properties(native_continuation_wake_escrow_stop_cancel_aba
+        PROPERTIES TIMEOUT 45)
+
+    # Reservation must fail cleanly if pthread_create cannot allocate a
+    # future wake carrier. The macro is absent from production builds.
+    add_executable(oreslang-native-wake-carrier-failure-test
+        tests/native_continuation_wake_carrier_failure_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-wake-carrier-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_definitions(oreslang-native-wake-carrier-failure-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
+    target_compile_options(oreslang-native-wake-carrier-failure-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-wake-carrier-failure-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_continuation_wake_carrier_failure_fence
+        COMMAND oreslang-native-wake-carrier-failure-test)
+    set_tests_properties(native_continuation_wake_carrier_failure_fence
+        PROPERTIES TIMEOUT 30)
+
     # Fault injection is compiled only into this test executable. A blocked
     # actor must not make a different actor's unserviceable work "ACCEPTED".
     add_executable(oreslang-native-carrier-create-failure-test
@@ -3637,4 +3672,46 @@ if(BUILD_TESTING)
     add_test(NAME native_callable_selector_source_arity
         COMMAND oreslang-native-callable-selector-test)
     set_tests_properties(native_callable_selector_source_arity PROPERTIES TIMEOUT 10)
+endif()
+
+# Host-only structured Task cancellation authority. This mirrors the Java
+# stage-1 runtime primitive only: it is NOT source-level task lowering,
+# scheduler continuation integration, or proof that get_done is quiescent.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-cancellation-test
+        tests/native_task_cancellation_test.cpp)
+    target_include_directories(oreslang-native-task-cancellation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-cancellation-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-cancellation-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-cancellation-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_cancellation_tree_host_only
+        COMMAND oreslang-native-task-cancellation-test)
+    set_tests_properties(native_task_cancellation_tree_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
+
+# Task authority <-> generation-checked continuation integration, with
+# producer-ready/cancel and scheduler-claim/cancel adversarial races.
+# Tests a real shared host admission primitive, not arbitrary guest Task syntax.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-task-continuation-gate-test
+        tests/native_task_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-native-task-continuation-gate-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-task-continuation-gate-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-task-continuation-gate-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-task-continuation-gate-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    add_test(NAME native_task_continuation_cancel_ready_races
+        COMMAND oreslang-native-task-continuation-gate-test)
+    set_tests_properties(native_task_continuation_cancel_ready_races
+        PROPERTIES TIMEOUT 60)
 endif()
