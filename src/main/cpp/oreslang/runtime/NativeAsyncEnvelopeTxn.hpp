@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -157,6 +158,7 @@ public:
         bool accepted = false;
         try {
             accepted = inbox.offer_owned_preloaned_to(
+                typename Inbox::PreloanedPublicationTag{},
                 target_, lane_, payload_, bytes_);
         } catch (...) {
             rollback_transferred_or_terminate();
