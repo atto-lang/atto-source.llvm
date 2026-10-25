@@ -138,3 +138,22 @@ These hooks are intended for throw/raise/panic rendering after those exceptional
 effects have native source lowering. They do not by themselves admit unsupported
 exception syntax and they never expose the underlying store or a native stack
 pointer.
+
+## Checked failure rendering
+
+Use `ores_native_failure_trace_format_checked` with the actual capacities of
+both caller-owned frame arrays. It rejects a header whose captured counts exceed
+those bounds before reading a frame. Invalid input empties a supplied nonempty
+output buffer, and rendering stops when that buffer is full. Capture failures
+clear their header so a previous successful snapshot cannot be reused as a new
+failure trace.
+
+The existing `ores_native_failure_trace_format` symbol remains source/ABI
+compatible for trusted captured counts. Its caller guarantees that the frame
+arrays match the header; new consumers should use the checked entry point.
+Neither renderer performs symbolization or owns the supplied frame arrays.
+
+Store destruction requires external quiescence of all API users and release of
+logical references. An empty live-record count is not proof that a concurrent
+API call has returned. Continuation stores must be closed before their execution
+stores.

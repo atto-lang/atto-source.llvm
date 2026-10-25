@@ -29,20 +29,20 @@ static bool injected_allocation_failure() {
     return false;
 }
 
-void* operator new(std::size_t size) {
+__attribute__((noinline)) void* operator new(std::size_t size) {
     if (injected_allocation_failure()) throw std::bad_alloc();
     if (void* p = std::malloc(size)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void* operator new[](std::size_t size) {
+__attribute__((noinline)) void operator delete(void* p) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+__attribute__((noinline)) void* operator new[](std::size_t size) {
     if (injected_allocation_failure()) throw std::bad_alloc();
     if (void* p = std::malloc(size)) return p;
     throw std::bad_alloc();
 }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete[](void* p) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("actor resource loan race: " #x); } while (false)
 
