@@ -1243,6 +1243,8 @@ if(BUILD_TESTING)
     # Canonical current-main sealed actor state. These are real source compiler
     # gates: the state binder is lexical, writes require exclusive authority,
     # and no legacy persistent field may coexist with a state schema.
+    oreslang_contract_test(native_sealed_state_empty sealed-state-empty-positive.ores
+        --ir "oreslang_actor_Idle_on_message")
     oreslang_contract_test(native_sealed_state_read sealed-state-read-positive.ores
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_write sealed-state-write-positive.ores
