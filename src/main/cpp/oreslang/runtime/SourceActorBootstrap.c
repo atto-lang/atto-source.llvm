@@ -1,6 +1,12 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+#include "oreslang/runtime/NativeOresVMNio.h"
+#include <errno.h>
+#include <poll.h>
+#include <sys/epoll.h>
+#endif
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -19,6 +25,10 @@
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+#define SOURCE_ROOT_CONTROL_READABLE_SUSPEND UINT64_C(5)
+#define SOURCE_READABLE_CODE_GENERATION UINT64_C(1)
+#endif
 
 typedef struct {
     uint64_t magic;
@@ -61,6 +71,23 @@ typedef struct {
     int64_t result;
 } DoneAwaitFrame;
 
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+typedef struct {
+    pthread_cond_t completed;
+    OresSourceActorContinuation continuation;
+    SourceActor* actor;
+    OresNativeSuspensionLink link;
+    OresNativeActorNioAwait awaiting;
+    uint64_t source_token;
+    int fd;
+    int suspend_recorded;
+    int admitted;
+    int done;
+    int outcome;
+    int64_t result;
+} ReadableAwaitFrame;
+#endif
+
 typedef struct {
     pthread_mutex_t mutex;
     OresNativeVM* vm;
@@ -69,6 +96,10 @@ typedef struct {
     OresNativeContinuationStore* continuations;
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+    ReadableAwaitFrame* pending_readable;
+    int nio_enabled;
+#endif
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
