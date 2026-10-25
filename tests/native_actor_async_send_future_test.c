@@ -66,6 +66,39 @@ static void close_one(
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void immediate_resource_failure_does_not_mint_future(void) {
+    State state = {0};
+    OresNativeActorRef actor = {0};
+    OresNativeActorScheduler* scheduler = open_one(&state, 2, &actor);
+
+    CHECK(ores_native_actor_scheduler_started_carriers(scheduler) == 0);
+    ores_native_actor_scheduler_test_fail_next_create();
+
+    OresNativeAsyncSendTicket failed = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, actor, 9, &failed)
+        == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    CHECK(failed.generation == 0);
+    CHECK(failed.target.scheduler_domain == 0);
+    CHECK(ores_native_actor_scheduler_started_carriers(scheduler) == 0);
+
+    /* The failed immediate admission consumed no descriptor. A subsequent
+     * healthy submission may use the cohort normally and becomes READY. */
+    OresNativeAsyncSendTicket ready = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, actor, 10, &ready) == ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(ready.generation != 0);
+    expect_state(
+        scheduler, ready,
+        ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, ready));
+
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(atomic_load(&state.observed_count) == 1);
+    CHECK(state.observed[0] == 10);
+    close_one(scheduler, actor);
+}
+
 static void immediate_future_is_ready_before_await(void) {
     State state = {0};
     OresNativeActorRef actor = {0};
@@ -365,6 +398,7 @@ static void live_future_fences_scheduler_destruction(void) {
 }
 
 int main(void) {
+    immediate_resource_failure_does_not_mint_future();
     immediate_future_is_ready_before_await();
     fifo_future_owns_released_credit_before_sync_sender();
     cancel_pending_never_delivers_payload();
@@ -373,6 +407,6 @@ int main(void) {
     descriptor_bound_and_generation_fence();
     live_future_fences_scheduler_destruction();
     cross_scheduler_carrier_rejects_host_lifecycle_barriers();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1");
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1");
     return 0;
 }
