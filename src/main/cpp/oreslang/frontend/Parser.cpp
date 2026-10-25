@@ -1425,8 +1425,13 @@ private:
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
-            if ((token_.text == "const" || token_.text == "val") &&
-                    peek_next().text == "Future") {
+            if ((token_.text == "const" || token_.text == "val" ||
+                    token_.text == "let") && peek_next().text == "Future") {
+                // Readiness aliases are compiler-owned linear capabilities.
+                // Mutable local forms could be reassigned between producer
+                // binding and await, invalidating the single-consumer proof.
+                if (token_.text != "const")
+                    fail("Future<void> readiness token must be const");
                 if (!value.ready_future_name.empty())
                     fail("native source supports only one Future<void> readiness token");
                 advance();
