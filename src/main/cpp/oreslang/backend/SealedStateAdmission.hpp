@@ -34,7 +34,12 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                !field.owner_mutable && field.pending_type_alias.empty() &&
                field.sum_type.empty();
     };
+    std::unordered_set<std::string> actor_names;
     for (const auto& actor : actors) {
+        // Actor codegen interns symbols and handlers by nominal name. A
+        // directly constructed AST must not alias two actors into one entry.
+        if (actor.name.empty() || !actor_names.insert(actor.name).second)
+            throw std::runtime_error("actor nominal name is empty or duplicated");
         if (actor.on_message.parameters.size() != 1 ||
                 !plain_message(actor.on_message.parameters.front()))
             throw std::runtime_error("actor handler must take exactly one plain i64 value");
