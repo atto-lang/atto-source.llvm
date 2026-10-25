@@ -1,0 +1,12 @@
+// L02 target: DONE after physical finalization is independently reusable.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return total + n; }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  stop worker;
+  await worker.get_done();
+  await worker.get_done();
+  return 43;
+}
