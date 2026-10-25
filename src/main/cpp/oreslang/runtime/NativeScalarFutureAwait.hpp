@@ -2,11 +2,11 @@
 // Host-only scalar Future<T> precursor: guest lowering is not enabled.
 // Result storage is a pinned shared allocation, never an actor heap pointer.
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
+#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -29,7 +29,9 @@ struct NativeScalarFutureId {
 class NativeScalarFutureAwait final
         : public std::enable_shared_from_this<NativeScalarFutureAwait> {
 public:
-    enum class Phase { pending, ready, scheduled, running, completed, cancelled };
+    enum class Phase {
+        pending, settling, ready, scheduled, running, completed, cancelled
+    };
     struct Result {
         bool success = false;
         std::int64_t value = 0;
@@ -64,12 +66,17 @@ public:
     // Once the callback has started, it is completed and cannot be revoked.
     bool cancel(NativeScalarFutureId ticket) noexcept {
         if (!valid(ticket)) return false;
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (phase_ == Phase::running || phase_ == Phase::completed
-                || phase_ == Phase::cancelled)
-            return false;
-        phase_ = Phase::cancelled;
-        return true;
+        Phase observed = phase_.load(std::memory_order_acquire);
+        for (;;) {
+            if (observed == Phase::settling || observed == Phase::running
+                    || observed == Phase::completed
+                    || observed == Phase::cancelled)
+                return false;
+            if (phase_.compare_exchange_weak(
+                    observed, Phase::cancelled,
+                    std::memory_order_acq_rel, std::memory_order_acquire))
+                return true;
+        }
     }
 
     /*
@@ -89,8 +96,7 @@ public:
     }
 
     Phase phase() const noexcept {
-        std::lock_guard<std::mutex> guard(mutex_);
-        return phase_;
+        return phase_.load(std::memory_order_acquire);
     }
 
     // Parent scheduler only. If CONTROL is full, leave the resolved value
@@ -103,57 +109,51 @@ public:
         if (!valid(ticket) || !parent_ref.same_incarnation(owner_))
             return false;
 
-        std::shared_ptr<NativeScalarFutureAwait> self;
-        {
-            std::lock_guard<std::mutex> guard(mutex_);
-            if (phase_ != Phase::ready) return false;
-            /*
-             * Publish the logical reservation before entering ActorGroup, then
-             * release the Future mutex. A carrier may dequeue CONTROL as soon
-             * as enqueue_control() returns; it must never park behind the
-             * producer/scheduler's Future bookkeeping lock.
-             */
-            phase_ = Phase::scheduled;
-            self = shared_from_this();
-        }
+        auto self = shared_from_this();
+        Phase expected = Phase::ready;
+        if (!phase_.compare_exchange_strong(
+                expected, Phase::scheduled,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return false;
 
         bool enqueued = false;
         try {
             enqueued = parent_group.enqueue_control(parent_ref,
                 [self, resume = std::move(resume)] {
-                    Result outcome;
-                    {
-                        std::lock_guard<std::mutex> lock(self->mutex_);
-                        if (self->phase_ != Phase::scheduled) return;
-                        outcome = self->result_;
-                        // Callback execution has now started on the owning
-                        // CONTROL lane. Cancellation is no longer allowed.
-                        self->phase_ = Phase::running;
-                    }
+                    Phase expected = Phase::scheduled;
+                    if (!self->phase_.compare_exchange_strong(
+                            expected, Phase::running,
+                            std::memory_order_acq_rel,
+                            std::memory_order_acquire))
+                        return;
+                    // The winning settle transition published result_ before
+                    // READY with release semantics; the READY->SCHEDULED and
+                    // SCHEDULED->RUNNING acquire/release chain makes it visible.
+                    const Result outcome = self->result_;
                     try {
                         resume(outcome);
                     } catch (...) {
-                        std::lock_guard<std::mutex> lock(self->mutex_);
-                        if (self->phase_ != Phase::running)
-                            std::terminate();
-                        self->phase_ = Phase::completed;
+                        self->phase_.store(
+                            Phase::completed, std::memory_order_release);
                         throw;
                     }
-                    std::lock_guard<std::mutex> lock(self->mutex_);
-                    if (self->phase_ != Phase::running)
-                        std::terminate();
-                    self->phase_ = Phase::completed;
+                    self->phase_.store(
+                        Phase::completed, std::memory_order_release);
                 });
         } catch (...) {
-            std::lock_guard<std::mutex> guard(mutex_);
-            if (phase_ == Phase::scheduled) phase_ = Phase::ready;
+            expected = Phase::scheduled;
+            (void)phase_.compare_exchange_strong(
+                expected, Phase::ready,
+                std::memory_order_acq_rel, std::memory_order_acquire);
             throw;
         }
 
         if (!enqueued) {
-            std::lock_guard<std::mutex> guard(mutex_);
+            expected = Phase::scheduled;
             // Cancellation may have won while ActorGroup admission was tried.
-            if (phase_ == Phase::scheduled) phase_ = Phase::ready;
+            (void)phase_.compare_exchange_strong(
+                expected, Phase::ready,
+                std::memory_order_acq_rel, std::memory_order_acquire);
             return false;
         }
         return true;
@@ -173,17 +173,19 @@ private:
 
     bool settle(NativeScalarFutureId ticket, Result outcome) noexcept {
         if (!valid(ticket)) return false;
-        std::lock_guard<std::mutex> guard(mutex_);
-        if (phase_ != Phase::pending) return false;
+        Phase expected = Phase::pending;
+        if (!phase_.compare_exchange_strong(
+                expected, Phase::settling,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            return false;
         result_ = outcome;
-        phase_ = Phase::ready;
+        phase_.store(Phase::ready, std::memory_order_release);
         return true;
     }
 
     const NativeActorRef owner_;
     const NativeScalarFutureId id_;
-    mutable std::mutex mutex_;
-    Phase phase_ = Phase::pending;
+    std::atomic<Phase> phase_{Phase::pending};
     Result result_;
 };
 
