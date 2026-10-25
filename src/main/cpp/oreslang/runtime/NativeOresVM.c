@@ -331,6 +331,15 @@ OresNativeSendStatus ores_native_vm_try_send(
         : ORES_NATIVE_SEND_INVALID_REF;
 }
 
+OresNativeSendStatus ores_native_vm_wait_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef ref, uint64_t payload) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_wait_send(
+            vm->schedulers[domain], ref, payload)
+        : ORES_NATIVE_SEND_INVALID_REF;
+}
+
 static int vm_stop(
         OresNativeVM* vm,
         enum OresNativeVMDomain domain,
