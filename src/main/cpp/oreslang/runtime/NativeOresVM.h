@@ -40,6 +40,17 @@ typedef struct {
 
 typedef struct OresNativeVM OresNativeVM;
 OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config);
+/* RT bootstrap: prestart every configured carrier in all four domains before
+ * exposing the VM to guest work. No carrier will be created on its DATA or
+ * CONTROL hot path thereafter. Unlike normal open(), this starts pthreads.
+ * Only the trusted host may invoke this before guest admission; it is not a
+ * hard-real-time certification or proof of bounded OS scheduling latency.
+ */
+OresNativeVM* ores_native_vm_open_realtime(const OresNativeVMConfig* config);
+/* Equivalent post-open preparation for still-private, completely cold VMs.
+ * A failed preparation must be followed by external-host VM teardown.
+ */
+int ores_native_vm_prepare_realtime(OresNativeVM* vm);
 /* Opt-in quota/cpuset-aware carrier admission. An explicit nonzero
  * carrier_workers is preserved for its domain, while zero-valued domains
  * divide remaining detected CPU capacity (at least one pthread per domain).
@@ -107,11 +118,19 @@ OresNativeSendStatus ores_native_vm_try_send(
  * cannot guarantee undelivered terminal notices without host reconciliation. */
 int ores_native_vm_stop(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Source-style stop: reject new DATA and abandon queued DATA while preserving
+ * an already-active turn and lifecycle CONTROL. */
+int ores_native_vm_stop_sealed(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */
 int ores_native_vm_poll_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Retained immutable post-mortem for the exact domain-scoped ActorRef. */
+int ores_native_vm_actor_terminal_state(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, OresNativeActorTerminalState* output);
 int ores_native_vm_wait_done(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_publish_control(
@@ -141,6 +160,33 @@ int ores_native_vm_control_notify(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 unsigned ores_native_vm_control_pending(OresNativeVM* vm);
 unsigned ores_native_vm_control_pump(OresNativeVM* vm);
+
+/* Trusted host-only optional NIO backend ownership. Pure-C scheduler users
+ * do not require C++ linkage; the separately compiled native NIO adapter
+ * supplies a destructor callback. Attach once before guest admission.
+ *
+ * Every caller must externally fence VM producers before final close.
+ * VM retirement blocks further backend access. The destructor may join
+ * reactor threads and is invoked ONLY during external vm_close(), never from
+ * a guest actor callback or on a reactor thread.
+ */
+typedef void (*OresNativeVMNioDestroy)(void* opaque_backend);
+/* Bootstrap-only check; final attach repeats this under the CONTROL gate. */
+int ores_native_vm_nio_can_attach(OresNativeVM* vm);
+/* Atomically reserve NIO startup before any selector threads are created.
+ * Actor spawn rejects while the reservation is held; always cancel it on
+ * failed bootstrap, or consume it via attach_nio on success.
+ */
+int ores_native_vm_nio_begin_bootstrap(OresNativeVM* vm);
+void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
+int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
+                              OresNativeVMNioDestroy destroy);
+/* Nonblocking trusted-host pin. Every successful acquisition requires one
+ * release, including when VM retirement begins during an operation.
+ * External callers must fence new API entry before freeing the VM object.
+ */
+void* ores_native_vm_nio_acquire(OresNativeVM* vm);
+void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call

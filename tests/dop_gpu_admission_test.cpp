@@ -72,6 +72,7 @@ int main() {
 
     const auto ticket = a.begin_command(Identity{"t", "d", 1});
     expect<std::logic_error>([&] { (void)preflight_gpu(kernel, target, input, output); });
+    a.mark_submitted(ticket);
     a.cancel_pending(ticket);
     expect<std::logic_error>([&] { (void)preflight_gpu(kernel, target, input, output); });
     a.acknowledge_cancelled_device_event(ticket, Identity{"t", "d", 1});
@@ -119,6 +120,7 @@ int main() {
         // generation and sequence, but not this submission's private seal.
         BufferFence foreign(Identity{"t", "gpu", 10}, shape.byte_length());
         const auto forged = foreign.begin_command(Identity{"t", "gpu", 10});
+        foreign.mark_submitted(forged);
         check(forged.generation() == admitted.tickets.input_ticket.generation()
                 && forged.sequence() == admitted.tickets.input_ticket.sequence());
         expect<std::logic_error>([&] { source.complete(forged, true); });
@@ -126,6 +128,7 @@ int main() {
         foreign.complete(forged, true);
         expect<std::logic_error>([&] { (void)source.take(); });
         expect<std::logic_error>([&] { (void)result.take(); });
+        mark_gpu_submitted(in, out, admitted);
         BufferFence::complete_pair(source, result, admitted.tickets, true);
         check(source.status() == oreslang::gpu::Status::Idle);
         check(result.status() == oreslang::gpu::Status::Idle);
@@ -136,6 +139,7 @@ int main() {
         BufferFence available(Identity{"t", "gpu", 20}, 64);
         BufferFence busy(Identity{"t", "gpu", 21}, 64);
         auto original = busy.begin_command(Identity{"t", "gpu", 21});
+        busy.mark_submitted(original);
         expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, busy, 64); });
         check(available.status() == oreslang::gpu::Status::Idle);
         check(busy.status() == oreslang::gpu::Status::InFlight);
@@ -146,11 +150,37 @@ int main() {
         auto moved = busy.take();
         expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, busy, 64); });
         auto claimed = BufferFence::claim_pair(available, moved, 64);
+        BufferFence::mark_pair_submitted(available, moved, claimed);
         BufferFence::cancel_pair(available, moved, claimed);
         expect<std::logic_error>([&] { (void)BufferFence::claim_pair(available, moved, 64); });
         BufferFence::acknowledge_cancelled_pair(available, moved, claimed);
         available.retire_after_backend_release(claimed.input);
         moved.retire_after_backend_release(claimed.output);
+    }
+
+
+    // A paired reservation that never reaches the device queue may roll back
+    // atomically. Once submitted, only completion/cancellation may terminate it.
+    {
+        BufferFence left(Identity{"t", "gpu", 30}, 64);
+        BufferFence right(Identity{"t", "gpu", 31}, 64);
+        auto reserved = BufferFence::claim_pair(left, right, 64);
+        expect<std::logic_error>([&] {
+            BufferFence::complete_pair(left, right, reserved, true);
+        });
+        BufferFence::abort_unsubmitted_pair(left, right, reserved);
+        check(left.status() == oreslang::gpu::Status::Idle);
+        check(right.status() == oreslang::gpu::Status::Idle);
+        expect<std::logic_error>([&] {
+            BufferFence::abort_unsubmitted_pair(left, right, reserved);
+        });
+
+        auto submitted = BufferFence::claim_pair(left, right, 64);
+        BufferFence::mark_pair_submitted(left, right, submitted);
+        expect<std::logic_error>([&] {
+            BufferFence::abort_unsubmitted_pair(left, right, submitted);
+        });
+        BufferFence::complete_pair(left, right, submitted, true);
     }
 
     // Opposite-order concurrent claims must never deadlock or half-claim.
@@ -180,6 +210,7 @@ int main() {
         const auto& winner = results[0].has_value() ? *results[0] : *results[1];
         BufferFence& src = results[0].has_value() ? left : right;
         BufferFence& dst = results[0].has_value() ? right : left;
+        BufferFence::mark_pair_submitted(src, dst, winner);
         BufferFence::complete_pair(src, dst, winner, true);
     }
 
@@ -199,6 +230,7 @@ int main() {
         claimant.join(); mover.join();
         check(tickets.has_value() != moved.has_value());
         if (tickets) {
+            BufferFence::mark_pair_submitted(left, right, *tickets);
             BufferFence::complete_pair(left, right, *tickets, true);
         } else check(left.status() == oreslang::gpu::Status::Idle);
     }
@@ -210,7 +242,9 @@ int main() {
         BufferFence foreign(Identity{"tenant", "gpu", 501}, 64);
         auto tickets = BufferFence::claim_pair(a, b, 64);
         auto other_ticket = foreign.begin_command(Identity{"tenant", "gpu", 501});
+        foreign.mark_submitted(other_ticket);
         check(tickets.input_ticket.sequence() == other_ticket.sequence());
+        BufferFence::mark_pair_submitted(a, b, tickets);
         auto mixed = tickets;
         mixed.input_ticket = other_ticket;
         expect<std::logic_error>([&] {
@@ -230,6 +264,7 @@ int main() {
         BufferFence a(Identity{"tenant", "gpu", 601}, 64);
         BufferFence b(Identity{"tenant", "gpu", 602}, 64);
         auto tickets = BufferFence::claim_pair(a, b, 64);
+        BufferFence::mark_pair_submitted(a, b, tickets);
         BufferFence::cancel_pair(a, b, tickets);
         check(a.status() == oreslang::gpu::Status::Poisoned);
         check(b.status() == oreslang::gpu::Status::Poisoned);
@@ -255,6 +290,7 @@ int main() {
         BufferFence a(Identity{"tenant", "gpu", 701}, 64);
         BufferFence b(Identity{"tenant", "gpu", 702}, 64);
         auto tickets = BufferFence::claim_pair(a, b, 64);
+        BufferFence::mark_pair_submitted(a, b, tickets);
         expect<std::logic_error>([&] { a.complete(tickets.input_ticket, true); });
         expect<std::logic_error>([&] { b.cancel_pending(tickets.output_ticket); });
         check(a.status() == oreslang::gpu::Status::InFlight);
@@ -267,6 +303,8 @@ int main() {
         BufferFence c(Identity{"t", "d", 803}, 64), d(Identity{"t", "d", 804}, 64);
         auto ab = BufferFence::claim_pair(a, b, 64);
         auto cd = BufferFence::claim_pair(c, d, 64);
+        BufferFence::mark_pair_submitted(a, b, ab);
+        BufferFence::mark_pair_submitted(c, d, cd);
         auto mixed = ab;
         mixed.output = cd.input;
         mixed.output_ticket = cd.input_ticket;
@@ -286,5 +324,75 @@ int main() {
         check(a.status() == oreslang::gpu::Status::Idle);
         check(b.status() == oreslang::gpu::Status::Idle);
     }
+    // Trusted host queue-targeted GPU preflight must fail BEFORE mutation.
+    // This verifies metadata compatibility, not actual device execution.
+    {
+        const Plan shape(Layout::SoA, 7, 2, 4, 16, 1);
+        const Kernel operation(shape, Element::F32, Op::Scale, 2.0f, 0.0f);
+        const GpuTarget profile{64, 8192, 100, true};
+        BufferFence source(Identity{"tenant-A", "gpu-0", 1001}, shape.byte_length());
+        BufferFence result(Identity{"tenant-A", "gpu-0", 1002}, shape.byte_length());
+        const DeviceBuffer input(shape, source), output(shape, result);
+        const auto plan = preflight_gpu(operation, profile, input, output);
+        const GpuQueueLocation valid{"tenant-A", "gpu-0", 9, 21, 4};
+        validate_gpu_queue(plan, valid);
+        for (const auto& foreign : {
+                GpuQueueLocation{"tenant-B", "gpu-0", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-1", 9, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 0, 21, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 0, 4},
+                GpuQueueLocation{"tenant-A", "gpu-0", 9, 21, 0},
+                GpuQueueLocation{"", "gpu-0", 9, 21, 4}}) {
+            expect<std::invalid_argument>([&] {
+                (void)claim_gpu_for_queue(operation, profile, input, output, foreign);
+            });
+            check(source.status() == oreslang::gpu::Status::Idle);
+            check(result.status() == oreslang::gpu::Status::Idle);
+        }
+        GpuQueueLocation mutableSelected = valid;
+        auto claimed = claim_gpu_for_queue(
+                operation, profile, input, output, mutableSelected);
+        // Mutating the original selection cannot change the admitted receipt.
+        mutableSelected.tenant = "attacker";
+        mutableSelected.device = "gpu-elsewhere";
+        mutableSelected.queue_id = 999;
+        mutableSelected.generation = 999;
+        check(claimed.claim().binding.input.tenant == valid.tenant);
+        check(claimed.claim().binding.output.device == valid.device);
+        check(claimed.queue().queue_id == valid.queue_id);
+        check(claimed.queue().generation == valid.generation);
+        check(claimed.queue().maximum_in_flight == valid.maximum_in_flight);
+        // Later mutation of the caller-owned descriptor cannot silently
+        // retarget an admitted operation.
+        check(claimed.queue().tenant == "tenant-A");
+        check(claimed.queue().device == "gpu-0");
+        static_assert(!std::is_copy_constructible_v<QueueClaimedGpuBinding>);
+        static_assert(!std::is_constructible_v<
+                QueueClaimedGpuBinding, ClaimedGpuBinding&&,
+                std::unique_ptr<const GpuQueueLocation>>,
+                "host code must not fabricate a queue claim without validation");
+        static_assert(!std::is_move_assignable_v<QueueClaimedGpuBinding>,
+                "an admitted queue receipt must not be retargeted by assignment");
+        static_assert(std::is_same_v<
+                decltype(claimed.claim()), const ClaimedGpuBinding&>,
+                "a caller must not replace the admitted fence tokens or binding");
+        static_assert(std::is_same_v<
+                decltype(claimed.queue()), const GpuQueueLocation&>,
+                "the selected queue must only be exposed as a const reference");
+        check(source.status() == oreslang::gpu::Status::InFlight);
+        check(result.status() == oreslang::gpu::Status::InFlight);
+        expect<std::logic_error>([&] {
+            (void)claim_gpu_for_queue(operation, profile, input, output, valid);
+        });
+        auto transferred = std::move(claimed);
+        expect<std::logic_error>([&] { (void)claimed.queue(); });
+        expect<std::logic_error>([&] { (void)claimed.claim(); });
+        check(transferred.queue().queue_id == valid.queue_id);
+        mark_gpu_submitted(input, output, transferred);
+        BufferFence::complete_pair(source, result, transferred.claim().tickets, true);
+        check(source.status() == oreslang::gpu::Status::Idle);
+        check(result.status() == oreslang::gpu::Status::Idle);
+    }
+
     std::cout << "typed DOP GPU placement admission tests passed\n";
 }

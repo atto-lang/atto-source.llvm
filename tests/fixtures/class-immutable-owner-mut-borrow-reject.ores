@@ -7,6 +7,6 @@ fnc mutate(borrow mut Box b): void {
 }
 pub fnc main(): int {
   let Box b = new Box();
-  mutate(rt borrow mut b);
+  mutate(rt mut borrow b);
   return b.value;
 }

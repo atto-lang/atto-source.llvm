@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -21,7 +22,9 @@ class NativeActorResourceQuarantine;
 // across a guest actor boundary.  A registry is owned by one actor incarnation.
 class ActorResourceRegistry final {
 public:
-    enum class Kind { socket, file, timer, ffi_callback, native_allocation };
+    // lock_permit is a logical scheduler-owned lease, not an OS-thread mutex.
+    // Its trusted revoker runs only after turns, loans and callbacks quiesce.
+    enum class Kind { socket, file, timer, ffi_callback, lock_permit, native_allocation };
     enum class Phase { live, retiring, closing, reclaimed, failed };
     enum class Reclaim { not_retired, busy, closing, complete, failed };
     enum class Activity { turn, loan, callback };
@@ -32,10 +35,11 @@ public:
         Ticket& operator=(const Ticket&) = default;
     private:
         friend class ActorResourceRegistry;
-        Ticket(std::uint64_t actor, std::uint64_t generation,
+        Ticket(std::uint64_t domain, std::uint64_t actor, std::uint64_t generation,
                std::uint64_t sequence, Activity role)
-            : actor_id(actor), incarnation(generation), nonce(sequence),
+            : registry_domain(domain), actor_id(actor), incarnation(generation), nonce(sequence),
               activity(role) {}
+        std::uint64_t registry_domain;
         std::uint64_t actor_id;
         std::uint64_t incarnation;
         std::uint64_t nonce;
@@ -57,7 +61,8 @@ public:
     explicit ActorResourceRegistry(std::uint64_t actor_id,
                                    std::uint64_t incarnation,
                                    std::size_t max_resources = 256)
-        : actor_id_(actor_id), incarnation_(incarnation), capacity_(max_resources) {
+        : actor_id_(actor_id), incarnation_(incarnation), capacity_(max_resources),
+          registry_domain_(reserve_registry_domain()) {
         if (!actor_id || !incarnation || max_resources == 0 || max_resources > 4096)
             throw std::invalid_argument("invalid actor resource registry identity/capacity");
         entries_.reserve(max_resources);
@@ -85,6 +90,14 @@ public:
         if (entries_.size() >= capacity_)
             throw std::length_error("actor resource registry capacity exceeded");
         entries_.push_back({kind, std::move(close)});
+    }
+
+    // Register only a trusted, idempotent logical lock-permit revoker.
+    // This cannot forcibly unlock a native thread-affine mutex or execute
+    // guest code. The caller must retain this registry through actor stop.
+    // Any revocation failure quarantines the registry and dependent arenas.
+    void register_lock_permit(std::function<void()> revoke) {
+        register_resource(Kind::lock_permit, std::move(revoke));
     }
 
     // Scheduler-only tokens. Tokens are observations of outstanding activity,
@@ -186,6 +199,26 @@ public:
 
 private:
     friend class NativeActorResourceQuarantine;
+#ifdef ORESLANG_NATIVE_TEST_REGISTRY_DOMAIN_EXHAUSTION
+    // Isolated single-translation-unit test only. Production exposes no
+    // counter mutation API, and no issued domain may ever be recycled.
+    friend struct ActorResourceRegistryDomainTestAccess;
+#endif
+
+    // Actor/incarnation numbers can coincide in different runtimes. Neither
+    // those numbers nor this object's address identifies a registry lifetime.
+    // One linked C++17 inline counter spans translation units. It must remain
+    // alive while any issued ticket may survive; never reset it on actor exit.
+    inline static std::atomic<std::uint64_t> next_registry_domain_{1};
+    static std::uint64_t reserve_registry_domain() {
+        auto candidate = next_registry_domain_.load(std::memory_order_relaxed);
+        while (candidate != 0 && candidate != std::numeric_limits<std::uint64_t>::max()) {
+            if (next_registry_domain_.compare_exchange_weak(candidate, candidate + 1,
+                    std::memory_order_relaxed, std::memory_order_relaxed))
+                return candidate;
+        }
+        throw std::overflow_error("actor resource registry domain exhausted");
+    }
 
     void discharge_after_verified_isolate_shutdown() {
         std::vector<Entry> released;
@@ -229,14 +262,16 @@ private:
             throw std::overflow_error("actor resource token exhausted");
         const auto nonce = ++next_token_;
         set.insert(nonce);
-        return Ticket{actor_id_, incarnation_, nonce, role};
+        return Ticket{registry_domain_, actor_id_, incarnation_, nonce, role};
     }
 
     void release(std::unordered_set<std::uint64_t>& set, Activity role, Ticket token) {
         std::lock_guard<std::mutex> guard(mutex_);
-        // Never allow foreign actor-incarnation or cross-role tickets to
-        // release one of this actor's loans, callbacks, or turns.
-        if (token.actor_id != actor_id_ || token.incarnation != incarnation_
+        // Check the issuing registry before erasing anything. A stale ticket
+        // must not release a replacement registry's activity at the same
+        // address, even with equal actor/incarnation/nonce/role values.
+        if (token.registry_domain != registry_domain_
+                || token.actor_id != actor_id_ || token.incarnation != incarnation_
                 || token.activity != role || set.erase(token.nonce) != 1)
             throw std::logic_error("invalid or duplicate actor resource lease release");
     }
@@ -244,6 +279,7 @@ private:
     const std::uint64_t actor_id_;
     const std::uint64_t incarnation_;
     const std::size_t capacity_;
+    const std::uint64_t registry_domain_;
     mutable std::mutex mutex_;
     Phase phase_ = Phase::live;
     std::uint64_t next_token_ = 0;
@@ -277,3 +313,4 @@ inline ActorResourceRegistry::~ActorResourceRegistry() noexcept {
 }
 
 } // namespace oreslang::runtime
+

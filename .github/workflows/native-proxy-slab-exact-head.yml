@@ -1,0 +1,82 @@
+name: Native proxy slab exact-head C++20
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ProxyRequestSlab.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedProxyRequestSlab.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'tests/native_proxy_request_slab_test.cpp'
+      - 'tests/native_actor_proxy_request_slab_owner_test.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/native-proxy-slab-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  standalone-host-sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact Git source head and tree
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Compile strict C++20 host slab
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena.o
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena.o -o /tmp/proxy-slab-host
+          test "$(/tmp/proxy-slab-host)" = "NATIVE_PROXY_REQUEST_SLAB_OK"
+      - name: Exercise ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/ActorArena.c \
+            -o /tmp/proxy-actor-arena-sanitized.o
+          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp tests/native_proxy_request_slab_test.cpp \
+            /tmp/proxy-actor-arena-sanitized.o -o /tmp/proxy-slab-sanitized
+          ASAN_OPTIONS=detect_leaks=1 /tmp/proxy-slab-sanitized
+      - name: Compile and execute exact-generation real native actor test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/proxy-native-actor-scheduler.o
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
+            /tmp/proxy-native-actor-scheduler.o /tmp/proxy-actor-arena.o \
+            -o /tmp/proxy-native-owner-test
+          test "$(/tmp/proxy-native-owner-test)" = "NATIVE_ACTOR_PROXY_REQUEST_SLAB_OWNER_OK"
+      - name: Exercise exact native actor and arena under ASan/UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o /tmp/proxy-scheduler-sanitized.o
+          c++ -std=c++20 -g -O1 -fno-omit-frame-pointer -pthread \
+            -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_actor_proxy_request_slab_owner_test.cpp \
+            /tmp/proxy-scheduler-sanitized.o /tmp/proxy-actor-arena-sanitized.o \
+            -o /tmp/proxy-native-owner-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/proxy-native-owner-sanitized

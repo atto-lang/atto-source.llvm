@@ -104,7 +104,46 @@ fields and can therefore occupy SoA columns or AoSoA lanes directly.
 * Layout selection must be part of ABI/cache/schema fingerprints wherever
   persisted or shared binary layouts depend on it.
 
-## Next lowering work
+## Actor-owned heap bridge (LLVM native runtime, October 2026)
+
+`ActorOwnedHeap<Bytes, Slots>` now exposes:
+
+- `compact(live_handle) -> optional<CompressedActorRef>`: only valid,
+  generation-checked, representable 8-byte-aligned object starts are admitted.
+- `compact_matches(original_handle, compact_ref) -> bool`: a boundary
+  validation that requires the *original* full-domain/generation handle.
+  It rejects foreign handles, dead objects and retired heaps without returning
+  a native pointer.
+
+This is deliberately a **runtime substrate** rather than source-language
+pointer-compression lowering. Merely restoring an address from a 32-bit offset
+does **not** prove that the object is live: two different actors can have the
+same offset, and a recycled slot can reuse the exact same compressed bits.
+An out-of-line lifetime/generation proof or statically proven borrow is
+necessary. Do not infer an object's proof from a newly resolved offset; that
+would admit ABA. ActorHeapIdentity/admission credentials are not themselves
+a sandbox or unforgeable guest capability.
+
+The fixed-capacity actor heap above is not a 32-GiB virtual-memory cage.
+It is an existing bounded contiguous region, with an aligned base. Memory
+for arbitrarily many actors must not be implemented by unconditionally
+reserving a full 32-GiB cage per actor: choose bounded actor-local regions,
+fallback native64 when required, or use arena tiers with explicit domain
+descriptors. Compression alone does not provide hardware memory isolation.
+
+FFI/code/stack/OS pointers, native ABI and `ActorRef<T>` remain independent
+of the compact storage format. The trusted actor scheduler must supply the
+active actor heap base, not a pointer loaded from untrusted actor state.
+Suspend/resume on another carrier must rebind this base to the actor *heap*
+identity, not the execution/continuation identity. Supervisor shutdown must
+fence borrows/FFI and revoke compact dereferences before freeing the arena.
+
+The current 8-byte quantum can cover nearly 32 GiB but requires a shift
+on each decode (`base + ((stored - 1) << 3)`). A future 4-GiB byte-offset
+cage permits simpler arithmetic but potentially greater virtual-address
+reservation and stricter placement. Benchmark both before declaring either
+faster; don't allocate a 32-GiB virtual cage for every tiny actor.
+
 
 The header-level representation is the substrate. Compiler lowering should
 next introduce a logical managed-reference type in HIR, select physical
@@ -115,3 +154,20 @@ should hoist redundant base/decode work.
 For ECS/DOP kernels, lowering should prefer index-preserving operations and
 avoid decoding to pointers until a concrete field load/store requires an
 address. This is especially important for vectorized SoA/AoSoA loops.
+
+## Span arithmetic safety gate (October 21, 2026)
+
+A compressed32 region descriptor must specify a nonzero base, a nonempty
+contiguous region, and a span of at most `2^32 - 1` eight-byte quanta
+(32 GiB minus 8 bytes). The *entire* `[base, base + size)` region must fit
+the native address space without integer wrap; checking just the target
+offset would admit malformed descriptors whose declared end wraps around
+`UINTPTR_MAX`. `ManagedRef.hpp` now applies the full-span check on both
+encode and decode, including the native64 fallback mode. Null references
+remain zero, never dereferenced. Tests cover the unsigned high bit, maximum
+encodable word, exact address-space boundary, and corrupt overflow spans.
+
+This does not make offset bits alone a capability. The independently verified
+actor identity, object-start, generation and turn/borrow constraints remain
+mandatory at every runtime/LLVM dereference boundary.
+

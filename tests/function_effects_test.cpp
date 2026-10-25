@@ -33,6 +33,14 @@ int main() {
                 "panic and throw must be distinct");
         require(FunctionEffects::parse("panic") != FunctionEffects::parse("raise"),
                 "panic and raise must be distinct");
+        // Preserve the original PR's direct least-authority regressions alongside
+        // the current-main exhaustive permission and forged-mask checks.
+        const FunctionEffects write{static_cast<std::uint32_t>(FunctionEffect::StateWrite)};
+        require(declared.permits(write), "declared effects must permit a write");
+        require(!FunctionEffects{}.permits(read), "pure effects cannot authorize read");
+        require(read.united(write).permits(write), "union must retain write");
+        require(declared.has(FunctionEffect::Suspend), "declared suspend remains present");
+        require(!read.has(FunctionEffect::Panic), "read does not imply panic");
         // Exhaustive spelling and one-hot flag coverage: adding or aliasing an
         // effect must require updating this reviewed table.
         const std::array<std::pair<std::string_view, FunctionEffect>, 10> known{{
@@ -95,6 +103,39 @@ int main() {
             }
         }
 
+        // Unproven callback/FFI/dynamic dispatch is never a pure call.
+        // The sentinel is intentionally invalid and cannot be authorized
+        // even by a forged declaration containing that same bit.
+        constexpr auto unresolved = FunctionEffects::unresolved_call();
+        static_assert(!unresolved.valid());
+        static_assert(!FunctionEffects{}.permits(unresolved));
+        static_assert(!unresolved.permits(unresolved));
+        require(unresolved.bits == FunctionEffects::UnresolvedCallBit,
+                "unresolved effect identity must be stable");
+        require(!unresolved.united({}).valid(),
+                "union with pure must not erase unresolved call");
+        require(!FunctionEffects{all_effects}.permits(unresolved),
+                "all known permissions must still reject unresolved calls");
+        require(!unresolved.permits({}),
+                "a forged unresolved declaration must not admit even pure calls");
+        for (std::uint32_t declaration = 0; declaration <= all_effects; ++declaration) {
+            const FunctionEffects declared_row{declaration};
+            require(!declared_row.permits(unresolved),
+                    "no known declaration can approve unresolved dispatch");
+            require(!declared_row.united(unresolved).valid(),
+                    "union must conserve the unresolved marker");
+        }
+        require(!FunctionEffects{unresolved.bits | all_effects}.permits(unresolved),
+                "matching forged unresolved bits cannot self-authorize");
+        bool unknown_spelling_rejected = false;
+        try {
+            (void)FunctionEffects::parse("unresolved_call");
+        } catch (const std::invalid_argument&) {
+            unknown_spelling_rejected = true;
+        }
+        require(unknown_spelling_rejected,
+                "internal unresolved marker must not be expressible in with");
+
         // Deliberately forged bitsets must never be approved. With the old
         // subset-only permits() check, equal unknown-bit masks were accepted,
         // including as the declared actor-state "using" effects.
@@ -139,8 +180,8 @@ int main() {
         // The known-domain tests above exhaust all valid rows.
         // Extra adversarial values exercise the opaque public ABI boundary.
 
-        const std::array<std::string_view, 13> invalid{{
-            std::string_view{}, "unknown", "state", "state.READ", "state.read ",
+        const std::array<std::string_view, 14> invalid{{
+            std::string_view{}, "unknown", "StateWrite", "state", "state.READ", "state.read ",
             " state.read", "state-read", "suspend\n", "PANIC", "panic.",
             "throw/raise", std::string_view{"panic\0extra", 11},
             std::string_view{"\0panic", 6}

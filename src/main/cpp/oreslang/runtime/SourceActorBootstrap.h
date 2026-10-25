@@ -1,7 +1,6 @@
 #pragma once
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/NativeLogicalTrace.h"
-#include "oreslang/runtime/NativeFailureTrace.h"
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -17,6 +16,27 @@ typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
+enum {
+    ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
+    ORES_SOURCE_ACTOR_STARTUP_INITIALIZING = 1,
+    ORES_SOURCE_ACTOR_STARTUP_READY = 2,
+    ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY = 3
+};
+
+/* Read-only host lifecycle observation. TERMINATED_BEFORE_READY corresponds
+ * to a failed get_ready observer while get_done still completes normally. */
+int oreslang_source_actor_ready_status(void* actor);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Deterministic startup-race proof hooks. They pause only the reserved
+ * initialization CONTROL callback before it decides whether construction may
+ * begin; they are not linked into ordinary source programs. */
+void oreslang_source_actor_test_hold_initialization(int hold);
+int oreslang_source_actor_test_initialization_entered(void);
+void oreslang_source_actor_test_hold_readiness_publication(int hold);
+int oreslang_source_actor_test_readiness_publication_entered(void);
+#endif
+
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
@@ -24,6 +44,20 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
  * host error; a typed guest overload result still needs compiler lowering.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+
+/*
+ * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
+ * scheduler to terminate the actor. join_done is trusted host glue: it waits
+ * for physical VM completion, retires/destroys the actor heap, releases the
+ * opaque SourceActor allocation, and closes an idle source-actor VM.
+ *
+ * Source lowering without get_done continues to call oreslang_source_actor_stop(),
+ * which keeps its existing synchronous request+join behavior. get_done lowering
+ * uses request_stop plus oreslang_source_actor_await_done(); the split APIs remain
+ * trusted compiler/runtime capabilities, not guest-callable functions.
+ */
+void oreslang_source_actor_request_stop(void* actor);
+void oreslang_source_actor_join_done(void* actor);
 void oreslang_source_actor_stop(void* actor);
 
 /*
@@ -44,6 +78,32 @@ int64_t oreslang_source_actor_await_ready(
     OresSourceActorContinuation continuation,
     uint64_t source_token);
 
+/* Host/runtime projection of the same readiness observer. Returns READY or
+ * TERMINATED_BEFORE_READY; the continuation runs only on READY. The compiler
+ * wrapper above remains fail-closed until typed ActorTerminated propagation is
+ * lowered for source await. */
+int oreslang_source_actor_await_ready_checked(
+    void* actor,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+
+/*
+ * Restricted compiler-generated terminal await slice:
+ *   stop actor;
+ *   await actor.get_done();
+ *
+ * The stop request has already been admitted before this call. The trusted
+ * outer host, never an actor carrier, waits for the target's physical terminal
+ * ACK. A root CONTROL suspension/resume pair preserves logical ancestry; the
+ * target actor heap and opaque SourceActor are reclaimed only after the resumed
+ * continuation has completed.
+ */
+int64_t oreslang_source_actor_await_done(
+    void* actor,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+
 /*
  * Active only while a compiler-generated source continuation is executing.
  * These hooks let throw/raise/panic rendering attach the live logical ancestry
@@ -57,20 +117,6 @@ int oreslang_source_actor_snapshot_current_trace(
     OresNativeContinuationTraceFrame* continuation_frames,
     size_t continuation_capacity,
     OresNativeLogicalTraceResult* out);
-
-/*
- * Failure recording hook used by future source throw/raise/panic lowering.
- * It is valid only while compiler-generated resumed source code owns the
- * current logical execution handle.
- */
-int oreslang_source_actor_capture_failure_trace(
-    OresNativeFailureKind kind,
-    uint64_t source_token,
-    OresNativeExecutionTraceFrame* execution_frames,
-    size_t execution_capacity,
-    OresNativeContinuationTraceFrame* continuation_frames,
-    size_t continuation_capacity,
-    OresNativeFailureTraceHeader* out);
 
 #ifdef __cplusplus
 }

@@ -31,6 +31,9 @@ struct AutoType {
     std::vector<AutoType> parameters;
     std::set<AutoTrait> dyn_bounds;
     bool shareable_domain = false;
+    // Nominal auto traits require a complete instantiated layout proof.
+    // Opaque/imported/unresolved nominal provenance fails closed.
+    bool complete_nominal_layout = false;
     std::set<AutoTrait> negative;
 };
 
@@ -67,6 +70,10 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
         caps = {true, true, true};
         break;
     case AutoTypeKind::Nominal:
+        if (!type.complete_nominal_layout) {
+            caps = {false, false, false};
+            break;
+        }
         caps = {
             all_have(type.parameters, AutoTrait::Send),
             all_have(type.parameters, AutoTrait::Sync),
@@ -81,8 +88,9 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
     case AutoTypeKind::Arc:
     case AutoTypeKind::Weak: {
         const auto nested = infer_auto_traits(exactly_one(type));
-        const bool admitted = type.shareable_domain && nested.send && nested.sync;
-        caps = {admitted, admitted, admitted};
+        const bool concurrent =
+            type.shareable_domain && nested.send && nested.sync;
+        caps = {concurrent, concurrent, concurrent && nested.share};
         break;
     }
     case AutoTypeKind::Rc:

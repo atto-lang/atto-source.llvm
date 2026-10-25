@@ -1,0 +1,7 @@
+define actor Entry as
+  let counter: int = 0;
+
+  pub fnc on_message(int message): int {
+    return message;
+  }
+end

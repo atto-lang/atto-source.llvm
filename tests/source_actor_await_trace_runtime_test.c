@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 static void check(int ok) { if (!ok) abort(); }
 
@@ -52,53 +51,11 @@ static int64_t resumed(void* actor) {
     check(continuations[0].record.boundary
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     check(continuations[0].record.source_token == UINT64_C(0x1234));
-
-    /*
-     * throw/raise/panic all snapshot the same live logical ancestry at their
-     * recording point. Language-specific propagation remains a separate layer.
-     */
-    const OresNativeFailureKind kinds[3] = {
-        ORES_NATIVE_FAILURE_THROW,
-        ORES_NATIVE_FAILURE_RAISE,
-        ORES_NATIVE_FAILURE_PANIC
-    };
-    const char* names[3] = {"THROW", "RAISE", "PANIC"};
-    for (size_t i = 0; i < 3; ++i) {
-        OresNativeFailureTraceHeader failure = {0};
-        OresNativeExecutionTraceFrame failure_executions[4] = {0};
-        OresNativeContinuationTraceFrame failure_continuations[4] = {0};
-        const uint64_t source = UINT64_C(0x2001) + (uint64_t)i;
-        check(oreslang_source_actor_capture_failure_trace(
-            kinds[i],
-            source,
-            failure_executions,
-            4,
-            failure_continuations,
-            4,
-            &failure));
-        check(failure.kind == kinds[i]);
-        check(failure.source_token == source);
-        check(failure.logical.execution_count == 2);
-        check(failure.logical.continuation_count == 1);
-        check(!failure.logical.corrupt);
-        check(failure.current_execution.slot == current.slot);
-        check(failure.current_execution.generation == current.generation);
-        check(failure_continuations[0].record.boundary
-            == ORES_CONTINUATION_BOUNDARY_AWAIT);
-
-        char rendered[1024];
-        const size_t rendered_bytes = ores_native_failure_trace_format(
-            &failure,
-            failure_executions,
-            failure_continuations,
-            rendered,
-            sizeof(rendered));
-        check(rendered_bytes != 0);
-        check(strstr(rendered, names[i]) != NULL);
-        check(strstr(rendered, "boundary[0] AWAIT") != NULL);
-        if (kinds[i] == ORES_NATIVE_FAILURE_PANIC)
-            fprintf(stderr, "SOURCE_FAILURE_TRACE_SAMPLE\n%s", rendered);
-    }
+    /* A real actor Future must commit READY before the root continuation
+     * can claim its physical CONTROL turn. Legacy PENDING trace claims are
+     * deliberately insufficient for this guest await execution path. */
+    check(continuations[0].record.state == ORES_CONTINUATION_CLAIMED);
+    check(continuations[0].record.code_generation == 1);
 
     oreslang_source_actor_send(actor, 1);
     oreslang_source_actor_send(actor, 2);

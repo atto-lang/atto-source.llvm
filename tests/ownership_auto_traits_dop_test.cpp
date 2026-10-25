@@ -51,6 +51,11 @@ int main() {
         wrap(AutoTypeKind::Arc, scalar(), true));
     REQUIRE(shared_arc.send && shared_arc.sync && shared_arc.share);
 
+    const auto boxed_for_arc = wrap(AutoTypeKind::Box, scalar());
+    const auto arc_box = oreslang::types::infer_auto_traits(
+        wrap(AutoTypeKind::Arc, boxed_for_arc, true));
+    REQUIRE(arc_box.send && arc_box.sync && !arc_box.share);
+
     const auto rc = oreslang::types::infer_auto_traits(
         wrap(AutoTypeKind::Rc, scalar()));
     REQUIRE(!rc.send && !rc.sync && !rc.share);
@@ -77,6 +82,17 @@ int main() {
     AutoType denied = scalar();
     denied.negative.insert(AutoTrait::Send);
     REQUIRE(!oreslang::types::infer_auto_traits(denied).send);
+
+    AutoType opaque_nominal;
+    opaque_nominal.kind = AutoTypeKind::Nominal;
+    const auto opaque_caps = oreslang::types::infer_auto_traits(opaque_nominal);
+    REQUIRE(!opaque_caps.send && !opaque_caps.sync && !opaque_caps.share);
+
+    AutoType proven_empty_nominal;
+    proven_empty_nominal.kind = AutoTypeKind::Nominal;
+    proven_empty_nominal.complete_nominal_layout = true;
+    const auto empty_caps = oreslang::types::infer_auto_traits(proven_empty_nominal);
+    REQUIRE(empty_caps.send && empty_caps.sync && !empty_caps.share);
 
     for (auto layout : {oreslang::dop::Layout::AoS,
                         oreslang::dop::Layout::SoA,
@@ -113,7 +129,17 @@ int main() {
     try { require_current_epoch(stale, 7); }
     catch (const std::invalid_argument&) { rejected = true; }
     REQUIRE(rejected);
-    REQUIRE(overlaps(first.place, stale));
+    rejected = false;
+    try { (void)overlaps(first.place, stale); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    REQUIRE(rejected);
+
+    rejected = false;
+    try {
+        (void)Place(oreslang::dop::Layout::SoA, "world", "moving", " ",
+                    std::nullopt, std::nullopt, 7);
+    } catch (const std::invalid_argument&) { rejected = true; }
+    REQUIRE(rejected);
 
     rejected = false;
     try { require_internally_valid({whole, x_write}); }

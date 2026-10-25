@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -109,12 +110,38 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(expr->right.get(), facts);
     if (facts.call_budget_exceeded) return;
+    scan_expression(expr->condition.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    // ConditionalExpr owns compatibility and branch child edges outside left/right:
+    // the proven-bool equality pair plus both lazy value arms. Realtime
+    // admission must inspect every edge; skipping an unselected-looking arm
+    // would let calls/allocation/state effects evade static accounting.
+    scan_expression(expr->condition_lhs.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->condition_rhs.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->when_true.get(), facts);
+    if (facts.call_budget_exceeded) return;
+    scan_expression(expr->when_false.get(), facts);
+    if (facts.call_budget_exceeded) return;
     for (const auto& argument : expr->arguments) {
         scan_expression(argument.get(), facts);
         if (facts.call_budget_exceeded) return;
     }
 
     switch (expr->kind) {
+        case Expression::Kind::SumConstruct:
+            add_effect(facts, FunctionEffect::Alloc); facts.unsupported_runtime = true; break;
+        case Expression::Kind::SumAccess:
+            add_effect(facts, FunctionEffect::StateRead); facts.unsupported_runtime = true;
+            if (expr->name == "unwrap") add_effect(facts, FunctionEffect::Panic);
+            break;
+        case Expression::Kind::String:
+            add_effect(facts, FunctionEffect::Alloc);
+            break;
+        case Expression::Kind::Console:
+            add_effect(facts, FunctionEffect::Io);
+            break;
         case Expression::Kind::Call:
             if (facts.calls.size() >= facts.call_limit) {
                 facts.call_budget_exceeded = true;
@@ -125,6 +152,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             facts.calls.push_back(function_key(expr->name, expr->arguments.size()));
             break;
         case Expression::Kind::ArrayCall:
+        case Expression::Kind::RecordConstruct:
             // Current native Array<int> runtime may allocate/resize. It is not
             // admitted until lowered onto the fixed-capacity RT arena.
             add_effect(facts, FunctionEffect::Alloc);
@@ -137,11 +165,25 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             add_effect(facts, FunctionEffect::StateWrite);
             break;
         case Expression::Kind::Integer:
+        case Expression::Kind::Boolean:
         case Expression::Kind::Variable:
         case Expression::Kind::Negate:
+        case Expression::Kind::LogicalNot:
         case Expression::Kind::Add:
+            if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
+            break;
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Equal:
+        case Expression::Kind::NotEqual:
+        case Expression::Kind::Less:
+        case Expression::Kind::LessEqual:
+        case Expression::Kind::Greater:
+        case Expression::Kind::GreaterEqual:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
+        case Expression::Kind::Conditional:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
         case Expression::Kind::Borrow:
@@ -163,8 +205,10 @@ inline void scan_binding(const LocalBinding& binding, DirectFacts& facts) {
 inline void scan_statement(const Statement& statement, DirectFacts& facts) {
     if (facts.call_budget_exceeded) return;
     scan_expression(statement.expression.get(), facts);
+    scan_expression(statement.condition.get(), facts);
     scan_expression(statement.condition_lhs.get(), facts);
     scan_expression(statement.condition_rhs.get(), facts);
+    scan_expression(statement.loop_step.get(), facts);
     scan_expression(statement.array_commit_length.get(), facts);
     for (const auto& value : statement.array_commit_values) {
         scan_expression(value.get(), facts);
@@ -180,6 +224,12 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
         add_effect(facts, FunctionEffect::Alloc);
     if (statement.kind == Statement::Kind::Defer)
         facts.bounded_cleanup = false;
+    if (statement.kind == Statement::Kind::ForEach || statement.kind == Statement::Kind::ForIndex) {
+        add_effect(facts, FunctionEffect::StateRead);
+        // Synchronous array iteration is not yet a certified scheduler/fuel
+        // loop. Do not admit it into strict realtime or pretend it can yield.
+        facts.unsupported_runtime = true;
+    }
 
     for (const auto& nested : statement.then_statements) {
         scan_statement(nested, facts);
@@ -194,6 +244,13 @@ inline void scan_statement(const Statement& statement, DirectFacts& facts) {
 inline DirectFacts direct_facts(const Function& function, std::size_t call_limit) {
     DirectFacts facts;
     facts.call_limit = call_limit;
+    // Even a passthrough validates a region-backed descriptor at entry. The
+    // scalar ABI does not make sum storage a certified hard-RT resource.
+    if (!function.return_sum.empty() || std::any_of(function.parameters.begin(), function.parameters.end(),
+            [](const Parameter& p) { return !p.sum_type.empty(); }))
+        facts.unsupported_runtime = true;
+    // Returning a named leaf record snapshots fields into native region storage.
+    if (!function.return_class.empty()) add_effect(facts, FunctionEffect::Alloc);
 
     for (const auto& local : function.locals) {
         scan_binding(local, facts);
@@ -204,6 +261,7 @@ inline DirectFacts direct_facts(const Function& function, std::size_t call_limit
         if (facts.call_budget_exceeded) return facts;
     }
     for (const auto& guard : function.early_returns) {
+        scan_expression(guard.condition.get(), facts);
         scan_expression(guard.lhs.get(), facts);
         scan_expression(guard.rhs.get(), facts);
         scan_expression(guard.result.get(), facts);

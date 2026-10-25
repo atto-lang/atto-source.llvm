@@ -88,27 +88,6 @@ actor-context await, generic Future<T>, select, cancellation and borrow-across-
 suspend. Those remain fail-closed until typed MIR, cleanup/unwind state and
 general continuation frames exist.
 
-## Failure recording
-
-`NativeFailureTrace` is the synchronous recording layer for future source
-`throw`, `raise`, and `panic` lowering. At the failure site it retains the
-active generation-checked ExecutionHandle, snapshots execution + continuation
-ancestry into caller-owned bounded buffers, records the failure kind and source
-token, then releases the temporary pin.
-
-The logical formatter performs no allocation and contains no native stack
-address. A public renderer can therefore emit live symbolized native frames
-first, while that failure stack still exists, and append the captured logical
-segment afterward. The first source-await integration exposes the same capture
-hook only while its compiler-generated resumed continuation owns the active
-ExecutionHandle.
-
-This does **not** admit generic LLVM source `raise` or `panic` yet. Propagation,
-typed Error payloads, unwind/cleanup state, `recover`, supervisor delivery and
-stack symbolization remain separate compiler/runtime slices. The capture API is
-deliberately ready before those paths so exception lowering cannot accidentally
-fall back to native stack pointers or whole-stack copying.
-
 ## Trace reconstruction
 
 At a failure site the public renderer may compose:
