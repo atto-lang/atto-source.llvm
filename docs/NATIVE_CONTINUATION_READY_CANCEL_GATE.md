@@ -84,3 +84,35 @@ Native `select` additionally needs a single winner across *all* registered
 channel/timeout/cancel arms and losing-arm detachment; independently claiming
 one continuation per arm is not select correctness. Java/GraalVM ↔ LLVM
 source-execution fixtures and exact-head sanitizer evidence remain mandatory.
+
+
+## CLAIMED physical-pin retention and exact finish identity
+
+The native continuation store must not release the **last** pin of a
+`CLAIMED` continuation while its physical guest execution is active.
+When releasing a nested child cascades into a CLAIMED parent with just
+the protected physical pin remaining, child release succeeds without
+retiring that parent. The parent may release its final pin only after
+`finish_resume()` completes.
+
+`ores_native_await_trace_resume_finish()` also verifies that the passed
+suspension link's parent handle (including generation) and logical
+source ExecutionId match the persisted continuation record before
+transitioning CLAIMED to COMPLETED. A forged or stale link is not a
+completion authority; this bridge remains a runtime-internal API.
+
+The C11 regression `native_continuation_ready_cancel_resume_race`
+now checks an explicit last-pin refusal, a nested child release that
+preserves CLAIMED ancestry, forged parent-generation and ExecutionId
+completion rejection, successful original-link completion, and
+one-shot physical finish. These changes are forward-ported onto current
+LLVM main and do **not** replace the newer wake-commit or actor scheduler
+behavior already on main.
+
+**Evidence boundary:** This forward-port requires newly executed
+normal and ASan/UBSan native tests on its own exact commit. Prior green
+tests from a different branch/commit are not proof of these fixes.
+At authoring time, source-org Actions ran no job steps and
+`docs/security/CI_PRIVATE_SOURCE_MIRRORING.md` authorized no external
+private source destination. Do not substitute a cross-org mirror without
+the repository's protected-main security approvals.

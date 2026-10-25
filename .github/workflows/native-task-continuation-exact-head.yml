@@ -1,0 +1,64 @@
+name: Native Task continuation exact-head race and sanitizer gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeContinuationStore.*'
+      - 'src/main/cpp/oreslang/runtime/NativeExecutionContextStore.*'
+      - 'src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.*'
+      - 'src/main/cpp/oreslang/runtime/NativeTraceSlotNamespace.h'
+      - 'src/main/cpp/oreslang/runtime/TaskCancellation.hpp'
+      - 'src/main/cpp/oreslang/runtime/TaskContinuationGate.hpp'
+      - 'tests/native_continuation_ready_resume_test.c'
+      - 'tests/native_task_cancellation_test.cpp'
+      - 'tests/native_task_continuation_gate_test.cpp'
+      - 'scripts/test-native-task-continuation-gate.sh'
+      - '.github/workflows/native-task-continuation-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-task-continuation:
+    name: native-task-continuation-${{ matrix.compiler }}-${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        mode: [normal, sanitize]
+    steps:
+      - name: Checkout exact source PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact tested source commit and clean checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "EXACT_SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and run exact-head C11/C++17 Task and continuation regressions
+        shell: bash
+        env:
+          TEST_CC: ${{ matrix.compiler }}
+          TEST_MODE: ${{ matrix.mode }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          case "$TEST_CC" in gcc) export CC=gcc CXX=g++ ;; clang) export CC=clang CXX=clang++ ;; *) exit 2 ;; esac
+          timeout 360s bash scripts/test-native-task-continuation-gate.sh "$TEST_MODE" \
+            | tee "$RUNNER_TEMP/native-task-continuation.log"
+          grep -Fx 'NATIVE_TASK_CONTINUATION_GATE_PASS' "$RUNNER_TEMP/native-task-continuation.log"
+          grep -Fx 'NATIVE_CONTINUATION_READY_CANCEL_RESUME_PASS' "$RUNNER_TEMP/native-task-continuation.log"
+          grep -Fx "NATIVE_TASK_GATE_TESTS_PASS mode=$TEST_MODE CC=$CC CXX=$CXX" \
+            "$RUNNER_TEMP/native-task-continuation.log"
+          echo "EXACT_NATIVE_TASK_CONTINUATION_PASS compiler=$TEST_CC mode=$TEST_MODE"

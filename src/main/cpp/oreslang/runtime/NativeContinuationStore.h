@@ -72,6 +72,12 @@ int ores_native_continuation_store_retain(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);
 
+/*
+ * Releasing an explicit final pin while CLAIMED fails until the physical
+ * guest turn has called finish_resume(). A successful child release can
+ * stop at its CLAIMED ancestor's protected final pin: true means the
+ * requested child pin was released, not that its entire ancestry retired.
+ */
 int ores_native_continuation_store_release(
     OresNativeContinuationStore* store,
     OresNativeContinuationHandle handle);

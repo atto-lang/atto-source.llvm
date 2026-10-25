@@ -289,6 +289,18 @@ int ores_native_continuation_store_release(
             unlock_store(store);
             return 0;
         }
+        /*
+         * A CLAIMED continuation owns an active physical guest frame.
+         * Its final pin must remain until finish_resume() has completed.
+         * If child reclamation reached this ancestor, the child was
+         * already successfully released: report that partial cascade
+         * honestly without reclaiming the running parent.
+         */
+        if (block->refs[lane] == 1
+                && block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+            unlock_store(store);
+            return released_any;
+        }
         released_any = 1;
         if (block->refs[lane] > 1) {
             --block->refs[lane];
