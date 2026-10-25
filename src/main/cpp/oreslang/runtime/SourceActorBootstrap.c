@@ -971,13 +971,17 @@ int oreslang_source_actor_await_send_future_checked(void* opaque_future) {
     return (int)outcome;
 }
 
-int64_t oreslang_source_actor_await_send_future(
+int oreslang_source_actor_await_send_future_continuation_checked(
         void* opaque_future,
         OresSourceActorContinuation continuation,
-        uint64_t source_token) {
+        uint64_t source_token,
+        int64_t* result_out) {
+    if (result_out) *result_out = 0;
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
-    ensure(future != NULL && continuation != NULL);
-    ensure(!ores_native_actor_scheduler_is_carrier_thread());
+    if (!future || !continuation || !result_out)
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
 
     SendAwaitFrame frame = {
         .continuation = continuation,
@@ -1070,7 +1074,18 @@ int64_t oreslang_source_actor_await_send_future(
         SOURCE_GROUP_ROOT_SLOT,
         (unsigned long long)source_token);
 #endif
-    ensure(outcome == ORES_NATIVE_SEND_ACCEPTED);
+    *result_out = result;
+    return (int)outcome;
+}
+
+int64_t oreslang_source_actor_await_send_future(
+        void* opaque_future,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    ensure(oreslang_source_actor_await_send_future_continuation_checked(
+        opaque_future, continuation, source_token, &result)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
     return result;
 }
 
