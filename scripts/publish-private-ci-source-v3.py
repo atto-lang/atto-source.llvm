@@ -62,7 +62,7 @@ SAFE_EXECUTABLE = re.compile(
     r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
 )
 MAX_MAVEN_PREFETCH_ARTIFACTS = 16
-MAX_FILES = 1024
+MAX_FILES = 2048
 MAX_TREE_ENTRIES = 4096
 MAX_TOTAL = 40 * 1024 * 1024
 MAX_FILE = 10 * 1024 * 1024
