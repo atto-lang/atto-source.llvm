@@ -33,6 +33,7 @@ class NativeAsyncEnvelopeTxn;
  */
 template <typename T>
 class PriorityActorInbox final {
+    struct PreloanedPublicationTag;
 public:
     enum class Lane { Urgent, Normal, Bulk };
     enum class Dispatch { Control, User, Idle, Busy, Retired };
