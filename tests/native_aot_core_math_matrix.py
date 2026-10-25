@@ -108,19 +108,64 @@ def must_run(argv, *, timeout=60, cwd=None):
     return result.stdout
 
 
+def render_i64_literal(value):
+    """Represent every signed-i64 input in the *current* native source grammar.
+
+    Native Parser.cpp currently parses unary '-' separately from the positive
+    integer token, and std::from_chars rejects the positive magnitude 2^63.
+    This source-level expression uses only representable intermediates:
+    -INT64_MAX - 1 == INT64_MIN, without overflow at either operation.
+    """
+    if type(value) is not int or value < MIN_I64 or value > MAX_I64:
+        raise ValueError("guest literal outside exact signed-i64 domain")
+    if value == MIN_I64:
+        return "(-9223372036854775807 - 1)"
+    return str(value)
+
+
+def guest_program(source, fn, args, expected):
+    if fn not in VALID_FUNCTIONS or len(args) != VALID_FUNCTIONS[fn]:
+        raise ValueError("unreviewed guest function or arity")
+    call = fn + "(" + ", ".join(map(render_i64_literal, args)) + ")"
+    main = ("\nfnc main(): int {\n"
+            + "  const actual: int = " + call + ";\n"
+            + "  if (actual eq " + render_i64_literal(expected) + ") "
+            + "{ return 0; } fi\n"
+            + "  return 1;\n}\n")
+    return source + main
+
+
+def test_guest_literal_renderer():
+    cases = read_cases()
+    for case_id, fn, args, expected in cases:
+        source = guest_program("", fn, args, expected)
+        if "9223372036854775808" in source:
+            raise AssertionError("native parser cannot parse i64-min positive magnitude")
+        if not source.endswith("return 1;\n}\n"):
+            raise AssertionError("guest fixture missing final fail-closed return")
+    for value in (MIN_I64, MIN_I64 + 1, -1, 0, 1, MAX_I64):
+        actual = render_i64_literal(value)
+        if value == MIN_I64 and actual != "(-9223372036854775807 - 1)":
+            raise AssertionError("i64-min does not use safe native expression")
+        if value != MIN_I64 and actual != str(value):
+            raise AssertionError("non-min signed-i64 changed")
+    for invalid in (True, None, "-1", MIN_I64 - 1, MAX_I64 + 1):
+        try:
+            render_i64_literal(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("out-of-domain guest scalar literal accepted")
+    print("NATIVE-I64-LITERAL-RENDER-OK 24 cases + boundaries and negatives")
+
+
 def one_execution(compiler, clang, source, fn, args, expected, working, label, level):
     # An Oreslang comparison is checked in the *guest*; only its Boolean 0/1
     # result is returned as process status, avoiding i64 exit-code truncation.
-    call = fn + "(" + ", ".join(map(str, args)) + ")"
-    main = ("\nfnc main(): int {\n"
-            + "  const actual: int = " + call + ";\n"
-            + "  if (actual eq " + str(expected) + ") "
-            + "{ return 0; } fi\n"
-            + "  return 1;\n}\n")
     source_path = working / (label + ".ores")
     ll_path = working / (label + ".ll")
     exe_path = working / (label + "-" + level + ".exe")
-    source_path.write_text(source + main, encoding="ascii")
+    source_path.write_text(guest_program(source, fn, args, expected), encoding="ascii")
     ll_path.write_bytes(must_run([compiler, "--target=host", str(source_path)]))
     if level not in ("O0", "O2"):
         raise ValueError("unknown optimization level")
@@ -191,7 +236,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        if sys.argv[1:] == ["--self-test-literals"]:
+            test_guest_literal_renderer()
+        else:
+            main()
     except Exception as error:
         print("NATIVE-AOT-CORE-MATH-UNVERIFIED: " + str(error), file=sys.stderr)
         sys.exit(1)

@@ -16,20 +16,36 @@ class ActorReceiptParserTest(unittest.TestCase):
     def setUp(self):
         self.good = (
             "SOURCE_ACTOR_SPAWN_STOP_VERIFIED constructor_on_worker=1 "
-            "released=1 processed=4 last=52"
+            "released=1 ready=1 accepted=4 processed=4 abandoned=0 last=52"
         )
 
     def test_exact_native_receipt(self):
         self.assertEqual(
-            {"constructor_on_worker": 1, "released": 1, "processed": 4, "last": 52},
+            {
+                "constructor_on_worker": 1,
+                "released": 1,
+                "ready": 1,
+                "accepted": 4,
+                "processed": 4,
+                "abandoned": 0,
+                "last": 52,
+            },
             parse(self.good),
         )
+
+    def test_failed_startup_readiness_is_a_valid_receipt_value(self):
+        self.assertEqual(0, parse(self.good.replace("ready=1", "ready=0"))["ready"])
+
+    def test_invalid_readiness_is_denied(self):
+        with self.assertRaises(AssertionError):
+            parse(self.good.replace("ready=1", "ready=2"))
 
     def test_negative_result_is_supported(self):
         self.assertEqual(-172, parse(self.good.replace("last=52", "last=-172"))["last"])
 
     def test_delivery_count_prefix_does_not_pass(self):
-        self.assertNotEqual(4, parse(self.good.replace("processed=4", "processed=40"))["processed"])
+        self.assertNotEqual(
+            4, parse(self.good.replace("processed=4", "processed=40"))["processed"])
 
     def test_release_flag_prefix_is_denied(self):
         with self.assertRaises(AssertionError):
@@ -45,7 +61,7 @@ class ActorReceiptParserTest(unittest.TestCase):
 
     def test_missing_field_is_denied(self):
         with self.assertRaises(AssertionError):
-            parse(self.good.replace(" processed=4", ""))
+            parse(self.good.replace(" abandoned=0", ""))
 
     def test_non_decimal_count_is_denied(self):
         for value in ("4junk", "4.0", "+4", "", "４", "٤"):

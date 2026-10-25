@@ -2,6 +2,7 @@
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -12,25 +13,47 @@ if not __debug__:
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
 
+def expected_prefix_last(name, actor_index, processed):
+    if processed == 0:
+        return 0
+    if name == "source-actor-fifo-ten.ores":
+        value = 0
+        for n in range(1, processed + 1):
+            value = value * 11 + n
+        return value
+    if name == "source-actor-scoped-owned-i64.ores":
+        value = 0
+        for n in range(1, processed + 1):
+            value = 2 * (value + n)
+        return value
+    if name == "source-actor-interleaved-stop.ores":
+        sequences = ([1], [3, 4])
+        return sum(sequences[actor_index][:processed])
+    return sum([1, 2][:processed])
 
 def parse_actor_receipt(line):
-    """Strictly parse a complete native stop receipt, without prefix matches."""
+    """Strictly parse the complete current native stop receipt."""
     parts = line.split()
     marker = "SOURCE_ACTOR_SPAWN_STOP_VERIFIED"
     assert parts and parts[0] == marker, ("missing actor receipt marker", line)
-    expected = {"constructor_on_worker", "released", "processed", "last"}
+    expected = {
+        "constructor_on_worker", "released", "ready",
+        "accepted", "processed", "abandoned", "last",
+    }
     fields = {}
     for field in parts[1:]:
         key, sep, value = field.partition("=")
         assert sep and key in expected and key not in fields, (
             "invalid actor receipt field", field)
-        assert value and value.isascii() and (value.isdecimal() or (
-            key == "last" and value.startswith("-") and value[1:].isdecimal()
-        )), ("invalid integer actor receipt", field)
+        signed = key == "last" and value.startswith("-")
+        digits = value[1:] if signed else value
+        assert digits and digits.isascii() and digits.isdecimal(), (
+            "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
     assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
         "native actor constructor/release not verified", fields)
+    assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
     return fields
 
 def main():
@@ -53,6 +76,9 @@ def main():
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
+        ("source-actor-await-worker.ores", 1, 2, 3),
+        ("source-actor-future-void-ready.ores", 1, 2, 3),
+        ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
@@ -76,11 +102,30 @@ def main():
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
+        "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
+        "source-actor-await-get-done.ores": "expected 'get_ready'",
+        "source-actor-await-worker-twice.ores": "native source supports only one await get_ready continuation",
+        "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
+        "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
+        "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
+        "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
+        "source-actor-future-void-double-await.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
+        "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
+        "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
+        "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
+        "source-actor-future-void-send.ores": "unknown parameter",
+        "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
+        "source-actor-future-void-await-again.ores": "native source supports only one await get_ready continuation",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
+        "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
+        "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
+        "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
+        "source-actor-await-two-lifecycle.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -121,6 +166,7 @@ def main():
             assert "oreslang_source_actor_stop" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
+                "source-actor-await-done.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name in {
@@ -132,13 +178,26 @@ def main():
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_drop(") == 2, name
                 # One actor-native heap for the retained field plus two
-                # reusable temporary slots: the second mailbox delivery
-                # must fail if either compiler drop was omitted.
+                # reusable temporary slots. Immediate stop may abandon queued
+                # DATA, so runtime repeat-turn proof belongs to dedicated host
+                # tests; this source gate pins the generated bounded reserve.
                 assert "i64 3" in guest.stdout, (
                     name, "actor heap needs bounded local slot reserve")
-            if name == "source-actor-await-ready.ores":
+            if name in {"source-actor-await-ready.ores",
+                        "source-actor-await-worker.ores",
+                        "source-actor-future-void-ready.ores"}:
                 assert "oreslang_source_actor_await_ready" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
+                # A runtime declaration or source text alone is not an await:
+                # require exactly one generated call to the CONTROL bridge.
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                assert len(calls) == 1, (name, "expected one guest await", calls)
+            if name == "source-actor-await-done.ores":
+                assert "oreslang_source_actor_request_stop" in guest.stdout, name
+                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "done_continuation" in guest.stdout, name
+                assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -173,27 +232,40 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
-            if name == "source-actor-await-ready.ores":
+            if name in {"source-actor-await-ready.ores",
+                        "source-actor-await-worker.ores",
+                        "source-actor-future-void-ready.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-await-done.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
             receipts = [parse_actor_receipt(line) for line in lines]
             for i, receipt in enumerate(receipts):
-                if name == "source-actor-interleaved-stop.ores":
-                    expected = [(1, 1), (2, 7)][i]
-                    assert (receipt["processed"], receipt["last"]) == expected, (
-                        name, receipt, expected)
-                else:
-                    assert receipt["processed"] == count, (name, receipt, count)
-                    if last is not None:
-                        assert receipt["last"] == last, (name, receipt, last)
+                accepted = receipt["accepted"]
+                processed = receipt["processed"]
+                abandoned = receipt["abandoned"]
+                observed_last = receipt["last"]
+                expected_accepted = (
+                    [1, 2][i]
+                    if name == "source-actor-interleaved-stop.ores"
+                    else count)
+                assert accepted == expected_accepted, (
+                    name, i, accepted, expected_accepted)
+                assert 0 <= processed <= accepted, (name, i, processed, accepted)
+                assert abandoned == accepted - processed, (
+                    name, i, accepted, processed, abandoned)
+                assert observed_last == expected_prefix_last(
+                    name, i, processed), (
+                    name, i, processed, observed_last)
             if name == "source-actor-two-owned-heaps.ores":
-                # Two independent heap owners must report different results.
-                # This is an executed-native-runtime assertion, not IR grep.
                 assert sorted(receipt["last"] for receipt in receipts) == [
                     52, 172
                 ], (name, receipts)

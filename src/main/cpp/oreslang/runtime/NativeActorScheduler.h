@@ -103,6 +103,10 @@ int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
 int ores_native_actor_scheduler_stop(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+/* Seal user DATA immediately while preserving an already-active turn and
+ * lifecycle CONTROL. Queued DATA is abandoned with terminal accounting. */
+int ores_native_actor_scheduler_stop_sealed(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Nonblocking host readiness/termination observations. Source-level
  * get_ready()/get_done() must return futures when compiler lowering exists.
  */

@@ -46,6 +46,19 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Compiler-level trait projection contract: closed-world HasFuture dispatch
+    # for native ActorRef readiness and its one-shot Future<void> token.
+    # Independently runnable without LLVM libraries or a guest scheduler.
+    add_executable(oreslang-native-hasfuture-contract-test
+        tests/native_has_future_contract_test.cpp)
+    target_include_directories(oreslang-native-hasfuture-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-hasfuture-contract-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_hasfuture_trait_projection_admission
+        COMMAND oreslang-native-hasfuture-contract-test)
+    set_tests_properties(native_hasfuture_trait_projection_admission PROPERTIES TIMEOUT 15)
+
     # Compiler-only Send/Sync parity model. LLVM guest lowering remains gated.
     add_executable(oreslang-native-send-sync-contract-test
         tests/native_send_sync_contract_test.cpp)
@@ -557,6 +570,15 @@ if(BUILD_TESTING)
         message(STATUS "Native MessagePack v2 parity test requires OpenSSL Crypto; not enabled")
     endif()
     find_program(ORE_CLANG NAMES clang clang-19 clang-18 clang-17 clang-16 clang-15 clang-14)
+    # Executable Oreslang method fixtures, using Rust-only tooling.
+    if(ORE_CLANG)
+        add_test(NAME native_inline_self_receiver_arity_aot
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
+                native-inline-self-arity
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}")
+        set_tests_properties(native_inline_self_receiver_arity_aot PROPERTIES TIMEOUT 90)
+    endif()
     # Positive compiler-only contracts must assemble the emitted IR, not just
     # accept an expected substring after the textual ModuleID header.
     if(ORE_CLANG)
@@ -1243,6 +1265,66 @@ if(BUILD_TESTING)
         --ir "ready_continuation")
     oreslang_contract_test(source_actor_await_ready_trace_runtime_ir source-actor-await-ready.ores
         --ir "oreslang_source_actor_await_ready")
+    # ActorRef implements HasFuture: awaiting its capability directly
+    # delegates to the same get_ready() root CONTROL continuation.
+    oreslang_contract_test(source_actor_hasfuture_direct_await_ir
+        source-actor-await-worker.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_hasfuture_direct_await_runtime_ir
+        source-actor-await-worker.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_hasfuture_unknown_receiver
+        source-actor-await-unknown.ores
+        --diagnostic "await get_ready requires a live direct ActorRef receiver")
+    oreslang_contract_test(reject_source_actor_hasfuture_get_done
+        source-actor-await-get-done.ores
+        --diagnostic "expected 'get_ready'")
+    oreslang_contract_test(reject_source_actor_hasfuture_double_await
+        source-actor-await-worker-twice.ores
+        --diagnostic "native source supports only one await get_ready continuation")
+    # HasFuture must be a checked live actor capability, not merely an
+    # identifier that happens to appear in an await expression.
+    oreslang_contract_test(reject_source_actor_hasfuture_scalar_operand
+        source-actor-await-non-hasfuture-scalar.ores
+        --diagnostic "await get_ready requires a live direct ActorRef receiver")
+    oreslang_contract_test(reject_source_actor_hasfuture_stopped_actor
+        source-actor-await-after-stop.ores
+        --diagnostic "await get_ready must precede post-await actor effects")
+    oreslang_contract_test(reject_source_actor_hasfuture_skips_linear_future
+        source-actor-future-void-await-worker-instead.ores
+        --diagnostic "native Future<void> await requires its declared readiness token")
+    oreslang_contract_test(reject_source_actor_hasfuture_reuses_future
+        source-actor-future-void-await-again.ores
+        --diagnostic "native source supports only one await get_ready continuation")
+    # First actual native source-level typed Future: Future<void> from a
+    # single ActorRef.get_ready(). It uses the existing root CONTROL
+    # continuation, not synchronous polling or a generic Future<T> ABI.
+    oreslang_contract_test(source_actor_typed_ready_future_continuation_ir
+        source-actor-future-void-ready.ores --ir "ready_continuation")
+    oreslang_contract_test(source_actor_typed_ready_future_runtime_ir
+        source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
+    oreslang_contract_test(reject_source_actor_unused_ready_future
+        source-actor-future-void-unused.ores
+        --diagnostic "Future<void> readiness token must be awaited exactly once")
+    oreslang_contract_test(reject_source_actor_wrong_ready_future
+        source-actor-future-void-wrong-name.ores
+        --diagnostic "native Future<void> await requires its declared readiness token")
+    oreslang_contract_test(reject_source_actor_double_ready_future
+        source-actor-future-void-double-await.ores
+        --diagnostic "native source supports only one await get_ready continuation")
+    oreslang_contract_test(reject_source_actor_unspawned_ready_future
+        source-actor-future-void-unspawned.ores
+        --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
+    oreslang_contract_test(reject_source_actor_ready_future_shadow
+        source-actor-future-void-shadow.ores
+        --diagnostic "Future<void> readiness token shadows a live owner")
+    oreslang_contract_test(reject_source_actor_duplicate_ready_future
+        source-actor-future-void-duplicate.ores
+        --diagnostic "native source supports only one Future<void> readiness token")
+    oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
+        source-actor-future-void-wrong-producer.ores
+        --diagnostic "expected 'get_ready'")
+    oreslang_contract_test(reject_source_actor_ready_future_as_message
+        source-actor-future-void-send.ores
+        --diagnostic "unknown parameter")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
@@ -1306,14 +1388,41 @@ if(BUILD_TESTING)
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}")
-        set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 90)
+        set_tests_properties(source_actor_compiled_native_lifecycle PROPERTIES TIMEOUT 180)
         add_test(NAME source_actor_compiled_native_asan_ubsan
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_e2e.py"
                 --compiler "$<TARGET_FILE:oreslang-llvmc>"
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
-        set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 90)
+        set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
+    endif()
+
+    # Run both direct await and typed Future<void> source through real
+    # Clang-linked actor runtime, including independent release/sanitizer
+    # physical lifecycle receipts. No new Python test drivers.
+    find_program(ORE_READY_FUTURE_RUSTC NAMES rustc)
+    if(ORE_CLANG AND ORE_READY_FUTURE_RUSTC)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            COMMAND "${ORE_READY_FUTURE_RUSTC}" --edition=2021 -O -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_future_void_source_e2e.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+            DEPENDS tests/native_future_void_source_e2e.rs VERBATIM)
+        add_custom_target(oreslang-ready-future-void-e2e-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e")
+        add_test(NAME native_ready_future_void_guest_release
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_ready_future_void_guest_asan_ubsan
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-ready-future-void-e2e"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(native_ready_future_void_guest_release
+            native_ready_future_void_guest_asan_ubsan PROPERTIES TIMEOUT 150)
     endif()
 
     # Trusted host resource reclamation: close in reverse acquisition order only
@@ -1824,6 +1933,26 @@ if(BUILD_TESTING)
         endif()
         set_tests_properties(native_class_string_parity_${mode} PROPERTIES TIMEOUT 180)
     endforeach()
+    # Unary + now lowers as an int-only identity under the existing typed
+    # scalar checker. Verify guest compilation, real AOT execution, and
+    # fail-closed type/range/recursion rejection without Python tooling.
+    if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            COMMAND "${ORE_STRUCTURAL_RUSTC}" --edition=2021 -D warnings
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_unary_plus_source_parity.rs"
+                -o "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+            DEPENDS tests/native_unary_plus_source_parity.rs
+            VERBATIM)
+        add_custom_target(oreslang-native-unary-plus-parity-build ALL
+            DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity")
+        add_test(NAME native_unary_plus_source_aot
+            COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-unary-plus-parity"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+    else()
+        add_test(NAME native_unary_plus_source_aot COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_unary_plus_source_aot PROPERTIES TIMEOUT 180)
     add_test(NAME native_strict_nonblocking_io_source_guard
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/strict_nonblocking_io_source_guard.py")
@@ -3093,6 +3222,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Source-compiled JVM/native declaration parity slice. This deliberately tests
+# native scalar aliases only; generic and trait/interface forms MUST fail closed.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_FORWARD_TYPE_CLANG
+        NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14 REQUIRED)
+    add_test(NAME native_declare_type_scalar_source_parity
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_declare_type_parity.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_FORWARD_TYPE_CLANG}")
+    set_tests_properties(native_declare_type_scalar_source_parity PROPERTIES TIMEOUT 120)
+endif()
+
 # Host-only native proxy slab parity with Java ActorProxyRequestSlab.
 # The borrowed arena span requires caller-owned actor-turn fencing; this is
 # not guest Oreslang lowering or a live HTTP/CONNECT transport.
@@ -3271,6 +3414,21 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Dependency-free, executable import/source admission boundary. This test
+# compiles the production SourceInput.hpp with the host C++ compiler.
+if(BUILD_TESTING AND UNIX)
+    add_executable(oreslang-native-source-input-admission-test
+        tests/native_source_input_admission.cpp)
+    target_include_directories(oreslang-native-source-input-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-source-input-admission-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-source-input-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_source_input_admission
+        COMMAND oreslang-native-source-input-admission-test)
+    set_tests_properties(native_source_input_admission PROPERTIES TIMEOUT 10)
+endif()
+
 if(BUILD_TESTING)
     add_executable(oreslang-native-record-region-test
         tests/native_record_region_test.c
@@ -3305,6 +3463,215 @@ if(BUILD_TESTING)
     add_test(NAME native_continuation_ready_cancel_resume_race
         COMMAND oreslang-native-continuation-ready-resume-test)
     set_tests_properties(native_continuation_ready_cancel_resume_race PROPERTIES TIMEOUT 45)
+endif()
+
+# Source-free continuation wake failure-boundary oracle. This verifies only
+# model invariants; production continuation-store tests remain separate.
+if(BUILD_TESTING)
+    add_executable(oreslang-continuation-wake-transaction-oracle
+        tests/continuation_wake_transaction_oracle.c)
+    set_target_properties(oreslang-continuation-wake-transaction-oracle PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-continuation-wake-transaction-oracle PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME continuation_wake_transaction_model
+        COMMAND oreslang-continuation-wake-transaction-oracle)
+    set_tests_properties(continuation_wake_transaction_model PROPERTIES TIMEOUT 10)
+endif()
+
+# Source-actor lifecycle prerequisite for real ActorRef.get_done lowering:
+# stop request must not wait for physical termination; join_done owns the
+# host-side terminal ACK and heap-reclamation barrier.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+
+    add_executable(oreslang-native-actor-sealed-stop-test
+        tests/native_actor_sealed_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-sealed-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-sealed-stop-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-sealed-stop-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-sealed-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_sealed_stop_abandons_queued_data
+        COMMAND oreslang-native-actor-sealed-stop-test)
+    set_tests_properties(native_actor_sealed_stop_abandons_queued_data
+        PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-native-actor-sealed-stop-race-test
+        tests/native_actor_sealed_stop_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-native-actor-sealed-stop-race-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-actor-sealed-stop-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_sealed_stop_send_race
+        COMMAND oreslang-native-actor-sealed-stop-race-test)
+    set_tests_properties(native_actor_sealed_stop_send_race
+        PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-source-actor-stop-join-split-test
+        tests/source_actor_stop_join_split_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-stop-join-split-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-stop-join-split-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-stop-join-split-test PRIVATE c_std_11)
+    target_compile_options(oreslang-source-actor-stop-join-split-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_stop_request_join_split
+        COMMAND oreslang-source-actor-stop-join-split-test)
+    set_tests_properties(source_actor_stop_request_join_split PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-source-actor-await-done-trace-test
+        tests/source_actor_await_done_trace_runtime_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-await-done-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-await-done-trace-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-await-done-trace-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-await-done-trace-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-await-done-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_await_done_trace_runtime
+        COMMAND oreslang-source-actor-await-done-trace-test)
+    set_tests_properties(source_actor_await_done_trace_runtime PROPERTIES TIMEOUT 30)
+
+
+    add_executable(oreslang-source-actor-stop-before-ready-test
+        tests/source_actor_stop_before_ready_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-stop-before-ready-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-stop-before-ready-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-stop-before-ready-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-stop-before-ready-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-stop-before-ready-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_stop_before_ready
+        COMMAND oreslang-source-actor-stop-before-ready-test)
+    set_tests_properties(source_actor_stop_before_ready PROPERTIES TIMEOUT 30)
+
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-source-actor-stop-before-ready-sanitizer-test
+            tests/source_actor_stop_before_ready_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        target_include_directories(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            Threads::Threads)
+        target_compile_features(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            c_std_11)
+        target_compile_definitions(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING=1)
+        target_compile_options(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-source-actor-stop-before-ready-sanitizer-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME source_actor_stop_before_ready_asan_ubsan
+            COMMAND oreslang-source-actor-stop-before-ready-sanitizer-test)
+        set_tests_properties(source_actor_stop_before_ready_asan_ubsan
+            PROPERTIES TIMEOUT 60)
+
+        add_executable(oreslang-source-actor-stop-before-ready-tsan-test
+            tests/source_actor_stop_before_ready_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+        target_include_directories(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            Threads::Threads)
+        target_compile_features(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            c_std_11)
+        target_compile_definitions(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING=1)
+        target_compile_options(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(
+            oreslang-source-actor-stop-before-ready-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        add_test(NAME source_actor_stop_before_ready_tsan
+            COMMAND oreslang-source-actor-stop-before-ready-tsan-test)
+        set_tests_properties(source_actor_stop_before_ready_tsan
+            PROPERTIES TIMEOUT 60)
+    endif()
+endif()
+
+# Receiver-elided source overload selector; this C++ unit is intentionally
+# independent of LLVM libraries and can be compiled on minimal hosts.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-callable-selector-test
+        tests/native_callable_selector_test.cpp)
+    target_include_directories(oreslang-native-callable-selector-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-callable-selector-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-callable-selector-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_callable_selector_source_arity
+        COMMAND oreslang-native-callable-selector-test)
+    set_tests_properties(native_callable_selector_source_arity PROPERTIES TIMEOUT 10)
 endif()
 
 # Host-only structured Task cancellation authority. This mirrors the Java
