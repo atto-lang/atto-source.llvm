@@ -39,6 +39,15 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                 throw std::runtime_error("sealed actor state has ambiguous or reserved field");
             if (!field.initializer || !field.field_mutable)
                 throw std::runtime_error("sealed actor state field is not initialized and writable");
+            // A canonical native state slot is currently a plain i64 value.
+            // Forged owner/record/array metadata cannot reach heap lowering.
+            if (field.scalar_type != decltype(field.scalar_type)::I64 ||
+                    field.heap_owned || field.int_array || field.record_view ||
+                    !field.array_record_class.empty() || !field.class_name.empty() ||
+                    field.new_class || !field.constructor_arguments.empty() ||
+                    field.move_class || !field.move_source.empty() ||
+                    field.owner_mutable || !field.sum_type.empty())
+                throw std::runtime_error("sealed actor state forbids non-scalar storage metadata");
         }
         const auto* loan = method.actor_state_loan.get();
         if (!loan || loan->binder.empty() || loan->binder == message ||
@@ -61,6 +70,17 @@ void verify_sealed_actor_state_shape(const ActorContainer& actors) {
                 !method.statements.empty() || !method.early_returns.empty() ||
                 !method.actor_spawns.empty())
             throw std::runtime_error("sealed actor state mixed with legacy handler storage");
+        // These are alternate compiler-lowering lanes, not benign metadata:
+        // none is admitted by the one-lexical-callback actor grammar.
+        if (!method.generic_parameters.empty() || method.scalar_while ||
+                !method.ready_await_actor.empty() || !method.done_await_actor.empty() ||
+                method.ready_await_form != decltype(method.ready_await_form)::None ||
+                !method.ready_future_name.empty() || !method.ready_future_actor.empty() ||
+                method.caught_throw_value || !method.caught_throw_defers.empty() ||
+                !method.catch_binding.empty() || !method.return_class.empty() ||
+                !method.return_sum.empty() || !method.pending_return_type_alias.empty() ||
+                !method.method_owner.empty() || method.native_internal)
+            throw std::runtime_error("sealed actor state cannot carry lifecycle or alternate lowering");
         for (const auto& write : loan->writes) {
             if (!field_names.count(write.field) || !write.expression)
                 throw std::runtime_error("sealed actor state write references an invalid field");
