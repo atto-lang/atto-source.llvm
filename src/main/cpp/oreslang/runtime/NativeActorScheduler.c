@@ -46,6 +46,7 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
     uint64_t abandoned_user_messages;
@@ -70,6 +71,7 @@ struct OresNativeActorScheduler {
     uint64_t next_execution;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
+    uint64_t resource_loans; /* external resources across all actor lanes */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
     int retired;
     int priority_inheritance_enabled;
@@ -144,7 +146,7 @@ static void publish_terminal_locked(
     ActorLane* lane = &s->actors[actor_index];
     if (!lane->spawned || lane->terminal_valid
             || !lane->retired || lane->active || lane->queued || lane->has_control
-            || lane->wake_live || lane->wake_ready)
+            || lane->wake_live || lane->wake_ready || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
         return;
@@ -220,7 +222,8 @@ static int lane_has_work(const ActorLane* lane) {
 }
 static void maybe_finish_stopped_locked(OresNativeActorScheduler* s, size_t i) {
     ActorLane* lane = &s->actors[i];
-    if (!lane->retired || lane->active || lane_has_work(lane) || lane->wake_live)
+    if (!lane->retired || lane->active || lane_has_work(lane)
+            || lane->wake_live || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
             && !ores_execution_retired(&lane->authority, lane->generation))
@@ -1055,6 +1058,37 @@ int ores_native_actor_scheduler_stop_sealed(OresNativeActorScheduler* s,
     unlock(s);
     return ok;
 }
+int ores_native_actor_scheduler_retain_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && s->actors[actor.actor_slot].resource_loans != UINT64_MAX
+        && s->resource_loans != UINT64_MAX;
+    if (ok) {
+        ++s->actors[actor.actor_slot].resource_loans;
+        ++s->resource_loans;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_release_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor)
+        && s->actors[actor.actor_slot].resource_loans != 0
+        && s->resource_loans != 0;
+    if (ok) {
+        --s->actors[actor.actor_slot].resource_loans;
+        --s->resource_loans;
+        maybe_finish_stopped_locked(s, (size_t)actor.actor_slot);
+        pthread_cond_broadcast(&s->drained);
+    }
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_poll_ready(OresNativeActorScheduler* s,
                                            OresNativeActorRef actor) {
     if (!s) return 0;
@@ -1093,6 +1127,7 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
     while (lane_has_work(lane) || lane->active || lane->wake_live
+        || lane->resource_loans
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
         || !lane->terminal_valid) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
@@ -1157,7 +1192,7 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    while (s->outstanding)
+    while (s->outstanding || s->resource_loans)
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     unlock(s);
     return 1;
@@ -1165,7 +1200,8 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    int ready = s->retired && !s->outstanding && !s->reserved_wakes;
+    int ready = s->retired && !s->outstanding && !s->reserved_wakes
+        && !s->resource_loans;
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
