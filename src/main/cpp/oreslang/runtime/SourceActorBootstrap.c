@@ -94,6 +94,12 @@ static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
 static atomic_int test_readiness_publication_entered;
+static atomic_uint test_parent_vm_done_ack;
+
+unsigned oreslang_source_actor_test_parent_vm_done_observed(void) {
+    return atomic_load_explicit(
+        &test_parent_vm_done_ack, memory_order_acquire);
+}
 
 void oreslang_source_actor_test_hold_initialization(int hold) {
     if (hold) {
@@ -911,6 +917,15 @@ int64_t oreslang_source_actor_await_done(
     ensure(ores_native_vm_wait_done(
         vm, ORES_NATIVE_VM_MAIN, target));
 
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    /*
+     * Precise test witness: the parent VM has physically settled, but its
+     * constructor-owned children may still be executing. Publishing root
+     * DONE before their join would violate the stronger subtree contract.
+     */
+    atomic_fetch_add_explicit(
+        &test_parent_vm_done_ack, 1, memory_order_release);
+#endif
     /* Settle parent DONE only after its owned children physically join. */
     source_actor_join_owned_children(instance);
 
