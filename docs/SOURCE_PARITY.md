@@ -22,6 +22,57 @@ Semantic check runs before LLVM lowering: rejects unknown variables/callees,
 mismatched call arity and duplicate declarations/parameters. Unexpected tokens fail closed.
 The LLVM verifier runs before IR is emitted.
 
+## Type-only declaration parity slice (2026-10-23)
+
+The Java compiler follow-up [#1948](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/1948)
+admits `declare type`, `declare trait` and `declare interface` with
+exact same-file/module definition matching, preserving visibility and
+generic signature. That **full** syntax is **not yet** lowered by LLVM.
+
+LLVM's source frontend now offers only a deliberate **scalar transparent
+alias subset**, e.g.:
+
+```ores
+declare pub type Code;
+define pub type Code = int;
+
+fnc identity(Code code): Code { return code; }
+pub fnc main(): int { return identity(7); }
+```
+
+`bool` aliases, explicitly declared forward dependency chains, and use-before-definition in function parameter/return signatures are also admitted. Resolution runs after declaration parsing and **before** scalar checking, ownership, ABI computation, or LLVM IR emission. Self/mutual alias cycles, cycles through chains, and excessive resolution depth are rejected.
+`declare type` contributes no LLVM IR or runtime descriptor; a compatible
+definition must occur in the same source scope, with the same public/private
+visibility. Repeated or unresolved declarations, duplicate definitions,
+builtin shadowing, class/actor collisions, module scope leakage and aliases
+to unverified types fail closed. `pub define type` remains a compatibility
+spelling. This is **not** a general newtype, nominal ADT, data layout or
+runtime reflection implementation.
+
+The native subset deliberately rejects generic alias signatures,
+`declare trait` / `declare interface`, and recursive/non-scalar aliases.
+A function may use `Code` before its definition **only if** a matching
+`declare type Code;` signature precedes the function within the same
+source scope. Use-before-forward remains unavailable; no cross-file
+declaration linking is implied. Java supports additional type-only forms,
+so **full source acceptance and execution parity is outstanding**.
+The native frontend must not silently reinterpret `trait` as `interface`
+or class/actor as a scalar alias.
+
+The test `native_declare_type_scalar_source_parity` invokes the **actual
+native compiler** and requires LLVM IR on accepted scalar cases, nonzero exit
+and zero stdout IR for every negative. CTest registration alone or an Actions
+run with zero executed steps is not evidence that it passed. Next gate:
+actual JVM/native execution of the **byte-identical** fixture
+`forward-scalar-alias-parity.ores` (Git blob
+`093b92f47f845a61cc644c01eee975929af66e0b`) in both backends.
+The Java JUnit guest test and native Clang-linked CTest both target the
+integer result `7`; these are not validated until runner steps execute.
+Retain explicit source/version receipts. Follow Java enum AST issue
+[#1269](https://github.com/ores-truffle-oreslang/oreslang-source.java/issues/1269)
+and native ADT issue [#314](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/314)
+before claiming general enum/Option/Result parity.
+
 ## Numeric division fail-closed parity boundary
 
 Java source revision `4fc9148` defines `int / int` with a `float`
