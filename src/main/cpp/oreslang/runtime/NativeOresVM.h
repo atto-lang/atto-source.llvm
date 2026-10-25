@@ -112,6 +112,11 @@ int ores_native_vm_publish_supervised_failure(
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
+/* External-host only; atomically waits for real scheduler mailbox capacity.
+ * Never call from a carrier in the selected domain. */
+OresNativeSendStatus ores_native_vm_wait_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, uint64_t payload);
 /* Reject supervisor stop until all its registered direct children have
  * drained AND their terminal notices have been admitted to priority CONTROL.
  * VM-wide retirement still drains previously accepted actor work, but it
