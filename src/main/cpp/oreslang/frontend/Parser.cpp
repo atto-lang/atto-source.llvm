@@ -846,16 +846,52 @@ private:
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
         std::unordered_set<std::string> names;
+        std::unordered_set<std::string> capability_names;
         while (token_.text == "let" || token_.text == "const" || token_.text == "val") {
+            const bool mutable_binding = token_.text == "let";
+            const std::size_t field_offset = token_.offset;
+            advance();
+
+            if (token_.text == "ActorRef") {
+                if (mutable_binding)
+                    fail("native actor ActorRef field must be val/const; capability rebinding is unsupported");
+                if (actor.capability_fields.size() == 8)
+                    fail("native actor capability field limit exceeded (8)");
+                advance();
+                require("<");
+                ActorCapabilityField capability;
+                capability.offset = field_offset;
+                capability.actor_type = identifier();
+                require(">");
+                capability.name = identifier();
+                if (!names.insert(capability.name).second)
+                    fail("duplicate actor field '" + capability.name + "'");
+                capability_names.insert(capability.name);
+                require("=");
+                require("spawn");
+                const std::string spawned = identifier();
+                if (spawned != capability.actor_type)
+                    fail("ActorRef<T> actor field requires spawn T()");
+                require("(");
+                require(")");
+                require(";");
+                actor.capability_fields.push_back(std::move(capability));
+                continue;
+            }
+
             if (actor.fields.size() == 16) fail("native actor field limit exceeded (16)");
             LocalBinding field;
-            field.offset = token_.offset;
-            field.field_mutable = token_.text == "let";
-            advance();
-            field.name = identifier();
+            field.offset = field_offset;
+            field.field_mutable = mutable_binding;
+            if (token_.text == "int") {
+                advance();
+                field.name = identifier();
+            } else {
+                field.name = identifier();
+                require(":");
+                require("int");
+            }
             if (!names.insert(field.name).second) fail("duplicate actor field '" + field.name + "'");
-            require(":");
-            require("int");
             require("=");
             field.initializer = expression();
             require(";");
@@ -933,6 +969,21 @@ private:
                     fail("duplicate actor temporary owner");
                 local.heap_owned = true;
                 method.locals.push_back(std::move(local));
+                continue;
+            }
+            if (capability_names.count(token_.text) && peek_next().text == ".") {
+                if (!method.actor_field_writes.empty())
+                    fail("native actor capability sends must precede scalar field writes in this synchronous slice");
+                ActorCapabilitySend send;
+                send.offset = token_.offset;
+                send.field = identifier();
+                require(".");
+                require("send");
+                require("(");
+                send.payload = expression();
+                require(")");
+                require(";");
+                method.actor_capability_sends.push_back(std::move(send));
                 continue;
             }
             ActorFieldWrite write;
@@ -3458,18 +3509,26 @@ private:
                     || functions.count(actor.name))
                 throw std::runtime_error("duplicate actor/class/function symbol '" + actor.name + "'");
             std::unordered_set<std::string> fields;
+            std::unordered_set<std::string> all_names;
+            std::unordered_set<std::string> capability_names;
             std::unordered_set<std::string> mutables;
             const std::unordered_set<std::string> empty;
             for (const auto& field : actor.fields) {
                 validate_expression(*field.initializer, empty, {});
-                if (!fields.insert(field.name).second)
+                if (!fields.insert(field.name).second || !all_names.insert(field.name).second)
                     throw std::runtime_error("duplicate actor field '" + field.name + "'");
                 if (field.field_mutable) mutables.insert(field.name);
             }
+            for (const auto& capability : actor.capability_fields) {
+                if (!all_names.insert(capability.name).second)
+                    throw std::runtime_error("duplicate actor field '" + capability.name + "'");
+                capability_names.insert(capability.name);
+            }
             const auto& method = actor.on_message;
             const std::string& parameter = method.parameters.at(0).name;
-            if (!fields.insert(parameter).second)
+            if (!all_names.insert(parameter).second)
                 throw std::runtime_error("actor parameter shadows field '" + parameter + "'");
+            fields.insert(parameter);
             // Validate in declaration order. An owned actor-handler local
             // becomes visible only AFTER its initializer is fully checked.
             // Never treat a forward reference as an arbitrary field or let
@@ -3479,10 +3538,16 @@ private:
                     throw std::runtime_error(
                         "native actor owned local requires immutable initialized slot");
                 validate_expression(*local.initializer, fields, functions);
-                if (!fields.insert(local.name).second)
+                if (!all_names.insert(local.name).second)
                     throw std::runtime_error(
                         "actor owned local shadows field, parameter or previous owner '" +
                         local.name + "'");
+                fields.insert(local.name);
+            }
+            for (const auto& send : method.actor_capability_sends) {
+                if (!capability_names.count(send.field))
+                    throw std::runtime_error("unknown actor capability field '" + send.field + "'");
+                validate_expression(*send.payload, fields, functions);
             }
             for (const auto& write : method.actor_field_writes) {
                 if (!mutables.count(write.field))
@@ -3494,6 +3559,56 @@ private:
                     functions.count("oreslang_actor_" + actor.name + "_on_message"))
                 throw std::runtime_error("conflicting generated actor symbol");
         }
+        for (const auto& actor : program.actors) {
+            for (const auto& capability : actor.capability_fields) {
+                if (capability.actor_type == actor.name)
+                    throw std::runtime_error(
+                        "native actor capability field cannot recursively spawn its own actor type '" +
+                        actor.name + "'");
+                if (!actor_types.count(capability.actor_type))
+                    throw std::runtime_error(
+                        "unknown actor capability target '" + capability.actor_type + "'");
+            }
+        }
+
+        std::unordered_map<std::string, unsigned> actor_capability_marks;
+        std::function<void(const ActorDecl&)> visit_actor_capabilities;
+        visit_actor_capabilities = [&](const ActorDecl& actor) {
+            unsigned& mark = actor_capability_marks[actor.name];
+            if (mark == 2) return;
+            if (mark == 1)
+                throw std::runtime_error(
+                    "native actor capability spawn graph contains a cycle at '" +
+                    actor.name + "'");
+            mark = 1;
+            for (const auto& capability : actor.capability_fields)
+                visit_actor_capabilities(*actor_types.at(capability.actor_type));
+            mark = 2;
+        };
+        for (const auto& actor : program.actors)
+            visit_actor_capabilities(actor);
+
+        std::unordered_map<std::string, std::size_t> actor_spawn_footprints;
+        std::function<std::size_t(const ActorDecl&)> actor_spawn_footprint;
+        actor_spawn_footprint = [&](const ActorDecl& actor) -> std::size_t {
+            const auto cached = actor_spawn_footprints.find(actor.name);
+            if (cached != actor_spawn_footprints.end()) return cached->second;
+            std::size_t total = 1;
+            for (const auto& capability : actor.capability_fields) {
+                const std::size_t child =
+                    actor_spawn_footprint(*actor_types.at(capability.actor_type));
+                if (child > 63 || total > 63 - child)
+                    throw std::runtime_error(
+                        "native actor capability spawn tree exceeds 63 guest actor slots at '" +
+                        actor.name + "'");
+                total += child;
+            }
+            actor_spawn_footprints.emplace(actor.name, total);
+            return total;
+        };
+        for (const auto& actor : program.actors)
+            (void)actor_spawn_footprint(actor);
+
         // Same-file contracts are compile-time structural checks. Requiring
         // matching *public* members prevents accidental admission through
         // private functions that external callers cannot invoke.
@@ -3542,6 +3657,7 @@ private:
             for (const auto& param : fn.parameters) params.insert(param.name);
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
+            std::size_t static_actor_slots = 0;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
                     || !fn.done_await_actor.empty()
                     || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
@@ -3556,6 +3672,11 @@ private:
                     throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
                 if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
+                const std::size_t footprint = actor_spawn_footprints.at(spawn.actor_type);
+                if (footprint > 63 || static_actor_slots > 63 - footprint)
+                    throw std::runtime_error(
+                        "source actor bootstrap statically exceeds 63 guest actor slots");
+                static_actor_slots += footprint;
                 references.emplace(spawn.name, it->second);
             }
             if (!fn.ready_future_name.empty()) {

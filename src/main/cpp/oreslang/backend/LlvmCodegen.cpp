@@ -624,6 +624,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (source.actors.size() > 1)
             throw std::runtime_error("wasm32 actor guest supports one actor per instance");
         for (const auto& actor : source.actors) {
+            if (!actor.capability_fields.empty())
+                throw std::runtime_error(
+                    "wasm32 source actor ActorRef capability fields require Worker capability lowering");
             if (actor.fields.empty() || actor.fields.size() > 16)
                 throw std::runtime_error("wasm32 actor guest requires 1..16 scalar fields");
             if (actor.on_message.parameters.size() != 1 || !actor.on_message.result ||
@@ -707,6 +710,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         for (const auto& s : fn.caught_throw_defers) scan_statement(s);
         for (const auto& s : fn.actor_sends) scan_string(s.payload.get());
+        for (const auto& s : fn.actor_capability_sends) scan_string(s.payload.get());
         for (const auto& w : fn.actor_field_writes) scan_string(w.expression.get());
         scan_string(fn.caught_throw_value.get());
         scan_string(fn.result.get());
@@ -866,8 +870,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
+    llvm::FunctionCallee sourceSpawnChildCapability, sourceSendCapability;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
+    const auto nativeActorHeapCapacity = [](const ActorDecl& actor) -> std::size_t {
+        const std::size_t required =
+            actor.fields.size() + actor.on_message.locals.size();
+        return std::max<std::size_t>(1, required);
+    };
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
         fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
@@ -888,6 +898,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
+        sourceSendCapability = module.getOrInsertFunction(
+            "oreslang_source_actor_send_capability",
+            llvm::FunctionType::get(voidTy, {native_ptr, i64, i64}, false));
+        sourceSpawnChildCapability = module.getOrInsertFunction(
+            "oreslang_source_actor_spawn_child_capability",
+            llvm::FunctionType::get(
+                voidTy, {native_ptr, i64, native_ptr, native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
@@ -1066,8 +1083,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const auto actor = std::find_if(source.actors.begin(), source.actors.end(),
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
-                llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
+                llvm::ConstantInt::get(i64, nativeActorHeapCapacity(*actor))},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2273,6 +2289,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             init.CreateCall(field.field_mutable ? fieldInitMutable : fieldInit,
                 {heap, domain, epoch, llvm::ConstantInt::get(i64, i), initialValue});
         }
+        for (std::size_t i=0; i<actor.capability_fields.size(); ++i) {
+            const auto& capability=actor.capability_fields[i];
+            const auto target=std::find_if(source.actors.begin(), source.actors.end(),
+                [&](const ActorDecl& candidate) {
+                    return candidate.name == capability.actor_type;
+                });
+            if (target == source.actors.end())
+                throw std::runtime_error("invalid source actor capability target lowering");
+            llvm::Value* childInit=init.CreatePointerCast(
+                actorInits.at(capability.actor_type), native_ptr);
+            llvm::Value* childHandler=init.CreatePointerCast(
+                actorHandlers.at(capability.actor_type), native_ptr);
+            init.CreateCall(sourceSpawnChildCapability, {
+                heap,
+                llvm::ConstantInt::get(i64, i),
+                childInit,
+                childHandler,
+                llvm::ConstantInt::get(i64, nativeActorHeapCapacity(*target))
+            });
+        }
         init.CreateRetVoid();
 
         auto* handler = actorHandlers.at(actor.name);
@@ -2316,6 +2352,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.CreateStore(initial, slot);
             values.emplace(local.name, slot);
             actor_owned_tokens.push_back(token);
+        }
+        for (const auto& send : actor.on_message.actor_capability_sends) {
+            const auto capability=std::find_if(
+                actor.capability_fields.begin(), actor.capability_fields.end(),
+                [&](const ActorCapabilityField& field) {
+                    return field.name == send.field;
+                });
+            if (capability == actor.capability_fields.end())
+                throw std::runtime_error("invalid actor capability send lowering");
+            llvm::Value* payload = lower(
+                *send.payload, builder, i64, values, emptyFields, declarations);
+            const std::size_t capability_index =
+                std::distance(actor.capability_fields.begin(), capability);
+            builder.CreateCall(sourceSendCapability, {
+                actorHeap,
+                llvm::ConstantInt::get(i64, capability_index),
+                payload
+            });
         }
         for (const auto& write : actor.on_message.actor_field_writes) {
             auto field = std::find_if(actor.fields.begin(), actor.fields.end(),

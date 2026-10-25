@@ -37,13 +37,42 @@ void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
 #endif
 
+#define ORES_SOURCE_ACTOR_CAPABILITY_SLOTS 8u
+
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
-/* Nonblocking bounded one-way send. Overload currently fails closed with a
- * host error; a typed guest overload result still needs compiler lowering.
+/* Runtime-only host bridge for copied peer capabilities. Each input must be a
+ * live source ActorRef in this active group. The runtime copies generation-
+ * fenced identities; caller SourceActor pointers are not retained as guest
+ * state. Compiler-generated child fields use spawn_child_capability below. */
+void* oreslang_source_actor_spawn_with_capabilities(
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields,
+    void* const* actors,
+    uint64_t actor_count);
+
+/* Nonblocking bounded one-way send. Strict send fails closed on any rejection.
+ * try_send returns 0 only for mailbox saturation; stale/terminated/invalid
+ * references remain runtime contract violations.
  */
 void oreslang_source_actor_send(void* actor, int64_t payload);
+int oreslang_source_actor_try_send(void* actor, int64_t payload);
+
+/* Compiler-owned ActorRef<T> child capability ABI. Child creation is legal
+ * only during the current actor constructor; capability send is legal only
+ * during that actor's handler and must present its exact private heap. */
+void oreslang_source_actor_spawn_child_capability(
+    OresActorI64Heap* heap,
+    uint64_t slot,
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields);
+void oreslang_source_actor_send_capability(
+    OresActorI64Heap* heap, uint64_t slot, int64_t payload);
+int oreslang_source_actor_try_send_capability(
+    OresActorI64Heap* heap, uint64_t slot, int64_t payload);
 
 /*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the

@@ -308,6 +308,9 @@ void validate_native_scalar_types(const Program& program) {
         if (fn.result) require(expression(*fn.result, locals), result, fn.offset, "return type");
         for (const auto& send : fn.actor_sends)
             require(expression(*send.payload, locals), scalar(false), send.offset, "actor message requires int");
+        for (const auto& send : fn.actor_capability_sends)
+            require(expression(*send.payload, locals), scalar(false), send.offset,
+                    "actor capability message requires int");
         for (const auto& write : fn.actor_field_writes)
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };

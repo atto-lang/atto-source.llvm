@@ -1,0 +1,15 @@
+define actor A as {
+  let total: int = 0;
+  val ActorRef<B> child = spawn B();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor B as {
+  let total: int = 0;
+  val ActorRef<A> child = spawn A();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+pub fnc main(): int { return 43; }

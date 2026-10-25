@@ -1,0 +1,8 @@
+define actor Parent as {
+  let total: int = 0;
+  val ActorRef<Missing> child = spawn Missing();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+pub fnc main(): int { return 43; }

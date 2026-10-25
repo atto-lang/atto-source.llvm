@@ -1,0 +1,20 @@
+define actor Left as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Right as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Parent as {
+  let total: int = 0;
+  val ActorRef<Left> child = spawn Right();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+pub fnc main(): int { return 43; }

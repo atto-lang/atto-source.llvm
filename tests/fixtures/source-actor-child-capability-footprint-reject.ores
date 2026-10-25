@@ -1,0 +1,59 @@
+define actor Node0 as {
+  let total: int = 0;
+  val ActorRef<Node1> left = spawn Node1();
+  val ActorRef<Node1> right = spawn Node1();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Node1 as {
+  let total: int = 0;
+  val ActorRef<Node2> left = spawn Node2();
+  val ActorRef<Node2> right = spawn Node2();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Node2 as {
+  let total: int = 0;
+  val ActorRef<Node3> left = spawn Node3();
+  val ActorRef<Node3> right = spawn Node3();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Node3 as {
+  let total: int = 0;
+  val ActorRef<Node4> left = spawn Node4();
+  val ActorRef<Node4> right = spawn Node4();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Node4 as {
+  let total: int = 0;
+  val ActorRef<Node5> left = spawn Node5();
+  val ActorRef<Node5> right = spawn Node5();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Node5 as {
+  let total: int = 0;
+  val ActorRef<Leaf> left = spawn Leaf();
+  val ActorRef<Leaf> right = spawn Leaf();
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+define actor Leaf as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    return n;
+  }
+}
+pub fnc main(): int {
+  const root = spawn Node0();
+  stop root;
+  return 43;
+}
