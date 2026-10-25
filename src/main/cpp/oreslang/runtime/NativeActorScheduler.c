@@ -1044,6 +1044,7 @@ int ores_native_actor_scheduler_cancel_async_send(
         credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
         credit->outcome = ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
         credit->sequence = 0;
+        service_async_sends_locked(s, (size_t)ticket.target.actor_slot);
         if (pthread_cond_broadcast(&s->credit) != 0) abort();
     }
     unlock(s);
@@ -1406,6 +1407,12 @@ static int stop_locked(
     lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_STOPPED;
     lane->retired = 1;
 
+    /* STOP rejects future DATA admission. Pending async descriptors have not
+     * crossed the mailbox-admission boundary, so fail them now. READY futures
+     * remain READY: their DATA envelope was already irrevocably admitted. */
+    fail_pending_async_sends_locked(
+        s, (size_t)actor.actor_slot, ORES_NATIVE_SEND_TERMINATED);
+
     if (abandon_queued_data && lane->queued) {
         const size_t abandoned = lane->queued;
         if (s->reserved_executions < abandoned || s->outstanding < abandoned)
@@ -1517,6 +1524,8 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             lane->requested_terminal_kind = ORES_NATIVE_TERMINATION_RUNTIME_RETIRED;
         lane->retired = 1;
         if (lane->spawned) {
+            fail_pending_async_sends_locked(
+                s, i, ORES_NATIVE_SEND_TERMINATED);
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
                 if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
@@ -1577,9 +1586,11 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
-            if (lane->spawned
-                && (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
-                    || !lane->terminal_valid)) {
+            if (lane->async_live != 0
+                    || (lane->spawned
+                        && (ores_execution_phase(&lane->authority)
+                                != ORES_EXEC_TERMINATED
+                            || !lane->terminal_valid))) {
                 ready = 0;
                 break;
             }
