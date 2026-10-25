@@ -3644,6 +3644,9 @@ private:
                 if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
                     throw std::runtime_error(
                         "await get_ready requires one source actor without suspended locals");
+                if (!fn.statements.empty())
+                    throw std::runtime_error(
+                        "await get_ready does not yet lower post-await non-actor statements");
                 /*
                  * The first vertical slice evaluates the final scalar result on
                  * the root continuation before trusted-main stop. Keep that
@@ -3682,6 +3685,16 @@ private:
                 if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
                     throw std::runtime_error(
                         "await readable requires one source actor without suspended locals");
+                /*
+                 * Parser admission requires the await to occur before ordinary
+                 * statements. Therefore any statement present here was parsed
+                 * after the suspension. Until general continuation frames can
+                 * lower those statements into the resumed block, reject rather
+                 * than silently execute them before readiness.
+                 */
+                if (!fn.statements.empty())
+                    throw std::runtime_error(
+                        "await readable does not yet lower post-await non-actor statements");
                 if (fn.readable_await_fd < 0 ||
                         fn.readable_await_fd > std::numeric_limits<int>::max())
                     throw std::runtime_error(
