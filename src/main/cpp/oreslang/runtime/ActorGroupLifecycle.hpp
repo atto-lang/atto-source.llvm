@@ -93,6 +93,16 @@ public:
     }
 
     /**
+     * Physical finalization seals resource admission before settling DONE and
+     * publishing delivery_closed(). Host-only frame admission can use this as
+     * the earlier half of a fail-closed finalization fence.
+     */
+    bool resource_admission_closed() const noexcept {
+        return (ticket_->resource_state.load(std::memory_order_acquire)
+                & terminal_resource_bit) != 0;
+    }
+
+    /**
      * Nonblocking host subscription to DONE. Callbacks must enqueue guest
      * resumption on the scheduler's exclusive CONTROL lane, never run guest
      * code inline from the acknowledging or subscribing host thread.
