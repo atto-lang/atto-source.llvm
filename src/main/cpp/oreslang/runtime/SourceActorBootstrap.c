@@ -19,6 +19,8 @@
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
+#define SOURCE_ROOT_CONTROL_SEND_SUSPEND UINT64_C(5)
+#define SOURCE_ROOT_CONTROL_SEND_RESUME UINT64_C(6)
 
 typedef struct SourceActor SourceActor;
 typedef struct {
@@ -75,6 +77,20 @@ typedef struct {
 } DoneAwaitFrame;
 
 typedef struct {
+    pthread_cond_t completed;
+    OresNativeActorFuture* resume_future;
+    OresSourceActorContinuation continuation;
+    SourceSendFuture* send_future;
+    SourceActor* actor;
+    OresNativeSuspensionLink link;
+    uint64_t source_token;
+    int suspend_recorded;
+    int done;
+    int outcome;
+    int64_t result;
+} SendAwaitFrame;
+
+typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t async_waiters_changed;
     OresNativeVM* vm;
@@ -83,6 +99,7 @@ typedef struct {
     OresNativeContinuationStore* continuations;
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
+    SendAwaitFrame* pending_send;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -553,7 +570,8 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
 static void open_group_locked(void) {
     ensure(!group.vm && !group.executions && !group.continuations);
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
-    ensure(group.pending_ready == NULL && group.pending_done == NULL);
+    ensure(group.pending_ready == NULL && group.pending_done == NULL
+        && group.pending_send == NULL);
 
     /*
      * Live trace stores are process-local runtime metadata. They hold logical
@@ -1221,7 +1239,8 @@ void oreslang_source_actor_join_done(void* opaque) {
     group.live--;
 
     if (group.live == 0) {
-        ensure(group.pending_ready == NULL && group.pending_done == NULL);
+        ensure(group.pending_ready == NULL && group.pending_done == NULL
+            && group.pending_send == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
 
