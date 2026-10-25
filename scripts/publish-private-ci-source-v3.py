@@ -44,7 +44,7 @@ SAFE_EXECUTABLE = re.compile(
     r"^(?:python3|mvn|cmake|ctest|g\+\+|clang\+\+|/tmp/ores-[A-Za-z0-9_.-]+)$"
 )
 MAX_MAVEN_PREFETCH_ARTIFACTS = 16
-REVIEW_AUTHORITY_PR = 0  # replaced with this PR number before review
+REVIEW_AUTHORITY_PR = 974
 REVIEW_AUTHORITY_LOGIN = "ORESoftware"
 REVIEW_AUTHORITY_USER_ID = 11139560
 CARRIER_REVIEW_LOGIN = "ORESoftware"
