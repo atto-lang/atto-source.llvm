@@ -74,6 +74,7 @@ def main():
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-send-async.ores", 1, 1, 1),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -167,8 +168,14 @@ def main():
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
+                "source-actor-send-async.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-send-async.ores":
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call void @oreslang_source_actor_await_send_async(" in line]
+                assert len(calls) == 1, (name, "expected one awaited send_async admission", calls)
+                assert "call void @oreslang_source_actor_send(" not in guest.stdout, name
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
