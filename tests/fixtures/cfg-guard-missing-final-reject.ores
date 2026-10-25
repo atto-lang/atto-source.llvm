@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  const x: int = 42;
+  if (x eq 42) { return x; } fi
+}

@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* Fixed per-actor slot and loan caps; zero guest tracing/RC.
  * This is the serial-actor native substrate. Concurrent actor messages need
@@ -16,6 +17,8 @@ typedef struct {
     uint64_t generation;
     uint32_t loans;
     unsigned char live;
+    unsigned char field_mutable;
+    unsigned char fixed_field;
 } ActorSlot;
 
 typedef struct {
@@ -36,12 +39,24 @@ struct OresActorI64Heap {
     int retiring;
     uint32_t active_loans;
     ActorLoanEntry loan_entries[MAX_LOANS];
+    /* Optional, host-owned bounded forensic log. No hot-path allocation. */
+    OresActorHeapAccessEvent* trace;
+    uint32_t trace_capacity;
+    uint32_t trace_count;
+    uint64_t trace_dropped;
     ActorSlot slots[];
 };
 
 static _Atomic(uint64_t) next_domain = 1;
 
 static void rejected(void) { abort(); }
+
+/* Explicit wipe for diagnostic buffers before free. Volatile stores prevent
+ * the compiler from deleting the clearing pass as a dead write. */
+static void zeroize_bytes(void* memory, size_t bytes) {
+    volatile unsigned char* cursor = (volatile unsigned char*)memory;
+    while (bytes-- != 0) *cursor++ = 0;
+}
 
 /* Short critical sections; bounded spinning fails rather than blocking an
  * uncooperative carrier forever. Production actor scheduling must not allow
@@ -55,6 +70,68 @@ static void lock_heap(OresActorI64Heap* heap) {
 }
 static void unlock_heap(OresActorI64Heap* heap) {
     atomic_flag_clear_explicit(&heap->mutex, memory_order_release);
+}
+
+static void record_access(OresActorI64Heap* heap, OresActorTurn turn,
+                          uint64_t index, uint64_t generation, uint32_t kind) {
+    if (!heap->trace) return;
+    if (heap->trace_count == heap->trace_capacity) {
+        if (heap->trace_dropped == UINT64_MAX) rejected();
+        ++heap->trace_dropped;
+        return;
+    }
+    OresActorHeapAccessEvent* event = &heap->trace[heap->trace_count++];
+    event->domain = heap->domain;
+    event->actor_id = heap->owner;
+    event->incarnation = heap->incarnation;
+    event->turn_epoch = turn.epoch;
+    event->slot_index = index;
+    event->slot_generation = generation;
+    event->kind = kind;
+}
+
+int ores_actor_i64_heap_trace_enable(OresActorI64Heap* heap, uint32_t capacity) {
+    if (!heap || capacity == 0 || capacity > 65536u) return 0;
+    lock_heap(heap);
+    if (heap->trace || heap->turn_epoch != 0 || heap->turn_active || heap->retiring) {
+        unlock_heap(heap);
+        return 0;
+    }
+    OresActorHeapAccessEvent* events =
+        (OresActorHeapAccessEvent*) calloc((size_t)capacity, sizeof(*events));
+    if (!events) {
+        unlock_heap(heap);
+        return 0;
+    }
+    heap->trace = events;
+    heap->trace_capacity = capacity;
+    unlock_heap(heap);
+    return 1;
+}
+
+int ores_actor_i64_heap_trace_snapshot(
+    OresActorI64Heap* heap, OresActorHeapAccessEvent* output,
+    uint32_t output_capacity, OresActorHeapAccessSummary* summary) {
+    if (!heap || !summary) return 0;
+    lock_heap(heap);
+    if (!heap->trace || heap->turn_active || output_capacity < heap->trace_count
+        || (heap->trace_count != 0 && !output)) {
+        unlock_heap(heap);
+        return 0;
+    }
+    /* A snapshot is all-or-nothing. Caller must independently reject
+     * dropped>0; absence of overflow does not establish guest coverage. */
+    if (heap->trace_count != 0)
+        memcpy(output, heap->trace, (size_t)heap->trace_count * sizeof(*output));
+    OresActorHeapAccessSummary result = {
+        heap->trace_dropped, heap->trace_count, heap->trace_capacity, 1u
+    };
+    *summary = result;
+    /* Lost events invalidate a complete snapshot. Keep summary.dropped
+     * available for diagnostics, but never return a successful receipt. */
+    const int complete = (result.dropped == 0);
+    unlock_heap(heap);
+    return complete;
 }
 
 static void require_turn(OresActorI64Heap* heap, OresActorTurn turn) {
@@ -121,8 +198,11 @@ OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
         ActorSlot* s = &heap->slots[i];
         if (!s->live && s->generation != UINT64_MAX) {
             s->value = value;
+            s->field_mutable = 0;
+            s->fixed_field = 0;
             s->live = 1;
             OresActorSlot id = {heap->domain, i, s->generation};
+            record_access(heap, turn, i, s->generation, ORES_ACTOR_HEAP_ACCESS_ALLOC);
             unlock_heap(heap);
             return id;
         }
@@ -136,6 +216,7 @@ int64_t ores_actor_i64_heap_read(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     const int64_t value = checked_slot(heap, slot)->value;
+    record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_READ);
     unlock_heap(heap);
     return value;
 }
@@ -148,8 +229,9 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
     /* A suspended shared read loan still freezes the referent: a new actor
      * turn is not permission to mutate it. Mutable loans need a separate
      * exclusive API and source-level alias proof. */
-    if (target->loans != 0) rejected();
+    if (target->fixed_field || target->loans != 0) rejected();
     target->value = value;
+    record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_WRITE);
     unlock_heap(heap);
 }
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
@@ -157,11 +239,32 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     lock_heap(heap);
     require_turn(heap, turn);
     ActorSlot* s = checked_slot(heap, slot);
-    if (s->loans != 0 || s->generation == UINT64_MAX) rejected();
+    if (s->fixed_field || s->loans != 0 || s->generation == UINT64_MAX) rejected();
     s->value = 0;
     s->live = 0;
+    record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_DROP);
     ++s->generation;
     unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorTurn turn = {domain, epoch};
+    OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, value);
+    token[0] = slot.domain;
+    token[1] = slot.index;
+    token[2] = slot.generation;
+}
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorSlot slot = {token[0], token[1], token[2]};
+    OresActorTurn turn = {domain, epoch};
+    ores_actor_i64_heap_drop(heap, turn, slot);
+    token[0] = 0;
+    token[1] = 0;
+    token[2] = 0;
 }
 
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
@@ -206,6 +309,70 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     }
     rejected();
 }
+void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
+                                    uint64_t domain, uint64_t epoch,
+                                    uint64_t index, int64_t initial) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    // Unlike an ordinary slot, source-level actor fields are initialized
+    // exactly once during the actor's first admitted turn.
+    if (field->live || field->generation != 1) rejected();
+    field->value = initial;
+    field->fixed_field = 1;
+    field->live = 1;
+    record_access(heap, turn, index, field->generation, ORES_ACTOR_HEAP_ACCESS_FIELD_INIT);
+    unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_field_init_mutable(OresActorI64Heap* heap,
+                                           uint64_t domain, uint64_t epoch,
+                                           uint64_t index, int64_t initial) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    if (field->live || field->generation != 1) rejected();
+    field->value = initial;
+    field->field_mutable = 1;
+    field->fixed_field = 1;
+    field->live = 1;
+    record_access(heap, turn, index, field->generation, ORES_ACTOR_HEAP_ACCESS_FIELD_INIT);
+    unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
+                                     uint64_t domain, uint64_t epoch,
+                                     uint64_t index, int64_t value) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity) rejected();
+    ActorSlot* field = &heap->slots[index];
+    if (!field->live || !field->fixed_field || !field->field_mutable || field->loans != 0) rejected();
+    field->value = value;
+    record_access(heap, turn, index, field->generation, ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE);
+    unlock_heap(heap);
+}
+
+int64_t ores_actor_i64_heap_field_read(OresActorI64Heap* heap,
+                                       uint64_t domain, uint64_t epoch,
+                                       uint64_t index) {
+    lock_heap(heap);
+    OresActorTurn turn = {domain, epoch};
+    require_turn(heap, turn);
+    if (index >= heap->capacity || !heap->slots[index].live
+        || !heap->slots[index].fixed_field) rejected();
+    const int64_t value = heap->slots[index].value;
+    record_access(heap, turn, index, heap->slots[index].generation,
+                  ORES_ACTOR_HEAP_ACCESS_FIELD_READ);
+    unlock_heap(heap);
+    return value;
+}
+
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap) {
     lock_heap(heap);
     heap->retiring = 1; /* no subsequent actor turn may enter */
@@ -222,6 +389,11 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
                        + (size_t) heap->capacity * sizeof(ActorSlot);
     memset(heap->slots, 0, (size_t) heap->capacity * sizeof(ActorSlot));
     memset(heap->loan_entries, 0, sizeof(heap->loan_entries));
+    if (heap->trace) {
+        zeroize_bytes(heap->trace, (size_t)heap->trace_capacity * sizeof(*heap->trace));
+        free(heap->trace);
+        heap->trace = NULL;
+    }
     heap->domain = 0;
     /* Release lock before teardown; the supervisor must have fenced all
      * transport, scheduler, timer and callback handles to this heap. */

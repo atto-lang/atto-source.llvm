@@ -1,0 +1,77 @@
+// Deterministic ownership/invariant stress in Oreslang.
+// Independent invariants are checked after every single mutation.
+import class IntLinkedQueue from "../src/int_linked_queue";
+
+pub routine main() -> int {
+  val IntLinkedQueue q = new IntLinkedQueue(64);
+  if !q.initialize() then
+    return 1;
+  fi
+  for let i = 0; i < 64; i++ do
+    if !q.enqueue(i, i * 10) then
+      return 2;
+    fi
+    if !q.validate() then
+      return 3;
+    fi
+    if q.size() != i + 1 then
+      return 4;
+    fi
+  done
+
+  // Full capacity cannot admit duplicates or out-of-range keys.
+  if q.enqueue(63, 999) then
+    return 5;
+  fi
+  if q.enqueue(64, 999) then
+    return 6;
+  fi
+  if !q.validate() then
+    return 7;
+  fi
+  // Exercise repeatedly unlinking a middle node and reinserting as front.
+  for let i = 10; i < 54; i++ do
+    if q.remove(i).unwrap().value != i * 10 then
+      return 8;
+    fi
+    if !q.validate() then
+      return 9;
+    fi
+    if !q.add_to_front(i, i * 100) then
+      return 10;
+    fi
+    if !q.validate() then
+      return 11;
+    fi
+  done
+
+  // Every key exists exactly once after all recycled-slot operations.
+  if q.size() != 64 then
+    return 12;
+  fi
+  for let i = 0; i < 64; i++ do
+    if !q.contains(i) then
+      return 13;
+    fi
+  done
+
+  // Destructive traversal must release all links, including both endpoints.
+  for let i = 0; i < 64; i++ do
+    if !q.dequeue().is_some() then
+      return 14;
+    fi
+    if !q.validate() then
+      return 15;
+    fi
+  done
+  if !q.is_empty() then
+    return 16;
+  fi
+  if q.remove_last().is_some() then
+    return 17;
+  fi
+  if !q.validate() then
+    return 18;
+  fi
+  return 0;
+}

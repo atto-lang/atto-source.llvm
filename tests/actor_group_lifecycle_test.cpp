@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -296,6 +298,310 @@ int main() {
         catch (const std::runtime_error&) { done_failed = true; }
         check(ready_failed && done_failed,
               "uninitialized actor must fail both ready and done");
+    }
+
+    {
+        // The actual current-main NativeActorGroup owns the reserved CONTROL
+        // lane; GPU producer callbacks can enqueue but cannot run user code.
+        NativeActorGroup group(1201, 2);
+        auto a = group.adopt(1201, 1, 1, [] {});
+        auto b = group.adopt(1201, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "CONTROL workers not ready");
+        std::atomic<int> executed{0};
+        std::thread producer([&] {
+            check(group.enqueue_control(a, [&] { ++executed; }), "producer CONTROL enqueue failed");
+        });
+        producer.join();
+        check(executed == 0, "producer ran actor handler on callback thread");
+        check(group.has_pending_control(a), "reserved CONTROL slot missing");
+        check(!group.enqueue_control(a, [] {}), "CONTROL slot accepted over capacity");
+        check(!group.finalized(a), "actor finalized with reserved CONTROL");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+              "scheduler did not admit CONTROL");
+        check(executed == 1, "actor callback did not run on scheduler turn");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::idle,
+              "CONTROL queue not cleared");
+        check(group.finalized(a) && group.finalized(b), "CONTROL actors not finalized");
+        a.get_done().get(); b.get_done().get();
+    }
+    {
+        NativeActorGroup group(1202, 2);
+        auto a = group.adopt(1202, 1, 1, [] {});
+        auto b = group.adopt(1202, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "CONTROL workers not ready");
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        check(group.enqueue_control(a, [&] {
+            entered.set_value();
+            gate.wait();
+        }), "unable to enqueue controlled long turn");
+        check(group.enqueue_control(b, [] {}), "unable to enqueue second actor CONTROL");
+        std::thread carrier([&] {
+            check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+                  "first carrier rejected CONTROL turn");
+        });
+        entered.get_future().wait();
+        // Two distinct actors are independent lanes; parent/user single-flight
+        // must not impose a group-global throughput bottleneck.
+        check(group.run_control_turn(b) == NativeActorGroup::ControlTurn::executed,
+              "different actor CONTROL was serialized behind unrelated actor");
+        check(!group.finalized(a), "active CONTROL bypassed physical finalization gate");
+        release.set_value();
+        carrier.join();
+        check(group.finalized(a) && group.finalized(b), "CONTROL not quiescent");
+    }
+    {
+        // Normal user code and CONTROL share the SAME target actor lane,
+        // regardless of carrier migration. CONTROL admission has priority
+        // once reserved; unrelated actors remain parallel.
+        NativeActorGroup group(1204, 2);
+        auto a = group.adopt(1204, 1, 1, [] {});
+        auto b = group.adopt(1204, 2, 1, [] {});
+        check(group.mark_ready(a) && group.mark_ready(b), "normal/control actors not ready");
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        std::atomic<int> normal{0}, control{0}, other{0};
+        std::thread carrier([&] {
+            check(group.run_user_turn(a, [&] {
+                ++normal;
+                entered.set_value();
+                gate.wait();
+            }) == NativeActorGroup::UserTurn::executed, "normal actor turn rejected");
+        });
+        entered.get_future().wait();
+        check(!group.finalized(a), "physical release crossed active normal actor turn");
+        check(group.enqueue_control(a, [&] { ++control; }), "CONTROL reserve during normal failed");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::busy,
+              "parent CONTROL overlapped active normal turn");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::busy,
+              "second ordinary turn ran concurrently on same actor");
+        check(group.run_user_turn(b, [&] { ++other; })
+                  == NativeActorGroup::UserTurn::executed,
+              "unrelated actor could not run concurrently");
+        release.set_value();
+        carrier.join();
+        check(normal == 1 && other == 1 && control == 0, "logical turn accounting drift");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::busy,
+              "new ordinary turn bypassed reserved CONTROL priority");
+        check(group.run_control_turn(a) == NativeActorGroup::ControlTurn::executed,
+              "reserved parent CONTROL did not resume after normal turn");
+        check(control == 1, "CONTROL executed more than once");
+        check(group.run_user_turn(a, [&] { ++normal; })
+                  == NativeActorGroup::UserTurn::executed,
+              "ordinary actor turn was not re-admitted after CONTROL");
+        check(normal == 2, "post-CONTROL ordinary actor turn missing");
+        check(group.finalized(a) && group.finalized(b),
+              "quiescent actors were not finalized");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::retired,
+              "retired actor accepted stale normal admission");
+    }
+    {
+        // Exceptions cannot strand the actor's logical lane.
+        NativeActorGroup group(1205, 1);
+        auto a = group.adopt(1205, 1, 1, [] {});
+        check(group.mark_ready(a), "exception actor not ready");
+        check(group.enqueue_control(a, [] { throw std::runtime_error("CONTROL panic"); }),
+              "exception CONTROL reserve failed");
+        bool threw = false;
+        try { (void)group.run_control_turn(a); }
+        catch (const std::runtime_error&) { threw = true; }
+        check(threw, "CONTROL failure did not propagate");
+        check(group.run_user_turn(a, [] {}) == NativeActorGroup::UserTurn::executed,
+              "failed CONTROL stranded logical lane");
+        check(group.finalized(a), "failed CONTROL blocked terminal finalization");
+    }
+    {
+        NativeActorGroup group(1203, 1);
+        auto a = group.adopt(1203, 1, 1, [] {});
+        check(group.mark_ready(a), "CONTROL close actor not ready");
+        check(group.enqueue_control(a, [] {}), "CONTROL could not reserve");
+        group.close();
+        check(a.control_delivery_lost(), "close silently dropped terminal CONTROL");
+        check(group.finalized(a), "closed group could not retire discarded CONTROL");
+        a.get_done().get();
+    }
+
+
+    {
+        // Runtime owns a token independent of the group object. Destroying a
+        // closed group must not strand actor identity, readiness or DONE.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        {
+            NativeActorGroup group(8101, 1);
+            auto worker = group.adopt(8101, 9, 41, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(!finalizer->finalized(),
+                  "runtime finalizer bypassed live group ownership");
+            check(group.mark_ready(worker), "runtime finalizer actor not ready");
+            group.close();
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "group close fabricated physical retirement");
+        }
+        NativeActorGroup successor(8101, 1);
+        bool blocked = false;
+        try { (void) successor.adopt(8101, 9, 42, [] {}); }
+        catch (const std::logic_error&) { blocked = true; }
+        check(blocked, "actor ID reused before runtime physical ack");
+        check(finalizer->finalized(), "runtime finalizer lost retired group");
+        original->get_ready().get();
+        original->get_done().get();
+        check(!finalizer->finalized(), "runtime finalizer double-acked DONE");
+        auto next = successor.adopt(8101, 9, 42, [] {});
+        check(!finalizer->finalized(), "stale finalizer retired new generation");
+        check(successor.mark_ready(next), "reused generation not ready");
+        check(successor.finalized(next), "reused generation failed to finalize");
+        next.get_done().get();
+    }
+    {
+        // Failed startup remains failed after closing and destroying a
+        // group, and its completion is settled only on a runtime quiescence
+        // acknowledgement rather than on close().
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> original;
+        int notified = 0;
+        {
+            NativeActorGroup group(8102, 1);
+            auto worker = group.adopt(8102, 2, 3, [] {});
+            original.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            worker.when_ready([&](const auto& result) {
+                check(!result.ready, "closed initializing actor became ready");
+                ++notified;
+            });
+            group.close();
+        }
+        check(notified == 1, "close lost startup rejection notification");
+        check(original->get_done().wait_for(0ms) == std::future_status::timeout,
+              "failed startup manufactured DONE without release");
+        check(finalizer->finalized(), "late failed-startup ack not accepted");
+        bool ready_failed = false, done_failed = false;
+        try { original->get_ready().get(); }
+        catch (const std::runtime_error&) { ready_failed = true; }
+        try { original->get_done().get(); }
+        catch (const std::runtime_error&) { done_failed = true; }
+        check(ready_failed && done_failed,
+              "late failed startup did not fail both lifecycle futures");
+    }
+    {
+        // A trusted runtime finalizer racing with close must not free a
+        // still-group-owned actor; retries can succeed once close detaches.
+        // This test has no executing carrier work or retained native loans.
+        for (int round = 0; round < 64; ++round) {
+            const auto runtime = static_cast<std::uint64_t>(8200 + round);
+            NativeActorGroup group(runtime, 1);
+            auto worker = group.adopt(runtime, 5, 1, [] {});
+            auto finalizer = group.runtime_finalizer(worker);
+            check(group.mark_ready(worker), "race worker init failed");
+            std::atomic<bool> retired{false};
+            std::thread runtime_ack([&] {
+                for (int attempt = 0; attempt < 100000; ++attempt) {
+                    if (finalizer.finalized()) {
+                        retired.store(true, std::memory_order_release);
+                        return;
+                    }
+                    std::this_thread::yield();
+                }
+            });
+            group.close();
+            runtime_ack.join();
+            check(retired.load(std::memory_order_acquire),
+                  "runtime finalization raced with close and stayed pending");
+            check(!group.finalized(worker), "double finalization accepted");
+            worker.get_done().get();
+        }
+    }
+    {
+        // Close drops undelivered CONTROL work, but only a post-close
+        // runtime finalizer can acknowledge physical retirement. Neither
+        // token nor close may execute the actor handler inline.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> actor;
+        int ran = 0;
+        {
+            NativeActorGroup group(8103, 1);
+            auto worker = group.adopt(8103, 4, 1, [] {});
+            actor.emplace(worker);
+            finalizer.emplace(group.runtime_finalizer(worker));
+            check(group.mark_ready(worker), "CONTROL worker not ready");
+            check(group.enqueue_control(worker, [&] { ++ran; }),
+                  "CONTROL reservation failed");
+            check(!group.finalized(worker), "queued CONTROL was bypassed");
+            check(worker.get_done().wait_for(0ms) == std::future_status::timeout,
+                  "failed physical ack settled DONE");
+            group.close();
+        }
+        check(ran == 0, "close executed guest CONTROL inline");
+        check(actor->control_delivery_lost(), "CONTROL loss unreported");
+        check(finalizer->finalized(), "late ack blocked after CONTROL dropped");
+        actor->get_done().get();
+    }
+
+
+    {
+        // Nonblocking DONE subscriber must enqueue CONTROL, not invoke guest
+        // continuation inline on the retiring child's completion thread.
+        NativeActorGroup parent(8401, 1);
+        auto supervisor = parent.adopt(8401, 1, 1, [] {});
+        check(parent.mark_ready(supervisor), "supervisor not ready");
+        int resumed = 0;
+        int observed = 0;
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        std::optional<NativeActorRef> child;
+        {
+            NativeActorGroup children(8402, 1);
+            auto worker = children.adopt(8402, 1, 1, [] {});
+            child.emplace(worker);
+            finalizer.emplace(children.runtime_finalizer(worker));
+            check(children.mark_ready(worker), "child not ready");
+            worker.when_done([&](const auto& done) {
+                check(done.success && done.error.empty(),
+                      "successful child DONE reported failure");
+                ++observed;
+                check(parent.enqueue_control(supervisor, [&] { ++resumed; }),
+                      "DONE could not enqueue parent CONTROL continuation");
+            });
+            children.close();
+            check(observed == 0, "close prematurely published DONE callback");
+        }
+        check(finalizer->finalized(), "late child completion was not accepted");
+        check(observed == 1 && resumed == 0,
+              "child finalizer ran a guest continuation on host thread");
+        check(parent.has_pending_control(supervisor),
+              "nonblocking DONE callback did not reserve supervisor CONTROL");
+        check(parent.run_control_turn(supervisor) == NativeActorGroup::ControlTurn::executed,
+              "scheduler did not run resumed DONE on parent turn");
+        check(resumed == 1, "DONE resumed more or fewer than once");
+        int late = 0;
+        child->when_done([&](const auto& done) {
+            check(done.success, "late DONE observer did not see successful result");
+            ++late;
+        });
+        check(late == 1, "late DONE subscription was not settled immediately");
+        check(!finalizer->finalized(), "duplicate DONE ack was admitted");
+        check(parent.finalized(supervisor), "supervisor could not retire after continuation");
+    }
+    {
+        // Failed child startup propagates to nonblocking DONE subscribers
+        // once, even when the group has already been destroyed.
+        std::optional<NativeActorGroup::RuntimeFinalizer> finalizer;
+        int failed = 0;
+        {
+            NativeActorGroup group(8403, 1);
+            auto child = group.adopt(8403, 1, 1, [] {});
+            finalizer.emplace(group.runtime_finalizer(child));
+            child.when_done([&](const auto& result) {
+                check(!result.success && !result.error.empty(),
+                      "failed child DONE lost its terminal error");
+                ++failed;
+            });
+            group.close();
+            check(failed == 0, "stop or close fabricated failed DONE");
+        }
+        check(finalizer->finalized("startup failed"), "failure completion lost");
+        check(failed == 1, "terminal error subscriber notified incorrectly");
+        check(!finalizer->finalized("duplicate"), "duplicate failure ack accepted");
     }
 
 }

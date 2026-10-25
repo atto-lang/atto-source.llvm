@@ -1,69 +1,60 @@
-# Native class ownership: bounded i64 field slice
+# Native stack-class ownership: bounded field moves and actor-send admission
 
-This compiler feature implements **source-level LLVM class fields and exclusive
-borrowing in a deliberately restricted, non-escaping subset**. It is not full
-Java/Graal class, Rust lifetime, or actor suspension parity.
+LLVM compiles bounded stack classes with 1–16 initialized `int` (`i64`)
+fields, explicit same-type local whole-class moves, and checked synchronous
+call-scoped shared/mutable borrows. The native CFG proof tracks per-field states
+across return-only equality guards. The compiler does **not** yet have a
+general-purpose source CFG, nontrivial object destructors, or source-level
+suspension; unsupported constructs fail closed before LLVM IR.
 
-## Accepted source
+## Scope
 
-```ores
-define class Box as
-  pub let int value = 0;
-end
+- `let Pair a = new Pair(); let Pair b = rt take a;` is an admitted
+  **local-only, whole-record** transfer of a fully initialized stack object.
+  A second transfer, reading moved-from storage, a live loan, type mismatch,
+  or a partially moved record must fail without LLVM IR. By-value class
+  parameters/returns and actor transfers remain unsupported.
+- `rt take a.left` moves a single primitive `i64` **field place**. The
+  checker marks that field uninitialized. Reusing it, moving it twice, or
+  borrowing/transfering the incomplete class is rejected. Other still-live
+  fields remain accessible. `a.left = value;` reinitializes it after the
+  right-hand expression is validated, restoring complete-object admission.
+- These fields are trivially destructible integers. LLVM lowers a field take
+  as a load, coupled with static move-state invalidation. **This is not a
+  general-purpose field destructor or ownership-transfer ABI.**
+- Synchronous actor `send` payload expressions are checked in original
+  send/stop order. An explicit scalar `rt take` cannot be reused in a later
+  send or return; raw borrowed references cannot be passed as scalar actor
+  payloads. Native scheduler/heap epochs and actor stop checks are retained.
+- Ordinary actor refs, class loans and scalar function calls keep existing
+  conservative whole-object exclusivity. No split loans, escaping pointers,
+  partially initialized nontrivial classes or cross-actor object references.
+- Return-only `if (lhs eq rhs) { return expr; } fi` guards remain bounded to
+  eight preceding a required final return. A move in a taken return path
+  does not affect a distinct fallthrough path. No branch-local object
+  constructors or arbitrary `if/else`/loops are admitted.
+- The independent field-sensitive `OwnershipCfg.hpp` lattice can compute
+  joins, but *runtime conditional drop flags* and exact-once destructor
+  glue are not implemented. `llvm.lifetime.end` is a lifetime marker, not
+  an object destructor.
+- Function-scoped synchronous `defer` (merged LLVM #153) runs LIFO after
+  computing the return value; it remains incompatible with guest
+  throw/panic/exception unwind and cancellation. Source `await`, typed
+  `Future<T>`, pinned guest frames and actor transfers still fail closed.
 
-fnc set(borrow mut Box target): void {
-  target.value = 42;
-  return;
-}
+## Regression coverage
 
-fnc read(borrow Box target): int {
-  return target.value;
-}
+`native_field_and_region_move_admission` generates 1/2/8/16-field positive
+read/take/reinitialization cases and rejects double takes, use-after-move,
+whole-class borrow/transfer of partial objects, borrowed-field moves and
+unsafe native region `owned int` transfers. Every invalid source must emit
+**zero LLVM IR** and an ownership diagnostic.
 
-pub fnc main(): int {
-  let Box box = new Box();
-  set(rt borrow mut box);
-  return read(rt borrow box);
-}
-```
+Dedicated native Clang fixtures cover field takes, restoration, guarded return
+paths and existing whole-class local moves. The source actor end-to-end harness
+executes positive moved-scalar send payloads against the scheduler and rejects
+borrows and use-after-move payloads. Full CMake/CTest, Clang ASan/UBSan, and
+the strict 11-source Java/LLVM fixture suite remain release gates.
 
-Every instance is a function-local, stack-allocated LLVM record containing
-one i64 field initialized from the class declaration. Field loads and stores
-operate on its address. No runtime-managed class allocation, object graph, or
-collector is involved. Stack lifetimes end in reverse lexical order after
-the final return value has been evaluated.
-
-## Ownership rules
-
-- A class is non-`Copy` by default; passing it by value is **rejected** until
-  source-level move and destructor lowering exist.
-- `borrow Box` can read its field but cannot write it; `borrow mut Box`
-  can read and write the field during the callee's synchronous execution.
-- Loan acquisition and release are tied to a synchronous call. Duplicate
-  mutable loans, mutable plus shared loans on the same slot, mutable reborrow
-  of an immutable formal parameter, temporary borrows and use-after-move
-  must fail in semantic analysis, producing no LLVM IR.
-- Reborrowing a `borrow mut Box` into a nested shared call is allowed while
-  the nested call is active. The shared loan is released before the outer
-  mutable borrow resumes.
-- **No outstanding loan may cross `await`, `select`, actor hops or
-  cancellation**. The compiler rejects these constructs rather than
-  advertising unsound or incomplete native support.
-- The only supported constructor is `new Box()`, only in a local `let`
-  declaration. No constructor parameters, inheritance, escaping class
-  references, pointer fields, multi-field layouts or methods are admitted.
-- Native exception and panic unwind edges, general ownership drops,
-  independent GC heaps per actor, and cross-file class imports remain
-  unsupported.
-
-## Conformance boundary
-
-The exact shared fixture at
-`contracts/v1/semantics/fixtures/ownership.ores` attempts
-`change(Box box)` and `box.value = 1`. It is rejected with an explicit
-`ownership violation` diagnostic, not a generic unknown-class parser error.
-Matching one negative fixture does not prove full Oreslang parity.
-
-The CTest matrix includes four Clang-compiled guest programs, seven
-fail-closed source fixtures, plus a direct exact-shared-fixture test.
-All source-level compiler checks execute before LLVM IR is emitted.
+Related: [LLVM ownership #96](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/96),
+[suspension-safe ownership #45](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/45).

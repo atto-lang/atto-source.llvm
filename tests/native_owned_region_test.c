@@ -27,14 +27,14 @@ enum Failure {
 
 static void misuse(enum Failure kind) {
     OresOwnedI64Region* a = oreslang_owned_i64_region_open(1);
-    int64_t* item = oreslang_owned_i64_region_new(a, 12);
+    OresOwnedI64Handle item = oreslang_owned_i64_region_new(a, 12);
     if (kind == DOUBLE_DROP) {
         oreslang_owned_i64_region_drop(a, item);
         oreslang_owned_i64_region_drop(a, item);
     }
     if (kind == FOREIGN_REGION_DROP) {
         OresOwnedI64Region* b = oreslang_owned_i64_region_open(1);
-        int64_t* other = oreslang_owned_i64_region_new(b, 11);
+        OresOwnedI64Handle other = oreslang_owned_i64_region_new(b, 11);
         oreslang_owned_i64_region_drop(a, other);
     }
     if (kind == CLOSE_WITH_LIVE_OWNER) {
@@ -64,10 +64,10 @@ static int rejects_misuse(enum Failure kind) {
 
 int main(void) {
     OresOwnedI64Region* region = oreslang_owned_i64_region_open(2);
-    int64_t* a = oreslang_owned_i64_region_new(region, 6);
-    int64_t* b = oreslang_owned_i64_region_new(region, *a * 7);
-    CHECK(*a == 6);
-    CHECK(*b == 42);
+    OresOwnedI64Handle a = oreslang_owned_i64_region_new(region, 6);
+    OresOwnedI64Handle b = oreslang_owned_i64_region_new(region, oreslang_owned_i64_region_read(region, a) * 7);
+    CHECK(oreslang_owned_i64_region_read(region, a) == 6);
+    CHECK(oreslang_owned_i64_region_read(region, b) == 42);
     oreslang_owned_i64_region_drop(region, b);
     oreslang_owned_i64_region_drop(region, a);
     oreslang_owned_i64_region_close(region);

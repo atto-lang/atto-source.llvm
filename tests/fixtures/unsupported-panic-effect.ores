@@ -1,0 +1,1 @@
+pub fnc main(): int { panic 7; return 1; }

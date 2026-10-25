@@ -1,0 +1,5 @@
+fnc observe(): int { return 42; }
+pub fnc main(): int {
+  if (observe() eq 42) { return 42; } fi
+  return 0;
+}

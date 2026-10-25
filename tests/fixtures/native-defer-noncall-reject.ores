@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  defer 42;
+  return 0;
+}

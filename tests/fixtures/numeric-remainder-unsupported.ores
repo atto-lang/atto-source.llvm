@@ -1,0 +1,2 @@
+fnc modulus(int a, int b): int { return a % b; }
+pub fnc main(): int { return modulus(7, 3); }
