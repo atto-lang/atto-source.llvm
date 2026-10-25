@@ -42,5 +42,7 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2
       - name: Focused dispatch conformance matrix
-        run: ctest --test-dir build -R '^native_(value_(match|switch)_arm_result(_runtime)?|do_(match|switch)_function_return(_runtime)?|value_switch_requires_default|value_switch_duplicate_case_rejected|value_dispatch_type_mismatch_rejected|dispatch_async_arm_not_yet_lowered|nb_(match|switch)_rejected)
- --output-on-failure
+        run: |
+          ctest --test-dir build \
+            -R '^native_(value_(match|switch)_arm_result(_runtime)?|do_(match|switch)_function_return(_runtime)?|value_switch_requires_default|value_switch_duplicate_case_rejected|value_dispatch_type_mismatch_rejected|dispatch_async_arm_not_yet_lowered|dispatch_replay_unsafe_subject_rejected|nb_(match|switch)_rejected) \
+            --output-on-failure
