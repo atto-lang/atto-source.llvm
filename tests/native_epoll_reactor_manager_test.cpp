@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/eventfd.h>
 using namespace oreslang::runtime;
 static void check(bool good) { if (!good) throw std::runtime_error("reactor manager test failed"); }
 int main() {
@@ -410,6 +411,74 @@ int main() {
             ::close(pipefd[0]); ::close(pipefd[1]);
         }
         check(watch_wins + stop_wins == 1000);
+    }
+    {
+        // Delivered actor completions deliberately retain their manager claim
+        // until scheduler handoff ACK. Exhaust that bounded claim table while
+        // reactor slots are being reused, and prove the next admission fails
+        // before epoll registration/ownership transfer. ACKing one claim makes
+        // exactly one slot available again.
+        constexpr std::size_t claims =
+            NativeEpollReactorManager::maximum_reactors
+            * NativeEpollReactor::capacity;
+        NativeActorGroup group(880005, 1);
+        auto actor = group.adopt(880005, 12, 1, [] {});
+        check(group.mark_ready(actor));
+        NativeEpollReactorManager manager(1);
+        std::array<int, claims + 1> fds{};
+        std::array<std::optional<NativeEpollReactorManager::Completion>, claims> held{};
+        fds.fill(-1);
+
+        const std::uint64_t one = 1;
+        for (std::size_t i = 0; i < fds.size(); ++i) {
+            fds[i] = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+            check(fds[i] >= 0);
+        }
+        for (std::size_t i = 0; i < claims; ++i) {
+            std::optional<NativeEpollReactorManager::ActorWatch> watch;
+            for (int retry = 0; retry < 3000 && !watch; ++retry) {
+                watch = manager.try_watch_actor(actor, fds[i], EPOLLIN);
+                if (!watch) std::this_thread::yield();
+            }
+            check(watch.has_value());
+            check(::write(fds[i], &one, sizeof(one)) == (ssize_t)sizeof(one));
+            for (int retry = 0; retry < 3000 && !held[i]; ++retry) {
+                held[i] = manager.try_pop();
+                if (!held[i]) std::this_thread::yield();
+            }
+            check(held[i] && held[i]->actor
+                  && held[i]->actor->same_incarnation(actor));
+        }
+        check(actor.outstanding_resource_loans() == claims);
+
+        // No free manager claim: admission must be refused and its speculative
+        // actor retain refunded, leaving the reactor completion queue clean.
+        check(!manager.try_watch_actor(actor, fds[claims], EPOLLIN).has_value());
+        check(actor.outstanding_resource_loans() == claims);
+        check(!manager.try_pop().has_value());
+
+        check(manager.ack_actor_completion(*held[0]));
+        check(actor.outstanding_resource_loans() == claims - 1);
+        auto recycled = manager.try_watch_actor(actor, fds[claims], EPOLLIN);
+        check(recycled.has_value());
+        check(actor.outstanding_resource_loans() == claims);
+        check(manager.try_cancel_actor(*recycled));
+        std::optional<NativeEpollReactorManager::Completion> recycled_done;
+        for (int retry = 0; retry < 3000 && !recycled_done; ++retry) {
+            recycled_done = manager.try_pop();
+            if (!recycled_done) std::this_thread::yield();
+        }
+        check(recycled_done && recycled_done->actor
+              && recycled_done->actor->same_incarnation(actor));
+        check(manager.ack_actor_completion(*recycled_done));
+
+        for (std::size_t i = 1; i < claims; ++i)
+            check(manager.ack_actor_completion(*held[i]));
+        check(actor.outstanding_resource_loans() == 0);
+        group.stop_workers();
+        check(group.finalized(actor));
+        actor.get_done().get();
+        for (int fd : fds) ::close(fd);
     }
     bool bad = false;
     try { NativeEpollReactorManager manager(5); }
