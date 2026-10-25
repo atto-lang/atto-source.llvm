@@ -145,7 +145,9 @@ int ores_native_vm_actor_resource_release(
 /* Trusted runtime continuation-wake escrow. Source guest code cannot mint
  * these tickets. Reserve must happen before an external operation can suspend;
  * publish schedules the configured on_wake callback and never runs guest code
- * inline on the producer/completion thread. */
+ * inline on the producer/completion thread. This VM slice accepts only targets
+ * in the producer's exact scheduler domain; cross-scheduler continuation
+ * routing requires a separately authenticated bridge. */
 int ores_native_vm_actor_reserve_wake(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef producer, OresNativeActorRef target,
