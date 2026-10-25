@@ -38,7 +38,9 @@ static int valid_domain(enum OresNativeVMDomain domain) {
     return domain >= ORES_NATIVE_VM_MAIN && domain < ORES_NATIVE_VM_DOMAIN_COUNT;
 }
 
-OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
+static OresNativeVM* open_vm_internal(
+        const OresNativeVMConfig* config,
+        const OresNativeVMWakeConfig* wakes) {
     if (!config) return NULL;
     OresNativeVM* vm = (OresNativeVM*)calloc(1, sizeof(*vm));
     if (!vm) return NULL;
@@ -53,6 +55,8 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
     }
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         const OresNativeVMDomainConfig* p = &config->domains[i];
+        const OresNativeActorWakeFn on_wake =
+            wakes ? wakes->domains[i] : NULL;
         size_t workers = p->carrier_workers ? p->carrier_workers : 5;
         /* Validate all host callbacks and slot/capacity budgets before use.
          * NativeActorScheduler additionally enforces its allocation limits. */
@@ -60,7 +64,7 @@ OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
             || workers > 128) goto failed;
         vm->schedulers[i] = ores_native_actor_scheduler_open_with_wakes(
             p->actor_slots, p->mailbox_capacity, workers,
-            p->on_message, p->on_control, p->on_failure, p->on_wake, p->context);
+            p->on_message, p->on_control, p->on_failure, on_wake, p->context);
         if (!vm->schedulers[i]) goto failed;
         vm->supervisors[i] = (OresVMSupervisorRegistration*)calloc(
             p->actor_slots, sizeof(*vm->supervisors[i]));
@@ -85,6 +89,16 @@ failed:
         free(vm->supervisors[i]);
     free(vm);
     return NULL;
+}
+
+OresNativeVM* ores_native_vm_open(const OresNativeVMConfig* config) {
+    return open_vm_internal(config, NULL);
+}
+
+OresNativeVM* ores_native_vm_open_with_wakes(
+        const OresNativeVMConfig* config,
+        const OresNativeVMWakeConfig* wakes) {
+    return config && wakes ? open_vm_internal(config, wakes) : NULL;
 }
 
 static void control_lock(OresNativeVM* vm);
