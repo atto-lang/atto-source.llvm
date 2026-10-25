@@ -46,22 +46,6 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
-    # Compile the production parser/type/ownership passes without LLVM IR.
-    # This complements, rather than replaces, the source -> LLVM -> native gate.
-    add_executable(oreslang-source-actor-send-async-frontend-test
-        tests/source_actor_send_async_frontend_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
-        src/main/cpp/oreslang/frontend/MethodResolver.cpp
-        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
-        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
-    target_include_directories(oreslang-source-actor-send-async-frontend-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_options(oreslang-source-actor-send-async-frontend-test PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
-    add_test(NAME source_actor_send_async_frontend_admission
-        COMMAND oreslang-source-actor-send-async-frontend-test)
-    set_tests_properties(source_actor_send_async_frontend_admission PROPERTIES TIMEOUT 30)
-
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -350,6 +334,26 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
+    # Constrained compiler-owned alias/trait/interface type declarations:
+    # exact source syntax, no runtime value, and fail-closed unsupported types.
+    add_test(NAME native_type_only_declaration_boundaries
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
+    add_test(NAME native_type_constraint_descriptor_v1
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_type_constraint_descriptor_v1 PROPERTIES TIMEOUT 90)
+    # Broader refinement boundary: bounded int/i64 min/max descriptors are
+    # supported, but unchecked runtime use and unimplemented refinement forms
+    # must fail before emitting LLVM IR.
+    add_test(NAME native_refinement_admission_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/refinement_admission_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_refinement_admission_failclosed PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
@@ -380,6 +384,21 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Exact source alias-extension proof: compiler-owned static receiver dispatch,
+    # LLVM IR emission, Clang link and native process execution.
+    add_test(NAME native_alias_extension_method_aot
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_alias_extension_methods.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_alias_extension_method_aot PROPERTIES TIMEOUT 120)
+    # Exact compiler -> LLVM -> Clang -> OS conformance from the shared TSV.
+    add_test(NAME native_shared_type_declaration_conformance
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/shared_type_declarations_conformance.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_shared_type_declaration_conformance PROPERTIES TIMEOUT 120)
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
     add_test(NAME native_tree_shaking_direct_calls
@@ -1422,6 +1441,7 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_send_async_real_mailbox_admission
         PROPERTIES TIMEOUT 45)
 
+
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
             COMMAND "${Python3_EXECUTABLE}"
@@ -1936,6 +1956,37 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_exception_failure_precedence_and_diagnostics
              COMMAND oreslang-native-exception-policy-test)
+    # Task borrow/capture regressions: source Task execution remains
+    # fail-closed, while the host-only admission primitive proves exact
+    # boundary/epoch/domain identity and Send gating independently.
+    find_program(ORE_RUSTC NAMES rustc REQUIRED)
+    set(ORE_NATIVE_TASK_BORROW_TEST
+        "${CMAKE_CURRENT_BINARY_DIR}/native_task_borrow_rejection")
+    add_custom_command(
+        OUTPUT "${ORE_NATIVE_TASK_BORROW_TEST}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_task_borrow_rejection.rs"
+            -o "${ORE_NATIVE_TASK_BORROW_TEST}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_task_borrow_rejection.rs"
+        VERBATIM)
+    add_custom_target(oreslang-native-task-borrow-rejection-rust ALL
+        DEPENDS "${ORE_NATIVE_TASK_BORROW_TEST}")
+    add_test(NAME native_task_borrow_rejection_no_ir
+        COMMAND "${ORE_NATIVE_TASK_BORROW_TEST}"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_task_borrow_rejection_no_ir PROPERTIES TIMEOUT 60)
+
+    add_executable(oreslang-native-task-capture-admission-test
+        tests/native_task_capture_admission_test.cpp)
+    target_include_directories(oreslang-native-task-capture-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-task-capture-admission-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_task_capture_admission_host_only
+        COMMAND oreslang-native-task-capture-admission-test)
+    set_tests_properties(native_task_capture_admission_host_only
+        PROPERTIES TIMEOUT 20)
+
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
