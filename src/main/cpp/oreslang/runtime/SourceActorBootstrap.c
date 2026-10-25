@@ -971,9 +971,107 @@ int oreslang_source_actor_await_send_future_checked(void* opaque_future) {
     return (int)outcome;
 }
 
-void oreslang_source_actor_await_send_future(void* future) {
-    ensure(oreslang_source_actor_await_send_future_checked(future)
-        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+int64_t oreslang_source_actor_await_send_future(
+        void* opaque_future,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    SourceSendFuture* future = (SourceSendFuture*)opaque_future;
+    ensure(future != NULL && continuation != NULL);
+    ensure(!ores_native_actor_scheduler_is_carrier_thread());
+
+    SendAwaitFrame frame = {
+        .continuation = continuation,
+        .send_future = future,
+        .source_token = source_token,
+        .outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF
+    };
+    ensure(pthread_cond_init(&frame.completed, NULL) == 0);
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future));
+    SourceActor* actor = future->actor;
+    OresNativeVM* vm = group.vm;
+    const OresNativeAsyncSendTicket ticket = future->ticket;
+    frame.actor = actor;
+    ensure(group.root_ref.scheduler_domain
+        && group.pending_ready == NULL
+        && group.pending_done == NULL
+        && group.pending_send == NULL);
+    frame.resume_future = ores_native_vm_actor_future_open(
+        vm,
+        ORES_NATIVE_VM_MAIN,
+        group.root_ref,
+        SOURCE_ROOT_CONTROL_SEND_RESUME);
+    ensure(frame.resume_future != NULL);
+    group.pending_send = &frame;
+
+    /*
+     * Capture the root logical continuation before observing send settlement.
+     * Even an already-READY send Future must cross a real suspend/resume pair
+     * so post-await guest code never continues on the original host stack.
+     */
+    ensure(ores_native_vm_publish_control(
+        vm,
+        ORES_NATIVE_VM_MAIN,
+        group.root_ref,
+        SOURCE_ROOT_CONTROL_SEND_SUSPEND));
+    while (!frame.suspend_recorded)
+        ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
+    group_unlock();
+
+    OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
+    ensure(ores_native_vm_await_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket, &outcome));
+
+    group_lock();
+    ensure(group.vm == vm && group.pending_send == &frame
+        && source_send_future_valid_locked(future)
+        && future->actor == actor);
+    frame.outcome = (int)outcome;
+    ensure(ores_native_actor_future_status(frame.resume_future)
+        == ORES_NATIVE_FUTURE_PENDING);
+    ensure(ores_native_actor_future_complete(
+        frame.resume_future,
+        outcome == ORES_NATIVE_SEND_ACCEPTED
+            ? ORES_NATIVE_FUTURE_READY
+            : ORES_NATIVE_FUTURE_FAILED));
+
+    while (!frame.done)
+        ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
+
+    ensure(group.pending_send == &frame);
+    group.pending_send = NULL;
+    const int64_t result = frame.result;
+    ores_native_actor_future_destroy(frame.resume_future);
+    ensure(ores_native_continuation_store_release(
+        group.continuations, frame.link.continuation));
+    ensure(ores_native_execution_context_store_live(group.executions) == 0);
+    ensure(ores_native_continuation_store_live(group.continuations) == 0);
+    group_unlock();
+
+    ensure(ores_native_vm_release_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->actor == actor && actor->send_future_live > 0);
+    future->live = 0;
+    future->actor = NULL;
+    future->ticket = (OresNativeAsyncSendTicket){0};
+    --actor->send_future_live;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+
+    ensure(pthread_cond_destroy(&frame.completed) == 0);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS outcome=%d execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
+        (int)outcome,
+        SOURCE_GROUP_ROOT_SLOT,
+        (unsigned long long)source_token);
+#endif
+    ensure(outcome == ORES_NATIVE_SEND_ACCEPTED);
+    return result;
 }
 
 int oreslang_source_actor_cancel_send_future(void* opaque_future) {
@@ -1037,7 +1135,8 @@ int oreslang_source_actor_await_ready_checked(
 
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
-        && group.pending_ready == NULL && group.pending_done == NULL);
+        && group.pending_ready == NULL && group.pending_done == NULL
+        && group.pending_send == NULL);
     frame.ready_future = ores_native_vm_actor_future_open(
         group.vm,
         ORES_NATIVE_VM_MAIN,
@@ -1130,7 +1229,8 @@ int64_t oreslang_source_actor_await_done(
 
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
-        && group.pending_ready == NULL && group.pending_done == NULL);
+        && group.pending_ready == NULL && group.pending_done == NULL
+        && group.pending_send == NULL);
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = instance->ref;
     frame.done_future = ores_native_vm_actor_future_open(
