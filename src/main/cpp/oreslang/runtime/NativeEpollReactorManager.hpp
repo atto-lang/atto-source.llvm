@@ -261,9 +261,15 @@ private:
             started_.store(1, std::memory_order_release);
             count = 1;
         }
-        for (const auto& claim : claimed_fds_) {
+        FdClaim* free_claim = nullptr;
+        for (auto& claim : claimed_fds_) {
             if (claim.occupied && claim.fd == fd) return std::nullopt;
+            if (!claim.occupied && !free_claim) free_claim = &claim;
         }
+        // Actor terminal records may keep claims occupied after reactor slots
+        // are freed. Refuse before epoll registration rather than creating an
+        // untracked watch that must be cancelled after the fact.
+        if (!free_claim) return std::nullopt;
         maybe_expand_locked();
         count = started_.load(std::memory_order_relaxed);
         std::size_t best = 0;
@@ -275,19 +281,13 @@ private:
             auto token = reactors_[index]->try_watch(fd, events);
             if (!token) continue;
             const Watch result{static_cast<std::uint8_t>(index), *token};
-            for (auto& claim : claimed_fds_) {
-                if (claim.occupied) continue;
-                claim.occupied = true;
-                claim.fd = fd;
-                claim.watch = result;
-                if (actor) claim.actor = *actor;
-                return result;
-            }
-            // With per-reactor capacity and one claim per active slot this
-            // must be unreachable. Revoke rather than expose an untracked
-            // readiness token if an internal accounting invariant breaks.
-            (void)reactors_[index]->try_cancel(*token);
-            return std::nullopt;
+            free_claim->occupied = true;
+            free_claim->fd = fd;
+            free_claim->watch = result;
+            free_claim->actor.reset();
+            free_claim->completion_delivered = false;
+            if (actor) free_claim->actor = *actor;
+            return result;
         }
         return std::nullopt;
     }
