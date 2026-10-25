@@ -16,11 +16,12 @@ typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
-typedef enum {
+typedef int64_t OresSourceReadableOutcome;
+enum {
     ORES_SOURCE_READABLE_READY = 1,
     ORES_SOURCE_READABLE_CANCELLED = 2,
     ORES_SOURCE_READABLE_FAILED = 3
-} OresSourceReadableOutcome;
+};
 
 typedef int64_t (*OresSourceActorReadableContinuation)(
     void* actor, OresSourceReadableOutcome outcome);
