@@ -42,10 +42,19 @@ Admission limits: 128 source files, 8 MiB aggregate source/read budget, 4,096
 import edges and 32 recursive resolver edges. Files are opened nonblocking and
 checked as regular files on the opened descriptor; FIFOs/devices are rejected.
 UTF-8, NUL and target/capability directive checks cover dependencies as well as
-the root. Only relative `./`/`../` `.ores` paths (extension optional) are admitted;
-package/std/host resolution, selectors other than module, runtime loading,
-imported actors, module continuations and module initializer hooks fail closed.
-No partial LLVM IR is emitted when any dependency is unsupported.
+the root. Relative `./`/`../` `.ores` paths (extension optional) are admitted.
+
+The host linker also admits canonical `+/` project-root imports through the
+nearest `.ores.pkg.toml`. This is intentionally a narrow fail-closed bootstrap,
+not a general TOML/package resolver: the manifest must contain exactly one
+top-level canonical `schema_version = "1"` marker; quoted/repeated/conflicting
+schema keys, TOML multiline strings, `project.root`, missing/foreign manifest
+symlinks, traversal/empty path segments, nested-package crossings and physical
+symlink escapes are rejected. The selected source must remain below the physical
+nearest package root. `pkg:`, bare/std/host resolution, runtime loading,
+imported actors, module continuations and module initializer hooks remain
+unsupported and fail closed. No partial LLVM IR is emitted when any dependency
+is unsupported.
 
 This does not yet compile Spin: exported class/method surfaces, String/Array
 operations, typed HTTP capabilities, async continuations and OTel imports remain.

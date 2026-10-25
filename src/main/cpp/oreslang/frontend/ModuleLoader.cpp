@@ -1,4 +1,5 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
+#include "oreslang/frontend/ProjectRootImport.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -136,15 +137,33 @@ private:
         for (const auto& imported : current.program.imports) {
             if (++edges > 4096) fail(current, "native import graph exceeds 4096 edges");
             const auto& raw = imported.path;
-            if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
-                fail(current, "native imports require relative ./ or ../ source paths; package/std/host resolution unsupported");
-            fs::path dependency(raw);
-            if (dependency.extension().empty()) dependency += ".ores";
-            if (dependency.extension() != ".ores") fail(current, "native module source must use .ores extension");
-            dependency = current.path.parent_path() / dependency;
-            std::error_code error;
-            dependency = fs::canonical(dependency, error);
-            if (error) fail(current, "cannot resolve native import '" + raw + "'");
+            fs::path dependency;
+            if (raw.rfind("+/", 0) == 0) {
+                try {
+                    dependency = resolve_project_root_import(
+                        current.path, raw,
+                        [](const fs::path& manifest) {
+                            auto bytes = read_regular_source(
+                                manifest.string().c_str(), 64u * 1024u,
+                                "native package manifest exceeds 64 KiB");
+                            require_valid_source_utf8(bytes);
+                            return bytes;
+                        });
+                } catch (const std::exception& error) {
+                    fail(current, error.what());
+                }
+            } else {
+                if (raw.rfind("./", 0) != 0 && raw.rfind("../", 0) != 0)
+                    fail(current, "native imports require relative ./ or ../ or project-root +/ source paths; package/std/host resolution unsupported");
+                dependency = fs::path(raw);
+                if (dependency.extension().empty()) dependency += ".ores";
+                if (dependency.extension() != ".ores")
+                    fail(current, "native module source must use .ores extension");
+                dependency = current.path.parent_path() / dependency;
+                std::error_code error;
+                dependency = fs::canonical(dependency, error);
+                if (error) fail(current, "cannot resolve native import '" + raw + "'");
+            }
             const auto known = paths.find(dependency.string());
             std::size_t selected = known == paths.end() ? units.size() : known->second;
             if (selected == index) fail(current, "source file cannot import itself");
