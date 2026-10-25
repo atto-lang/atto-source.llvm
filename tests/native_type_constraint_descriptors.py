@@ -45,15 +45,16 @@ def compile_source(compiler, path, source, *extra):
 def descriptor_rows(output):
     rows = []
     for raw in output.decode("utf-8").splitlines():
-        fields = raw.split("\t", 5)
-        require(len(fields) == 6 and fields[0] == "descriptor",
+        fields = raw.split("\t", 6)
+        require(len(fields) == 7 and fields[0] == "descriptor",
                 "malformed descriptor row: " + raw)
         rows.append({
             "schema": fields[1],
             "name": fields[2],
             "repr": fields[3],
-            "fingerprint": fields[4],
-            "canonical": fields[5],
+            "validation_required": fields[4],
+            "fingerprint": fields[5],
+            "canonical": fields[6],
         })
     return rows
 
@@ -71,10 +72,14 @@ def require_descriptor(compiler, root, label, source, expected_name,
     require(row["schema"] == "ores.type-constraint.v1", label + " schema drift")
     require(row["name"] == expected_name, label + " qualified identity drift")
     require(row["repr"] == "i64", label + " representation drift")
+    require(row["validation_required"] == "true",
+            label + " validation-required marker drift")
     observed = hashlib.sha256(row["canonical"].encode("utf-8")).hexdigest()
     require(observed == row["fingerprint"], label + " fingerprint is not SHA-256 canonical form")
     if contract_key is not None:
         require(contract is not None, "golden contract missing")
+        require(contract.get("constraint.validation_required") == "true",
+                "golden validation-required marker drift")
         require(row["canonical"] == contract["constraint." + contract_key + ".canonical"],
                 label + " canonical form differs from Java/LLVM golden vector")
         require(row["fingerprint"] == contract["constraint." + contract_key + ".fingerprint"],
