@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -147,6 +148,11 @@ static void on_owned_actor_nio(void* opaque, size_t slot, uint64_t value) {
         sched_yield();
 
     OresNativeActorNioWatch watch = {0};
+    OresNativeActorRef wrong = probe->actor;
+    ++wrong.generation;
+    check(!ores_native_vm_nio_try_watch_actor(
+        probe->vm, probe->domain, wrong,
+        probe->fd, EPOLLIN, &watch));
     const int accepted = ores_native_vm_nio_try_watch_actor(
         probe->vm, probe->domain, probe->actor,
         probe->fd, EPOLLIN, &watch);
@@ -621,6 +627,62 @@ int main(void) {
             close(actor_pipe[1]);
         }
         check(watch_wins + stop_wins == 32);
+    }
+
+
+    // The VM bridge is bounded at the reactor's global 4x64 capacity. A 257th
+    // actor watch must fail and refund its speculative resource retain. After
+    // STOP, draining/ACKing the accepted 256 must be sufficient for DONE;
+    // any retain leak would make wait_done hang/fail this test.
+    {
+        enum { actor_claims = 256 };
+        OresNativeVM* actor_vm = ores_native_vm_open(&cfg);
+        check(actor_vm != NULL);
+        check(ores_native_vm_enable_nio(actor_vm, 4, 0, 1));
+        const OresNativeActorRef actor_ref =
+            ores_native_vm_spawn(actor_vm, ORES_NATIVE_VM_MAIN, 0);
+        check(actor_ref.scheduler_domain != 0);
+
+        int fds[actor_claims + 1];
+        OresNativeActorNioWatch watches[actor_claims];
+        for (size_t i = 0; i < actor_claims + 1; ++i) {
+            fds[i] = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+            check(fds[i] >= 0);
+        }
+        for (size_t i = 0; i < actor_claims; ++i) {
+            int admitted = 0;
+            for (int retry = 0; retry < 3000 && !admitted; ++retry) {
+                admitted = ores_native_vm_nio_try_watch_actor(
+                    actor_vm, ORES_NATIVE_VM_MAIN, actor_ref,
+                    fds[i], EPOLLIN, &watches[i]);
+                if (!admitted) sched_yield();
+            }
+            check(admitted);
+        }
+        OresNativeActorNioWatch overflow = {0};
+        check(!ores_native_vm_nio_try_watch_actor(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref,
+            fds[actor_claims], EPOLLIN, &overflow));
+
+        check(ores_native_vm_stop_sealed(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        check(!ores_native_vm_poll_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+
+        for (size_t i = 0; i < actor_claims; ++i)
+            check(ores_native_vm_nio_try_cancel_actor(actor_vm, watches[i]));
+        for (size_t i = 0; i < actor_claims; ++i) {
+            OresNativeActorNioCompletion completion =
+                await_actor_completion(actor_vm);
+            check(completion.io.outcome == ORES_NATIVE_NIO_CANCELLED);
+            check(same_actor_ref(completion.owner.actor, actor_ref));
+            check(ores_native_vm_nio_ack_actor_completion(
+                actor_vm, completion));
+        }
+        check(ores_native_vm_wait_done(
+            actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
+        for (size_t i = 0; i < actor_claims + 1; ++i) close(fds[i]);
+        check(ores_native_vm_close(actor_vm));
     }
 
     // Once the first actor is admitted, adding a reactor is no longer a
