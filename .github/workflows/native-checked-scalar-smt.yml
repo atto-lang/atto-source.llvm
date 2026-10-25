@@ -93,6 +93,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           test "$(git hash-object tests/fixtures/formal-core-scalar-checked.ores)" = "f1bf58f3e28c2b5a76553f96e23839a9a520a0a4"
           test "$(git hash-object tests/fixtures/core-math-i64-v1.json)" = "58d2b64a137ede4700593f855e1f0504ff744f90"
+      - name: Reject unsafe signed-i64 guest literal spelling before compiler build
+        run: |
+          set -euo pipefail
+          python3 tests/native_aot_core_math_matrix.py --self-test-literals
       - name: Install pinned-layout native toolchain
         run: |
           set -euo pipefail

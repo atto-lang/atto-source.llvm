@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
 
@@ -74,6 +75,7 @@ struct Parameter {
     std::string name;
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
+    std::string pending_type_alias;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
@@ -237,12 +239,21 @@ struct Function {
     /* Restricted first source await slice: exactly one direct ActorRef.get_ready(). */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
+    // Records the syntactic protocol witness; codegen receives only a
+    // checked SourceActorReadyControl resolution, not a magic name.
+    NativeAwaitForm ready_await_form = NativeAwaitForm::None;
+    // Non-Copy lexical Future<void> from a previously spawned actor's
+    // get_ready(). The compiler consumes it into the existing CONTROL
+    // continuation; it is never represented as an untyped i64 guest value.
+    std::string ready_future_name;
+    std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
+    std::string pending_return_type_alias;
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
