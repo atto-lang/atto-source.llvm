@@ -75,6 +75,27 @@ def parse_actor_receipt(line):
     return fields
 
 
+def parse_native_control_receipt(line, marker, expected, dynamic=()):
+    """Parse one complete C runtime control trace, rejecting prefix forgeries."""
+    assert line.isascii(), ("non-ASCII native control trace", line)
+    parts = line.split()
+    assert parts and parts[0] == marker and line == " ".join(parts), (
+        "noncanonical native control trace", line)
+    order = (*expected, *dynamic)
+    assert len(set(order)) == len(order), ("duplicate expected control field", order)
+    fields = {}
+    for field in parts[1:]:
+        key, sep, value = field.partition("=")
+        assert sep and key in order and key not in fields, (
+            "extra or duplicate native control field", field)
+        fields[key] = parse_native_decimal(value)
+    assert tuple(fields) == order, ("missing/reordered native control fields", fields)
+    for key, required in expected.items():
+        assert fields[key] == required, (
+            "native control field value mismatch", marker, key, fields)
+    return fields
+
+
 def verify_native_owned_ir(ir, name):
     """Prove two issued three-word native tokens and subsequent LIFO drops.
 
@@ -295,21 +316,30 @@ def main():
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
-            assert len(vm_lines) == 1 and (
-                "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
-                name, vm_lines)
+            assert len(vm_lines) == 1, (name, vm_lines)
+            parse_native_control_receipt(
+                vm_lines[0], "SOURCE_ACTOR_VM_ROUTING_VERIFIED",
+                {"domains": 4, "main": 1, "cold_carriers": 0, "root_slot": 63})
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
-                assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+                parse_native_control_receipt(
+                    trace_lines[0], "SOURCE_AWAIT_READY_TRACE_PASS",
+                    {"outcome": 2, "execution_id_persisted": 1,
+                     "fresh_resume": 1, "root_slot": 63},
+                    dynamic=("source_token",))
             if name == "source-actor-await-done.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
-                assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+                parse_native_control_receipt(
+                    trace_lines[0], "SOURCE_AWAIT_DONE_TRACE_PASS",
+                    {"terminal_ack": 1, "execution_id_persisted": 1,
+                     "fresh_resume": 1, "root_slot": 63},
+                    dynamic=("source_token",))
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
