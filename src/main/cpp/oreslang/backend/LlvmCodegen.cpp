@@ -47,7 +47,8 @@ bool contains_ready_carrier_call(const Expression* expr) {
             expr->kind == Expression::Kind::SumAccess ||
             expr->kind == Expression::Kind::RecordConstruct ||
             expr->kind == Expression::Kind::Call ||
-            expr->kind == Expression::Kind::ArrayCall)
+            expr->kind == Expression::Kind::ArrayCall ||
+            expr->kind == Expression::Kind::Console)
         return true;
     if (contains_ready_carrier_call(expr->left.get()) ||
             contains_ready_carrier_call(expr->right.get()) ||
@@ -1755,6 +1756,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
             const std::unordered_map<std::string, llvm::Value*> no_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
+            if (contains_ready_carrier_call(fn.result.get()))
+                throw std::runtime_error(
+                    "DONE continuation result reached codegen with an effectful expression");
             llvm::Value* done_result = lower(
                 *fn.result,
                 done_resumed,
@@ -1887,6 +1891,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         "READY continuation send payload reached codegen with a callable");
                 resumed.CreateCall(sourceSend, {resumed_actor, payload});
             }
+            if (contains_ready_carrier_call(fn.result.get()))
+                throw std::runtime_error(
+                    "READY continuation result reached codegen with an effectful expression");
             llvm::Value* continuation_result = lower(
                 *fn.result,
                 resumed,
@@ -1963,6 +1970,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
             const std::unordered_map<std::string, llvm::Value*> no_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
+            if (contains_ready_carrier_call(fn.result.get()))
+                throw std::runtime_error(
+                    "DONE continuation result reached codegen with an effectful expression");
             llvm::Value* continuation_result = lower(
                 *fn.result,
                 resumed,
