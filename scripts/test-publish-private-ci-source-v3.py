@@ -125,6 +125,24 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         with self.assertRaisesRegex(v3.Denied, "command invalid"):
             v3.validate_test_plan(raw, 669)
 
+    def test_reviewed_plan_allows_exact_cpp_compiler_executables(self):
+        for executable in ("g++", "clang++"):
+            with self.subTest(executable=executable):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = [executable, "--version"]
+                raw = (json.dumps(doc) + "\n").encode()
+                meta = v3.validate_test_plan(raw, 669)
+                self.assertEqual(meta["sha256"], hashlib.sha256(raw).hexdigest())
+
+        for executable in ("g+", "clang+", "g++-14", "/usr/bin/g++"):
+            with self.subTest(executable=executable):
+                doc = json.loads(PLAN)
+                doc["commands"][0]["argv"] = [executable, "--version"]
+                with self.assertRaisesRegex(v3.Denied, "command invalid"):
+                    v3.validate_test_plan(
+                        (json.dumps(doc) + "\n").encode(), 669
+                    )
+
     def test_reviewed_plan_rejects_wrong_pr_unexpected_fields_and_unsafe_commands(self):
         with self.assertRaisesRegex(v3.Denied, "authorize source PR"):
             v3.validate_test_plan(PLAN, 670)
