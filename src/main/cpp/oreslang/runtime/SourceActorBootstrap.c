@@ -90,6 +90,12 @@ static SourceActorGroup group = {
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
+/* The test-only admission hook below uses these helpers before their
+ * definitions. C11 requires declarations before first use, including when
+ * ORESLANG_SOURCE_ACTOR_TESTING is enabled under -Werror. */
+static void group_lock(void);
+static void group_unlock(void);
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
