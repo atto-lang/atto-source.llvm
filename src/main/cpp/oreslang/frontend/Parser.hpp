@@ -100,6 +100,7 @@ struct LocalBinding {
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
     ScalarType scalar_type = ScalarType::I64;
+    std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
 };
@@ -298,6 +299,32 @@ struct ModuleContract {
     std::vector<ContractMethod> methods;
 };
 
+// Compiler-only type declarations. Neither traits nor interfaces nor
+// transparent scalar aliases create runtime values, LLVM globals or
+// constructors. The native scalar backend records the distinct source kinds
+// without claiming full generic/typeclass or cross-unit linker support.
+struct TypeOnlyDecl {
+    enum class Kind { Alias, Trait, Interface };
+    struct Constraint {
+        enum class Kind { MinInclusive, MaxInclusive };
+        Kind kind = Kind::MinInclusive;
+        std::int64_t value = 0;
+    };
+    struct Method {
+        std::string name;
+        std::vector<std::string> parameter_types;
+        std::string return_type;
+    };
+    Kind kind = Kind::Alias;
+    std::string name;
+    std::string module_name; // empty for root; captured at declaration site
+    bool exported = false;
+    std::string alias_target; // native v1 accepts int/bool or another alias
+    std::vector<Constraint> constraints; // canonical min then max, compiler-only
+    std::vector<std::string> parents;
+    std::vector<Method> methods;
+};
+
 // First AOT-only resumable source slice. No owned borrows, calls, FFI,
 // lexical cleanup or actor scheduler integration is admitted yet.
 // The host supplies a zeroed, single-owner two-i64 continuation frame.
@@ -316,14 +343,26 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+struct TypeConstraintDescriptor {
+    std::string schema_id;
+    std::string qualified_type_name;
+    std::string representation;
+    std::string canonical;
+    std::string fingerprint;
+    bool validation_required = true;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
+    std::string namespace_name;
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
+    std::vector<TypeOnlyDecl> type_only_declarations;
+    std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
 };
