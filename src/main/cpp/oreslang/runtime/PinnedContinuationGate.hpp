@@ -15,6 +15,9 @@ class PinnedContinuationGate final {
 public:
     enum class Loan : std::uint8_t { shared, exclusive };
     static constexpr std::uint32_t exclusive_bit = 0x80000000u;
+    static constexpr std::uint32_t retirement_fence_bit = 0x40000000u;
+    static constexpr std::uint32_t control_bits =
+            exclusive_bit | retirement_fence_bit;
     static constexpr std::uint32_t max_shared_loans = 1024;
 
     explicit PinnedContinuationGate(AsyncIoTicket ticket) noexcept : ticket_(ticket) {}
@@ -61,7 +64,8 @@ public:
             return false;
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
-            if (mode == Loan::exclusive ? old != 0 : (old & exclusive_bit) || old >= max_shared_loans)
+            if (mode == Loan::exclusive ? old != 0
+                    : (old & control_bits) || old >= max_shared_loans)
                 return false;
             const std::uint32_t next = mode == Loan::exclusive ? exclusive_bit : old + 1;
             if (loans_.compare_exchange_weak(old, next,
@@ -81,7 +85,7 @@ public:
         std::uint32_t old = loans_.load(std::memory_order_acquire);
         for (;;) {
             if (mode == Loan::exclusive ? old != exclusive_bit
-                    : old == 0 || (old & exclusive_bit)) return false;
+                    : old == 0 || (old & control_bits)) return false;
             const std::uint32_t next = mode == Loan::exclusive ? 0 : old - 1;
             if (loans_.compare_exchange_weak(old, next,
                     std::memory_order_acq_rel, std::memory_order_acquire)) return true;
@@ -127,16 +131,23 @@ public:
     // the I/O broker ACK'd, and one guest cleanup/resume TURN FINISHED.
     bool try_retire(AsyncIoTicket ticket) noexcept {
         if (!valid(ticket) || !broker_quiesced_.load(std::memory_order_acquire)
-                || !resume_finished_.load(std::memory_order_acquire)
-                || loans_.load(std::memory_order_acquire) != 0) return false;
-        // Claim cleanup before touching the heap, but do NOT publish
-        // retired=true until physical lease-release has returned. Observers
-        // cannot mistake an in-progress native reclamation for quiescence.
-        bool old = false;
-        if (!retirement_claimed_.compare_exchange_strong(old, true,
+                || !resume_finished_.load(std::memory_order_acquire)) return false;
+
+        // Atomically fence future metadata-loan acquisition from exact zero.
+        // A plain loans_==0 load followed by retired_=true leaves a race where
+        // an acquire that observed terminal=pending can increment loans_ after
+        // the owner has decided retirement succeeded and is free to destroy
+        // this frame. Encoding retirement in the same CAS word closes that
+        // frame-UAF window without a mutex or broker callback.
+        std::uint32_t expected = 0;
+        if (!loans_.compare_exchange_strong(
+                expected, retirement_fence_bit,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             return false;
         }
+
+        // The loan-word fence also claims cleanup exactly once. Keep the
+        // public retired flag false until physical lease release has returned.
         if (lifetime_heap_ != nullptr) {
             ores_actor_i64_heap_external_release(
                     lifetime_heap_, &lifetime_lease_);
@@ -172,8 +183,8 @@ private:
     std::atomic<bool> broker_quiesced_{false};
     std::atomic<bool> resume_claimed_{false};
     std::atomic<bool> resume_finished_{false};
-    std::atomic<bool> retirement_claimed_{false};
     std::atomic<bool> lifetime_pin_active_{false};
     std::atomic<bool> retired_{false};
 };
 } // namespace oreslang::runtime
+

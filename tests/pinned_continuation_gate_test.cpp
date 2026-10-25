@@ -90,6 +90,41 @@ int main() {
         check(gate.finish_resume(token) && gate.try_retire(token),
               "guest cleanup or frame retirement missing");
     }
+    // Retirement must atomically occupy the same word used by loan
+    // acquisition. Once try_retire succeeds, no stale acquire can enter the
+    // frame even if it began before terminal settlement.
+    {
+        for (std::uint64_t round = 1; round <= 512; ++round) {
+            AsyncIoTicket token{77, round, round};
+            PinnedContinuationGate gate(token);
+            std::atomic<bool> stop{false};
+            std::thread acquirer([&] {
+                while (!stop.load(std::memory_order_acquire)) {
+                    if (gate.acquire(token, PinnedContinuationGate::Loan::shared)) {
+                        std::this_thread::yield();
+                        check(gate.release(token, PinnedContinuationGate::Loan::shared),
+                              "racing shared loan failed to release");
+                    }
+                }
+            });
+
+            check(gate.settle(token, AsyncIoTerminal::cancelled),
+                  "retirement-race settlement failed");
+            check(gate.broker_acknowledge(token)
+                    && gate.try_claim_resume(token)
+                    && gate.finish_resume(token),
+                  "retirement-race cleanup did not quiesce");
+            while (!gate.try_retire(token)) std::this_thread::yield();
+            check(gate.retired(), "retirement fence did not publish retired state");
+            check(gate.loan_state() == PinnedContinuationGate::retirement_fence_bit,
+                  "retired frame did not retain atomic loan-admission fence");
+            check(!gate.acquire(token, PinnedContinuationGate::Loan::shared),
+                  "loan entered after retirement fence");
+            stop.store(true, std::memory_order_release);
+            acquirer.join();
+        }
+    }
+
     {
         AsyncIoTicket token{4, 8, 2};
         PinnedContinuationGate gate(token);
@@ -104,3 +139,4 @@ int main() {
               "bounded frame leaked after completion");
     }
 }
+
