@@ -45,6 +45,10 @@ def main():
             "zero-schema actor emitted a hidden state read")
     require("call void @ores_actor_i64_heap_field_write" not in empty_ir,
             "zero-schema actor emitted a hidden state write")
+    spawn_lines = [line for line in empty_ir.splitlines()
+                   if "call " in line and "@oreslang_source_actor_spawn(" in line]
+    require(len(spawn_lines) == 1 and "i64 1" in spawn_lines[0],
+            "empty actor must receive a one-slot runtime-only physical heap")
 
     read_ir = compile_fixture(args.compiler, root / "sealed-state-read-positive.ores")
     require("call i64 @ores_actor_i64_heap_field_read" in read_ir,
