@@ -241,6 +241,13 @@ struct Function {
     std::size_t ready_await_offset = 0;
     std::string done_await_actor;
     std::size_t done_await_offset = 0;
+    // First source-level nonblocking I/O suspension: compiler-owned
+    // `await readable(<literal-fd>);` in trusted zero-argument main.
+    // The literal does not become a suspended local; runtime continuation
+    // state is generation-fenced by the source root actor/wake escrow.
+    bool readable_await = false;
+    std::int64_t readable_await_fd = -1;
+    std::size_t readable_await_offset = 0;
     // Records the syntactic protocol witness; codegen receives only a
     // checked SourceActorReadyControl resolution, not a magic name.
     NativeAwaitForm ready_await_form = NativeAwaitForm::None;
@@ -326,9 +333,10 @@ struct Program {
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted, synchronous actor send/stop.
-// Actors remain incompatible with wasm32. The only admitted source suspension
-// is one zero-local actor lifecycle await in trusted zero-argument main:
-// direct/typed get_ready readiness or explicit ActorRef.get_done().
+// Actors remain incompatible with wasm32. Admitted source suspension remains
+// one zero-local trusted-main boundary: direct/typed ActorRef get_ready,
+// explicit get_done, or the Linux-native compiler-owned `await readable(fd)`
+// readiness slice. General async/Future<T>/channel/select lowering stays closed.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
