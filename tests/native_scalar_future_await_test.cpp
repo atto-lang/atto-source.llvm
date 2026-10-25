@@ -302,6 +302,39 @@ int main() {
           "detached owner still pinned");
     check(detached_finalizer.finalized(), "detached owner finalization failed");
 
+    // Scheduling itself must consume an already-published detach barrier.
+    // Callers must not need a second teardown reconciliation just because
+    // they discovered close through try_schedule().
+    NativeActorGroup closed_schedule_group(9803, 1);
+    auto closed_schedule_owner = closed_schedule_group.adopt(9803, 1, 1, [] {});
+    check(closed_schedule_group.mark_ready(closed_schedule_owner),
+          "closed-schedule owner not ready");
+    auto closed_schedule_finalizer =
+        closed_schedule_group.runtime_finalizer(closed_schedule_owner);
+    auto closed_ready = NativeScalarFutureAwait::open(closed_schedule_owner, 82);
+    auto closed_pending = NativeScalarFutureAwait::open(closed_schedule_owner, 83);
+    check(closed_ready->complete(closed_ready->id(), 13),
+          "closed-schedule READY settle failed");
+    closed_schedule_group.close();
+    check(closed_schedule_owner.delivery_closed(),
+          "closed-schedule barrier not published");
+    check(!closed_ready->try_schedule(
+              closed_ready->id(), closed_schedule_group, closed_schedule_owner,
+              [&](const auto&) { check(false, "detached READY callback executed"); }),
+          "detached READY Future reported scheduled");
+    check(!closed_pending->try_schedule(
+              closed_pending->id(), closed_schedule_group, closed_schedule_owner,
+              [&](const auto&) { check(false, "detached PENDING callback executed"); }),
+          "detached PENDING Future reported scheduled");
+    check(closed_ready->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "detached READY schedule did not cancel");
+    check(closed_pending->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "detached PENDING schedule did not cancel");
+    check(closed_schedule_finalizer.ready_for_resource_reclamation(),
+          "closed-schedule owner still pinned");
+    check(closed_schedule_finalizer.finalized(),
+          "closed-schedule owner finalization failed");
+
     // A detached old generation must never revoke a Future owned by a newer
     // generation reusing the same runtime/actor identity.
     NativeActorGroup next_group(9802, 1);
