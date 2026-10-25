@@ -121,7 +121,7 @@ def main():
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
-        "source-actor-await-two-lifecycle.ores": "native source supports only one direct ActorRef lifecycle await",
+        "source-actor-await-two-lifecycle.ores": "native source cannot compose readiness and get_done awaits yet",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
