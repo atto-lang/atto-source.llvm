@@ -1280,6 +1280,10 @@ private:
                 while (token_.text != "return") {
                     if (token_.kind == Kind::End || token_.text == "}")
                         fail("state callback requires return");
+                    if (token_.text == "await" || token_.text == "select" ||
+                            token_.text == "nb-select" || token_.text == "readch" ||
+                            token_.text == "writech")
+                        fail("sealed actor state suspension requires raw-view revoke/revalidate lowering");
                     ActorFieldWrite write;
                     write.offset = token_.offset;
                     const std::string receiver = identifier();
@@ -1293,10 +1297,18 @@ private:
                     loan->writes.push_back(std::move(write));
                 }
                 require("return");
+                if (token_.text == "await" || token_.text == "select" ||
+                        token_.text == "nb-select" || token_.text == "readch" ||
+                        token_.text == "writech")
+                    fail("sealed actor state suspension requires raw-view revoke/revalidate lowering");
                 loan->result = expression();
                 require(";");
                 require("}");
             } else {
+                if (token_.text == "await" || token_.text == "select" ||
+                        token_.text == "nb-select" || token_.text == "readch" ||
+                        token_.text == "writech")
+                    fail("sealed actor state suspension requires raw-view revoke/revalidate lowering");
                 loan->result = expression();
             }
             require(")");
