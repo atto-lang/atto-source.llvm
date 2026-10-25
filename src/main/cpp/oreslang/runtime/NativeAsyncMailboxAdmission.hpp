@@ -302,9 +302,10 @@ private:
         if (fifo_entries_ < max_waiters_) return;
         std::size_t write = 0;
         for (std::size_t n = 0; n < fifo_entries_; ++n) {
-            const std::size_t index = fifo_[(fifo_head_ + n) % max_waiters_];
-            if (index < slots_.size() && slots_[index].state == State::Waiting)
-                fifo_[write++] = index;
+            const Handle queued = fifo_[(fifo_head_ + n) % max_waiters_];
+            const Slot* entry = matching_locked(queued);
+            if (entry && entry->state == State::Waiting)
+                fifo_[write++] = queued;
         }
         fifo_head_ = 0;
         fifo_entries_ = write;
@@ -315,15 +316,21 @@ private:
         if (fifo_entries_ == max_waiters_) compact_fifo_locked();
         if (fifo_entries_ == max_waiters_)
             throw std::logic_error("async mailbox FIFO accounting corrupted");
-        fifo_[fifo_tail_] = slot;
+        fifo_[fifo_tail_] = Handle{slot, slots_[slot].generation};
         fifo_tail_ = (fifo_tail_ + 1) % max_waiters_;
         ++fifo_entries_;
     }
 
     void service_waiters_locked() {
         while (fifo_entries_) {
-            const std::size_t index = fifo_[fifo_head_];
-            Slot& entry = slots_[index];
+            const Handle queued = fifo_[fifo_head_];
+            Slot* matched = matching_locked(queued);
+            if (!matched || matched->state != State::Waiting) {
+                fifo_head_ = (fifo_head_ + 1) % max_waiters_;
+                --fifo_entries_;
+                continue;
+            }
+            Slot& entry = *matched;
             if (entry.state != State::Waiting) {
                 fifo_head_ = (fifo_head_ + 1) % max_waiters_;
                 --fifo_entries_;
@@ -362,7 +369,7 @@ private:
 
     mutable std::mutex mutex_;
     std::vector<Slot> slots_;
-    std::vector<std::size_t> fifo_;
+    std::vector<Handle> fifo_;
     std::size_t fifo_head_ = 0;
     std::size_t fifo_tail_ = 0;
     std::size_t fifo_entries_ = 0;
