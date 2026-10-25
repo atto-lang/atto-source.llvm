@@ -165,6 +165,10 @@ struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
+    // First native send_async source slice: direct await only. This records
+    // mailbox-admission suspension semantics without pretending the compiler
+    // can yet materialize a general storable Future<void> value.
+    bool await_admission = false;
 };
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
