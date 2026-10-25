@@ -29,21 +29,64 @@ class PolicyAuditTest(unittest.TestCase):
                 audit.parse_allowlist(case)
 
     def test_reject_unprotected_and_missing_codeowner_review(self):
-        repo = {"full_name": audit.SOURCE, "private": True, "default_branch": "main"}
-        protected = {"name": "main", "protected": True}
+        repo = {"id": audit.SOURCE_ID, "full_name": audit.SOURCE,
+                "private": True, "default_branch": "main"}
+        protected = {"name": "main", "protected": True,
+                     "commit": {"sha": "a" * 40}}
         protection = {
             "required_pull_request_reviews": {
-                "require_code_owner_reviews": True, "dismiss_stale_reviews": True
+                "require_code_owner_reviews": True, "dismiss_stale_reviews": True,
+                "required_approving_review_count": 1
             },
-            "enforce_admins": {"enabled": True}
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False}
         }
         audit.check_live_metadata(repo, protected, protection)
         invalids = [
             (dict(repo, private=False), protected, protection),
+            (None, protected, protection),
+            (repo, [], protection),
+            (repo, protected, None),
+            (repo, protected, []),
+            (dict(repo, id=0), protected, protection),
             (repo, dict(protected, protected=False), protection),
+            (repo, dict(protected, commit=None), protection),
+            (repo, dict(protected, commit={"sha": "f" * 39}), protection),
+            (repo, dict(protected, commit={"sha": "Z" * 40}), protection),
             (repo, protected, {**protection, "enforce_admins": {"enabled": False}}),
+            (repo, protected, {**protection, "allow_force_pushes": {"enabled": True}}),
+            (repo, protected, {**protection, "allow_deletions": {"enabled": True}}),
+            (repo, protected, {**protection, "allow_deletions": None}),
+            (repo, protected, {**protection, "allow_force_pushes": None}),
+            (repo, protected, {k: v for k, v in protection.items()
+                               if k != "allow_deletions"}),
             (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": False}}),
             (repo, protected, {**protection, "required_pull_request_reviews": {"require_code_owner_reviews": True, "dismiss_stale_reviews": False}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "required_approving_review_count": 0}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "required_approving_review_count": True}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": {"users": ["owner"]}}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": {"teams": ["trusted"]}}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": {"apps": ["automation"]}}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": []}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": {"delegated_roles": ["owner"]}}}),
+            (repo, protected, {**protection, "required_pull_request_reviews": {
+                **protection["required_pull_request_reviews"],
+                "bypass_pull_request_allowances": {"users": {}}}}),
         ]
         for r, b, p in invalids:
             with self.subTest(input=(r, b, p)), self.assertRaises(audit.GovernanceError):
