@@ -32,6 +32,11 @@ typedef struct {
      * Not an actor-local panic catch or an external supervisor pool. */
     OresNativeActorPanicFn on_failure;
     void* context;
+    /* Optional continuation wake callback. Appended after context so existing
+     * positional host initializers keep their ABI meaning. When present, the
+     * domain allocates bounded scheduler wake credits and invokes this callback
+     * only on the producer actor's authenticated single-flight lane. */
+    OresNativeActorWakeFn on_wake;
 } OresNativeVMDomainConfig;
 
 typedef struct {
@@ -130,6 +135,34 @@ int ores_native_vm_actor_resource_retain(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 int ores_native_vm_actor_resource_release(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Trusted runtime continuation-wake escrow. Source guest code cannot mint
+ * these tickets. Reserve must happen before an external operation can suspend;
+ * publish schedules the configured on_wake callback and never runs guest code
+ * inline on the producer/completion thread. */
+int ores_native_vm_actor_reserve_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer, OresNativeActorRef target,
+    uint64_t continuation_slot, uint64_t continuation_generation,
+    uint64_t code_generation, uint64_t descriptor_generation,
+    OresNativeWakeTicket* out);
+int ores_native_vm_actor_transfer_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_cancel_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+int ores_native_vm_actor_abort_transferred_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+OresNativeWakePublishStatus ores_native_vm_actor_publish_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket, OresNativeWakeOutcome outcome);
+int ores_native_vm_actor_is_current_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeWakeTicket ticket);
+size_t ores_native_vm_actor_outstanding_wake_loans(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer);
 /* External trusted host barriers for compiler-generated linear ActorRef
  * stop/teardown. They do not implement source-level suspend or Future<T>.
  * Never call wait_done from a VM carrier callback. */
