@@ -249,6 +249,45 @@ int main() {
     }
     check(group.finalized(owner) && group.finalized(foreign), "group not quiescent");
 
+    // Per-actor physical finalization also removes an incarnation from the
+    // delivery table while the group remains open. Publish the same closed
+    // barrier used by group close so orphaned scalar Futures become terminal.
+    NativeActorGroup finalized_group(9790, 2);
+    auto finalized_owner = finalized_group.adopt(9790, 1, 1, [] {});
+    auto live_sibling = finalized_group.adopt(9790, 2, 1, [] {});
+    check(finalized_group.mark_ready(finalized_owner)
+          && finalized_group.mark_ready(live_sibling),
+          "finalized-group admission failed");
+    auto finalized_ready = NativeScalarFutureAwait::open(finalized_owner, 70);
+    auto finalized_pending = NativeScalarFutureAwait::open(finalized_owner, 71);
+    check(finalized_ready->complete(finalized_ready->id(), 55),
+          "per-actor finalized READY settle failed");
+    check(!finalized_owner.delivery_closed(),
+          "delivery closed before per-actor finalization");
+    check(finalized_group.finalized(finalized_owner),
+          "per-actor finalization failed");
+    check(finalized_owner.delivery_closed(),
+          "per-actor finalization did not publish delivery barrier");
+    check(!finalized_ready->try_schedule(
+              finalized_ready->id(), finalized_group, finalized_owner,
+              [&](const auto&) { check(false, "finalized READY callback executed"); }),
+          "finalized READY Future reported scheduled");
+    check(!finalized_pending->try_schedule(
+              finalized_pending->id(), finalized_group, finalized_owner,
+              [&](const auto&) { check(false, "finalized PENDING callback executed"); }),
+          "finalized PENDING Future reported scheduled");
+    check(finalized_ready->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "finalized READY Future did not cancel");
+    check(finalized_pending->phase() == NativeScalarFutureAwait::Phase::cancelled,
+          "finalized PENDING Future did not cancel");
+    int sibling_turns = 0;
+    check(finalized_group.run_user_turn(live_sibling, [&] { ++sibling_turns; })
+              == NativeActorGroup::UserTurn::executed,
+          "sibling actor stopped when peer finalized");
+    check(sibling_turns == 1, "live sibling did not execute");
+    check(finalized_group.finalized(live_sibling),
+          "live sibling did not finalize");
+
     // Group close may drop an already-reserved CONTROL callback. The Future
     // must observe that generation-fenced loss and become cancellable rather
     // than remaining permanently scheduled.

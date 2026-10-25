@@ -161,7 +161,8 @@ private:
         bool done_settled = false;
         std::atomic<bool> stop_issued{false};
         std::atomic<bool> physically_done{false};
-        // True only after the group worker table was detached by close().
+        // True after this exact actor incarnation is removed from the group's
+        // delivery table, either by per-actor finalization or group close.
         std::atomic<bool> detached_from_group{false};
         std::atomic<bool> control_active{false};
         std::atomic<bool> control_reserved{false};
@@ -477,6 +478,11 @@ public:
                 // physical-resource resurrection after logical termination.
                 throw;
             }
+            // No delivery can be admitted after this point: the group mutex is
+            // still held and this exact incarnation is about to leave the routing table.
+            // Publish the same generation-fenced barrier that close() exposes so host
+            // Future frames cannot remain READY/PENDING after per-actor finalization.
+            ref.ticket_->detached_from_group.store(true, std::memory_order_release);
             ref.ticket_->physically_done.store(true, std::memory_order_release);
             workers_.erase(ref.actor_id());
             owners.live.erase(it);
