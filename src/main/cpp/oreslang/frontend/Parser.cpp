@@ -1421,12 +1421,14 @@ private:
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
-            // Typed Future<void> is admitted ONLY as a linear lexical alias
-            // for one already-spawned ActorRef.get_ready() lifecycle promise.
+            // Typed Future<void> is admitted only as an immutable, non-escaping
+            // observer of one already-spawned ActorRef.get_ready() barrier.
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
-            if ((token_.text == "const" || token_.text == "val") &&
+            if ((token_.text == "const" || token_.text == "val" || token_.text == "let") &&
                     peek_next().text == "Future") {
+                if (token_.text != "const")
+                    fail("Future<void> readiness token must be const");
                 if (!value.ready_future_name.empty())
                     fail("native source supports only one Future<void> readiness token");
                 advance();
@@ -2005,29 +2007,50 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
-                    fail("native source supports only one direct ActorRef lifecycle await");
+                if (!value.done_await_actor.empty())
+                    fail("native source supports only one ActorRef lifecycle suspension");
                 const std::string awaited = identifier();
-                if (!value.ready_future_name.empty()) {
-                    if (awaited != value.ready_future_name || token_.text != ";")
-                        fail("native Future<void> await requires its declared readiness token");
+
+                // A bound Future<void> and its producer ActorRef observe the
+                // same readiness barrier. Re-observation does not consume
+                // either value or allocate another continuation.
+                const bool bound_future =
+                    !value.ready_future_name.empty() &&
+                    awaited == value.ready_future_name &&
+                    token_.text == ";";
+                if (bound_future) {
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
-                    value.ready_await_actor = value.ready_future_actor;
-                    value.ready_await_offset = await_offset;
-                    value.ready_await_form = NativeAwaitForm::FutureValue;
+                    if (!value.ready_await_actor.empty() &&
+                            value.ready_await_actor != value.ready_future_actor)
+                        fail("native source supports one ActorRef readiness barrier");
+                    if (value.ready_await_actor.empty()) {
+                        value.ready_await_actor = value.ready_future_actor;
+                        value.ready_await_offset = await_offset;
+                        value.ready_await_form = NativeAwaitForm::FutureValue;
+                    }
                     require(";");
                     continue;
                 }
-                // ActorRef<T> implements HasFuture: `await actor;` is
-                // equivalent to `await actor.get_ready();`, never get_done().
-                // get_done remains an explicit physical-quiescence await.
+
+                if (!value.ready_future_name.empty() &&
+                        awaited != value.ready_future_actor)
+                    fail("native Future<void> await requires its declared readiness token or producer ActorRef");
+
+                const bool first_ready = value.ready_await_actor.empty();
+                if (!first_ready && value.ready_await_actor != awaited)
+                    fail("native source supports one ActorRef readiness barrier");
+
+                // ActorRef<T> implements HasFuture: direct await means
+                // readiness, never get_done().
                 if (accept(";")) {
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
-                    value.ready_await_actor = awaited;
-                    value.ready_await_offset = await_offset;
-                    value.ready_await_form = NativeAwaitForm::DirectHasFuture;
+                    if (first_ready) {
+                        value.ready_await_actor = awaited;
+                        value.ready_await_offset = await_offset;
+                        value.ready_await_form = NativeAwaitForm::DirectHasFuture;
+                    }
                     continue;
                 }
                 if (token_.text != ".")
@@ -2040,10 +2063,14 @@ private:
                 if (lifecycle == "get_ready") {
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
-                    value.ready_await_actor = awaited;
-                    value.ready_await_offset = await_offset;
-                    value.ready_await_form = NativeAwaitForm::ExplicitGetReady;
+                    if (first_ready) {
+                        value.ready_await_actor = awaited;
+                        value.ready_await_offset = await_offset;
+                        value.ready_await_form = NativeAwaitForm::ExplicitGetReady;
+                    }
                 } else if (lifecycle == "get_done") {
+                    if (!value.ready_await_actor.empty())
+                        fail("native source cannot compose readiness and get_done awaits yet");
                     value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
                 } else {
@@ -3541,12 +3568,12 @@ private:
                 references.emplace(spawn.name, it->second);
             }
             if (!fn.ready_future_name.empty()) {
-                // A Future<void> alias must be consumed once, cannot shadow
-                // any live actor/parameter/local, and cannot be forged from
-                // an arbitrary scalar or a different actor capability.
+                // A Future<void> alias is an immutable readiness observer.
+                // It must correspond to the same observed ActorRef barrier,
+                // but observation is not a one-shot language operation.
                 if (fn.ready_await_actor != fn.ready_future_actor)
                     throw std::runtime_error(
-                        "Future<void> readiness token must be awaited exactly once");
+                        "Future<void> readiness observer must be observed through its producer barrier");
                 if (params.count(fn.ready_future_name) ||
                         live_actors.count(fn.ready_future_name) ||
                         std::any_of(fn.locals.begin(), fn.locals.end(),
@@ -3595,7 +3622,7 @@ private:
                     resolve_native_has_future(candidate);
                 if (resolution.abi != NativeAwaitAbi::SourceActorReadyControl ||
                         !resolution.returns_void ||
-                        resolution.consumes_future_token != token_form)
+                        resolution.uses_future_observer != token_form)
                     throw std::runtime_error(
                         "native HasFuture await requires verified get_ready projection");
                 if (fn.throws_types.size() != 1 ||
