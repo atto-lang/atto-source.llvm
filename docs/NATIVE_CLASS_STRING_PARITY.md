@@ -40,6 +40,24 @@ compiler-owned anonymous slots. This preserves effects in initializers rather
 than hoisting declarations above prints. Import visibility, private instance
 methods, receiver borrowing and fieldless object liveness remain checked.
 
+## Console argument parity
+
+The native host compiler accepts multiple `string` arguments in
+`stdio.print(a, b, ...)` and `stdio.println(a, b, ...)` (up to 32
+arguments). It evaluates each expression exactly once, left to right,
+concatenates without implicit separators, and emits one console operation.
+`println` appends one newline; `print` does not.
+
+The compiler lowers this through its **existing typed String addition and
+region-owned string runtime** rather than a second parser or a direct libc
+`printf` escape hatch. Mixed `string`/`int` calls currently fail
+closed until the common stringification contract is implemented.
+
+The native class/String parity runner includes the cross-file `Foo` program
+with `stdio.println("x", x)`, side-effect-order tests, and invalid mixed-type
+rejections. This is a source-to-native regression; an unexecuted CI job does
+not constitute verification.
+
 ## Nonblocking console transport
 
 Guest print calls enqueue immutable views in a bounded 1,024-record SPSC queue.
@@ -69,8 +87,10 @@ and byte limits, failure recovery and unsupported regular-file output.
 This milestone does **not** establish full Spin parity. Strings currently require
 a synchronous host `main`; actor, suspension and exception-frame integration
 are rejected until their ownership and cleanup boundaries are lowered. String
-fields, collections, mixed-type concatenation, string equality, unpaired UTF-16
-surrogates and the full standard-library API remain parity gaps. General local
+fields, equality, typed arrays, and nested owning results have subsequent
+native implementations; see [sum values and current lifetime limits](NATIVE_SCALAR_SUMS.md).
+Mixed-type concatenation, unpaired UTF-16 surrogates and the full
+standard-library API remain parity gaps. General local
 declarations after arbitrary control-flow statements remain unsupported.
 Allocation and console I/O are visible to effect analysis and are not silently
 admitted as allocation-free hard realtime work.

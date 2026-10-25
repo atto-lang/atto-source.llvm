@@ -1,4 +1,6 @@
 #include "oreslang/types/NativeScalarTypes.hpp"
+#include "oreslang/types/NativeClassLayout.hpp"
+#include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include <functional>
 #include <stdexcept>
@@ -6,7 +8,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Void };
+enum class Kind { Int, Bool, String, Class, Array, Sum, Void };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -16,6 +18,8 @@ using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
 Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
 Type declared_field_type(const ClassField& field) {
+    if (!field.sum_type.empty()) return {Kind::Sum, field.sum_type};
+    if (!field.class_name.empty()) return {Kind::Class, field.class_name};
     if (!field.int_array) return scalar(field.scalar_type);
     return {Kind::Array, !field.array_record_class.empty() ? field.array_record_class :
         field.array_element_type == ScalarType::String ? "String" : "int"};
@@ -26,13 +30,16 @@ Type constructor_parameter_type(const ClassDecl& cls, std::size_t index) {
         ? ScalarType::I64 : cls.constructor_parameter_types.at(index));
 }
 Type parameter_type(const Parameter& p) {
+    if (!p.sum_type.empty()) return {Kind::Sum, p.sum_type};
     return p.class_name.empty() ? scalar(p.scalar_type) : Type{Kind::Class, p.class_name};
 }
 Type result_type(const Function& fn) {
+    if (!fn.return_sum.empty()) return {Kind::Sum, fn.return_sum};
     return fn.returns_void ? Type{Kind::Void, {}} : fn.return_class.empty()
         ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
 }
 Type local_type(const LocalBinding& local) {
+    if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
         throw std::runtime_error("unsupported native array element type");
@@ -51,20 +58,13 @@ void validate_native_scalar_types(const Program& program) {
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
-    auto owns_arrays = [&](const std::string& name) {
-        auto found = classes.find(name);
-        if (found == classes.end()) return false;
-        for (const auto& field : found->second->fields) if (field.int_array) return true;
-        return false;
-    };
+    const NativeClassLayouts layouts(program);
+    auto owns_arrays = [&](const std::string& name) { return classes.count(name) && layouts.at(name).owns_arrays; };
     auto immutable_record = [&](const std::string& name) -> const ClassDecl& {
-        auto found = classes.find(name);
-        if (found == classes.end()) fail(0, "unknown record class '" + name + "'");
-        const auto& cls = *found->second;
-        for (const auto& field : cls.fields)
-            if (!field.final_field || field.int_array)
-                fail(0, "record collections require immutable scalar/String fields");
-        return cls;
+        if (!classes.count(name)) fail(0, "unknown record class '" + name + "'");
+        for (const auto& leaf : layouts.at(name).leaves)
+            if (!leaf.field->final_field || leaf.field->int_array) fail(0, "record collections require immutable scalar/String fields");
+        return *classes.at(name);
     };
     for (const auto& fn : program.functions)
         functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
@@ -82,6 +82,24 @@ void validate_native_scalar_types(const Program& program) {
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
+            case E::SumConstruct: {
+                const auto& type = native_sum(program, e.sum_type);
+                const bool option = type.kind == NativeSumType::Kind::Option;
+                if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
+                        e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
+                if (!e.arguments.empty()) require(expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
+                return {Kind::Sum, type.name};
+            }
+            case E::SumAccess: {
+                require(expression(*e.left, locals), {Kind::Sum, e.sum_type}, e.offset, "sum receiver type");
+                const auto& type = native_sum(program, e.sum_type);
+                const bool option = type.kind == NativeSumType::Kind::Option;
+                const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
+                if ((!query && e.name != "unwrap" && e.name != "unwrap_or") || e.arguments.size() != (e.name == "unwrap_or" ? 1u : 0u))
+                    fail(e.offset, "sum member or payload arity");
+                if (e.name == "unwrap_or") require(expression(*e.arguments.at(0), locals), scalar(type.value_type), e.offset, "sum fallback type");
+                return query ? scalar(true) : scalar(type.value_type);
+            }
             case E::Integer: return scalar(false);
             case E::Boolean: return scalar(true);
             case E::String: return scalar(ScalarType::String);
@@ -180,6 +198,7 @@ void validate_native_scalar_types(const Program& program) {
         // Preserve the admitted operand type for lowering. Handles are i64 at
         // the ABI boundary, so codegen must never infer String equality from
         // their physical representation or from syntax alone.
+        if (result.kind == Kind::Sum) e.sum_type = result.name;
         if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
         else if (result.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
         else if (result.kind == Kind::Int) e.resolved_type = ScalarType::I64;
@@ -239,7 +258,16 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals)> statements;
         statements = [&](const std::vector<Statement>& items, Locals scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ForEach) {
+                if (item.kind == Statement::Kind::ForIndex) {
+                    require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
+                    Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
+                    require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");
+                    require(expression(*item.loop_step, body), scalar(false), item.offset, "index update requires int");
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::Return) {
+                    if (item.expression) require(expression(*item.expression, scope), result_type(fn), item.offset, "structured return type");
+                    else if (!fn.returns_void) fail(item.offset, "non-void structured return requires value");
+                } else if (item.kind == Statement::Kind::ForEach) {
                     const auto source = expression(*item.expression, scope);
                     if (source.kind != Kind::Array) fail(item.offset, "for-of requires an array");
                     const auto& iterator = *item.branch_local;
@@ -284,7 +312,7 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*write.expression, locals), scalar(false), write.offset, "actor field requires int");
     };
     for (const auto& fn : program.functions) {
-        if (fn.name == "main" && (fn.return_type != ScalarType::I64 || !fn.return_class.empty())) fail(fn.offset, "OS entrypoint requires int or void");
+        if (fn.name == "main" && (fn.return_type != ScalarType::I64 || !fn.return_class.empty() || !fn.return_sum.empty())) fail(fn.offset, "OS entrypoint requires int or void");
         function(fn, {});
     }
     for (const auto& actor : program.actors) {
