@@ -133,7 +133,8 @@ typedef enum {
  * Typed host/runtime projection for the readable suspension. READY is the only
  * outcome that executes continuation. CANCELLED / TERMINATED / FAILED retire
  * the persisted continuation without executing guest code and report through
- * the enum. result is written only for READY.
+ * the enum. result is zeroed on entry and overwritten only for READY, so a
+ * non-READY caller never observes stale continuation data.
  */
 OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
     void* actor,
