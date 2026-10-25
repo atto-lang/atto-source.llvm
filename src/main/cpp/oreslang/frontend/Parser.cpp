@@ -477,11 +477,11 @@ private:
     }
 
     std::string type_alias_target() {
-        if (accept("int")) return "int";
+        if (accept("int") || accept("i64")) return "int";
         if (accept("bool")) return "bool";
         if (token_.kind == Kind::Identifier && !reserved(token_.text))
             return identifier();
-        fail("TYPE_ONLY_UNSUPPORTED_TYPE: alias target must name int, bool or another alias");
+        fail("TYPE_ONLY_UNSUPPORTED_TYPE: alias target must name int/i64, bool or another alias");
     }
 
     std::int64_t constraint_i64() {
