@@ -86,6 +86,7 @@ def main():
         ("source-actor-future-void-await-worker-instead.ores", 1, 2, 3),
         ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-await-done-twice.ores", 1, 0, None),
+        ("source-actor-await-ready-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
