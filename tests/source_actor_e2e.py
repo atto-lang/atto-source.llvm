@@ -75,6 +75,7 @@ def main():
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-send-async.ores", 1, 1, None),
+        ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -145,9 +146,13 @@ def main():
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
         "source-actor-send-async-unawaited-reject.ores":
-            "native send_async requires direct await; storable Future<void> lowering is not implemented",
+            "native send_async statement must be awaited directly or bound to Future<void>",
         "source-actor-send-async-method-reject.ores":
             "native send_async direct await requires trusted zero-argument main",
+        "source-actor-send-async-future-unused-reject.ores":
+            "Future<void> send_async token must be awaited exactly once",
+        "source-actor-send-async-future-stop-before-await-reject.ores":
+            "send_async Future target stopped before await",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -173,6 +178,7 @@ def main():
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
                 "source-actor-send-async.ores",
+                "source-actor-send-async-future.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-send-async.ores":
@@ -180,6 +186,27 @@ def main():
                          if "call void @oreslang_source_actor_await_send_async(" in line]
                 assert len(calls) == 1, (name, "expected one awaited send_async admission", calls)
                 assert "call void @oreslang_source_actor_send(" not in guest.stdout, name
+            if name == "source-actor-send-async-future.ores":
+                start_calls = [line for line in guest.stdout.splitlines()
+                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                await_calls = [line for line in guest.stdout.splitlines()
+                               if "call void @oreslang_source_actor_await_send_future(" in line]
+                send_calls = [line for line in guest.stdout.splitlines()
+                              if "call void @oreslang_source_actor_send(" in line]
+                assert len(start_calls) == 1, (
+                    name, "expected one eager send_async Future submission", start_calls)
+                assert len(await_calls) == 1, (
+                    name, "expected one linear Future<void> consumption", await_calls)
+                assert len(send_calls) == 1, (
+                    name, "expected one post-await ordinary send", send_calls)
+                start_pos = guest.stdout.find(
+                    "call ptr @oreslang_source_actor_send_async_start(")
+                await_pos = guest.stdout.find(
+                    "call void @oreslang_source_actor_await_send_future(")
+                send_pos = guest.stdout.find(
+                    "call void @oreslang_source_actor_send(")
+                assert 0 <= start_pos < await_pos < send_pos, (
+                    name, "send_async Future start/await/effect order changed")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
