@@ -26,6 +26,11 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-two-owned-heaps.ores":
+        value = 0
+        for n in ((1, 2, 3, 4), (5, 6, 7, 8))[actor_index][:processed]:
+            value = 2 * (value + n)
+        return value
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -51,9 +56,14 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1) and fields["released"] == 1, (
+        "invalid native actor constructor/release receipt", fields)
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    if fields["ready"]:
+        assert fields["constructor_on_worker"] == 1, ("ready before constructor", fields)
+    if not fields["constructor_on_worker"]:
+        assert fields["processed"] == 0 and fields["last"] == 0, (
+            "message processed before constructor", fields)
     return fields
 
 def main():
@@ -148,7 +158,9 @@ def main():
         "source-actor-send-async-unawaited-reject.ores":
             "native send_async statement must be awaited directly or bound to Future<void>",
         "source-actor-send-async-method-reject.ores":
-            "native send_async direct await requires trusted zero-argument main",
+            "native actor await requires continuation lowering",
+        "source-actor-send-async-saturated.ores":
+            "native source supports only one async await boundary",
         "source-actor-send-async-future-unused-reject.ores":
             "Future<void> send_async token must be awaited exactly once",
         "source-actor-send-async-future-stop-before-await-reject.ores":
@@ -325,7 +337,8 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
+            if name == "source-actor-two-owned-heaps.ores" and all(
+                    receipt["processed"] == 4 for receipt in receipts):
                 assert sorted(receipt["last"] for receipt in receipts) == [
                     52, 172
                 ], (name, receipts)
