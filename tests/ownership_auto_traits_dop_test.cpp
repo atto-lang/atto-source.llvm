@@ -27,6 +27,14 @@ AutoType wrap(AutoTypeKind kind, AutoType value, bool shared = false) {
     return result;
 }
 
+AutoType entry(AutoType key, AutoType value) {
+    AutoType result;
+    result.kind = AutoTypeKind::Entry;
+    result.parameters.push_back(std::move(key));
+    result.parameters.push_back(std::move(value));
+    return result;
+}
+
 Place place(oreslang::dop::Layout layout,
             std::optional<std::string> archetype,
             std::optional<std::string> component,
@@ -59,6 +67,29 @@ int main() {
     const auto rc = oreslang::types::infer_auto_traits(
         wrap(AutoTypeKind::Rc, scalar()));
     REQUIRE(!rc.send && !rc.sync && !rc.share);
+
+    const auto plain_entry = oreslang::types::infer_auto_traits(
+        entry(scalar(), scalar()));
+    REQUIRE(plain_entry.send && plain_entry.sync && plain_entry.share);
+
+    const auto boxed_entry = oreslang::types::infer_auto_traits(
+        entry(scalar(), wrap(AutoTypeKind::Box, scalar())));
+    REQUIRE(boxed_entry.send && boxed_entry.sync && !boxed_entry.share);
+
+    const auto rc_entry = oreslang::types::infer_auto_traits(
+        entry(scalar(), wrap(AutoTypeKind::Rc, scalar())));
+    REQUIRE(!rc_entry.send && !rc_entry.sync && !rc_entry.share);
+
+    bool entry_arity_rejected = false;
+    try {
+        AutoType malformed;
+        malformed.kind = AutoTypeKind::Entry;
+        malformed.parameters.push_back(scalar());
+        (void)oreslang::types::infer_auto_traits(malformed);
+    } catch (const std::invalid_argument&) {
+        entry_arity_rejected = true;
+    }
+    REQUIRE(entry_arity_rejected);
 
     const auto refcell = oreslang::types::infer_auto_traits(
         wrap(AutoTypeKind::RefCell, scalar()));

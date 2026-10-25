@@ -1,0 +1,5 @@
+define module Entry as
+  pub fnc main(): int {
+    return 0;
+  }
+end

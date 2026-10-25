@@ -122,6 +122,43 @@ int main() {
                             op(Kind::MoveObject, "p")}, {}}};
     assert(rejected([&] { verify(object_loan); }));
 
+    // Entry projections use the same field-sensitive ownership relation.
+    // key/value are siblings: consuming one does not poison the other, but
+    // any whole-Entry operation requires both projections to remain owned.
+    Graph entry_projection;
+    entry_projection.entry = {
+        {"entry.key", cell(kOwned)},
+        {"entry.value", cell(kOwned)}
+    };
+    entry_projection.blocks = {{{op(Kind::Move, "entry.key"),
+                                 op(Kind::Read, "entry.value")}, {}}};
+    verify(entry_projection);
+
+    entry_projection.blocks = {{{op(Kind::Move, "entry.key"),
+                                 op(Kind::ReadObject, "entry")}, {}}};
+    assert(rejected([&] { verify(entry_projection); }));
+    entry_projection.blocks = {{{op(Kind::Move, "entry.key"),
+                                 op(Kind::MoveObject, "entry")}, {}}};
+    assert(rejected([&] { verify(entry_projection); }));
+
+    // Loans on one projection do not alias its sibling. They do, however,
+    // participate in whole-Entry admission exactly like class fields.
+    entry_projection.blocks = {{{op(Kind::BorrowExclusive, "entry.key"),
+                                 op(Kind::Read, "entry.value"),
+                                 op(Kind::ReleaseExclusive, "entry.key"),
+                                 op(Kind::ReadObject, "entry")}, {}}};
+    verify(entry_projection);
+    entry_projection.blocks = {{{op(Kind::BorrowExclusive, "entry.key"),
+                                 op(Kind::ReadObject, "entry")}, {}}};
+    assert(rejected([&] { verify(entry_projection); }));
+    entry_projection.blocks = {{{op(Kind::BorrowShared, "entry.key"),
+                                 op(Kind::ReadObject, "entry"),
+                                 op(Kind::ReleaseShared, "entry.key")}, {}}};
+    verify(entry_projection);
+    entry_projection.blocks = {{{op(Kind::BorrowShared, "entry.key"),
+                                 op(Kind::MoveObject, "entry")}, {}}};
+    assert(rejected([&] { verify(entry_projection); }));
+
     Graph valid_loop;
     valid_loop.entry = {{"x", cell(kOwned)}};
     valid_loop.blocks = {

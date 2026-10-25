@@ -51,9 +51,24 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1), (
+        "invalid constructor receipt", fields)
+    assert fields["released"] == 1, (
+        "native actor release not verified", fields)
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    if fields["constructor_on_worker"] == 0:
+        # stop-before-start is a valid linearization. DATA may already have
+        # passed bounded admission before STOP wins, but no guest handler may
+        # run: every admitted frame must be abandoned and no payload result
+        # may be fabricated.
+        assert fields["ready"] == 0, (
+            "unconstructed actor fabricated readiness", fields)
+        assert fields["processed"] == 0, (
+            "unconstructed actor processed guest DATA", fields)
+        assert fields["accepted"] == fields["abandoned"], (
+            "unconstructed actor did not abandon every admitted frame", fields)
+        assert fields["last"] == 0, (
+            "unconstructed actor fabricated payload state", fields)
     return fields
 
 def main():
@@ -103,20 +118,20 @@ def main():
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
-        "source-actor-await-get-done.ores": "expected 'get_ready'",
-        "source-actor-await-worker-twice.ores": "native source supports only one await get_ready continuation",
+        "source-actor-await-get-done.ores": "await get_done requires stop before await",
+        "source-actor-await-worker-twice.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
         "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
         "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
         "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-double-await.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-double-await.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
         "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
         "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
         "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
         "source-actor-future-void-send.ores": "unknown parameter",
         "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-await-again.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-await-again.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
@@ -249,6 +264,18 @@ def main():
             assert len(lines) == actors, (name, lines)
             receipts = [parse_actor_receipt(line) for line in lines]
             for i, receipt in enumerate(receipts):
+                # Construction is required before guest work actually
+                # executes, and readiness-await fixtures explicitly prove READY.
+                # DATA may be admitted before STOP wins; in that race every
+                # accepted frame is abandoned, which parse_actor_receipt
+                # already checks fail-closed.
+                if receipt["processed"] > 0 or name in {
+                    "source-actor-await-ready.ores",
+                    "source-actor-await-worker.ores",
+                    "source-actor-future-void-ready.ores",
+                }:
+                    assert receipt["constructor_on_worker"] == 1, (
+                        name, "guest work without worker construction", receipt)
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
                 abandoned = receipt["abandoned"]

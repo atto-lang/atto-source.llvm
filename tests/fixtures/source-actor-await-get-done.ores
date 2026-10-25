@@ -1,4 +1,4 @@
-// First source-level await slice: no scalar locals cross suspension.
+// Legacy typed-ActorRef spelling: get_done requires an explicit stop first.
 define actor Worker as {
   let total: int = 0;
   pub fnc on_message(int n): int {
@@ -9,8 +9,5 @@ define actor Worker as {
 pub fnc main(): int {
   const worker: ActorRef<Worker> = spawn Worker();
   await worker.get_done();
-  worker.send(1);
-  worker.send(2);
-  stop worker;
   return 43;
 }

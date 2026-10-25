@@ -30,10 +30,14 @@ fn expected_trace(stderr: &str, source: &str) {
     let spawned = lines.iter().filter(|x| x.contains("SOURCE_ACTOR_SPAWN_STOP_VERIFIED"))
         .collect::<Vec<_>>();
     assert_eq!(spawned.len(), 1, "{source}: wrong actor count: {stderr}");
-    assert!(spawned[0].contains("constructor_on_worker=1 released=1")
-         && spawned[0].contains("processed=2")
-         && spawned[0].contains("last=3"),
-        "{source}: wrong actor effects: {stderr}");
+    assert!(spawned[0].contains("constructor_on_worker=1 released=1 ready=1 accepted=2"),
+        "{source}: wrong actor admission: {stderr}");
+    let settled =
+        (spawned[0].contains("processed=2 abandoned=0 last=3"))
+        || (spawned[0].contains("processed=1 abandoned=1 last=1"))
+        || (spawned[0].contains("processed=0 abandoned=2 last=0"));
+    assert!(settled,
+        "{source}: accepted DATA was neither processed FIFO nor abandoned by stop: {stderr}");
     let routed = lines.iter().filter(|x| x.contains("SOURCE_ACTOR_VM_ROUTING_VERIFIED"))
         .collect::<Vec<_>>();
     assert_eq!(routed.len(), 1, "{source}: VM route count: {stderr}");

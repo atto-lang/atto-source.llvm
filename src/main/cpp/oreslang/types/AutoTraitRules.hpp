@@ -8,7 +8,7 @@ namespace oreslang::types {
 
 enum class AutoTrait { Send, Sync, Share };
 enum class AutoTypeKind {
-    Scalar, Nominal, Box, Arc, Weak, Rc, RefCell, Mutex, RwLock, Dyn
+    Scalar, Nominal, Entry, Box, Arc, Weak, Rc, RefCell, Mutex, RwLock, Dyn
 };
 
 struct Capabilities {
@@ -78,6 +78,18 @@ inline Capabilities infer_auto_traits(const AutoType& type) {
             all_have(type.parameters, AutoTrait::Send),
             all_have(type.parameters, AutoTrait::Sync),
             type.shareable_domain && all_have(type.parameters, AutoTrait::Share)
+        };
+        break;
+    case AutoTypeKind::Entry:
+        if (type.parameters.size() != 2)
+            throw std::invalid_argument("Entry auto traits require exactly two type parameters");
+        // Entry is an immutable nominal product. Each capability composes
+        // recursively from both slots; unlike an arbitrary nominal class,
+        // Share does not depend on an external shareable-domain declaration.
+        caps = {
+            all_have(type.parameters, AutoTrait::Send),
+            all_have(type.parameters, AutoTrait::Sync),
+            all_have(type.parameters, AutoTrait::Share)
         };
         break;
     case AutoTypeKind::Box: {

@@ -1,3 +1,5 @@
+#define ORESLANG_NATIVE_SOURCE_CLEANUP_TEST_PEER 1
+
 #include "oreslang/runtime/ActorGroupLifecycle.hpp"
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
 #include "oreslang/runtime/NativeActorRetirementBarrier.hpp"

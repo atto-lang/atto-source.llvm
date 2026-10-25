@@ -1,0 +1,3 @@
+fnc Entry(): int {
+  return 0;
+}

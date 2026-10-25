@@ -489,7 +489,7 @@ public:
             if (accept("module")) {
                 if (!defined_type_aliases_.empty() || !forwards_.empty())
                     fail("native module wrapper cannot import file-root forward aliases");
-                program.module = identifier();
+                program.module = declaration_identifier("module");
                 if (accept("conforms")) {
                     do program.conforms.push_back(identifier()); while (accept(","));
                 }
@@ -1460,7 +1460,7 @@ private:
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         require("fnc");
-        loop.name = identifier();
+        loop.name = declaration_identifier("function");
         require("("); require(")");
         require(":"); require("void");
         require("{");
@@ -1566,13 +1566,13 @@ private:
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
-        value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        value.name = owner.empty() ? declaration_identifier("function") : owner + "." + identifier();
         if (!owner.empty() && token_.text == "<") fail("native generic methods require typed receiver monomorphization");
         if (accept("<")) {
             if (accept(">")) fail("native generic declaration cannot be empty");
             do {
                 GenericParameter slot;
-                slot.name = identifier();
+                slot.name = declaration_identifier("generic parameter");
                 if (slot.name == "_" || slot.name.rfind("$", 0) == 0)
                     fail("invalid generic parameter name");
                 for (const auto& prior : value.generic_parameters)
@@ -1771,6 +1771,7 @@ private:
             // Future<T> / async lowering must remain fail-closed.
             if ((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future") {
+                const std::size_t future_offset = token_.offset;
                 if (!value.ready_future_name.empty())
                     fail("native source supports only one Future<void> readiness token");
                 advance();
@@ -1792,7 +1793,9 @@ private:
                         return spawn.name == value.ready_future_actor;
                     });
                 if (!bound)
-                    fail("Future<void> requires previously spawned ActorRef.get_ready");
+                    throw std::runtime_error(
+                        "Future<void> requires previously spawned ActorRef.get_ready at byte "
+                        + std::to_string(future_offset));
                 continue;
             }
             LocalBinding binding;
@@ -3023,10 +3026,21 @@ private:
         if (token_.text != "<") return false;
         Lexer probe = lexer_; // already positioned immediately after '<'
         std::size_t budget = 0;
+        std::size_t nested_angles = 0;
         while (++budget <= 64) {
             const Token next = probe.next();
             if (next.kind == Kind::End) return false;
-            if (next.text == ">") return probe.next().text == "(";
+            if (next.text == "<") {
+                ++nested_angles;
+                continue;
+            }
+            if (next.text == ">") {
+                if (nested_angles != 0) {
+                    --nested_angles;
+                    continue;
+                }
+                return probe.next().text == "(";
+            }
             if (next.text == "," || next.text == "=" || next.text == "_" ||
                     next.text == "int" || next.kind == Kind::Identifier)
                 continue;
@@ -3105,12 +3119,25 @@ private:
         return name;
     }
 
+    std::string declaration_identifier(std::string_view role) {
+        if (entry_builtin_name(token_.text)) {
+            fail("builtin Entry is compiler-owned and cannot be shadowed as "
+                 + std::string(role));
+        }
+        return identifier();
+    }
+
     std::string nominal_declaration_name() {
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
+        // All nominal declaration forms share this gate. Keeping Entry here
+        // prevents a newly added class/actor/contract kind from accidentally
+        // forging the compiler-owned product identity.
+        if (entry_builtin_name(name))
+            fail("builtin Entry is compiler-owned and cannot be declared as a nominal type");
         return name;
     }
 
@@ -4142,6 +4169,11 @@ private:
 
             auto class_scalars = [&](const std::string& owner, const std::string& type) {
                 if (type.empty()) return;
+                const auto cls = std::find_if(program.classes.begin(), program.classes.end(),
+                    [&](const ClassDecl& candidate) { return candidate.name == type; });
+                if (cls == program.classes.end())
+                    throw std::runtime_error(
+                        "native return type requires resolved class layout '" + type + "'");
                 for (const auto& leaf : layouts.at(type).leaves) {
                     scalar_types.emplace(owner + "." + leaf.path, leaf.field->scalar_type);
                     if (leaf.field->int_array) scalar_types.emplace(owner + "." + leaf.path + ".$element", leaf.field->array_element_type);

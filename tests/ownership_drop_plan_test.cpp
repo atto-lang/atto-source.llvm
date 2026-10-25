@@ -166,6 +166,36 @@ static void reject_missing_extra_or_duplicate_drop_places() {
     delete static_cast<Token*>(slots.at("b").address);
 }
 
+static void entry_components_drop_value_then_key_exactly_once() {
+    Graph graph;
+    graph.entry = {{"entry.key", {kOwned, 0, false}},
+                   {"entry.value", {kOwned, 0, false}}};
+    graph.blocks = {{{}, {}}};
+
+    const auto plans = plan_drop_exits(
+        graph, {"entry.key", "entry.value"});
+    check(plans.size() == 1, "Entry has one terminal drop plan");
+    check(plans[0].fields.size() == 2, "Entry has exactly two drop places");
+    check(plans[0].fields[0].place == "entry.value"
+          && plans[0].fields[1].place == "entry.key",
+          "Entry components drop in reverse initialization order");
+
+    std::vector<int> log;
+    DropSlots slots{{"entry.key", live(1, log)},
+                    {"entry.value", live(2, log)}};
+    run_drop_exit(plans[0], slots);
+    check(log == std::vector<int>({2, 1}),
+          "Entry value then key must be destroyed exactly once");
+    check(slots.at("entry.key").state == kDropped
+          && slots.at("entry.value").state == kDropped,
+          "Entry component drop flags must be terminal");
+
+    const auto before = log.size();
+    expect_reject([&] { run_drop_exit(plans[0], slots); });
+    check(log.size() == before,
+          "Entry teardown cannot invoke a component destructor twice");
+}
+
 static void forbid_live_loans_and_invalid_layout() {
     Graph graph;
     graph.entry = {{"x", {kOwned, 1, false}}};
@@ -182,6 +212,7 @@ int main() {
     reject_alias_before_destructors();
     reject_stale_capabilities_and_bad_masks();
     reject_missing_extra_or_duplicate_drop_places();
+    entry_components_drop_value_then_key_exactly_once();
     forbid_live_loans_and_invalid_layout();
     std::puts("NATIVE_CFG_EXACT_ONCE_FIELD_DROP_OK");
 }

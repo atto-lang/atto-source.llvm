@@ -921,6 +921,28 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_auto_traits_and_logical_dop
         COMMAND oreslang-ownership-auto-traits-dop-test)
+    # Nominal immutable Entry<K,V> host substrate. Guest source syntax remains
+    # fail-closed until LLVM lowering, ownership/drop and actor transport use it.
+    add_executable(oreslang-native-entry-value-test
+        tests/native_entry_value_test.cpp)
+    target_include_directories(oreslang-native-entry-value-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-entry-value-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_entry_nominal_value_substrate
+        COMMAND oreslang-native-entry-value-test)
+    add_executable(oreslang-native-entry-llvm-type-test
+        tests/native_entry_llvm_type_test.cpp)
+    target_include_directories(oreslang-native-entry-llvm-type-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-entry-llvm-type-test SYSTEM PRIVATE
+        "${LLVM_INCLUDE_DIRS}")
+    target_link_libraries(oreslang-native-entry-llvm-type-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    target_compile_options(oreslang-native-entry-llvm-type-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_entry_nominal_llvm_type
+        COMMAND oreslang-native-entry-llvm-type-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -1311,10 +1333,10 @@ if(BUILD_TESTING)
         --diagnostic "await get_ready requires a live direct ActorRef receiver")
     oreslang_contract_test(reject_source_actor_hasfuture_get_done
         source-actor-await-get-done.ores
-        --diagnostic "expected 'get_ready'")
+        --diagnostic "await get_done requires stop before await")
     oreslang_contract_test(reject_source_actor_hasfuture_double_await
         source-actor-await-worker-twice.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one direct ActorRef lifecycle await")
     # HasFuture must be a checked live actor capability, not merely an
     # identifier that happens to appear in an await expression.
     oreslang_contract_test(reject_source_actor_hasfuture_scalar_operand
@@ -1328,7 +1350,7 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_hasfuture_reuses_future
         source-actor-future-void-await-again.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one direct ActorRef lifecycle await")
     # First actual native source-level typed Future: Future<void> from a
     # single ActorRef.get_ready(). It uses the existing root CONTROL
     # continuation, not synchronous polling or a generic Future<T> ABI.
@@ -1344,7 +1366,7 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_double_ready_future
         source-actor-future-void-double-await.ores
-        --diagnostic "native source supports only one await get_ready continuation")
+        --diagnostic "native source supports only one direct ActorRef lifecycle await")
     oreslang_contract_test(reject_source_actor_unspawned_ready_future
         source-actor-future-void-unspawned.ores
         --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
@@ -2178,6 +2200,14 @@ if(BUILD_TESTING)
         native-user-tuple-call.ores --ir "call i64 @tuple")
     oreslang_contract_test(native_local_entry_identifier_is_ordinary
         native-local-entry-name.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(reject_native_entry_shadow_function
+        entry-shadow-function-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_module
+        entry-shadow-module-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_contract
+        entry-shadow-contract-reject.ores --diagnostic "builtin Entry is compiler-owned")
+    oreslang_contract_test(reject_native_entry_shadow_generic_parameter
+        entry-shadow-generic-parameter-reject.ores --diagnostic "builtin Entry is compiler-owned")
     if(ORE_CLANG)
         oreslang_contract_test(native_user_tuple_call_executes
             native-user-tuple-call.ores --run 42 --clang "${ORE_CLANG}")
@@ -2318,7 +2348,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(class_reject_overlapping_borrows class-double-borrow-reject.ores --diagnostic "conflicting active native borrow")
     oreslang_contract_test(class_reject_unknown_field class-unknown-field-reject.ores --diagnostic "unknown class field")
     oreslang_contract_test(class_reject_noncopy_value class-noncopy-return-reject.ores --diagnostic "ownership violation")
-    oreslang_contract_test(class_reject_suspend_boundary class-async-borrow-reject.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(class_reject_suspend_boundary class-async-borrow-reject.ores --diagnostic "native await requires HasFuture ActorRef or explicit get_ready()/get_done()")
     oreslang_contract_test(class_admit_ordered_legacy_two_field_layout class-unsupported-layout-reject.ores)
     oreslang_contract_test(class_reject_duplicate_field class-multifield-duplicate-field-reject.ores --diagnostic "duplicate class field")
     oreslang_contract_test(class_reject_nonint_nested_field class-multifield-nonint-field-reject.ores --diagnostic "class field initializer type")

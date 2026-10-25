@@ -27,22 +27,26 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           test "$(git hash-object tests/fixtures/formal-core-scalar-checked.ores)" = "f1bf58f3e28c2b5a76553f96e23839a9a520a0a4"
-      - name: Install only the SMT solver
+      - name: Install SMT solver and Parser LLVM Support dependency
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends z3
+          sudo apt-get install -y --no-install-recommends z3 llvm-dev
+          test -d "$(llvm-config --includedir)"
       - name: Build and execute real native Parser.cpp and OwnershipChecker.cpp
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p build/native-scalar-evidence
           c++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror -pthread \
-            -Isrc/main/cpp \
+            -Isrc/main/cpp -I"$(llvm-config --includedir)" \
             tests/native_checked_scalar_smt_test.cpp \
             src/main/cpp/oreslang/frontend/Parser.cpp \
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp \
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp \
             src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+            $(llvm-config --ldflags --system-libs --libs support) \
             -o build/native-scalar-checked-proof
           build/native-scalar-checked-proof \
             tests/fixtures/formal-core-scalar-checked.ores \
@@ -69,6 +73,7 @@ jobs:
           git rev-parse HEAD > build/native-scalar-evidence/commit-sha.txt
           git hash-object tests/fixtures/formal-core-scalar-checked.ores > build/native-scalar-evidence/fixture-git-blob.txt
           c++ --version > build/native-scalar-evidence/compiler-version.txt
+          llvm-config --version > build/native-scalar-evidence/llvm-version.txt
           z3 -version > build/native-scalar-evidence/z3-version.txt
           sha256sum "$(command -v z3)" > build/native-scalar-evidence/z3-binary-sha256.txt
       - name: Archive native source-linked evidence
