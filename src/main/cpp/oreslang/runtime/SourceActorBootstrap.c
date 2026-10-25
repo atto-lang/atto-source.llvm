@@ -138,8 +138,7 @@ int oreslang_source_actor_test_set_async_waiters(
     const int ok = instance->magic == SOURCE_ACTOR_MAGIC
         && group.vm
         && instance->ref.actor_slot < group.next_slot
-        && group.actors[instance->ref.actor_slot] == instance
-        && instance->async_waiters == 0;
+        && group.actors[instance->ref.actor_slot] == instance;
     if (ok) instance->async_waiters = waiters;
     group_unlock();
     return ok;
