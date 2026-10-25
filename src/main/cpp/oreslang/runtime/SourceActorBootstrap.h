@@ -103,6 +103,11 @@ int oreslang_source_actor_await_send_future_checked(void* future);
  * post-await continuation resumes on a fresh root CONTROL turn. The trusted
  * outer host coordinates the barrier but no actor carrier is parked.
  */
+int oreslang_source_actor_await_send_future_continuation_checked(
+    void* future,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result_out);
 int64_t oreslang_source_actor_await_send_future(
     void* future,
     OresSourceActorContinuation continuation,
