@@ -1568,6 +1568,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_mailbox_completion_model
         COMMAND oreslang-actor-mailbox-completion-model-test)
     set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
+    # Regression against production ActorMailboxCompletion: window, failed
+    # publication rollback, contiguous drains, aborted poison and 8k concurrent
+    # completions. Host-only proof; not an Oreslang guest-execution gate.
+    add_executable(oreslang-actor-mailbox-completion-stress-test
+        tests/native_actor_mailbox_completion_stress_test.cpp)
+    target_include_directories(oreslang-actor-mailbox-completion-stress-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-actor-mailbox-completion-stress-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-actor-mailbox-completion-stress-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_mailbox_completion_stress
+        COMMAND oreslang-actor-mailbox-completion-stress-test)
+    set_tests_properties(native_actor_mailbox_completion_stress PROPERTIES TIMEOUT 90)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
