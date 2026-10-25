@@ -1576,6 +1576,8 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-native-async-mailbox-admission-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-async-mailbox-admission-test PRIVATE cxx_std_17)
+    target_compile_definitions(oreslang-native-async-mailbox-admission-test PRIVATE
+        ORESLANG_NATIVE_ASYNC_MAILBOX_TEST_PEER=1)
     target_compile_options(oreslang-native-async-mailbox-admission-test PRIVATE
         "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
         "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
