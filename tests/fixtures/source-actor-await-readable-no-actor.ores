@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  await readable(0);
+  return 43;
+}
