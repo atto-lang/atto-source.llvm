@@ -334,6 +334,18 @@ if(BUILD_TESTING)
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             callable-nominal "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_callable_nominal_boundary PROPERTIES TIMEOUT 35)
+    # Constrained compiler-owned alias/trait/interface type declarations:
+    # exact source syntax, no runtime value, and fail-closed unsupported types.
+    add_test(NAME native_type_only_declaration_boundaries
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_only_declarations.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_type_only_declaration_boundaries PROPERTIES TIMEOUT 90)
+    add_test(NAME native_type_constraint_descriptor_v1
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_type_constraint_descriptor_v1 PROPERTIES TIMEOUT 90)
     add_test(NAME native_nominal_type_binder_boundary
         COMMAND "${ORES_RUST_TEST_HARNESS_BIN}"
             nominal-type-binders "$<TARGET_FILE:oreslang-llvmc>")
@@ -364,6 +376,21 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Exact source alias-extension proof: compiler-owned static receiver dispatch,
+    # LLVM IR emission, Clang link and native process execution.
+    add_test(NAME native_alias_extension_method_aot
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_alias_extension_methods.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_alias_extension_method_aot PROPERTIES TIMEOUT 120)
+    # Exact compiler -> LLVM -> Clang -> OS conformance from the shared TSV.
+    add_test(NAME native_shared_type_declaration_conformance
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/shared_type_declarations_conformance.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_shared_type_declaration_conformance PROPERTIES TIMEOUT 120)
     # First executable-level tree-shaking proof: main/pub roots plus transitive
     # direct calls. Size is measured but not thresholded for this tiny ELF fixture.
     add_test(NAME native_tree_shaking_direct_calls
