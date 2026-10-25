@@ -633,6 +633,46 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 v3.checked_carrier_main("trusted/ci", carrier)
 
 
+    def test_recheck_destination_identity_binds_exact_main_each_write(self):
+        carrier = carrier_contract()
+
+        def good_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci":
+                return {
+                    "id": carrier["repository_id"],
+                    "full_name": "trusted/ci",
+                    "private": True,
+                    "visibility": "private",
+                }
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "commit": {"sha": carrier["base_sha"]},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=good_api):
+            v3.recheck_destination_identity("trusted/ci", carrier)
+
+        def drift_api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci":
+                return {
+                    "id": carrier["repository_id"],
+                    "full_name": "trusted/ci",
+                    "private": True,
+                    "visibility": "private",
+                }
+            if route == "repos/trusted/ci/branches/main":
+                return {
+                    "name": "main",
+                    "commit": {"sha": "9" * 40},
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=drift_api):
+            with self.assertRaisesRegex(v3.Denied, "main changed"):
+                v3.recheck_destination_identity("trusted/ci", carrier)
+
     def test_exact_source_tree_reads_only_pinned_git_blobs(self):
         def api(route, method="GET", payload=None):
             if route == f"repos/{v3.SOURCE_REPO}/pulls/669":
