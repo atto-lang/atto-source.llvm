@@ -66,7 +66,20 @@ public:
 
     NativeAsyncEnvelopeTxn(const NativeAsyncEnvelopeTxn&) = delete;
     NativeAsyncEnvelopeTxn& operator=(const NativeAsyncEnvelopeTxn&) = delete;
-    NativeAsyncEnvelopeTxn(NativeAsyncEnvelopeTxn&&) = delete;
+
+    NativeAsyncEnvelopeTxn(NativeAsyncEnvelopeTxn&& other) noexcept
+        : admission_(other.admission_),
+          handle_(other.handle_),
+          target_(std::move(other.target_)),
+          lane_(other.lane_),
+          bytes_(other.bytes_),
+          payload_(std::move(other.payload_)),
+          loan_owned_(other.loan_owned_),
+          state_(other.state_) {
+        // The continuation frame now exclusively owns descriptor cleanup.
+        other.admission_ = nullptr;
+        other.loan_owned_ = false;
+    }
     NativeAsyncEnvelopeTxn& operator=(NativeAsyncEnvelopeTxn&&) = delete;
 
     ~NativeAsyncEnvelopeTxn() noexcept {
@@ -253,6 +266,7 @@ private:
     }
 
     void cleanup_noexcept() noexcept {
+        if (!admission_) return;
         auto descriptor = admission_->descriptor_state(handle_);
         if (descriptor == DescriptorState::Waiting) {
             if (!admission_->cancel(handle_)) {
