@@ -1265,12 +1265,18 @@ void oreslang_source_actor_join_done(void* opaque) {
 
     if (group.live == 0) {
         ensure(group.pending_ready == NULL && group.pending_done == NULL);
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+        ensure(group.pending_readable == NULL);
+#endif
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
 
         ensure(ores_native_vm_close(group.vm));
         group.vm = NULL;
         group.root_ref = (OresNativeActorRef){0, 0, 0};
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+        group.nio_enabled = 0;
+#endif
 
         ensure(ores_native_continuation_store_close(group.continuations));
         group.continuations = NULL;
