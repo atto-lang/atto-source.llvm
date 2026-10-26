@@ -3837,8 +3837,39 @@ private:
             if (!classes.insert(cls.name).second)
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
+        const std::size_t static_select_count = std::count_if(
+            program.functions.begin(), program.functions.end(),
+            [](const Function& fn) { return fn.static_i64_select.has_value(); });
+        if (static_select_count != 0 &&
+                (static_select_count != 1 || program.functions.size() != 1 ||
+                 !program.classes.empty() || !program.actors.empty() ||
+                 !program.imports.empty() || !program.module.empty() ||
+                 !program.cooperative_loops.empty() || !program.contracts.empty() ||
+                 !program.type_only_declarations.empty() || !program.sum_types.empty()))
+            throw std::runtime_error(
+                "experimental static i64 select requires exactly one standalone function");
+
         NativeSignatures functions;
         for (const auto& fn : program.functions) {
+            if (fn.static_i64_select) {
+                const auto& plan = *fn.static_i64_select;
+                if (fn.name != "main" || !fn.parameters.empty() ||
+                        fn.returns_void || fn.return_type != ScalarType::I64 ||
+                        !fn.return_class.empty() || !fn.return_sum.empty() ||
+                        !fn.generic_parameters.empty() || fn.scalar_while ||
+                        !fn.locals.empty() || !fn.statements.empty() ||
+                        !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                        !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
+                        !fn.actor_actions.empty() || !fn.actor_field_writes.empty() ||
+                        !fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                        !fn.ready_future_name.empty() || fn.caught_throw_value ||
+                        fn.has_declared_effects || plan.channel.empty() ||
+                        plan.binding.empty() || plan.channel == plan.binding ||
+                        !fn.result || fn.result->kind != Expression::Kind::Integer ||
+                        fn.result->integer != plan.fallback_value)
+                    throw std::runtime_error(
+                        "malformed experimental static i64 select plan");
+            }
             // Reject hand-constructed or incorrectly deserialized programs:
             // parser-only pending aliases never enter ownership or LLVM ABI.
             if (!fn.pending_return_type_alias.empty())
