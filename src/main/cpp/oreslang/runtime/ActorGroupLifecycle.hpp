@@ -396,9 +396,11 @@ public:
                 || (scheduler != nullptr
                     && (!scheduler_actor.scheduler_domain
                         || !scheduler_actor.generation
-                        || scheduler_actor.generation != generation)))
+                        || scheduler_actor.generation != generation
+                        || !ores_native_actor_scheduler_poll_ready(
+                            scheduler, scheduler_actor))))
             throw std::invalid_argument(
-                "scheduled actor binding must be complete and generation-exact");
+                "scheduled actor binding must be complete, live and scheduler-exact");
         auto& owners = registry();
         // All paths touching both locks take the same scoped pair.
         std::scoped_lock guard(mutex_, owners.mutex);
