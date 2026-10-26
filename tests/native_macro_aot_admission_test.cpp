@@ -57,6 +57,13 @@ pub fnc main(): int {
 )");
 
     denied(R"(
+Producer.emit!(type int);
+pub fnc main(): int {
+  return 42;
+}
+)");
+
+    denied(R"(
 define module demo as
   define macro identity(Syntax<Expr> value) -> Syntax<Expr> {
     return value;
