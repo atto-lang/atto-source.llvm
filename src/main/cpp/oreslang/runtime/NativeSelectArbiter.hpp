@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -59,6 +60,20 @@ private:
         std::size_t winner = Capacity;
     };
 
+    static void invoke_all(
+            std::array<std::function<void()>, Capacity>& callbacks,
+            std::size_t callback_count) {
+        std::exception_ptr first_failure;
+        for (std::size_t i = 0; i < callback_count; ++i) {
+            try {
+                callbacks[i]();
+            } catch (...) {
+                if (!first_failure) first_failure = std::current_exception();
+            }
+        }
+        if (first_failure) std::rethrow_exception(first_failure);
+    }
+
     static bool cancel_state(const std::shared_ptr<State>& state) {
         std::array<std::function<void()>, Capacity> callbacks{};
         std::size_t callback_count = 0;
@@ -80,8 +95,7 @@ private:
                 }
             }
         }
-        for (std::size_t i = 0; i < callback_count; ++i)
-            callbacks[i]();
+        invoke_all(callbacks, callback_count);
         return true;
     }
 
@@ -113,8 +127,7 @@ private:
                 }
             }
         }
-        for (std::size_t i = 0; i < callback_count; ++i)
-            callbacks[i]();
+        invoke_all(callbacks, callback_count);
         return true;
     }
 
@@ -214,8 +227,13 @@ public:
     NativeSelectArbiter(NativeSelectArbiter&&) = delete;
     NativeSelectArbiter& operator=(NativeSelectArbiter&&) = delete;
 
-    ~NativeSelectArbiter() {
-        (void)cancel_state(state_);
+    ~NativeSelectArbiter() noexcept {
+        try {
+            (void)cancel_state(state_);
+        } catch (...) {
+            // Destruction is a last-resort revocation boundary. Explicit
+            // cancel() remains the observable path for revoker failures.
+        }
     }
 
     Registration register_case(std::size_t index) {
