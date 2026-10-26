@@ -20,6 +20,7 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 #define SOURCE_ROOT_CONTROL_SEND_SUSPEND UINT64_C(5)
+#define SOURCE_ROOT_CONTROL_SELECT_SUSPEND UINT64_C(6)
 
 typedef struct SourceActor SourceActor;
 typedef struct {
@@ -121,6 +122,35 @@ typedef struct {
 } SendAwaitFrame;
 
 typedef struct {
+    pthread_cond_t completed;
+    OresSourceSelectSend2Continuation continuation;
+    SourceActor* actors[2];
+    int64_t payloads[2];
+
+    /* Runtime-owned for the full detached lifetime. These objects must not
+     * live on a guest/native stack because scheduler wake credits retain the
+     * arbiter pointer until physical callback retirement. */
+    OresNativeSelectArbiter arbiter;
+    uint64_t selection_generation;
+    OresNativeSelectToken tokens[2];
+    OresNativeSelectWakeTicket common_wake;
+    OresNativeAsyncSendTicket sends[2];
+    int send_live[2];
+    int immediate_status[2];
+
+    OresNativeSuspensionLink link;
+    uint64_t source_token;
+    int suspend_recorded;
+    int wake_reserved;
+    int setup_complete;
+    int finalizer_claimed;
+    int done;
+    int outcome;
+    uint64_t winner_arm;
+    int64_t result;
+} SelectAwaitFrame;
+
+typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t async_waiters_changed;
     OresNativeVM* vm;
@@ -130,9 +160,11 @@ typedef struct {
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
     SendAwaitFrame* pending_send;
-    /* One bounded compiler-main continuation frame. The parser currently
-     * admits only one async boundary and one source actor across suspension. */
+    SelectAwaitFrame* pending_select;
+    /* Bounded compiler-main continuation frames. Only one suspended root
+     * operation is admitted at a time. */
     SendAwaitFrame detached_send;
+    SelectAwaitFrame detached_select;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -148,6 +180,7 @@ static SourceActorGroup group = {
     .async_waiters_changed = PTHREAD_COND_INITIALIZER
 };
 static _Atomic uint64_t next_actor_id = 4100;
+static _Atomic uint64_t next_select_generation = 1;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
 /* The test-only admission hook below uses these helpers before their
