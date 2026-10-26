@@ -1326,7 +1326,7 @@ if(BUILD_TESTING)
         --diagnostic "actor effects after await get_done are unsupported")
     oreslang_contract_test(reject_source_actor_hasfuture_double_await
         source-actor-await-worker-twice.ores
-        --diagnostic "native source supports only one direct ActorRef lifecycle await")
+        --diagnostic "native source supports only one async await boundary")
     # HasFuture must be a checked live actor capability, not merely an
     # identifier that happens to appear in an await expression.
     oreslang_contract_test(reject_source_actor_hasfuture_scalar_operand
@@ -1340,7 +1340,7 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_hasfuture_reuses_future
         source-actor-future-void-await-again.ores
-        --diagnostic "native source supports only one direct ActorRef lifecycle await")
+        --diagnostic "native source supports only one async await boundary")
     # First actual native source-level typed Future: Future<void> from a
     # single ActorRef.get_ready(). It uses the existing root CONTROL
     # continuation, not synchronous polling or a generic Future<T> ABI.
@@ -1356,22 +1356,36 @@ if(BUILD_TESTING)
         --diagnostic "native Future<void> await requires its declared readiness token")
     oreslang_contract_test(reject_source_actor_double_ready_future
         source-actor-future-void-double-await.ores
-        --diagnostic "native source supports only one direct ActorRef lifecycle await")
+        --diagnostic "native source supports only one async await boundary")
     oreslang_contract_test(reject_source_actor_unspawned_ready_future
         source-actor-future-void-unspawned.ores
-        --diagnostic "Future<void> requires previously spawned ActorRef.get_ready")
+        --diagnostic "Future<void> requires previously spawned ActorRef")
     oreslang_contract_test(reject_source_actor_ready_future_shadow
         source-actor-future-void-shadow.ores
         --diagnostic "Future<void> readiness token shadows a live owner")
     oreslang_contract_test(reject_source_actor_duplicate_ready_future
         source-actor-future-void-duplicate.ores
-        --diagnostic "native source supports only one Future<void> readiness token")
+        --diagnostic "native source supports only one Future<void> token")
     oreslang_contract_test(reject_source_actor_ready_future_wrong_producer
         source-actor-future-void-wrong-producer.ores
-        --diagnostic "expected 'get_ready'")
+        --diagnostic "Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)")
     oreslang_contract_test(reject_source_actor_ready_future_as_message
         source-actor-future-void-send.ores
         --diagnostic "unknown parameter")
+    # First stored send_async Future<void>: admission starts at declaration
+    # and the linear token must be consumed exactly once before target stop.
+    oreslang_contract_test(source_actor_send_async_future_start_ir
+        source-actor-send-async-future.ores
+        --ir "oreslang_source_actor_send_async_start")
+    oreslang_contract_test(source_actor_send_async_future_await_ir
+        source-actor-send-async-future.ores
+        --ir "oreslang_source_actor_await_send_future")
+    oreslang_contract_test(reject_source_actor_send_async_future_unused
+        source-actor-send-async-future-unused-reject.ores
+        --diagnostic "Future<void> send_async token must be awaited exactly once")
+    oreslang_contract_test(reject_source_actor_send_async_future_stop_before_await
+        source-actor-send-async-future-stop-before-await-reject.ores
+        --diagnostic "send_async Future target stopped before await")
     oreslang_contract_test(reject_source_actor_await_suspended_local
         source-actor-spawn-unavailable-await.ores
         --diagnostic "await get_ready requires one source actor without suspended locals")
@@ -1427,6 +1441,33 @@ if(BUILD_TESTING)
     add_test(NAME source_actor_await_trace_runtime
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-source-actor-send-async-admission-test
+        tests/source_actor_send_async_admission_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-send-async-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-send-async-admission-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-send-async-admission-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-send-async-admission-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-send-async-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_send_async_real_mailbox_admission
+        COMMAND oreslang-source-actor-send-async-admission-test)
+    set_tests_properties(source_actor_send_async_real_mailbox_admission
+        PROPERTIES TIMEOUT 45)
+
+
 
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
@@ -1615,6 +1656,58 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_mailbox_completion_model
         COMMAND oreslang-actor-mailbox-completion-model-test)
     set_tests_properties(native_actor_mailbox_completion_model PROPERTIES TIMEOUT 60)
+
+    # Bounded send_async credit/wake substrate; host runtime only.
+    add_executable(oreslang-native-async-mailbox-admission-test
+        tests/native_async_mailbox_admission_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-mailbox-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-mailbox-admission-test PRIVATE cxx_std_17)
+    target_compile_definitions(oreslang-native-async-mailbox-admission-test PRIVATE
+        ORESLANG_NATIVE_ASYNC_MAILBOX_TEST_PEER=1)
+    target_compile_options(oreslang-native-async-mailbox-admission-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-async-mailbox-admission-test PRIVATE Threads::Threads)
+    add_test(NAME native_async_mailbox_credit_wake_linearization
+        COMMAND oreslang-native-async-mailbox-admission-test)
+    set_tests_properties(native_async_mailbox_credit_wake_linearization PROPERTIES TIMEOUT 90)
+
+    # Scheduler-owned nonblocking send_async Future. The descriptor begins
+    # admission immediately, queues without parking a host thread, and is
+    # serviced before racing synchronous sends at physical credit release.
+    add_executable(oreslang-native-async-send-future-test
+        tests/native_actor_async_send_future_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-send-future-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-send-future-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-native-async-send-future-test PRIVATE
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+    target_compile_options(oreslang-native-async-send-future-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-async-send-future-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_async_send_future_fifo_and_lifecycle
+        COMMAND oreslang-native-async-send-future-test)
+    set_tests_properties(native_actor_async_send_future_fifo_and_lifecycle
+        PROPERTIES TIMEOUT 90)
+
+    # Frozen payload + exact target resource loan + transferred real envelope.
+    # Host runtime only; source send_async lowering remains separately gated.
+    add_executable(oreslang-native-async-envelope-ownership-test
+        tests/native_async_envelope_ownership_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-async-envelope-ownership-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-async-envelope-ownership-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-async-envelope-ownership-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-async-envelope-ownership-test PRIVATE Threads::Threads)
+    add_test(NAME native_async_envelope_payload_loan_publication
+        COMMAND oreslang-native-async-envelope-ownership-test)
+    set_tests_properties(native_async_envelope_payload_loan_publication PROPERTIES TIMEOUT 90)
     add_executable(oreslang-native-ndarray-view-admission-test tests/native_ndarray_view_admission_test.cpp)
     target_include_directories(oreslang-native-ndarray-view-admission-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-native-ndarray-view-admission-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -3554,6 +3647,23 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-actor-max-threads-admission-test)
     set_tests_properties(native_actor_max_threads_source_admission
         PROPERTIES TIMEOUT 20)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(oreslang-source-actor-send-async-frontend-test
+        tests/source_actor_send_async_frontend_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-source-actor-send-async-frontend-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-actor-send-async-frontend-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-source-actor-send-async-frontend-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME source_actor_send_async_frontend_contract
+        COMMAND oreslang-source-actor-send-async-frontend-test)
+    set_tests_properties(source_actor_send_async_frontend_contract PROPERTIES TIMEOUT 20)
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
