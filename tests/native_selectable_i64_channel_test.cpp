@@ -16,6 +16,45 @@ static auto bind_read(Channel& channel,
     return channel.subscribe_readable(
         [&](const typename Channel::Subscription& subscription) {
             ++callbacks;
+            typename Channel::ReadResult outcome;
+            typename Channel::NotificationBatch notifications;
+            const bool won = registration.try_win_if([&] {
+                return channel.try_commit_read(
+                    subscription, outcome, notifications);
+            });
+            notifications.dispatch();
+            if (won && outcome.status == Channel::ReadStatus::Value)
+                result = outcome.value;
+        });
+}
+
+template <class Channel, class Registration>
+static auto bind_write(Channel& channel,
+                       Registration& registration,
+                       std::int64_t value,
+                       int& callbacks) {
+    return channel.subscribe_writable(
+        [&channel, &registration, value, &callbacks](
+            const typename Channel::Subscription& subscription) {
+            ++callbacks;
+            auto outcome = Channel::WriteStatus::WouldBlock;
+            typename Channel::NotificationBatch notifications;
+            (void)registration.try_win_if([&] {
+                return channel.try_commit_write(
+                    subscription, value, outcome, notifications);
+            });
+            notifications.dispatch();
+        });
+}
+
+template <class Channel, class Registration>
+static auto bind_read_result(Channel& channel,
+                             Registration& registration,
+                             typename Channel::ReadResult& result,
+                             int& callbacks) {
+    return channel.subscribe_readable(
+        [&](const typename Channel::Subscription& subscription) {
+            ++callbacks;
             typename Channel::NotificationBatch notifications;
             (void)registration.try_win_if([&] {
                 return channel.try_commit_read(
@@ -26,17 +65,19 @@ static auto bind_read(Channel& channel,
 }
 
 template <class Channel, class Registration>
-static auto bind_write(Channel& channel,
-                       Registration& registration,
-                       std::int64_t value,
-                       int& callbacks) {
+static auto bind_write_result(Channel& channel,
+                              Registration& registration,
+                              std::int64_t value,
+                              typename Channel::WriteStatus& result,
+                              int& callbacks) {
     return channel.subscribe_writable(
-        [&](const typename Channel::Subscription& subscription) {
+        [&channel, &registration, value, &result, &callbacks](
+            const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
             (void)registration.try_win_if([&] {
                 return channel.try_commit_write(
-                    subscription, value, notifications);
+                    subscription, value, result, notifications);
             });
             notifications.dispatch();
         });
@@ -206,10 +247,6 @@ static void stale_post_commit_notification_cannot_consume_for_loser() {
         channel, read, read_value, read_callbacks);
     read.arm([read_wait] { (void)read_wait.close(); });
 
-    // The write is immediately ready. Its channel commit captures the pending
-    // reader notification, then the arbiter revokes that losing reader before
-    // the notification batch is dispatched. The stale callback may run but
-    // its subscription identity is no longer active and cannot consume.
     auto write_wait = bind_write(
         channel, write, 99, write_callbacks);
     write.arm([write_wait] { (void)write_wait.close(); });
@@ -223,6 +260,65 @@ static void stale_post_commit_notification_cannot_consume_for_loser() {
 
     auto value = channel.try_read();
     assert(value.has_value() && *value == 99);
+}
+
+static void close_wakes_pending_read_with_eof() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    NativeSelectArbiter<1> select;
+    auto read = select.register_case(0);
+    Channel::ReadResult result;
+    int callbacks = 0;
+
+    auto wait = bind_read_result(channel, read, result, callbacks);
+    read.arm([wait] { (void)wait.close(); });
+    assert(!select.winner().has_value());
+    assert(channel.close());
+    assert(!channel.close());
+    assert(channel.closed());
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(callbacks == 1);
+    assert(result.status == Channel::ReadStatus::Eof);
+    assert(channel.pending_readers() == 0);
+    assert(!channel.try_write(1));
+    assert(channel.try_read_result().status == Channel::ReadStatus::Eof);
+}
+
+static void close_drains_buffer_before_eof() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    assert(channel.try_write(77));
+    assert(channel.close());
+
+    auto value = channel.try_read_result();
+    assert(value.status == Channel::ReadStatus::Value);
+    assert(value.value == 77);
+    assert(channel.try_read_result().status == Channel::ReadStatus::Eof);
+}
+
+static void close_wakes_pending_write_as_closed_without_publication() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    assert(channel.try_write(7));
+
+    NativeSelectArbiter<1> select;
+    auto write = select.register_case(0);
+    auto result = Channel::WriteStatus::WouldBlock;
+    int callbacks = 0;
+    auto wait = bind_write_result(channel, write, 8, result, callbacks);
+    write.arm([wait] { (void)wait.close(); });
+
+    assert(!select.winner().has_value());
+    assert(channel.close());
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(callbacks == 1);
+    assert(result == Channel::WriteStatus::Closed);
+    assert(channel.pending_writers() == 0);
+
+    auto existing = channel.try_read_result();
+    assert(existing.status == Channel::ReadStatus::Value);
+    assert(existing.value == 7);
+    assert(channel.try_read_result().status == Channel::ReadStatus::Eof);
 }
 
 static void immediate_callback_failure_does_not_leak_waiter() {
@@ -275,6 +371,9 @@ int main() {
     freeing_capacity_wakes_pending_write_case();
     cancellation_detaches_channel_waiter();
     stale_post_commit_notification_cannot_consume_for_loser();
+    close_wakes_pending_read_with_eof();
+    close_drains_buffer_before_eof();
+    close_wakes_pending_write_as_closed_without_publication();
     immediate_callback_failure_does_not_leak_waiter();
     asynchronous_notification_failure_is_recorded_after_commit();
     return 0;
