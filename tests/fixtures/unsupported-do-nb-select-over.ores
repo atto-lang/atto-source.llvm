@@ -1,0 +1,9 @@
+// Detached procedural nonblocking select still requires continuation ownership.
+pub fnc main(): int {
+  do nb select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}
