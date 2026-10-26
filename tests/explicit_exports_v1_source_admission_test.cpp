@@ -1,0 +1,195 @@
+#include "oreslang/frontend/Parser.hpp"
+
+#include <cstdlib>
+#include <exception>
+#include <string>
+#include <string_view>
+
+using oreslang::SourceExportBinding;
+using oreslang::SourceExportKind;
+using oreslang::SourceExportScope;
+using oreslang::parse_unresolved_program;
+
+static void check(bool condition) {
+    if (!condition) std::abort();
+}
+
+static void denied(std::string_view source, std::string_view diagnostic) {
+    bool rejected = false;
+    try {
+        (void)parse_unresolved_program(source);
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find(diagnostic) != std::string_view::npos;
+    }
+    check(rejected);
+}
+
+static const SourceExportBinding& only_binding(const oreslang::Program& program) {
+    check(program.source_export_bindings.size() == 1);
+    return program.source_export_bindings.front();
+}
+
+int main() {
+    {
+        auto program = parse_unresolved_program(R"(
+export fnc api as public_api;
+fnc api(): int { return 1; }
+)");
+        check(program.source_exports.size() == 1);
+        const auto& binding = only_binding(program);
+        check(binding.local_kind == SourceExportKind::Fnc);
+        check(binding.local_name == "api");
+        check(binding.external_name == "public_api");
+        check(binding.scope == SourceExportScope::Public);
+        check(binding.origin == SourceExportBinding::Origin::ExplicitExport);
+        check(binding.local_symbol_id == "$root::fnc::api");
+        check(!program.functions.front().exported);
+    }
+
+    // Export metadata is transparent to the import prelude in either order.
+    for (const auto source : {
+            R"(
+export fnc api;
+import module Dep from './dep';
+fnc api(): int { return 1; }
+)",
+            R"(
+import module Dep from './dep';
+export fnc api;
+fnc api(): int { return 1; }
+)"}) {
+        auto program = parse_unresolved_program(source);
+        check(program.imports.size() == 1);
+        check(program.source_exports.size() == 1);
+        check(only_binding(program).external_name == "api");
+    }
+
+    denied(R"(
+fnc api(): int { return 1; }
+import module Dep from './dep';
+)", "EXPORT_IMPORT_PRELUDE");
+
+    {
+        auto program = parse_unresolved_program(R"(
+export[pkg] fnc api;
+fnc api(): int { return 1; }
+)");
+        check(only_binding(program).scope == SourceExportScope::Package);
+        check(!program.functions.front().exported);
+    }
+
+    {
+        auto program = parse_unresolved_program(R"(
+export fnc api;
+pub fnc api(): int { return 1; }
+)");
+        check(program.source_export_bindings.size() == 1);
+        check(program.source_export_bindings.front().origin ==
+              SourceExportBinding::Origin::ImplicitPub);
+    }
+
+    {
+        auto program = parse_unresolved_program(R"(
+export fnc internal as first;
+export fnc internal as second;
+fnc internal(): int { return 1; }
+)");
+        check(program.source_export_bindings.size() == 2);
+        check(program.source_export_bindings[0].local_symbol_id ==
+              program.source_export_bindings[1].local_symbol_id);
+        check(program.source_export_bindings[0].external_name !=
+              program.source_export_bindings[1].external_name);
+    }
+
+    // Completed export table, not source order, determines visibility leakage.
+    for (const auto source : {
+            R"(
+export fnc api;
+export type Hidden;
+define type Hidden = int;
+fnc api(Hidden value): int { return value; }
+)",
+            R"(
+export type Hidden;
+export fnc api;
+define type Hidden = int;
+fnc api(Hidden value): int { return value; }
+)"}) {
+        auto program = parse_unresolved_program(source);
+        check(program.source_export_bindings.size() == 2);
+    }
+
+    denied(R"(
+export[pkg] fnc api;
+export[file] type Hidden;
+define type Hidden = int;
+fnc api(Hidden value): int { return value; }
+)", "EXPORT_API_LEAK");
+
+    {
+        auto program = parse_unresolved_program(R"(
+export[file] fnc api;
+export[pkg] type Hidden;
+define type Hidden = int;
+fnc api(Hidden value): int { return value; }
+)");
+        check(program.source_export_bindings.size() == 2);
+    }
+
+    denied("export X\nfnc keep(): int { return 1; }\n", "EXPORT_SEMICOLON_REQUIRED");
+    denied("export {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
+    denied("export class {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
+    denied("export actor {,X};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {X,,Y};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {X Y};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {{X}};\nfnc keep(): int { return 1; }\n", "EXPORT_NESTED_GROUP");
+    denied("export *;\nfnc keep(): int { return 1; }\n", "EXPORT_WILDCARD_UNSUPPORTED");
+    denied("export * from './dep';\nfnc keep(): int { return 1; }\n", "EXPORT_REEXPORT_UNSUPPORTED");
+    denied("export from './dep' {X};\nfnc keep(): int { return 1; }\n", "EXPORT_REEXPORT_UNSUPPORTED");
+    denied("export dep.X;\nfnc keep(): int { return 1; }\n", "EXPORT_QUALIFIED_TARGET_UNSUPPORTED");
+    denied("export dep::X;\nfnc keep(): int { return 1; }\n", "EXPORT_QUALIFIED_TARGET_UNSUPPORTED");
+    denied("export Foo<int>;\nfnc keep(): int { return 1; }\n", "EXPORT_GENERIC_TARGET_UNSUPPORTED");
+    denied("export foo(int);\nfnc keep(): int { return 1; }\n", "EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED");
+    denied("export {class X, actor Y};\nfnc keep(): int { return 1; }\n", "EXPORT_KIND_PREFIX_IN_GROUP");
+    denied("export actor {actor X};\nfnc keep(): int { return 1; }\n", "EXPORT_KIND_PREFIX_IN_GROUP");
+    denied("export symbol #ready as Ready;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_BINDING_ALIAS_UNSUPPORTED");
+    denied("export symbol #ready as #ok;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_IDENTITY_MISMATCH");
+    denied("export symbol ready as #ready;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE");
+    denied("export[pkg][file] X;\nfnc keep(): int { return 1; }\n", "EXPORT_MULTIPLE_SCOPES");
+    denied("export[project] X;\nfnc keep(): int { return 1; }\n", "EXPORT_UNKNOWN_SCOPE");
+    denied("export string ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_UNKNOWN_DECLARATION_KIND");
+    denied("export const ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+    denied("export class Foo as \"foo\";\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+
+    denied(R"(
+export actor Box;
+define class Box as
+end
+)", "EXPORT_KIND_MISMATCH");
+
+    denied(R"(
+import module External from './dep';
+export External;
+fnc keep(): int { return 1; }
+)", "EXPORT_IMPORTED_NAME");
+
+    denied(R"(
+export fnc A as Public;
+export fnc B as Public;
+fnc A(): int { return 1; }
+fnc B(): int { return 2; }
+)", "EXPORT_ALIAS_COLLISION");
+
+    denied(R"(
+export[pkg] fnc api;
+pub fnc api(): int { return 1; }
+)", "EXPORT_SCOPE_CONFLICT");
+
+    denied(R"(
+define class Bad as
+  export fnc nope;
+end
+)", "EXPORT_LOCAL_SCOPE");
+
+    return 0;
+}
