@@ -200,8 +200,11 @@ The runtime contract is:
 - notification callback failures are retained for diagnostics without rolling
   back a committed channel operation.
 
-Channel close/EOF semantics, unbounded/dynamic channels, typed values beyond
-native i64, fairness/random policy, suspension, actor continuation delivery and
-source syntax remain outside this slice. The frontend must continue to reject
-source static select until those contracts are implemented.
+Channel close/EOF is now part of this slice: close wakes pending readers and
+writers, buffered values drain before EOF, an empty closed channel commits EOF,
+and a selected write against a closed channel commits a terminal closed outcome
+without publication. Unbounded/dynamic channels, typed values beyond native i64,
+fairness/random policy, suspension, actor continuation delivery and source
+syntax remain outside this slice. The frontend must continue to reject source
+static select until those contracts are implemented.
 
