@@ -1812,22 +1812,31 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (std::size_t i = fn.send_future_await_action_index;
                     i < fn.actor_actions.size(); ++i) {
                 const auto& action = fn.actor_actions[i];
-                if (action.kind != ActorAction::Kind::Send) continue;
-                const auto& send = fn.actor_sends.at(action.index);
-                if (send.reference != fn.send_future_actor)
-                    throw std::runtime_error(
-                        "send_async Future continuation references unexpected ActorRef");
-                llvm::Value* payload = lower(
-                    *send.payload,
-                    resumed,
-                    i64,
-                    no_storage,
-                    no_fields,
-                    declarations,
-                    nullptr);
-                resumed.CreateCall(
-                    send.await_admission ? sourceSendAsyncAwait : sourceSend,
-                    {resumed_actor, payload});
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    if (send.reference != fn.send_future_actor)
+                        throw std::runtime_error(
+                            "send_async Future continuation references unexpected ActorRef");
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        resumed,
+                        i64,
+                        no_storage,
+                        no_fields,
+                        declarations,
+                        nullptr);
+                    resumed.CreateCall(
+                        send.await_admission ? sourceSendAsyncAwait : sourceSend,
+                        {resumed_actor, payload});
+                } else {
+                    const auto& stopped = fn.actor_stops.at(action.index);
+                    if (stopped != fn.send_future_actor)
+                        throw std::runtime_error(
+                            "send_async Future continuation stops unexpected ActorRef");
+                    /* STOP admission is nonblocking and stays in lexical actor
+                     * effect order. Physical join remains outer-host-only. */
+                    resumed.CreateCall(sourceRequestStop, {resumed_actor});
+                }
             }
             llvm::Value* continuation_result = lower(
                 *fn.result,
@@ -1837,18 +1846,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 no_fields,
                 declarations,
                 nullptr);
-            for (std::size_t i = fn.send_future_await_action_index;
-                    i < fn.actor_actions.size(); ++i) {
-                const auto& action = fn.actor_actions[i];
-                if (action.kind != ActorAction::Kind::Stop) continue;
-                const auto& stopped = fn.actor_stops.at(action.index);
-                if (stopped != fn.send_future_actor)
-                    throw std::runtime_error(
-                        "send_async Future continuation stops unexpected ActorRef");
-                /* STOP admission is nonblocking and belongs to the resumed
-                 * state machine. Physical join stays in outer-host finalization. */
-                resumed.CreateCall(sourceRequestStop, {resumed_actor});
-            }
             resumed.CreateRet(continuation_result);
 
             llvm::Value* continuation_ptr =
@@ -1917,20 +1914,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (std::size_t i = direct_send_await_action_index + 1;
                     i < fn.actor_actions.size(); ++i) {
                 const auto& action = fn.actor_actions[i];
-                if (action.kind != ActorAction::Kind::Send) continue;
-                const auto& send = fn.actor_sends.at(action.index);
-                if (send.reference != awaited_send.reference)
-                    throw std::runtime_error(
-                        "direct send_async continuation references unexpected ActorRef");
-                llvm::Value* payload = lower(
-                    *send.payload,
-                    resumed,
-                    i64,
-                    no_storage,
-                    no_fields,
-                    declarations,
-                    nullptr);
-                resumed.CreateCall(sourceSend, {resumed_actor, payload});
+                if (action.kind == ActorAction::Kind::Send) {
+                    const auto& send = fn.actor_sends.at(action.index);
+                    if (send.reference != awaited_send.reference)
+                        throw std::runtime_error(
+                            "direct send_async continuation references unexpected ActorRef");
+                    llvm::Value* payload = lower(
+                        *send.payload,
+                        resumed,
+                        i64,
+                        no_storage,
+                        no_fields,
+                        declarations,
+                        nullptr);
+                    resumed.CreateCall(sourceSend, {resumed_actor, payload});
+                } else {
+                    const auto& stopped = fn.actor_stops.at(action.index);
+                    if (stopped != awaited_send.reference)
+                        throw std::runtime_error(
+                            "direct send_async continuation stops unexpected ActorRef");
+                    resumed.CreateCall(sourceRequestStop, {resumed_actor});
+                }
             }
             llvm::Value* continuation_result = lower(
                 *fn.result,
@@ -1940,16 +1944,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 no_fields,
                 declarations,
                 nullptr);
-            for (std::size_t i = direct_send_await_action_index + 1;
-                    i < fn.actor_actions.size(); ++i) {
-                const auto& action = fn.actor_actions[i];
-                if (action.kind != ActorAction::Kind::Stop) continue;
-                const auto& stopped = fn.actor_stops.at(action.index);
-                if (stopped != awaited_send.reference)
-                    throw std::runtime_error(
-                        "direct send_async continuation stops unexpected ActorRef");
-                resumed.CreateCall(sourceRequestStop, {resumed_actor});
-            }
             resumed.CreateRet(continuation_result);
 
             llvm::Value* continuation_ptr =
