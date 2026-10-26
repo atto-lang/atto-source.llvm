@@ -74,9 +74,16 @@ static inline int ores_native_select_arbiter_rearm(
     if (!arbiter || !generation || generation == UINT64_MAX
             || !arm_count || arm_count > ORES_NATIVE_SELECT_MAX_ARMS
             || atomic_load_explicit(
-                &arbiter->active_tokens, memory_order_acquire) != 0
-            || atomic_load_explicit(
-                &arbiter->generation, memory_order_acquire) == generation)
+                &arbiter->active_tokens, memory_order_acquire) != 0)
+        return 0;
+    const uint64_t prior_generation = atomic_load_explicit(
+        &arbiter->generation, memory_order_acquire);
+    /*
+     * Selection generations are capabilities, not caller labels. Never allow
+     * an older value to be reused after it may have escaped in a stale token.
+     * Exhaustion is therefore fail-closed rather than wrap/recycle.
+     */
+    if (!prior_generation || generation <= prior_generation)
         return 0;
 
     /*
@@ -128,10 +135,20 @@ static inline int ores_native_select_register(
         uint64_t arm,
         OresNativeSelectToken* out) {
     if (out) *out = (OresNativeSelectToken){0};
-    if (!arbiter || !out
-            || atomic_load_explicit(
-                &arbiter->winner, memory_order_acquire) != 0
-            || arm >= arbiter->arm_count)
+    if (!arbiter || !out || arm >= arbiter->arm_count)
+        return 0;
+
+    /*
+     * Snapshot the open generation before claiming the arm. Once the arm is
+     * REGISTERING it is counted in active_tokens immediately, so seal->rearm
+     * cannot reset generation/arm state underneath an in-flight registration.
+     */
+    if (atomic_load_explicit(
+            &arbiter->winner, memory_order_acquire) != 0)
+        return 0;
+    const uint64_t selection_generation = atomic_load_explicit(
+        &arbiter->generation, memory_order_acquire);
+    if (!selection_generation || selection_generation == UINT64_MAX)
         return 0;
 
     unsigned expected = ORES_NATIVE_SELECT_ARM_EMPTY;
@@ -143,16 +160,38 @@ static inline int ores_native_select_register(
             memory_order_acquire))
         return 0;
 
-    const uint64_t selection_generation = atomic_load_explicit(
-        &arbiter->generation, memory_order_acquire);
-    uint_fast64_t arm_generation = atomic_load_explicit(
-        &arbiter->arms[arm].generation, memory_order_relaxed);
-    if (!selection_generation || selection_generation == UINT64_MAX
-            || arm_generation == UINT64_MAX) {
+    atomic_fetch_add_explicit(
+        &arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+
+    /*
+     * Seal or a completed rearm may have raced the initial OPEN observation.
+     * active_tokens now prevents any *new* rearm from completing until this
+     * registration retires, while the generation equality rejects one which
+     * linearized before our token fence became visible.
+     */
+    if (atomic_load_explicit(
+            &arbiter->winner, memory_order_acquire) != 0
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire)
+                != selection_generation) {
         atomic_store_explicit(
             &arbiter->arms[arm].state,
-            ORES_NATIVE_SELECT_ARM_EMPTY,
+            ORES_NATIVE_SELECT_ARM_DETACHED,
             memory_order_release);
+        atomic_fetch_sub_explicit(
+            &arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+        return 0;
+    }
+
+    uint_fast64_t arm_generation = atomic_load_explicit(
+        &arbiter->arms[arm].generation, memory_order_relaxed);
+    if (arm_generation == UINT64_MAX) {
+        atomic_store_explicit(
+            &arbiter->arms[arm].state,
+            ORES_NATIVE_SELECT_ARM_DETACHED,
+            memory_order_release);
+        atomic_fetch_sub_explicit(
+            &arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
         return 0;
     }
     ++arm_generation;
@@ -160,8 +199,6 @@ static inline int ores_native_select_register(
         &arbiter->arms[arm].generation,
         arm_generation,
         memory_order_release);
-    atomic_fetch_add_explicit(
-        &arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
     atomic_store_explicit(
         &arbiter->arms[arm].state,
         ORES_NATIVE_SELECT_ARM_REGISTERED,
@@ -176,7 +213,10 @@ static inline int ores_native_select_register(
 
     /* Seal/winner may have raced the final registration publication. */
     if (atomic_load_explicit(
-            &arbiter->winner, memory_order_acquire) != 0) {
+            &arbiter->winner, memory_order_acquire) != 0
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire)
+                != selection_generation) {
         unsigned registered = ORES_NATIVE_SELECT_ARM_REGISTERED;
         if (atomic_compare_exchange_strong_explicit(
                 &arbiter->arms[arm].state,
