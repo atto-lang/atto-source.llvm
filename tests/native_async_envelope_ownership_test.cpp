@@ -86,6 +86,42 @@ static bool sync_offer_owned(
     return false;
 }
 
+
+static void malformed_scheduler_binding_rejects_before_group_publication() {
+    NativeActorGroup group(7010, 1);
+    WakeFixture f;
+    setup_scheduler(f);
+    f.target = ores_native_actor_scheduler_spawn(f.scheduler, 1);
+    CHECK(f.target.scheduler_domain);
+    CHECK(f.target.generation);
+
+    bool threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation, [] {},
+            nullptr, f.target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
+    OresNativeActorRef incomplete = f.target;
+    incomplete.scheduler_domain = 0;
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation, [] {},
+            f.scheduler, incomplete);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
+    finish_scheduler(f);
+}
+
 static void unarmed_transaction_destruction_refunds_preparation_descriptor() {
     NativeActorGroup group(7000, 1);
     WakeFixture f;
@@ -572,6 +608,7 @@ static void unbound_and_mismatched_scheduler_incarnations_reject_before_loans() 
 }
 
 int main() {
+    malformed_scheduler_binding_rejects_before_group_publication();
     unbound_and_mismatched_scheduler_incarnations_reject_before_loans();
     sealed_preparation_rejection_releases_reserved_wake();
     unarmed_transaction_destruction_refunds_preparation_descriptor();
