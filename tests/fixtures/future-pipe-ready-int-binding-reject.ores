@@ -1,0 +1,5 @@
+async fnc source(): int { return 21; }
+pub fnc main(): int {
+    val int result = source();
+    return result;
+}
