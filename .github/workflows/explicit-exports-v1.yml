@@ -11,6 +11,7 @@ on:
       - "src/main/cpp/oreslang/frontend/ModuleLoader.cpp"
       - "src/main/cpp/oreslang/main.cpp"
       - "tests/explicit_exports_v1_source_admission_test.cpp"
+      - "tests/explicit_exports_v1_module_loader_test.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/explicit-exports-v1.yml"
   workflow_dispatch:
@@ -33,7 +34,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
       - name: Configure focused native test
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-      - name: Compile production parser export gate
-        run: cmake --build build --target oreslang-native-explicit-exports-v1-test --parallel 2
-      - name: Run production parser export gate
-        run: ctest --test-dir build -R '^native_explicit_exports_v1_source_admission$' --output-on-failure --timeout 60
+      - name: Compile production export gates
+        run: cmake --build build --target oreslang-native-explicit-exports-v1-test oreslang-native-explicit-exports-v1-loader-test --parallel 2
+      - name: Run production export gates
+        run: ctest --test-dir build -R '^native_explicit_exports_v1_(source_admission|module_loader)
+ --output-on-failure --timeout 60
