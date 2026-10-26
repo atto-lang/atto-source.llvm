@@ -575,31 +575,38 @@ group_done:;
         return decl;
     }
 
+    void module_import(Program& program) {
+        require("import");
+        if (token_.text == "contract")
+            fail("native contract imports require a validated cross-unit linker");
+        ModuleImport imported;
+        imported.offset = token_.offset;
+        imported.selected_class = accept("class");
+        if (!imported.selected_class) require("module");
+        imported.selected_module = identifier();
+        imported.local_name = accept("as") ? identifier() : imported.selected_module;
+        if (!module_names_.insert(imported.local_name).second)
+            fail("duplicate imported module binding '" + imported.local_name + "'");
+        require("from");
+        if (token_.kind != Kind::String)
+            fail("native module import requires a quoted source path");
+        imported.path = std::string(token_.text);
+        if (imported.path.empty() || imported.path.size() > 4096)
+            fail("native import path must contain 1..4096 bytes");
+        for (unsigned char ch : imported.path)
+            if (ch < 32 || ch == 127 || ch == '\\')
+                fail("native import path escapes/control characters unsupported");
+        advance();
+        require(";");
+        program.imports.push_back(std::move(imported));
+    }
+
     Program parse() {
         Program program;
-        while (token_.text == "import") {
-            advance();
-            if (token_.text == "contract")
-                fail("native contract imports require a validated cross-unit linker");
-            ModuleImport imported;
-            imported.offset = token_.offset;
-            imported.selected_class = accept("class");
-            if (!imported.selected_class) require("module");
-            imported.selected_module = identifier();
-            imported.local_name = accept("as") ? identifier() : imported.selected_module;
-            if (!module_names_.insert(imported.local_name).second)
-                fail("duplicate imported module binding '" + imported.local_name + "'");
-            require("from");
-            if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
-            imported.path = std::string(token_.text);
-            if (imported.path.empty() || imported.path.size() > 4096)
-                fail("native import path must contain 1..4096 bytes");
-            for (unsigned char ch : imported.path)
-                if (ch < 32 || ch == 127 || ch == '\\')
-                    fail("native import path escapes/control characters unsupported");
-            advance();
-            require(";");
-            program.imports.push_back(std::move(imported));
+        // Export metadata is transparent to the lexical import prelude.
+        while (token_.text == "import" || token_.text == "export") {
+            if (token_.text == "import") module_import(program);
+            else program.export_declarations.push_back(source_export_declaration());
         }
         if (accept("namespace")) {
             program.namespace_name = identifier();
@@ -607,7 +614,7 @@ group_done:;
         }
         bool wrapped_module = false;
         if (token_.text == "import")
-            fail("native contract imports require a validated cross-unit linker");
+            fail("[EXPORT_IMPORT_PRELUDE] imports must precede real local declarations");
         while (token_.text == "define" || token_.text == "declare" ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
@@ -669,8 +676,13 @@ group_done:;
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "export") {
+                program.export_declarations.push_back(
+                        source_export_declaration(wrapped_module ? program.module : std::string{}));
+                continue;
+            }
             if (token_.text == "import")
-                fail("native contract imports require a validated cross-unit linker");
+                fail("[EXPORT_IMPORT_PRELUDE] imports must precede real local declarations");
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
