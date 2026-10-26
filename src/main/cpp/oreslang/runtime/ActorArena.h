@@ -62,7 +62,10 @@ void ores_actor_arena_compact_store_i64(
  * published object start in the SAME actor arena. These calls do not mint
  * provenance: only verified compiler MIR may pass compact references.
  * Loading a dangling/stale edge aborts rather than returning a pointer.
- * Ref fields must be aligned to 4 bytes and within the source allocation. */
+ * Ref fields must be aligned to 4 bytes and within the source allocation.
+ * Stored ref words are canonical LITTLE-ENDIAN bytes on ALL hosts, matching
+ * Java/Graal's actor-native byte order; this does not change the scalar
+ * C-call ABI or give host pointer/FFI authority to a compact word. */
 uint32_t ores_actor_arena_compact_load_ref_i32(
     OresActorArena*, uint64_t domain, uint64_t epoch,
     uint32_t source_bits, uint64_t field_offset);
