@@ -169,6 +169,9 @@ typedef struct {
     size_t next_slot;
     size_t live;
     size_t peak;
+    /* Deterministic FAIR cursor for the first static two-arm source-select
+     * slice. It advances once per selection while the source runtime is live. */
+    size_t select_fair_cursor;
 } SourceActorGroup;
 
 /* Process-local trusted-main group; the compiler only supports linear refs
@@ -729,7 +732,10 @@ static void root_select_suspend_turn(void) {
         frame->wake_reserved = setup_ok;
     }
 
-    for (size_t i = 0; setup_ok && i < 2; ++i) {
+    const size_t fair_start = group.select_fair_cursor % 2;
+    group.select_fair_cursor = (group.select_fair_cursor + 1) % 2;
+    for (size_t step = 0; setup_ok && step < 2; ++step) {
+        const size_t i = (fair_start + step) % 2;
         const OresNativeSendStatus status =
             ores_native_vm_submit_selectable_async_with_wake(
                 group.vm,
@@ -2714,6 +2720,7 @@ void oreslang_source_actor_join_done(void* opaque) {
 #endif
         group.next_slot = 0;
         group.peak = 0;
+        group.select_fair_cursor = 0;
     }
     group_unlock();
 }
