@@ -1,0 +1,9 @@
+// Procedural delimiter parity must not bypass the native select gate.
+pub fnc main(): int {
+  do select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}

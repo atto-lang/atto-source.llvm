@@ -1,0 +1,9 @@
+// Existing do-nb spelling inherits the same fail-closed delimiter boundary.
+pub fnc main(): int {
+  do nb select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}

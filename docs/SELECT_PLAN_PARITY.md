@@ -79,7 +79,8 @@ rather than emitting IR with unsound ownership assumptions.
 ## Native implementation acceptance requirements
 
 1. Typed channel cases (read/write/default), copy/ownership rules, and
-   source AST/HIR support for both `select { ... }` and `select from plan`.
+   source AST/HIR support for both static outer delimiters (`select { ... }`
+   and `select over ... end`) plus `select from plan`.
 2. Native actor-owned select registration with atomic exactly-one-winner,
    cancellation, close, wake-up, and stale-generation protection.
 3. Immutable-plan and mutable-plan snapshot storage with versioned keyed
@@ -91,9 +92,11 @@ rather than emitting IR with unsound ownership assumptions.
    ordinary static and dynamic selects, for constant and mutating case sets.
 
 The current bootstrap parser supports only integer-returning functions.
-The negative `unsupported-static-select` and
-`unsupported-dynamic-select-plan` fixtures require **nonzero exit with
-no LLVM IR emitted**, preventing premature claims of parity. Do not loosen
+The negative `unsupported-static-select`, `unsupported-static-select-over`,
+`unsupported-do-select-over`, `unsupported-nb-select-over`,
+`unsupported-do-nb-select-over`, and `unsupported-dynamic-select-plan`
+fixtures require **nonzero exit with no LLVM IR emitted**, preventing
+premature claims of parity. Do not loosen
 these tests until the relevant native feature and its conformance suite are
 implemented.
 

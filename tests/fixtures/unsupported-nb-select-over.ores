@@ -1,0 +1,9 @@
+// Nonblocking delimiter parity must not emit native IR before continuation lowering.
+pub fnc main(): int {
+  nb select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}

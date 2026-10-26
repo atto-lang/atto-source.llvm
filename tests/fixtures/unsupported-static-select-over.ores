@@ -1,0 +1,9 @@
+// Must fail closed until native static select lowering exists.
+pub fnc main(): int {
+  select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}
