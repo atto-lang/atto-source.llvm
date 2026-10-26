@@ -2401,7 +2401,9 @@ private:
                 const std::size_t await_offset = token_.offset;
                 advance();
                 if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
-                        || value.send_future_await_offset != 0)
+                        || value.send_future_await_offset != 0
+                        || std::any_of(value.actor_sends.begin(), value.actor_sends.end(),
+                            [](const ActorSend& prior) { return prior.await_admission; }))
                     fail("native source supports only one async await boundary");
                 const std::string awaited = identifier();
                 if (!value.send_future_name.empty()) {
