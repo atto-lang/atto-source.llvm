@@ -1005,7 +1005,7 @@ def exact_source_tree(source_pr, source_commit):
 def verify_published_root_and_commit(
         repository, base_sha, source_tree, receipt_blob_sha,
         root_tree_sha, commit_sha):
-    """Read back the exact carrier object graph before exposing any ref."""
+    """Read back the complete carrier object graph before exposing any ref."""
     commit = gh_api(f"repos/{repository}/git/commits/{commit_sha}")
     parents = commit.get("parents")
     if (commit.get("sha") != commit_sha
@@ -1016,34 +1016,78 @@ def verify_published_root_and_commit(
             or parents[0].get("sha") != base_sha):
         raise Denied("published carrier commit differs from requested object graph")
 
-    listing = gh_api(
-        f"repos/{repository}/git/trees/{root_tree_sha}?recursive=1"
+    base_commit = gh_api(f"repos/{repository}/git/commits/{base_sha}")
+    if base_commit.get("sha") != base_sha:
+        raise Denied("reviewed carrier base commit identity mismatch")
+    base_tree_sha = valid_sha(
+        base_commit.get("tree", {}).get("sha"),
+        "reviewed carrier base tree SHA invalid",
     )
-    if (listing.get("sha") != root_tree_sha
-            or listing.get("truncated") is not False
-            or not isinstance(listing.get("tree"), list)):
-        raise Denied("published carrier root tree listing is incomplete")
 
-    expected = {
+    receipt_parts = PurePosixPath(RECEIPT_PATH).parts
+    receipt_ancestors = {
+        "/".join(receipt_parts[:index])
+        for index in range(1, len(receipt_parts))
+    }
+
+    def snapshot(tree_sha, label, allow_overlay):
+        listing = gh_api(
+            f"repos/{repository}/git/trees/{tree_sha}?recursive=1"
+        )
+        if (listing.get("sha") != tree_sha
+                or listing.get("truncated") is not False
+                or not isinstance(listing.get("tree"), list)):
+            raise Denied(label + " tree listing is incomplete")
+
+        stable = {}
+        overlay = {}
+        seen = set()
+        for entry in listing["tree"]:
+            if not isinstance(entry, dict):
+                raise Denied(label + " tree entry is malformed")
+            path = entry.get("path")
+            if not isinstance(path, str) or not path or path in seen:
+                raise Denied(label + " tree path is invalid or duplicated")
+            seen.add(path)
+            mode = entry.get("mode")
+            kind = entry.get("type")
+            sha = valid_sha(entry.get("sha"), label + " tree SHA invalid")
+            value = (mode, kind, sha)
+
+            if path == PREFIX or path.startswith(PREFIX + "/"):
+                if not allow_overlay:
+                    raise Denied("reviewed carrier base contains private source path")
+                if path == PREFIX:
+                    overlay[path] = value
+                continue
+            if path == RECEIPT_PATH:
+                if not allow_overlay:
+                    raise Denied("reviewed carrier base contains receipt path")
+                overlay[path] = value
+                continue
+            if path in receipt_ancestors and kind == "tree":
+                # Adding the receipt legitimately changes ancestor tree SHAs.
+                continue
+            stable[path] = value
+        return stable, overlay
+
+    base_stable, base_overlay = snapshot(
+        base_tree_sha, "reviewed carrier base", False
+    )
+    if base_overlay:
+        raise Denied("reviewed carrier base unexpectedly contains overlay paths")
+    root_stable, root_overlay = snapshot(
+        root_tree_sha, "published carrier root", True
+    )
+
+    expected_overlay = {
         PREFIX: ("040000", "tree", source_tree),
         RECEIPT_PATH: ("100644", "blob", receipt_blob_sha),
     }
-    found = {}
-    for entry in listing["tree"]:
-        if not isinstance(entry, dict):
-            raise Denied("published carrier tree entry is malformed")
-        path = entry.get("path")
-        if path not in expected:
-            continue
-        if path in found:
-            raise Denied("published carrier tree contains duplicate protected path")
-        found[path] = (
-            entry.get("mode"),
-            entry.get("type"),
-            valid_sha(entry.get("sha"), "published carrier tree SHA invalid"),
-        )
-    if found != expected:
+    if root_overlay != expected_overlay:
         raise Denied("published carrier tree differs from exact source/receipt binding")
+    if root_stable != base_stable:
+        raise Denied("published carrier tree changed outside source/receipt overlay")
 
 
 def require_handoff_refs_absent(
