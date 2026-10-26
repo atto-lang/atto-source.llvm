@@ -1837,12 +1837,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
          */
         llvm::Value* awaited_result = nullptr;
         std::vector<std::size_t> direct_send_await_action_indices;
-        for (std::size_t i = 0; i < fn.actor_actions.size(); ++i) {
-            const auto& action = fn.actor_actions[i];
-            if (action.kind != ActorAction::Kind::Send) continue;
-            const auto& send = fn.actor_sends.at(action.index);
-            if (!send.await_admission) continue;
-            direct_send_await_action_indices.push_back(i);
+        for (const auto& site : fn.await_sites) {
+            if (site.kind != NativeAwaitSite::Kind::DirectSendAdmission)
+                continue;
+            if (site.action_index >= fn.actor_actions.size())
+                throw std::runtime_error(
+                    "invalid native await catalog in LLVM lowering");
+            direct_send_await_action_indices.push_back(site.action_index);
         }
         if (direct_send_await_action_indices.size() > 2)
             throw std::runtime_error(
