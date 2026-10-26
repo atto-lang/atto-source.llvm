@@ -4026,9 +4026,24 @@ private:
                         || !references.count(fn.send_future_actor))
                     throw std::runtime_error(
                         "Future<void> send_async requires a live direct ActorRef receiver");
-                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                if (fn.actor_spawns.size() != 1)
                     throw std::runtime_error(
-                        "Future<void> send_async requires one source actor without suspended locals");
+                        "Future<void> send_async requires one source actor");
+                const auto copy_scalar = [](const LocalBinding& local) {
+                    return !local.heap_owned
+                        && !local.int_array
+                        && local.class_name.empty()
+                        && !local.new_class
+                        && !local.record_view
+                        && !local.move_class
+                        && local.sum_type.empty()
+                        && local.scalar_type != ScalarType::String;
+                };
+                if (fn.locals.size() > 16
+                        || !std::all_of(
+                            fn.locals.begin(), fn.locals.end(), copy_scalar))
+                    throw std::runtime_error(
+                        "Future<void> send_async await captures only up to 16 Copy int/bool locals");
                 validate_expression(*fn.send_future_payload, params, functions);
             }
             const bool direct_send_await = std::any_of(
