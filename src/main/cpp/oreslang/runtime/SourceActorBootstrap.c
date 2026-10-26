@@ -1193,6 +1193,7 @@ static void retire_consuming_send_future_terminal(
 
 static void abandon_consuming_send_future_unbound(
         SourceSendFuture* future, SourceActor* actor) {
+    ensure(!ores_native_actor_scheduler_is_carrier_thread());
     group_lock();
     ensure(source_send_future_valid_locked(future)
         && future->consuming && future->actor == actor
