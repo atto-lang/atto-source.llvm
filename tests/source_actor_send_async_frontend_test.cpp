@@ -70,6 +70,17 @@ int main() {
     CHECK(stored_main.actor_actions[0].kind == oreslang::ActorAction::Kind::Send);
     CHECK(stored_main.actor_actions[1].kind == oreslang::ActorAction::Kind::Stop);
 
+    auto direct_local = oreslang::parse_program(program(
+        "const int retained = 40; "
+        "await worker.send_async(1); stop worker; return retained + 3;"));
+    CHECK(direct_local.functions.size() == 1);
+    const auto& local_main = direct_local.functions.front();
+    CHECK(local_main.locals.size() == 1);
+    CHECK(local_main.locals.front().name == "retained");
+    CHECK(local_main.locals.front().scalar_type == oreslang::ScalarType::I64);
+    CHECK(local_main.actor_sends.size() == 1);
+    CHECK(local_main.actor_sends.front().await_admission);
+
     rejects(program("const Future<void> pending = worker.send_async(1); "
                     "stop worker; return 43;"),
             "Future<void> send_async token must be awaited exactly once");
@@ -95,10 +106,7 @@ int main() {
     rejects(program("await worker.send_async(1); await worker.get_done(); "
                     "return 43;"),
             "native source supports only one async await boundary");
-    rejects(program("const retained: int = 7; "
-                    "await worker.send_async(1); stop worker; return retained;"),
-            "direct send_async await requires one source actor without suspended locals");
-    rejects(program("const retained: int = 7; "
+    rejects(program("const int retained = 7; "
                     "const Future<void> pending = worker.send_async(1); "
                     "await pending; stop worker; return retained;"),
             "native Future<void> suspension cannot capture scalar/class locals");
@@ -117,5 +125,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=20 detached_no_stack_capture=1\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=3 negative=19 detached_scalar_capture=1\n";
 }
