@@ -1,0 +1,6 @@
+async fnc source(): int { return 21; }
+fnc observe(int value): int { return value; }
+pub fnc main(): int {
+    val int result = observe(source());
+    return result;
+}
