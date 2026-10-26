@@ -416,9 +416,7 @@ static void root_resume_turn(void) {
     if (future_status == ORES_NATIVE_FUTURE_READY) {
         ensure(!ores_native_store_handle_valid(current_source_execution));
         current_source_execution = resumed;
-        result = state_continuation
-            ? state_continuation(actor, detached_state, detached_state_count)
-            : continuation(actor);
+        result = continuation(actor);
         current_source_execution = (OresNativeExecutionHandle){0, 0};
         outcome = ORES_SOURCE_ACTOR_STARTUP_READY;
     }
@@ -666,7 +664,9 @@ static void source_send_wake(
     if (send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED) {
         ensure(!ores_native_store_handle_valid(current_source_execution));
         current_source_execution = resumed;
-        result = continuation(actor);
+        result = state_continuation
+            ? state_continuation(actor, detached_state, detached_state_count)
+            : continuation(actor);
         current_source_execution = (OresNativeExecutionHandle){0, 0};
     }
 
