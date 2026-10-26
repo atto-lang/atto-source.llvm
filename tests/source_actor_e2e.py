@@ -21,6 +21,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = value * 11 + n
         return value
+    if name == "source-actor-send-async-two-pc.ores":
+        return sum(range(1, processed + 1))
     if name == "source-actor-scoped-owned-i64.ores":
         value = 0
         for n in range(1, processed + 1):
@@ -99,7 +101,7 @@ def main():
         ("source-actor-send-async.ores", 1, 1, None),
         ("source-actor-send-async-local.ores", 1, 1, None),
         ("source-actor-send-async-bool-local.ores", 1, 1, None),
-        ("source-actor-send-async-two-pc.ores", 1, 2, None),
+        ("source-actor-send-async-two-pc.ores", 1, 3, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-send-async-future-local.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
@@ -302,6 +304,12 @@ def main():
                     guest.stdout, ".send_async_continuation.pc2")
                 assert "call i32 @oreslang_source_actor_rearm_detached_send_state_checked(" in pc1, (
                     name, "PC1 must rearm rather than synchronously wait", pc1)
+                ordinary_send_pos = pc1.find(
+                    "call void @oreslang_source_actor_send(")
+                rearm_pos = pc1.find(
+                    "call i32 @oreslang_source_actor_rearm_detached_send_state_checked(")
+                assert 0 <= ordinary_send_pos < rearm_pos, (
+                    name, "PC1 ordinary actor effect must precede PC2 rearm", pc1)
                 assert "call void @oreslang_source_actor_request_stop(" not in pc1, (
                     name, "final STOP belongs to PC2", pc1)
                 assert "retained.detached.slot" in pc1, (
