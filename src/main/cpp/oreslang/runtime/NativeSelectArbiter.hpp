@@ -99,8 +99,10 @@ private:
         return true;
     }
 
+    template <class Commit>
     static bool try_win_state(const std::shared_ptr<State>& state,
-                              std::size_t index) {
+                              std::size_t index,
+                              Commit&& commit) {
         if (index >= Capacity) return false;
 
         std::array<std::function<void()>, Capacity> callbacks{};
@@ -109,6 +111,15 @@ private:
             std::lock_guard<std::mutex> guard(state->mutex);
             if (state->terminal != Terminal::Pending ||
                 state->slots[index].state != SlotState::Pending)
+                return false;
+
+            // The commit hook is the operation's atomic readiness/consume or
+            // readiness/publish step. It runs while the arbiter is still
+            // pending, before this case becomes the winner. It MUST be bounded
+            // and must not re-enter this select arbiter. Channel adapters use
+            // the lock order arbiter -> one channel; readiness notifications
+            // must never call into the arbiter while holding the channel lock.
+            if (!static_cast<bool>(std::forward<Commit>(commit)()))
                 return false;
 
             state->terminal = Terminal::Won;
@@ -180,8 +191,14 @@ public:
         }
 
         bool try_win() const {
+            return try_win_if([]() noexcept { return true; });
+        }
+
+        template <class Commit>
+        bool try_win_if(Commit&& commit) const {
             auto state = state_;
-            return state && NativeSelectArbiter::try_win_state(state, index_);
+            return state && NativeSelectArbiter::try_win_state(
+                state, index_, std::forward<Commit>(commit));
         }
 
         bool is_winner() const {
