@@ -4,6 +4,14 @@
 #include <pthread.h>
 #include <errno.h>
 #include <stdlib.h>
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+#include <stdatomic.h>
+static _Atomic uint64_t test_async_send_host_wait_calls;
+uint64_t ores_native_vm_test_async_send_host_wait_calls(void) {
+    return atomic_load_explicit(
+        &test_async_send_host_wait_calls, memory_order_acquire);
+}
+#endif
 
 typedef struct {
     OresNativeActorRef child;
@@ -399,6 +407,10 @@ int ores_native_vm_bind_async_send_wake(
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    atomic_fetch_add_explicit(
+        &test_async_send_host_wait_calls, 1, memory_order_acq_rel);
+#endif
     return vm && valid_domain(domain)
         && ores_native_actor_scheduler_await_async_send(
             vm->schedulers[domain], ticket, outcome_out);
