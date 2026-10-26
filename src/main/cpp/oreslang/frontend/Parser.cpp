@@ -2400,13 +2400,19 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
+                const std::size_t prior_direct_send_awaits =
+                    static_cast<std::size_t>(std::count_if(
+                        value.actor_sends.begin(), value.actor_sends.end(),
+                        [](const ActorSend& prior) {
+                            return prior.await_admission;
+                        }));
                 if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
-                        || value.send_future_await_offset != 0
-                        || std::any_of(value.actor_sends.begin(), value.actor_sends.end(),
-                            [](const ActorSend& prior) { return prior.await_admission; }))
-                    fail("native source supports only one async await boundary");
+                        || value.send_future_await_offset != 0)
+                    fail("native source supports only one lifecycle/stored async await boundary");
                 const std::string awaited = identifier();
                 if (!value.send_future_name.empty()) {
+                    if (prior_direct_send_awaits != 0)
+                        fail("native source mixed direct/stored async await PCs unsupported");
                     if (awaited != value.send_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared send_async token");
                     value.send_future_await_offset = await_offset;
@@ -2416,6 +2422,8 @@ private:
                     continue;
                 }
                 if (!value.ready_future_name.empty()) {
+                    if (prior_direct_send_awaits != 0)
+                        fail("native source mixed direct/lifecycle await PCs unsupported");
                     if (awaited != value.ready_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared readiness token");
                     if (!value.actor_actions.empty() || !value.statements.empty())
@@ -2430,6 +2438,8 @@ private:
                 // equivalent to `await actor.get_ready();`, never get_done().
                 // get_done remains an explicit physical-quiescence await.
                 if (accept(";")) {
+                    if (prior_direct_send_awaits != 0)
+                        fail("native source mixed direct/lifecycle await PCs unsupported");
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
                     value.ready_await_actor = awaited;
@@ -2445,9 +2455,8 @@ private:
                 if (lifecycle == "send_async") {
                     if (value.name != "main" || !value.parameters.empty())
                         fail("native send_async direct await requires trusted zero-argument main");
-                    if (std::any_of(value.actor_sends.begin(), value.actor_sends.end(),
-                            [](const ActorSend& prior) { return prior.await_admission; }))
-                        fail("native source supports only one async await boundary");
+                    if (prior_direct_send_awaits >= 2)
+                        fail("native source supports at most two direct send_async await PCs");
                     ActorSend send;
                     send.offset = await_offset;
                     send.reference = awaited;
@@ -2462,6 +2471,8 @@ private:
                 }
                 require(")");
                 require(";");
+                if (prior_direct_send_awaits != 0)
+                    fail("native source mixed direct/lifecycle await PCs unsupported");
                 if (lifecycle == "get_ready") {
                     if (!value.actor_actions.empty() || !value.statements.empty())
                         fail("await get_ready must precede post-await actor effects");
