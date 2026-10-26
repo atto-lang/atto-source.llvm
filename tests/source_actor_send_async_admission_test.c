@@ -1,4 +1,5 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
+#include "oreslang/runtime/NativeOresVM.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -462,16 +463,20 @@ static void stored_future_await_resumes_fresh_root_continuation(void) {
     atomic_store_explicit(
         &logical_send_resume_seen, 0, memory_order_release);
 
+    const uint64_t host_waits_before =
+        ores_native_vm_test_async_send_host_wait_calls();
     const int64_t result = oreslang_source_actor_await_send_future(
         future, stored_send_resume_probe, UINT64_C(0x5eed));
     CHECK(result == 1234);
+    CHECK(ores_native_vm_test_async_send_host_wait_calls()
+        == host_waits_before);
     CHECK(atomic_load_explicit(
         &logical_send_resume_seen, memory_order_acquire) == 1);
     CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
 
     oreslang_source_actor_stop(actor);
     fprintf(stderr,
-        "SOURCE_SEND_ASYNC_LOGICAL_RESUME_PASS fresh_root_turn=1 trace_handle=1\n");
+        "SOURCE_SEND_ASYNC_LOGICAL_RESUME_PASS fresh_root_turn=1 trace_handle=1 host_settlement_observer=0\n");
 }
 
 static atomic_int failed_send_continuation_seen;
