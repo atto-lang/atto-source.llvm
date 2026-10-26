@@ -1832,7 +1832,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (std::size_t i = 0; i < fn.send_future_await_action_index; ++i)
                 emit_pre_await_action(fn.actor_actions[i]);
 
-            if (fn.locals.size() > 16)
+            if (fn.locals.size() > kNativeDetachedScalarWords)
                 throw std::runtime_error(
                     "send_async Future detached scalar frame exceeds 16 words");
             for (const auto& local : fn.locals) {
@@ -2001,7 +2001,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 awaited_payload,
                 "direct.send_async");
 
-            if (fn.locals.size() > 16)
+            if (fn.locals.size() > kNativeDetachedScalarWords)
                 throw std::runtime_error(
                     "direct send_async detached scalar frame exceeds 16 words");
             for (const auto& local : fn.locals) {
