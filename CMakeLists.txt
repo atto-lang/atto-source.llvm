@@ -3556,6 +3556,30 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 20)
 endif()
 
+# Production native parser + source-export binding admission. This checks
+# source API metadata only; it deliberately does not prove or enable LLVM
+# dynamic-symbol/native-linkage exposure.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-explicit-exports-v1-test
+        tests/explicit_exports_v1_source_admission_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-explicit-exports-v1-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-explicit-exports-v1-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-explicit-exports-v1-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-explicit-exports-v1-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-explicit-exports-v1-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_explicit_exports_v1_source_admission
+        COMMAND oreslang-native-explicit-exports-v1-test)
+    set_tests_properties(native_explicit_exports_v1_source_admission
+        PROPERTIES TIMEOUT 25)
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)
