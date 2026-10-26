@@ -704,7 +704,7 @@ static void* release_async_descriptor(void* raw) {
     return NULL;
 }
 
-static void release_during_executing_wake_is_deferred(void) {
+static void release_waits_for_executing_wake_exit(void) {
     BoundWakeState state = {0};
     atomic_store_explicit(&state.hold_wake, 1, memory_order_release);
     OresNativeActorScheduler* scheduler =
@@ -816,8 +816,8 @@ int main(void) {
     pending_resource_exhaustion_publishes_exact_failed_wake();
     duplicate_send_wake_bind_fails_closed();
     bounded_wake_escrow_rejects_ninth_bind();
-    release_during_executing_wake_is_deferred();
+    release_waits_for_executing_wake_exit();
     wake_activation_is_bootstrap_only();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 exact_resource_wake=1 release_fence=1 deferred_release=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 exact_resource_wake=1 release_fence=1 release_waits_for_wake_exit=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
     return 0;
 }
