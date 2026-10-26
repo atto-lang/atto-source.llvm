@@ -66,6 +66,59 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+    def test_incident_gate_requires_exact_completed_identity(self):
+        def issue(number, issue_id, state="closed", reason="completed", url=None):
+            return {
+                "id": issue_id,
+                "number": number,
+                "html_url": url or (
+                    "https://github.com/ores-truffle-oreslang/"
+                    f"oreslang-platform-conformance/issues/{number}"
+                ),
+                "state": state,
+                "state_reason": reason,
+            }
+
+        good = {
+            22: issue(22, 5832921751),
+            77: issue(77, 5904679716),
+            127: issue(127, 5935338521),
+        }
+
+        def api_for(values):
+            def api(route, method="GET", payload=None):
+                prefix = f"repos/{v3.INCIDENT_REPO}/issues/"
+                if method == "GET" and route.startswith(prefix):
+                    return values[int(route[len(prefix):])]
+                raise AssertionError((method, route))
+            return api
+
+        with patch.object(v3, "gh_api", side_effect=api_for(good)):
+            self.assertTrue(v3.require_incident_closure())
+
+        cases = []
+        opened = dict(good)
+        opened[22] = issue(22, 5832921751, state="open", reason=None)
+        cases.append(opened)
+        wrong_reason = dict(good)
+        wrong_reason[77] = issue(77, 5904679716, reason="not_planned")
+        cases.append(wrong_reason)
+        wrong_id = dict(good)
+        wrong_id[127] = issue(127, 1)
+        cases.append(wrong_id)
+        wrong_url = dict(good)
+        wrong_url[22] = issue(22, 5832921751, url="https://github.com/other/repo/issues/22")
+        cases.append(wrong_url)
+        pr_object = dict(good)
+        pr_object[77] = {**issue(77, 5904679716), "pull_request": {}}
+        cases.append(pr_object)
+
+        for values in cases:
+            with self.subTest(values=values):
+                with patch.object(v3, "gh_api", side_effect=api_for(values)):
+                    with self.assertRaisesRegex(v3.Denied, "not independently completed"):
+                        v3.require_incident_closure()
+
     def test_allowlist_is_exact_and_fail_closed(self):
         v3.parse_allowlist(b"# x\ntrusted/ci\n", "trusted/ci")
         for raw in (
@@ -123,12 +176,92 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(meta["sha256"], hashlib.sha256(PLAN).hexdigest())
         self.assertFalse(meta["uses_maven"])
         self.assertEqual(meta["required_source_blobs"], {})
+        self.assertIsNone(meta["required_source_head_sha"])
+        self.assertIsNone(meta["required_source_root_tree_sha"])
 
         malformed = json.loads(PLAN)
         malformed["commands"][0]["argv"] = ["bash", "-lc", "cat /etc/passwd"]
         raw = (json.dumps(malformed) + "\n").encode()
         with self.assertRaisesRegex(v3.Denied, "command invalid"):
             v3.validate_test_plan(raw, 669)
+
+    def test_reviewed_plan_snapshot_pins_are_paired_and_exact(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "9" * 40
+        doc["required_source_root_tree_sha"] = SOURCE_TREE
+        raw = (json.dumps(doc) + "\n").encode()
+        meta = v3.validate_test_plan(raw, 669)
+        self.assertEqual(meta["required_source_head_sha"], "9" * 40)
+        self.assertEqual(meta["required_source_root_tree_sha"], SOURCE_TREE)
+        v3.verify_required_source_snapshot(meta, "9" * 40)
+        v3.verify_required_source_snapshot(meta, "9" * 40, SOURCE_TREE)
+
+        with self.assertRaisesRegex(v3.Denied, "source head differs"):
+            v3.verify_required_source_snapshot(meta, "8" * 40)
+        with self.assertRaisesRegex(v3.Denied, "source root tree differs"):
+            v3.verify_required_source_snapshot(meta, "9" * 40, "8" * 40)
+
+        for missing in ("required_source_head_sha", "required_source_root_tree_sha"):
+            bad = json.loads(json.dumps(doc))
+            del bad[missing]
+            with self.subTest(missing=missing), self.assertRaisesRegex(
+                    v3.Denied, "snapshot pins must be paired"):
+                v3.validate_test_plan((json.dumps(bad) + "\n").encode(), 669)
+
+        for field in ("required_source_head_sha", "required_source_root_tree_sha"):
+            bad = json.loads(json.dumps(doc))
+            bad[field] = "not-a-git-sha"
+            with self.subTest(field=field), self.assertRaises(v3.Denied):
+                v3.validate_test_plan((json.dumps(bad) + "\n").encode(), 669)
+
+    def test_publish_rejects_reviewed_head_drift_before_source_tree_read(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "8" * 40
+        doc["required_source_root_tree_sha"] = SOURCE_TREE
+        raw = (json.dumps(doc) + "\n").encode()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(v3, "exact_source_tree") as source_tree,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "source head differs"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            source_tree.assert_not_called()
+
+    def test_publish_rejects_reviewed_root_tree_drift_before_writes(self):
+        doc = json.loads(PLAN)
+        doc["required_source_head_sha"] = "9" * 40
+        doc["required_source_root_tree_sha"] = "8" * 40
+        raw = (json.dumps(doc) + "\n").encode()
+        rows = [["src/synthetic.cpp", "100644", BLOB, len(DATA)]]
+        manifest = hashlib.sha256(v3.canonical_bytes(rows)).hexdigest()
+        with (
+            patch.object(v3, "protected_authority",
+                         return_value=(PROTECTED, carrier_contract())),
+            patch.object(v3, "checked_destination",
+                         return_value=(BASE_TREE, raw)),
+            patch.object(
+                v3, "exact_source_tree",
+                return_value=(
+                    SOURCE_TREE,
+                    [("src/synthetic.cpp", "100644", BLOB, DATA)],
+                    rows,
+                    manifest,
+                ),
+            ),
+            patch.object(v3, "gh_api") as api,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "source root tree differs"):
+                v3.publish(
+                    "trusted/ci", 669, "9" * 40,
+                    "ci/test-plans/llvm-pr669.json",
+                )
+            api.assert_not_called()
 
     def test_reviewed_plan_allows_exact_cpp_compiler_executables(self):
         for executable in ("g++", "clang++"):
