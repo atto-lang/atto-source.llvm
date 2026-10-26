@@ -46,6 +46,54 @@ fnc api(): int { return 1; }
         check(!program.functions.front().exported);
     }
 
+    {
+        auto program = parse_unresolved_program(R"(
+export symbol #ready as #ready;
+define symbol #ready;
+)");
+        check(program.source_symbols.size() == 1);
+        check(program.source_symbols.front().name == "#ready");
+        const auto& binding = only_binding(program);
+        check(binding.local_kind == SourceExportKind::Symbol);
+        check(binding.local_name == "#ready");
+        check(binding.external_name == "#ready");
+        check(binding.local_symbol_id == "$root::symbol::#ready");
+        check(binding.origin == SourceExportBinding::Origin::ExplicitExport);
+    }
+
+    // Untyped export resolves the same nominal Symbol family.
+    {
+        auto program = parse_unresolved_program(R"(
+export #ready;
+define symbol #ready;
+)");
+        const auto& binding = only_binding(program);
+        check(binding.local_kind == SourceExportKind::Symbol);
+        check(binding.local_symbol_id == "$root::symbol::#ready");
+    }
+
+    // Both public declaration spellings publish the Symbol identity directly.
+    for (const auto source : {
+            "pub define symbol #ready;\n",
+            "define pub symbol #ready;\n"}) {
+        auto program = parse_unresolved_program(source);
+        check(program.source_symbols.size() == 1);
+        const auto& binding = only_binding(program);
+        check(binding.local_kind == SourceExportKind::Symbol);
+        check(binding.external_name == "#ready");
+        check(binding.origin == SourceExportBinding::Origin::ImplicitPub);
+    }
+
+    denied(R"(
+define symbol #ready;
+define symbol #ready;
+)", "duplicate Symbol declaration");
+
+    denied(R"(
+export symbol #missing as #missing;
+define symbol #ready;
+)", "EXPORT_UNKNOWN_TARGET");
+
     // Export metadata is transparent to the import prelude in either order.
     for (const auto source : {
             R"(
