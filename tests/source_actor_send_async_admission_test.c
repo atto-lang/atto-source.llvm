@@ -215,6 +215,144 @@ static void pending_future_await_excludes_concurrent_cancel(void) {
         "SOURCE_SEND_ASYNC_AWAIT_CANCEL_RACE_PASS owner=1 cancel_rejected=1\n");
 }
 
+typedef struct {
+    void* future;
+    atomic_int* go;
+    atomic_int* ready;
+    int outcome;
+} FutureRaceThread;
+
+static void* race_observe_future(void* raw) {
+    FutureRaceThread* state = (FutureRaceThread*)raw;
+    atomic_fetch_add_explicit(state->ready, 1, memory_order_release);
+    while (!atomic_load_explicit(state->go, memory_order_acquire))
+        sched_yield();
+    state->outcome =
+        oreslang_source_actor_await_send_future_checked(state->future);
+    return NULL;
+}
+
+static void pending_future_double_await_has_single_consumer(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 921, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    atomic_int go = ATOMIC_VAR_INIT(0);
+    atomic_int ready = ATOMIC_VAR_INIT(0);
+    FutureRaceThread first = {future, &go, &ready, -1};
+    FutureRaceThread second = {future, &go, &ready, -1};
+    pthread_t a, b;
+    CHECK(pthread_create(&a, NULL, race_observe_future, &first) == 0);
+    CHECK(pthread_create(&b, NULL, race_observe_future, &second) == 0);
+    while (atomic_load_explicit(&ready, memory_order_acquire) != 2)
+        sched_yield();
+    atomic_store_explicit(&go, 1, memory_order_release);
+
+    while (!oreslang_source_actor_test_future_consuming(future))
+        sched_yield();
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+
+    CHECK(pthread_join(a, NULL) == 0);
+    CHECK(pthread_join(b, NULL) == 0);
+    const int accepted =
+        (first.outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED)
+        + (second.outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    const int rejected =
+        (first.outcome == ORES_SOURCE_SEND_ASYNC_INVALID_REF)
+        + (second.outcome == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    CHECK(accepted == 1);
+    CHECK(rejected == 1);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DOUBLE_AWAIT_PASS accepted=1 duplicate_rejected=1\n");
+}
+
+typedef struct {
+    void* future;
+    atomic_int started;
+    int status;
+    int64_t result;
+} FutureContinuationThread;
+
+static int64_t contention_resume_probe(void* actor) {
+    CHECK(actor != NULL);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    return 4242;
+}
+
+static void* observe_future_with_continuation(void* raw) {
+    FutureContinuationThread* state = (FutureContinuationThread*)raw;
+    atomic_store_explicit(&state->started, 1, memory_order_release);
+    state->status =
+        oreslang_source_actor_await_send_future_continuation_checked(
+            state->future,
+            contention_resume_probe,
+            UINT64_C(0x5ef0),
+            &state->result);
+    return NULL;
+}
+
+static void competing_root_send_continuation_fails_closed(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* first = NULL;
+    void* second = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 922, &first) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 923, &second) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(first != NULL && second != NULL && first != second);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 2);
+
+    FutureContinuationThread owner = {
+        .future = first, .status = -1, .result = -1
+    };
+    atomic_init(&owner.started, 0);
+    pthread_t thread;
+    CHECK(pthread_create(
+        &thread, NULL, observe_future_with_continuation, &owner) == 0);
+    while (!oreslang_source_actor_test_future_consuming(first))
+        sched_yield();
+    CHECK(atomic_load_explicit(&owner.started, memory_order_acquire));
+
+    int64_t refused_result = -1;
+    CHECK(oreslang_source_actor_await_send_future_continuation_checked(
+        second,
+        contention_resume_probe,
+        UINT64_C(0x5ef1),
+        &refused_result) == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+    CHECK(refused_result == 0);
+    CHECK(!oreslang_source_actor_test_future_consuming(second));
+    CHECK(oreslang_source_actor_cancel_send_future(second));
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    CHECK(pthread_join(thread, NULL) == 0);
+    CHECK(owner.status == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(owner.result == 4242);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_CONTINUATION_CONTENTION_PASS owner=1 refused=1 reusable_loser=1\n");
+}
+
 static void stored_future_starts_before_await_and_progresses(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -554,6 +692,8 @@ int main(void) {
     capacity_release_admits_waiter();
     stored_future_starts_before_await_and_progresses();
     pending_future_await_excludes_concurrent_cancel();
+    pending_future_double_await_has_single_consumer();
+    competing_root_send_continuation_fails_closed();
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
     failed_stored_future_resumes_only_for_trace_cleanup();
