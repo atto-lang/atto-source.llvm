@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val int source = 21;
+    val int result = await source;
+    return result;
+}
