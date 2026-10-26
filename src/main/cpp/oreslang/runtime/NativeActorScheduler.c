@@ -1194,15 +1194,23 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     /*
      * Descriptor/sequence exhaustion means this select arm could not be
      * registered. It is not an operation-completion event and must not win the
-     * common selection. Detach this arm and let the coordinator fail/cleanup
-     * the partial select setup.
+     * common selection.
+     *
+     * Recheck the generation before reporting setup failure: another arm may
+     * have committed after our scheduler-lock precheck. In that race this arm
+     * is simply a loser, not a RESOURCE_EXHAUSTED failure for the completed
+     * selection.
      */
     if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
             || lane->next_async_sequence == 0) {
+        const int still_open =
+            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        return still_open
+            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            : ORES_NATIVE_SEND_CANCELLED;
     }
     size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
@@ -1214,10 +1222,14 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
         }
     }
     if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
+        const int still_open =
+            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        return still_open
+            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            : ORES_NATIVE_SEND_CANCELLED;
     }
 
     AsyncSendCredit* credit = &lane->async_sends[slot];
