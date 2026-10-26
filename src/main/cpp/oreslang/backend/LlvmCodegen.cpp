@@ -871,7 +871,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
-        sourceSendAsyncStartChecked, sourceAwaitSendFuture,
+        sourceSendAsyncStartChecked,
         sourceDetachSendFuture, sourceWaitDetachedSendResult,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
@@ -904,9 +904,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(
                 llvm::Type::getInt32Ty(context),
                 {native_ptr, i64, native_ptr}, false));
-        sourceAwaitSendFuture = module.getOrInsertFunction(
-            "oreslang_source_actor_await_send_future",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
         sourceDetachSendFuture = module.getOrInsertFunction(
             "oreslang_source_actor_detach_send_future_checked",
             llvm::FunctionType::get(
