@@ -479,6 +479,106 @@ static void stored_future_await_resumes_fresh_root_continuation(void) {
         "SOURCE_SEND_ASYNC_LOGICAL_RESUME_PASS fresh_root_turn=1 trace_handle=1 host_settlement_observer=0\n");
 }
 
+static atomic_int teardown_resume_entered;
+static atomic_int release_teardown_resume;
+
+typedef struct {
+    void* future;
+    int status;
+    int64_t result;
+} TeardownFutureThread;
+
+typedef struct {
+    void* actor;
+    atomic_int done;
+} JoinActorThread;
+
+static int64_t teardown_resume_probe(void* actor) {
+    CHECK(actor != NULL);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    atomic_store_explicit(
+        &teardown_resume_entered, 1, memory_order_release);
+    while (!atomic_load_explicit(
+            &release_teardown_resume, memory_order_acquire))
+        sched_yield();
+    return 5150;
+}
+
+static void* await_teardown_future(void* raw) {
+    TeardownFutureThread* state = (TeardownFutureThread*)raw;
+    state->status =
+        oreslang_source_actor_await_send_future_continuation_checked(
+            state->future,
+            teardown_resume_probe,
+            UINT64_C(0x5ef2),
+            &state->result);
+    return NULL;
+}
+
+static void* join_stopped_actor(void* raw) {
+    JoinActorThread* state = (JoinActorThread*)raw;
+    oreslang_source_actor_join_done(state->actor);
+    atomic_store_explicit(&state->done, 1, memory_order_release);
+    return NULL;
+}
+
+static void live_future_fences_actor_teardown_through_wake_exit(void) {
+    atomic_store_explicit(
+        &teardown_resume_entered, 0, memory_order_release);
+    atomic_store_explicit(
+        &release_teardown_resume, 0, memory_order_release);
+
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 915, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+
+    TeardownFutureThread awaiter = {
+        .future = future, .status = -1, .result = -1
+    };
+    pthread_t await_thread;
+    CHECK(pthread_create(
+        &await_thread, NULL, await_teardown_future, &awaiter) == 0);
+
+    while (!atomic_load_explicit(
+            &teardown_resume_entered, memory_order_acquire))
+        sched_yield();
+    CHECK(oreslang_source_actor_test_future_consuming(future));
+
+    /* Stop the target while its root continuation still owns the Future.
+     * Physical target DONE may complete, but actor reclamation must remain
+     * fenced by send_future_live until the wake callback exits and descriptor
+     * release has physically retired the exact generation. */
+    oreslang_source_actor_request_stop(actor);
+
+    JoinActorThread joiner = {.actor = actor};
+    atomic_init(&joiner.done, 0);
+    pthread_t join_thread;
+    CHECK(pthread_create(
+        &join_thread, NULL, join_stopped_actor, &joiner) == 0);
+    while (!oreslang_source_actor_test_join_waiting_on_futures(actor))
+        sched_yield();
+
+    CHECK(!atomic_load_explicit(&joiner.done, memory_order_acquire));
+    CHECK(oreslang_source_actor_test_future_consuming(future));
+
+    atomic_store_explicit(
+        &release_teardown_resume, 1, memory_order_release);
+    CHECK(pthread_join(await_thread, NULL) == 0);
+    CHECK(awaiter.status == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(awaiter.result == 5150);
+
+    CHECK(pthread_join(join_thread, NULL) == 0);
+    CHECK(atomic_load_explicit(&joiner.done, memory_order_acquire));
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_TEARDOWN_FENCE_PASS live_future=1 consuming_until_resume=1 descriptor_release_after_wake=1 actor_reclaim_after_future=1\n");
+}
+
 static atomic_int failed_send_continuation_seen;
 
 static int64_t failed_send_resume_probe(void* actor) {
@@ -717,6 +817,8 @@ int main(void) {
     atomic_init(&carrier_probe_status, -1);
     atomic_init(&foreign_probe_status, -1);
     atomic_init(&logical_send_resume_seen, 0);
+    atomic_init(&teardown_resume_entered, 0);
+    atomic_init(&release_teardown_resume, 0);
     atomic_init(&failed_send_continuation_seen, 0);
 
     capacity_release_admits_waiter();
@@ -727,6 +829,7 @@ int main(void) {
     foreign_future_pointer_fails_closed_without_dereference();
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
+    live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
