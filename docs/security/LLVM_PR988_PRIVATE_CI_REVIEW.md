@@ -21,14 +21,14 @@ proposed carrier as part of this proposal.
   40241181625 and 40241178103 both completed successfully, confirming that the
   proposed destination currently has executable GitHub Actions capacity.
 - Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, head
-  `ca42805e2e1d4b0ed95a4d17e90870a5d62c1f19`, based on
+  `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`, based on
   `980a9e8f2a5d2d87b0b49b8c4d764c1ccddd238e`.
 - Reviewed workflow candidate blob:
   `1241236ba3a52e92770e5688408365ccc151aaff`.
 - Reviewed PR #988 test-plan candidate blob:
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570`.
 - Source-free workflow run `40253715185` completed successfully at exact
-  carrier head `ca42805e2e1d4b0ed95a4d17e90870a5d62c1f19`: pinned checkout,
+  carrier head `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`: pinned checkout,
   eight carrier-verifier regressions (including exact CODEOWNERS and duplicate-key
   JSON rejection), six trusted-plan-runner regressions, and the exact LLVM PR #988
   plan lint all executed and passed; the source-bearing job was skipped as intended.
@@ -43,7 +43,7 @@ proposed carrier as part of this proposal.
   contract with repository ID `1271706990`; after carrier PR #29 is independently
   approved and merged, pin the **resulting carrier `main` commit SHA** as `base_sha`
   and independently verify that its root tree equals the reviewed PR-head tree at
-  `ca42805e2e1d4b0ed95a4d17e90870a5d62c1f19`; do not use the PR-head commit itself
+  `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`; do not use the PR-head commit itself
   as `base_sha` unless it is literally the resulting `main` commit. Pin workflow blob
   `1241236ba3a52e92770e5688408365ccc151aaff` and test-plan blob
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570` restricted to PR `988`.
@@ -140,3 +140,18 @@ Java/LLVM semantic parity, or executable guest runtime support.
 **Next action:** security owners decide whether to authorize this exact
 carrier and plan. Do not publish source until their reviewed decision is
 effective.
+
+## Synthetic source-bearing carrier proof
+
+A harmless synthetic source tree was used to exercise the full carrier path without exporting LLVM source:
+
+- source repo label: `synthetic/private`, PR `7`
+- synthetic source tree: `a379330e6f4461f78786ec83d7ec34431aeca043`
+- receipt-bound carrier commit: `0497162489b548c8bbfda21701935e40229ac79a`
+- synthetic self-test plan blob: `46614ef8e2c92055b4e7c9f06cc88d9a64b936fa`
+- Actions run `40265226955`: success
+- live carrier identity, initial authorization ref, exact-tree provenance, pre-test authorization recheck, sandbox execution, and final authorization recheck all passed
+- sandbox evidence: `PLAN_SANDBOX_PASS uid=65534 pid=1 netns=isolated`
+- guest evidence: `SYNTHETIC_SOURCE_BEARING_PASS`
+
+This is carrier-mechanics evidence only. It is not LLVM #988 source execution and does not authorize private-source transfer.
