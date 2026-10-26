@@ -4057,13 +4057,17 @@ private:
                         "Future<void> send_async await captures only up to 16 Copy int/bool locals");
                 validate_expression(*fn.send_future_payload, params, functions);
             }
-            const bool direct_send_await = std::any_of(
-                fn.actor_sends.begin(), fn.actor_sends.end(),
-                [](const ActorSend& send) { return send.await_admission; });
-            if (direct_send_await && fn.actor_spawns.size() != 1)
+            const std::size_t direct_send_await_count =
+                static_cast<std::size_t>(std::count_if(
+                    fn.actor_sends.begin(), fn.actor_sends.end(),
+                    [](const ActorSend& send) { return send.await_admission; }));
+            if (direct_send_await_count != 0 && fn.actor_spawns.size() != 1)
                 throw std::runtime_error(
                     "direct send_async await requires one source actor");
-            if (direct_send_await) {
+            if (direct_send_await_count > 2)
+                throw std::runtime_error(
+                    "native source supports at most two direct send_async await PCs");
+            if (direct_send_await_count != 0) {
                 const auto copy_scalar = [](const LocalBinding& local) {
                     return !local.heap_owned
                         && !local.int_array
@@ -4079,6 +4083,21 @@ private:
                             fn.locals.begin(), fn.locals.end(), copy_scalar))
                     throw std::runtime_error(
                         "direct send_async await captures only up to 16 Copy int/bool locals");
+                if (direct_send_await_count > 1) {
+                    const auto first_await = std::find_if(
+                        fn.actor_sends.begin(), fn.actor_sends.end(),
+                        [](const ActorSend& send) {
+                            return send.await_admission;
+                        });
+                    if (first_await == fn.actor_sends.end())
+                        throw std::runtime_error(
+                            "missing detached direct await PC0");
+                    for (const auto& local : fn.locals) {
+                        if (local.offset > first_await->offset)
+                            throw std::runtime_error(
+                                "detached multi-PC locals must be initialized before PC0 await");
+                    }
+                }
             }
             if (!fn.ready_await_actor.empty()) {
                 /*
