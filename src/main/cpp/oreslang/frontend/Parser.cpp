@@ -999,6 +999,8 @@ private:
             std::unordered_set<std::string> member_names;
             while (token_.kind != Kind::End &&
                     token_.text != (braces ? "}" : "end")) {
+                if (token_.text == "export")
+                    fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside traits or interfaces");
                 if (decl.methods.size() >= 128)
                     fail("TYPE_ONLY_MEMBER_BUDGET: maximum 128 method signatures");
                 require("fnc");
@@ -1231,6 +1233,8 @@ private:
         std::unordered_set<std::string> seen;
         while (token_.kind != Kind::End
                && token_.text != (braced ? "}" : "end")) {
+            if (token_.text == "export")
+                fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside contracts");
             ContractMethod method;
             if (!accept("fnc")) {
                 fail("native i64 contracts only admit fnc signatures");
@@ -1344,6 +1348,8 @@ private:
         // allocated in the existing actor heap and dropped before returning;
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
+            if (token_.text == "export")
+                fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside actor handlers");
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
@@ -1411,6 +1417,8 @@ private:
         require("as");
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
+            if (token_.text == "export")
+                fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside classes");
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
@@ -2282,6 +2290,8 @@ private:
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
             while (token_.text != "}" && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif"))) {
+                if (token_.text == "export")
+                    fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside executable scopes");
                 if (token_.kind == Kind::End || actions.size() == 16)
                     fail("native conditional arm limit exceeded (16)");
                 if (token_.text == "for" && !finally_scope) {
@@ -2359,6 +2369,8 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (token_.text == "export")
+                fail("[EXPORT_LOCAL_SCOPE] export declarations are not allowed inside functions");
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
