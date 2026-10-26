@@ -70,12 +70,22 @@ struct Expression {
     mutable std::string sum_type;
 };
 
+struct StructuralField {
+    std::string name;
+    ScalarType scalar_type = ScalarType::I64;
+};
+
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
-    std::string class_name; // empty means scalar int/bool
+    std::string class_name; // empty means scalar int/bool or structural projection
     std::string generic_type; // stage-one i64 generic slot
     std::string pending_type_alias;
+    // Named structural parameters are compile-time readonly projections.
+    // The resolved field list becomes the native scalar projection ABI; no
+    // nominal pointer, reflection object, or runtime shape descriptor escapes.
+    std::string structural_contract;
+    std::vector<StructuralField> structural_fields;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
@@ -302,6 +312,10 @@ struct ModuleContract {
 // without claiming full generic/typeclass or cross-unit linker support.
 struct TypeOnlyDecl {
     enum class Kind { Alias, Trait, Interface };
+    struct Field {
+        std::string name;
+        std::string type_name; // int/bool or a transparent scalar alias
+    };
     struct Constraint {
         enum class Kind { MinInclusive, MaxInclusive };
         Kind kind = Kind::MinInclusive;
@@ -319,6 +333,7 @@ struct TypeOnlyDecl {
     std::string alias_target; // native v1 accepts int/bool or another alias
     std::vector<Constraint> constraints; // canonical min then max, compiler-only
     std::vector<std::string> parents;
+    std::vector<Field> fields; // interface-only readonly structural shape slots
     std::vector<Method> methods;
 };
 
