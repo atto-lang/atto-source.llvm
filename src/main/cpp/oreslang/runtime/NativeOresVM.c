@@ -404,6 +404,50 @@ int ores_native_vm_bind_async_send_wake(
             code_generation, out);
 }
 
+int ores_native_vm_reserve_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer, OresNativeSelectArbiter* arbiter,
+    uint64_t selection_generation, uint64_t continuation_slot,
+    uint64_t continuation_generation, uint64_t code_generation,
+    OresNativeSelectWakeTicket* out) {
+    if (out) *out = (OresNativeSelectWakeTicket){0};
+    return vm && valid_domain(domain) && out
+        && ores_native_actor_scheduler_reserve_select_wake(
+            vm->schedulers[domain], producer, arbiter, selection_generation,
+            continuation_slot, continuation_generation, code_generation, out);
+}
+
+OresNativeSendStatus ores_native_vm_submit_selectable_async_with_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef target, uint64_t payload,
+    OresNativeSelectToken select_token,
+    OresNativeSelectWakeTicket select_wake,
+    OresNativeAsyncSendTicket* out) {
+    if (out) *out = (OresNativeAsyncSendTicket){0};
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_submit_selectable_async_with_wake(
+            vm->schedulers[domain], target, payload,
+            select_token, select_wake, out)
+        : ORES_NATIVE_SEND_INVALID_REF;
+}
+
+OresNativeWakePublishStatus ores_native_vm_publish_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket, OresNativeSelectToken winner) {
+    return vm && valid_domain(domain)
+        ? ores_native_actor_scheduler_publish_select_wake(
+            vm->schedulers[domain], ticket, winner)
+        : ORES_NATIVE_WAKE_INVALID;
+}
+
+int ores_native_vm_cancel_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_cancel_select_wake(
+            vm->schedulers[domain], ticket);
+}
+
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out) {
