@@ -20,21 +20,26 @@ proposed carrier as part of this proposal.
 - Fresh carrier-capacity confirmation on October 25: private-repo Actions runs
   40241181625 and 40241178103 both completed successfully, confirming that the
   proposed destination currently has executable GitHub Actions capacity.
-- Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, head
-  `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`, based on
+- Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, current head
+  `410a250b6ca6b562d650e8195063fa47e6bf7a7a`, reviewed root tree
+  `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`, based on
   `980a9e8f2a5d2d87b0b49b8c4d764c1ccddd238e`.
 - Reviewed workflow candidate blob:
-  `1241236ba3a52e92770e5688408365ccc151aaff`.
+  `8528a2cb43788fc86a4adbffead671c70a8b5710`.
 - Reviewed PR #988 test-plan candidate blob:
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570`.
-- Source-free workflow run `40253715185` completed successfully at exact
+- Current trusted-plan runner blob: `3175155f05565cf783533e10aecb08e12f80663d`.
+- Exact-head source-free carrier run `40268961769` at `410a250b6ca6b562d650e8195063fa47e6bf7a7a` completed successfully across verifier, isolation, tokenless GraalVM/Maven, native CMake/CTest, and Rust offline probes.
+- Receipt-bound synthetic source-bearing run `40269232700` completed successfully at synthetic carrier commit `fb463aa08c4435014f3402ebcebf2258538805e7`, proving exact authorization, tokenless pre-source toolchain setup, exact-tree provenance, gitless read-only sandbox preparation, and deprivileged network-isolated execution. The synthetic source tree was `fd0d58d34b5ce77095496b5a85fe252a1b72ec78`; one-use refs were revoked after evidence capture.
+- The source-bearing workflow has no `contents: write` or `actions: write` authority, and all three pinned GraalVM setup steps explicitly receive an empty GitHub token with update checks disabled.
+- Historical source-free baseline run `40253715185` completed successfully at older
   carrier head `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`: pinned checkout,
   eight carrier-verifier regressions (including exact CODEOWNERS and duplicate-key
   JSON rejection), six trusted-plan-runner regressions, and the exact LLVM PR #988
   plan lint all executed and passed; the source-bearing job was skipped as intended.
   Carrier CODEOWNERS blob: `0110a557c162204a399ebf1e628e50c9ed991439`.
   Verifier blob: `f235c9a1056da5c6b8149643010c82b6b2dc984a`.
-  Trusted-plan runner blob: `53d0b80cabb6ca2f70df541132fd13c12ca932e9`.
+  Historical trusted-plan runner blob: `53d0b80cabb6ca2f70df541132fd13c12ca932e9`.
   Trusted-plan runner-test blob: `d168051f3cbcbdc2ff1583bbe411fd61fd9d63ae`.
   Plan-lint blob: `50ff454ee43557a888fa5158beff808124157ba1`.
   The trusted-plan regression emitted `PLAN_SANDBOX_PASS uid=65534 pid=1 netns=isolated`, proving the reviewed runner entered fresh network + PID namespaces, dropped to UID/GID 65534, cleared effective capabilities, and enforced `NoNewPrivs` before executing the synthetic plan. A synthetic parent `GITHUB_TOKEN` was also removed before guest execution (`ENV_SCRUB_PASS`), and symlinked source entries are rejected. The source-bearing job now has a 180-minute ceiling consistent with the reviewed plan's bounded command timeouts, and it revalidates the exact dispatcher authorization ref both before and after source execution.
@@ -42,10 +47,10 @@ proposed carrier as part of this proposal.
   add exact allowlist entry `sonus-auris/sonus-auris.infra`; add a carrier
   contract with repository ID `1271706990`; after carrier PR #29 is independently
   approved and merged, pin the **resulting carrier `main` commit SHA** as `base_sha`
-  and independently verify that its root tree equals the reviewed PR-head tree at
-  `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`; do not use the PR-head commit itself
+  and independently verify that its root tree equals the reviewed PR-head tree
+  `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`; do not use the PR-head commit itself
   as `base_sha` unless it is literally the resulting `main` commit. Pin workflow blob
-  `1241236ba3a52e92770e5688408365ccc151aaff` and test-plan blob
+  `8528a2cb43788fc86a4adbffead671c70a8b5710` and test-plan blob
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570` restricted to PR `988`.
   This proposal is not effective authorization until independently reviewed
   and merged under source-repository policy.
@@ -162,3 +167,22 @@ This is carrier-mechanics evidence only. It is not LLVM #988 source execution an
 - Run `40265492280`: exact authorization passed initial and pre-test checks, the sandboxed synthetic command completed successfully, then the authorization ref was deliberately moved while execution was in flight. The final recheck failed with `dispatcher authorization revoked or changed during tests`, so the overall workflow failed.
 
 These controls prove branch naming is insufficient authority and mid-run revocation prevents a green carrier result.
+
+## Current hardened synthetic source-bearing proof
+
+The final current candidate was exercised with harmless synthetic source after removing third-party carrier-token access and all source-bearing workflow write authority:
+
+- carrier PR #29 head: `410a250b6ca6b562d650e8195063fa47e6bf7a7a`
+- carrier root tree: `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`
+- workflow blob: `8528a2cb43788fc86a4adbffead671c70a8b5710`
+- runner blob: `3175155f05565cf783533e10aecb08e12f80663d`
+- LLVM #988 production plan blob: `7bcc58972d329d5f02bc853fa1d908d3d24cc570`
+- exact-head source-free run: `40268961769` — success
+- synthetic source-bearing run: `40269232700` — success
+- synthetic carrier commit: `fb463aa08c4435014f3402ebcebf2258538805e7`
+- synthetic source tree: `fd0d58d34b5ce77095496b5a85fe252a1b72ec78`
+- evidence markers: `SOURCE_DISPATCH_AUTH_PASS`, `CARRIER_PROVENANCE=PASS`, `CARRIER_AUTHORIZATION_RECHECK_PASS`, `GITLESS_SANDBOX_PREP_PASS`, `SYNTHETIC_SOURCE_BEARING_PASS`, and `TEST_PLAN_PASS commands=1 source=synthetic/private pr=7`.
+
+The first run against the redesigned PID namespace failed only because the old synthetic command asserted that it, rather than the trusted plan runner, was PID 1. The test was corrected to require the command's parent PID to be 1; production LLVM #988 plan bytes were not changed. The corrected run passed end to end.
+
+This remains carrier-mechanics evidence only. No LLVM #988 private source has been transferred or executed.
