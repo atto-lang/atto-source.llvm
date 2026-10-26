@@ -19,6 +19,7 @@ enum class ScalarType { I64, Bool, String };
 /* Compiler half of the fixed detached send continuation ABI. Runtime storage
  * independently pins the same 16-word bound in SourceActorBootstrap.h. */
 inline constexpr std::size_t kNativeDetachedScalarWords = 16;
+inline constexpr std::size_t kNativeDetachedMaxPcs = 4;
 
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
