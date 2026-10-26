@@ -3517,6 +3517,10 @@ private:
                     expr.argument_names.size() != expr.arguments.size())
                     throw std::runtime_error("invalid named call argument layout");
                 const auto& signature = found->second.at(expr.arguments.size());
+                if (signature.async_source_i64)
+                    throw std::runtime_error(
+                        "async source call requires checked Future<int> pipeline lowering at byte " +
+                        std::to_string(expr.offset));
                 const auto& formals = signature.parameters;
                 if (expr.type_arguments_present && signature.generics.empty())
                     throw std::runtime_error("call-site type arguments require generic function");
@@ -5067,6 +5071,9 @@ void resolve_future_pipeline_contracts(Program& program) {
 
     for (auto& owner : program.functions) {
         for (auto& pipeline : owner.future_pipelines) {
+            if (!pipeline.root_consumed)
+                throw std::runtime_error(
+                    "native Future<int> pipeline v1 execution requires an explicit rt take root");
             Function& producer = exact(pipeline.producer_function, 0);
             if (!producer.async_source_i64)
                 throw std::runtime_error(
