@@ -1173,29 +1173,37 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
         return ORES_NATIVE_SEND_CANCELLED;
     }
 
-    OresNativeSendStatus immediate_failure = ORES_NATIVE_SEND_ACCEPTED;
+    OresNativeSendStatus immediate_terminal = ORES_NATIVE_SEND_ACCEPTED;
     if (!matching(s, target))
-        immediate_failure = ORES_NATIVE_SEND_INVALID_REF;
-    else {
-        ActorLane* target_lane = &s->actors[target.actor_slot];
-        if (s->retired || target_lane->retired)
-            immediate_failure = ORES_NATIVE_SEND_TERMINATED;
-        else if (target_lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
-                || target_lane->next_async_sequence == 0)
-            immediate_failure = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
-    }
+        immediate_terminal = ORES_NATIVE_SEND_INVALID_REF;
+    else if (s->retired || s->actors[target.actor_slot].retired)
+        immediate_terminal = ORES_NATIVE_SEND_TERMINATED;
 
-    if (immediate_failure != ORES_NATIVE_SEND_ACCEPTED) {
+    if (immediate_terminal != ORES_NATIVE_SEND_ACCEPTED) {
         const OresNativeSelectCommitResult selected =
             ores_native_select_try_commit(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
         return selected == ORES_NATIVE_SELECT_WON
-            ? immediate_failure
+            ? immediate_terminal
             : ORES_NATIVE_SEND_CANCELLED;
     }
 
     ActorLane* lane = &s->actors[target.actor_slot];
+
+    /*
+     * Descriptor/sequence exhaustion means this select arm could not be
+     * registered. It is not an operation-completion event and must not win the
+     * common selection. Detach this arm and let the coordinator fail/cleanup
+     * the partial select setup.
+     */
+    if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
+            || lane->next_async_sequence == 0) {
+        (void)ores_native_select_detach(select_token);
+        if (s->rejected != UINT64_MAX) ++s->rejected;
+        unlock(s);
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+    }
     size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
         AsyncSendCredit* candidate = &lane->async_sends[i];
@@ -1206,13 +1214,10 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
         }
     }
     if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
-        const OresNativeSelectCommitResult selected =
-            ores_native_select_try_commit(select_token);
+        (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return selected == ORES_NATIVE_SELECT_WON
-            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
-            : ORES_NATIVE_SEND_CANCELLED;
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
     }
 
     AsyncSendCredit* credit = &lane->async_sends[slot];
