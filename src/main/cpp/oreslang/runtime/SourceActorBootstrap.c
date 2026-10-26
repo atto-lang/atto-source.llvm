@@ -1086,6 +1086,11 @@ int oreslang_source_actor_await_send_async_checked(
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
     }
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_TERMINATED;
+    }
     const size_t slot = (size_t)instance->ref.actor_slot;
     if (slot >= group.next_slot || group.actors[slot] != instance) {
         group_unlock();
@@ -1231,6 +1236,16 @@ int oreslang_source_actor_send_async_start_checked(
             || group.actors[instance->ref.actor_slot] != instance) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    /*
+     * Stop admission and send_async submission share group.mutex. Once the
+     * source stop bit is published, never mint a new Future wrapper or
+     * scheduler descriptor while physical teardown is still in progress.
+     */
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_TERMINATED;
     }
     if (instance->send_future_live >= ORES_SOURCE_SEND_ASYNC_MAX_WAITERS) {
         group_unlock();
