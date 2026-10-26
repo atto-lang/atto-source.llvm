@@ -609,6 +609,30 @@ static void concurrent_arms_have_exactly_one_winner(void) {
     }
 }
 
+static void physical_select_loan_fences_generation_rearm(void) {
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 280, 1));
+    CHECK(ores_native_select_retain_physical_loan(&select, 280));
+    CHECK(ores_native_select_active_physical_loans(&select) == 1);
+
+    OresNativeSelectToken token = {0};
+    CHECK(ores_native_select_register(&select, 0, &token));
+    CHECK(ores_native_select_try_commit(token) == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+
+    /* Logical winner is terminal, but its physical wake/continuation still
+     * belongs to generation 280, so the arbiter may not be reused. */
+    CHECK(!ores_native_select_arbiter_rearm(&select, 281, 1));
+    CHECK(ores_native_select_release_physical_loan(&select, 280));
+    CHECK(ores_native_select_active_physical_loans(&select) == 0);
+    CHECK(ores_native_select_arbiter_rearm(&select, 281, 1));
+
+    OresNativeSelectToken next = {0};
+    CHECK(ores_native_select_register(&select, 0, &next));
+    CHECK(ores_native_select_try_commit(next) == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+}
+
 static void rearm_generation_is_strictly_monotonic(void) {
     OresNativeSelectArbiter select = {0};
     CHECK(ores_native_select_arbiter_init(&select, 300, 1));
@@ -663,8 +687,9 @@ int main(void) {
     sealed_selection_never_publishes_pending_send();
     stale_bound_descriptor_cannot_commit_rearmed_generation();
     concurrent_arms_have_exactly_one_winner();
+    physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
     return 0;
 }
