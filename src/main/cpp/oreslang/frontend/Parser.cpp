@@ -1764,6 +1764,36 @@ private:
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
+        auto channel_local = [&]() {
+            if (!(token_.text == "val" && peek_next().text == "Channel"))
+                return false;
+            ChannelBinding channel;
+            channel.offset = token_.offset;
+            require("val");
+            require("Channel");
+            require("<");
+            require("int");
+            require(">");
+            channel.name = identifier();
+            channel.declared_type.kind = SourceType::Kind::Channel;
+            channel.declared_type.argument = "int";
+            require("=");
+            require("Channel");
+            require(".");
+            require("new");
+            require("<");
+            require("int");
+            require(">");
+            require("(");
+            const auto capacity = integer_literal();
+            if (capacity != 1)
+                fail("native Channel<int> currently requires capacity exactly 1");
+            channel.capacity = 1;
+            require(")");
+            require(";");
+            value.channels.push_back(std::move(channel));
+            return true;
+        };
         auto ready_future_local = [&]() {
             if (!((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future")) return false;
@@ -1796,6 +1826,7 @@ private:
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
+            if (channel_local()) continue;
             if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
@@ -2172,7 +2203,6 @@ private:
         };
         select_default_statement = [&]() {
             Statement selection;
-            selection.kind = Statement::Kind::SelectDefault;
             selection.offset = token_.offset;
             require("do");
             require("select");
@@ -2183,21 +2213,70 @@ private:
             } else if (accept("over")) {
                 over_delimited = true;
             } else {
-                fail("native do select default lowering requires '{ ... }' or 'over ... end'");
+                fail("native do select lowering requires '{ ... }' or 'over ... end'");
             }
 
-            // First executable source slice is deliberately narrow. It proves
-            // procedural select CFG/cleanup without inventing a native-only
-            // Channel<T> source representation. Channel/Future arms remain
-            // fail-closed until their typed source descriptors are admitted.
-            if (token_.text != "default")
-                fail("native do select currently supports only a single default arm");
-            require("default");
-            require(":");
-            accept("->");
-            require("{");
-            selection.then_statements = branch_arm(false, false);
-            require("}");
+            auto channel_exists = [&](const std::string& name) {
+                return std::any_of(value.channels.begin(), value.channels.end(),
+                    [&](const ChannelBinding& channel) {
+                        return channel.name == name;
+                    });
+            };
+
+            if (token_.text == "default") {
+                selection.kind = Statement::Kind::SelectDefault;
+                require("default");
+                require(":");
+                accept("->");
+                require("{");
+                selection.then_statements = branch_arm(false, false);
+                require("}");
+            } else {
+                selection.kind = Statement::Kind::SelectChannelDefault;
+                require("when");
+                if (accept("readch")) {
+                    selection.channel_op = Statement::ChannelOp::Read;
+                    selection.channel_name = identifier();
+                    if (!channel_exists(selection.channel_name))
+                        fail("native select read requires a lexical Channel<int>");
+                    require(":");
+                    require("val");
+                    selection.channel_read_binding =
+                        std::make_unique<LocalBinding>();
+                    selection.channel_read_binding->offset = token_.offset;
+                    selection.channel_read_binding->name = identifier();
+                    selection.channel_read_binding->scalar_type =
+                        ScalarType::I64;
+                    selection.channel_read_binding->owner_mutable = true;
+                    require("->");
+                } else if (accept("writech")) {
+                    selection.channel_op = Statement::ChannelOp::Write;
+                    selection.channel_name = identifier();
+                    if (!channel_exists(selection.channel_name))
+                        fail("native select write requires a lexical Channel<int>");
+                    require(",");
+                    selection.channel_write_value = expression();
+                    require(":");
+                    accept("->");
+                } else {
+                    fail("native do select channel slice supports only readch or writech");
+                }
+                require("{");
+                selection.then_statements = branch_arm(false, false);
+                require("}");
+
+                // A mandatory final default is the suspension boundary: with
+                // one readiness probe plus default this select is immediately
+                // decidable and needs no parked continuation.
+                if (token_.text != "default")
+                    fail("native channel select requires a final default arm");
+                require("default");
+                require(":");
+                accept("->");
+                require("{");
+                selection.else_statements = branch_arm(false, false);
+                require("}");
+            }
 
             if (over_delimited) require("end");
             else require("}");
@@ -3745,6 +3824,10 @@ private:
             throw std::runtime_error(
                 "using effects on actor actions requires trusted actor effect summaries");
         }
+        if (!fn.channels.empty() &&
+                !fn.declared_effects.has(FunctionEffect::Alloc))
+            throw std::runtime_error(
+                "Channel<int> allocation violates using signature without alloc");
         for (const auto& local : fn.locals) {
             bool allocates_class_array = false;
             if (local.new_class) {
@@ -3840,6 +3923,7 @@ private:
                     fn.name == "abort" ||
                     fn.name == "__oreslang_guest_main" ||
                     fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
+                    fn.name.rfind("oreslang_channel_i64_", 0) == 0 ||
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
@@ -3851,6 +3935,14 @@ private:
             if (std::count_if(fn.locals.begin(), fn.locals.end(),
                     [](const LocalBinding& local) { return local.int_array; }) > 64)
                 throw std::runtime_error("native Array<int> owner limit exceeded (64)");
+            if (fn.channels.size() > 64)
+                throw std::runtime_error("native Channel<int> owner limit exceeded (64)");
+            for (const auto& channel : fn.channels)
+                if (channel.declared_type.kind != SourceType::Kind::Channel ||
+                        channel.declared_type.argument != "int" ||
+                        channel.capacity != 1)
+                    throw std::runtime_error(
+                        "invalid native Channel<int> capability before ABI admission");
             // Overload identity is strictly name and explicit argument count.
             // Parameter types, borrow modes and returns cannot select a slot.
             if (fn.name == "main" && functions.count("main"))
@@ -4111,6 +4203,13 @@ private:
                         + "' at byte " + std::to_string(binding.offset));
                 }
             }
+            std::unordered_set<std::string> channel_names;
+            for (const auto& channel : fn.channels) {
+                if (params.count(channel.name) || live_actors.count(channel.name) ||
+                        !channel_names.insert(channel.name).second)
+                    throw std::runtime_error("duplicate or shadowed Channel<int> owner '" +
+                        channel.name + "' at byte " + std::to_string(channel.offset));
+            }
             using NameSet = std::unordered_set<std::string>;
             std::function<void(const Statement&, NameSet&)> check_statement_names;
             check_statement_names = [&](const Statement& stmt, NameSet& names) {
@@ -4138,6 +4237,24 @@ private:
                     NameSet body = names;
                     for (const auto& action : stmt.then_statements)
                         check_statement_names(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::SelectChannelDefault) {
+                    if (!channel_names.count(stmt.channel_name))
+                        throw std::runtime_error("unknown Channel<int> select owner '" +
+                            stmt.channel_name + "'");
+                    if (stmt.channel_write_value)
+                        validate_expression(*stmt.channel_write_value, names, functions);
+                    NameSet selected = names;
+                    if (stmt.channel_read_binding &&
+                            !selected.insert(stmt.channel_read_binding->name).second)
+                        throw std::runtime_error("native select read binding shadows live owner '" +
+                            stmt.channel_read_binding->name + "'");
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_names(action, selected);
+                    NameSet fallback = names;
+                    for (const auto& action : stmt.else_statements)
+                        check_statement_names(action, fallback);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Conditional) {
@@ -4302,6 +4419,20 @@ private:
                     TypeMap body = env;
                     for (const auto& action : stmt.then_statements)
                         check_statement_types(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::SelectChannelDefault) {
+                    if (stmt.channel_write_value)
+                        require_scalar(*stmt.channel_write_value, ScalarType::I64,
+                            "native Channel<int> write arm value", env);
+                    TypeMap selected = env;
+                    if (stmt.channel_read_binding)
+                        scoped_type(*stmt.channel_read_binding, selected);
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, selected);
+                    TypeMap fallback = env;
+                    for (const auto& action : stmt.else_statements)
+                        check_statement_types(action, fallback);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Conditional) {
