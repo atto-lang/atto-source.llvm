@@ -1827,11 +1827,15 @@ private:
                 }
                 if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
+                    parameter.source_type_name = "int";
                 } else if (accept("bool")) {
                     parameter.scalar_type = ScalarType::Bool;
+                    parameter.source_type_name = "bool";
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                    parameter.source_type_name = "String";
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
+                    parameter.source_type_name = parameter.pending_type_alias;
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
                            type_only_nominals_.count(std::string(token_.text))) {
@@ -1839,6 +1843,7 @@ private:
                 } else {
                     const std::size_t type_offset = token_.offset;
                     const std::string type = type_identifier();
+                    parameter.source_type_name = type;
                     if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                     const bool generic = std::any_of(value.generic_parameters.begin(),
                         value.generic_parameters.end(),
@@ -1866,11 +1871,15 @@ private:
         if (!value.returns_void) {
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
+                value.source_return_type_name = "int";
             } else if (accept("bool")) {
                 value.return_type = ScalarType::Bool;
+                value.source_return_type_name = "bool";
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+                value.source_return_type_name = "String";
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
+                value.source_return_type_name = value.pending_return_type_alias;
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
                        type_only_nominals_.count(std::string(token_.text))) {
@@ -1878,6 +1887,7 @@ private:
             } else {
                 const std::size_t type_offset = token_.offset;
                 const std::string type = type_identifier();
+                value.source_return_type_name = type;
                 if (entry_builtin_name(type)) reject_native_entry_boundary(type_offset);
                 const bool generic = std::any_of(value.generic_parameters.begin(),
                     value.generic_parameters.end(),
