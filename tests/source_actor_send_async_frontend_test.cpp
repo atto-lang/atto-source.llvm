@@ -93,6 +93,24 @@ int main() {
     CHECK(local_main.actor_sends.size() == 1);
     CHECK(local_main.actor_sends.front().await_admission);
 
+    auto two_pc = oreslang::parse_program(program(
+        "const int retained = 40; "
+        "await worker.send_async(1); "
+        "worker.send(2); "
+        "await worker.send_async(3); "
+        "stop worker; return retained + 3;"));
+    CHECK(two_pc.functions.size() == 1);
+    const auto& two_pc_main = two_pc.functions.front();
+    CHECK(two_pc_main.locals.size() == 1);
+    CHECK(two_pc_main.locals.front().name == "retained");
+    CHECK(two_pc_main.actor_sends.size() == 3);
+    CHECK(two_pc_main.actor_actions.size() == 4);
+    CHECK(two_pc_main.actor_sends[0].await_admission);
+    CHECK(!two_pc_main.actor_sends[1].await_admission);
+    CHECK(two_pc_main.actor_sends[2].await_admission);
+    CHECK(two_pc_main.actor_actions[3].kind
+        == oreslang::ActorAction::Kind::Stop);
+
     rejects(program("const Future<void> pending = worker.send_async(1); "
                     "stop worker; return 43;"),
             "Future<void> send_async token must be awaited exactly once");
@@ -105,19 +123,26 @@ int main() {
             "native send_async Future<void> declaration must precede actor effects");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one async await boundary");
+            "native source supports only one lifecycle/stored async await boundary");
     rejects(program("await worker; await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one async await boundary");
+            "native source supports only one lifecycle/stored async await boundary");
     rejects(program("stop worker; await worker.get_done(); "
                     "await worker.send_async(1); return 43;"),
-            "native source supports only one async await boundary");
-    rejects(program("await worker.send_async(1); await worker.send_async(2); "
+            "native source supports only one lifecycle/stored async await boundary");
+    rejects(program("await worker.send_async(1); "
+                    "await worker.send_async(2); "
+                    "await worker.send_async(3); "
                     "stop worker; return 43;"),
-            "native source supports only one async await boundary");
+            "native source supports at most two direct send_async await PCs");
     rejects(program("await worker.send_async(1); await worker.get_done(); "
                     "return 43;"),
-            "native source supports only one async await boundary");
+            "native source mixed direct/lifecycle await PCs unsupported");
+    rejects(program("await worker.send_async(1); "
+                    "const int late = 2; "
+                    "await worker.send_async(2); "
+                    "stop worker; return late + 41;"),
+            "detached multi-PC locals must be initialized before PC0 await");
     rejects(program("const int retained = 7; "
                     "const Future<void> pending = worker.send_async(1); "
                     "await pending; stop worker; return retained;"),
@@ -148,5 +173,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=4 negative=21 detached_scalar_capture=1 stored_scalar_capture=1 frame_words=16 ownership_handles_rejected=1\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=5 negative=23 detached_scalar_capture=1 stored_scalar_capture=1 multi_pc=2 frame_words=16 ownership_handles_rejected=1\n";
 }
