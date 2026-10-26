@@ -110,7 +110,7 @@ static inline int ores_native_select_register(
 
     const uint64_t selection_generation = atomic_load_explicit(
         &arbiter->generation, memory_order_acquire);
-    uint64_t arm_generation = atomic_load_explicit(
+    uint_fast64_t arm_generation = atomic_load_explicit(
         &arbiter->arms[arm].generation, memory_order_relaxed);
     if (!selection_generation || selection_generation == UINT64_MAX
             || arm_generation == UINT64_MAX) {
@@ -198,8 +198,8 @@ static inline OresNativeSelectCommitResult ores_native_select_try_commit(
             memory_order_acquire))
         return ORES_NATIVE_SELECT_INVALID;
 
-    uint64_t winner = 0;
-    const uint64_t encoded = token.arm + UINT64_C(1);
+    uint_fast64_t winner = 0;
+    const uint_fast64_t encoded = token.arm + UINT64_C(1);
     if (atomic_compare_exchange_strong_explicit(
             &token.arbiter->winner,
             &winner,
