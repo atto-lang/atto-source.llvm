@@ -99,9 +99,9 @@ inline constexpr bool is_fixed_record_v = is_fixed_record<std::remove_cv_t<T>>::
  * The compiler must instantiate Members in canonical structural member-name
  * order. Nested records and variable-sized/resource-owning members are rejected.
  *
- * This host reference deliberately exposes only a read-only byte view. Mutable
- * column loans are disallowed for FixedRecord fields so callers cannot create
- * noncanonical bool encodings behind the validated value boundary.
+ * Encoded bytes are returned only as detached copies. Mutable column loans are
+ * disallowed for FixedRecord fields so callers cannot create noncanonical bool
+ * encodings behind the validated value boundary.
  */
 template<class... Members>
 class FixedRecord final {
