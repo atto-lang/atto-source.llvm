@@ -260,7 +260,7 @@ def main():
                 assert "call i64 @oreslang_source_actor_await_send_future(" not in guest.stdout, (
                     name, "synchronous guest-stack Future await ABI still emitted")
                 start_pos = guest.stdout.find(
-                    "call ptr @oreslang_source_actor_send_async_start(")
+                    "call i32 @oreslang_source_actor_send_async_start_checked(")
                 detach_pos = guest.stdout.find(
                     "call i32 @oreslang_source_actor_detach_send_future_checked(")
                 assert 0 <= start_pos < detach_pos, (
