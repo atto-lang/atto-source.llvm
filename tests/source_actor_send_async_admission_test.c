@@ -695,6 +695,83 @@ static void detached_scalar_state_accepts_exact_bound(void) {
         "SOURCE_SEND_ASYNC_DETACHED_STATE_BOUND_PASS words=16 null_state_rejected=1 copied=16 state_zeroed=1 final_join=1\n");
 }
 
+static atomic_int detached_rearm_first_seen;
+static atomic_int detached_rearm_second_seen;
+
+static int64_t detached_rearm_second_probe(
+        void* actor, const int64_t* state, uint64_t state_count) {
+    CHECK(actor != NULL);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    CHECK(state != NULL && state_count == 1);
+    CHECK(state[0] == 42);
+    atomic_store_explicit(
+        &detached_rearm_second_seen, 1, memory_order_release);
+    oreslang_source_actor_request_stop(actor);
+    return state[0] + 1;
+}
+
+static int64_t detached_rearm_first_probe(
+        void* actor, const int64_t* state, uint64_t state_count) {
+    CHECK(actor != NULL);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    CHECK(state != NULL && state_count == 1);
+    CHECK(state[0] == 40);
+
+    int64_t next_state[1] = {42};
+    CHECK(oreslang_source_actor_rearm_detached_send_state_checked(
+        actor,
+        921,
+        detached_rearm_second_probe,
+        UINT64_C(0x5ef9),
+        next_state,
+        1) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    /* Rearm owns a copy. Mutating this callback-local buffer after the call
+     * must not change the next PC's runtime-owned state. */
+    next_state[0] = 999;
+    atomic_store_explicit(
+        &detached_rearm_first_seen, 1, memory_order_release);
+    return -1;
+}
+
+static void detached_two_pc_rearm_defers_descriptor_cleanup_to_host(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 920, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+
+    int64_t state[1] = {40};
+    atomic_store_explicit(
+        &detached_rearm_first_seen, 0, memory_order_release);
+    atomic_store_explicit(
+        &detached_rearm_second_seen, 0, memory_order_release);
+
+    CHECK(oreslang_source_actor_detach_send_future_state_checked(
+        future,
+        detached_rearm_first_probe,
+        UINT64_C(0x5ef8),
+        state,
+        1) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    state[0] = 999;
+
+    int64_t result = -1;
+    CHECK(oreslang_source_actor_wait_detached_send_result(&result)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(result == 43);
+    CHECK(atomic_load_explicit(
+        &detached_rearm_first_seen, memory_order_acquire) == 1);
+    CHECK(atomic_load_explicit(
+        &detached_rearm_second_seen, memory_order_acquire) == 1);
+    CHECK(oreslang_source_actor_test_detached_state_cleared());
+
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
+}
+
 typedef struct {
     atomic_int started;
     int status;
@@ -1180,6 +1257,8 @@ int main(void) {
     atomic_init(&detached_send_resume_seen, 0);
     atomic_init(&detached_state_resume_seen, 0);
     atomic_init(&detached_max_state_resume_seen, 0);
+    atomic_init(&detached_rearm_first_seen, 0);
+    atomic_init(&detached_rearm_second_seen, 0);
     atomic_init(&teardown_resume_entered, 0);
     atomic_init(&release_teardown_resume, 0);
     atomic_init(&failed_send_continuation_seen, 0);
@@ -1195,6 +1274,7 @@ int main(void) {
     detached_future_releases_guest_stack_before_admission();
     detached_scalar_state_is_copied_before_guest_return();
     detached_scalar_state_accepts_exact_bound();
+    detached_two_pc_rearm_defers_descriptor_cleanup_to_host();
     detached_result_finalizer_is_single_consumer();
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
