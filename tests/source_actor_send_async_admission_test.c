@@ -721,6 +721,18 @@ static int64_t detached_rearm_second_probe(
         == ORES_CONTINUATION_BOUNDARY_AWAIT);
     CHECK(continuations[0].record.source_token == UINT64_C(0x5ef9));
     CHECK(continuations[1].record.source_token == UINT64_C(0x5ef8));
+    CHECK(continuations[0].record.parent.slot
+        == continuations[1].handle.slot);
+    CHECK(continuations[0].record.parent.generation
+        == continuations[1].handle.generation);
+    CHECK(executions[0].context.parent_execution.slot
+        == executions[1].handle.slot);
+    CHECK(executions[0].context.parent_execution.generation
+        == executions[1].handle.generation);
+    CHECK(executions[1].context.parent_execution.slot
+        == executions[2].handle.slot);
+    CHECK(executions[1].context.parent_execution.generation
+        == executions[2].handle.generation);
 
     atomic_store_explicit(
         &detached_rearm_second_seen, 1, memory_order_release);
@@ -790,6 +802,8 @@ static void detached_two_pc_rearm_defers_descriptor_cleanup_to_host(void) {
         &detached_rearm_first_seen, 0, memory_order_release);
     atomic_store_explicit(
         &detached_rearm_second_seen, 0, memory_order_release);
+    const uint64_t host_waits_before =
+        ores_native_vm_test_async_send_host_wait_calls();
 
     CHECK(oreslang_source_actor_detach_send_future_state_checked(
         future,
@@ -807,10 +821,12 @@ static void detached_two_pc_rearm_defers_descriptor_cleanup_to_host(void) {
         &detached_rearm_first_seen, memory_order_acquire) == 1);
     CHECK(atomic_load_explicit(
         &detached_rearm_second_seen, memory_order_acquire) == 1);
+    CHECK(ores_native_vm_test_async_send_host_wait_calls()
+        == host_waits_before);
     CHECK(oreslang_source_actor_test_detached_state_cleared());
 
     fprintf(stderr,
-        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 trace_executions=3 trace_continuations=2 overbound_rejected=1 null_state_rejected=1 duplicate_rearm_rejected=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
+        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 trace_executions=3 trace_continuations=2 trace_parent_chain=1 host_settlement_observer=0 overbound_rejected=1 null_state_rejected=1 duplicate_rearm_rejected=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
 }
 
 static atomic_int detached_rearm_terminated_pc1_seen;
