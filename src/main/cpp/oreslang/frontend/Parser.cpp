@@ -1886,6 +1886,8 @@ private:
                         });
                     if (task == value.source_tasks.end())
                         fail("await requires the live source Task<int> binding");
+                    if (binding.name == task_name)
+                        fail("Task<int> await result cannot shadow its Task binding");
                     if (task->awaited)
                         fail("source Task<int> must be awaited exactly once");
                     task->awaited = true;
@@ -4114,11 +4116,17 @@ private:
             if (!fn.source_tasks.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() ||
                         fn.source_tasks.size() != 1 ||
+                        !fn.generic_parameters.empty() ||
+                        fn.has_declared_effects ||
+                        fn.scalar_while ||
+                        fn.caught_throw_value ||
                         !fn.actor_spawns.empty() ||
+                        !fn.actor_actions.empty() ||
+                        !fn.actor_field_writes.empty() ||
                         !fn.ready_await_actor.empty() ||
                         !fn.done_await_actor.empty())
                     throw std::runtime_error(
-                        "native Task<int> v1 requires one capture-free Task in zero-argument main");
+                        "native Task<int> v1 requires one capture-free Task in synchronous zero-argument main");
                 const auto& task = fn.source_tasks.front();
                 if (!task.awaited || !task.result ||
                         !native_capture_free_task_tree(*task.result))
@@ -4134,6 +4142,13 @@ private:
                         fn.locals.front().task_await_name != task.name)
                     throw std::runtime_error(
                         "native Task<int> v1 await must be the first scalar local");
+                if (std::any_of(
+                        fn.locals.begin(), fn.locals.end(),
+                        [&](const LocalBinding& local) {
+                            return local.name == task.name;
+                        }))
+                    throw std::runtime_error(
+                        "source Task<int> binding cannot be shadowed by a scalar local");
             }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
