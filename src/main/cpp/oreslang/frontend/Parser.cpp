@@ -4450,6 +4450,21 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_names(stmt, params);
+            if (fn.try_select) {
+                if (!references.count(fn.try_select->actor)
+                        || !live_actors.count(fn.try_select->actor))
+                    throw std::runtime_error(
+                        "unknown or stopped actor try-select receiver '" +
+                        fn.try_select->actor + "'");
+                validate_expression(
+                    *fn.try_select->payload, params, functions);
+                NameSet send_names = params;
+                NameSet default_names = params;
+                for (const auto& statement : fn.try_select->send_branch)
+                    check_statement_names(statement, send_names);
+                for (const auto& statement : fn.try_select->default_branch)
+                    check_statement_names(statement, default_names);
+            }
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (std::size_t action_position = 0;
@@ -4623,6 +4638,19 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_types(stmt, scalar_types);
+            if (fn.try_select) {
+                require_scalar(
+                    *fn.try_select->payload,
+                    ScalarType::I64,
+                    "native try-select actor message payload",
+                    scalar_types);
+                TypeMap send_types = scalar_types;
+                TypeMap default_types = scalar_types;
+                for (const auto& statement : fn.try_select->send_branch)
+                    check_statement_types(statement, send_types);
+                for (const auto& statement : fn.try_select->default_branch)
+                    check_statement_types(statement, default_types);
+            }
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send)
