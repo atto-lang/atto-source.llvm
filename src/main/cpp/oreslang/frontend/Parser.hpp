@@ -76,6 +76,9 @@ struct Parameter {
     std::string class_name; // empty means scalar int/bool
     std::string generic_type; // stage-one i64 generic slot
     std::string pending_type_alias;
+    // Original source signature spelling retained across scalar alias lowering
+    // so source-export visibility checks cannot be bypassed by ABI erasure.
+    std::string source_type_name;
     ScalarType scalar_type = ScalarType::I64;
     Mode mode = Mode::Value;
     std::string sum_type;
@@ -258,6 +261,8 @@ struct Function {
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
     std::string pending_return_type_alias;
+    // Original source result spelling retained for export API-leak checks.
+    std::string source_return_type_name;
     std::string return_class; // immutable leaf record handle; never a stack pointer
     // Single-frame native i64 throw; no nested exceptions or suspension.
     std::unique_ptr<Expression> caught_throw_value;
