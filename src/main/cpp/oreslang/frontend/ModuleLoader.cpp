@@ -30,9 +30,11 @@ class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
-    bool owned, scalar_loop, host;
+    bool owned, scalar_loop, static_i64_select, host;
 public:
-    Loader(bool owned, bool scalar_loop, bool host) : owned(owned), scalar_loop(scalar_loop), host(host) {}
+    Loader(bool owned, bool scalar_loop, bool static_i64_select, bool host)
+        : owned(owned), scalar_loop(scalar_loop),
+          static_i64_select(static_i64_select), host(host) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0);
@@ -115,7 +117,10 @@ private:
         auto unit = std::make_unique<Unit>();
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        try {
+            unit->program = parse_unresolved_program(
+                text, owned, scalar_loop, static_i64_select);
+        }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -132,7 +137,8 @@ private:
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
-        if (!current.program.imports.empty() && (!host || scalar_loop))
+        if (!current.program.imports.empty() &&
+                (!host || scalar_loop || static_i64_select))
             fail(current, "native module imports currently require the ordinary host target");
         for (const auto& imported : current.program.imports) {
             if (++edges > 4096) fail(current, "native import graph exceeds 4096 edges");
@@ -286,7 +292,9 @@ private:
 };
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
-                            bool owned, bool scalar_loop, bool host) {
-    return Loader(owned, scalar_loop, host).run(path, std::move(source), identity);
+                            bool owned, bool scalar_loop,
+                            bool static_i64_select, bool host) {
+    return Loader(owned, scalar_loop, static_i64_select, host)
+        .run(path, std::move(source), identity);
 }
 } // namespace oreslang
