@@ -522,10 +522,19 @@ static void source_send_wake(
     group_lock();
     frame = group.pending_send;
     ensure(frame && frame->suspend_recorded && !frame->done);
-    ensure(frame->send_future != NULL);
+    ensure(frame->send_future != NULL
+        && frame->send_future->live
+        && frame->send_future->consuming
+        && frame->send_future->actor == frame->actor);
     ensure(ticket.producer.scheduler_domain == group.root_ref.scheduler_domain
         && ticket.producer.actor_slot == group.root_ref.actor_slot
         && ticket.producer.generation == group.root_ref.generation);
+    ensure(ticket.target.scheduler_domain
+            == frame->send_future->ticket.target.scheduler_domain
+        && ticket.target.actor_slot
+            == frame->send_future->ticket.target.actor_slot
+        && ticket.target.generation
+            == frame->send_future->ticket.target.generation);
     ensure(ticket.continuation_slot == frame->link.continuation.slot
         && ticket.continuation_generation == frame->link.continuation.generation
         && ticket.code_generation == 1
@@ -536,7 +545,8 @@ static void source_send_wake(
     if (wake_outcome == ORES_NATIVE_WAKE_READY)
         ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
     else if (wake_outcome == ORES_NATIVE_WAKE_FAILED)
-        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TERMINATED);
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TERMINATED
+            || send_outcome == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
     else if (wake_outcome == ORES_NATIVE_WAKE_CANCELLED)
         ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE);
     else
