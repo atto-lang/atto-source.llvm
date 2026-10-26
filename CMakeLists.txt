@@ -3578,6 +3578,16 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-macro-aot-admission-test)
     set_tests_properties(native_macro_aot_admission_no_runtime_fallback
         PROPERTIES TIMEOUT 20)
+
+    # Exercise the actual compiler executable too. The existing contract
+    # harness requires exit 1, the dedicated diagnostic, and empty stdout,
+    # preventing partial LLVM IR from escaping a rejected macro source.
+    oreslang_contract_test(native_macro_declaration_no_ir
+        native-macro-declaration-reject.ores
+        --diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+    oreslang_contract_test(native_macro_invocation_no_ir
+        native-macro-invocation-reject.ores
+        --diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
