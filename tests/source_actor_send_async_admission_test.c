@@ -353,6 +353,31 @@ static void competing_root_send_continuation_fails_closed(void) {
         "SOURCE_SEND_ASYNC_CONTINUATION_CONTENTION_PASS owner=1 refused=1 reusable_loser=1\n");
 }
 
+static void foreign_future_pointer_fails_closed_without_dereference(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    int foreign_storage = 0;
+    void* foreign = &foreign_storage;
+    CHECK(oreslang_source_actor_await_send_future_checked(foreign)
+        == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    CHECK(!oreslang_source_actor_cancel_send_future(foreign));
+
+    int64_t result = -1;
+    CHECK(oreslang_source_actor_await_send_future_continuation_checked(
+        foreign,
+        contention_resume_probe,
+        UINT64_C(0x5ef2),
+        &result) == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    CHECK(result == 0);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_FOREIGN_FUTURE_PASS invalid_ref=1 no_deref=1\n");
+}
+
 static void stored_future_starts_before_await_and_progresses(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -694,6 +719,7 @@ int main(void) {
     pending_future_await_excludes_concurrent_cancel();
     pending_future_double_await_has_single_consumer();
     competing_root_send_continuation_fails_closed();
+    foreign_future_pointer_fails_closed_without_dereference();
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
     failed_stored_future_resumes_only_for_trace_cleanup();
