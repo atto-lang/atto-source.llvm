@@ -76,6 +76,19 @@ static void recycled_numeric_ref_cannot_inspect_next_control_slot() {
     CHECK(group.mark_ready(new_ref));
     CHECK(old_ref == new_ref);
     CHECK(!old_ref.same_incarnation(new_ref));
+
+    bool stale_loan_rejected = false;
+    try { old_ref.retain_resource_loan(); }
+    catch (const std::logic_error&) { stale_loan_rejected = true; }
+    CHECK(stale_loan_rejected);
+    CHECK(old_ref.outstanding_resource_loans() == 0);
+    CHECK(new_ref.outstanding_resource_loans() == 0);
+    new_ref.retain_resource_loan();
+    CHECK(old_ref.outstanding_resource_loans() == 0);
+    CHECK(new_ref.outstanding_resource_loans() == 1);
+    new_ref.release_resource_loan();
+    CHECK(new_ref.outstanding_resource_loans() == 0);
+
     int ran = 0;
     CHECK(group.enqueue_control(new_ref, [&] { ++ran; }));
     CHECK(!group.has_pending_control(old_ref));
