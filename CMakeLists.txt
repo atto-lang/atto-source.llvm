@@ -1185,7 +1185,11 @@ if(BUILD_TESTING)
     set_tests_properties(native_async_io_completion_generation_races PROPERTIES TIMEOUT 20)
     # Pre-source-lowering safety gate: prevents stale continuation wakeups,
     # premature actor-heap retirement, duplicate resumes and live-loan drops.
-    add_executable(oreslang-pinned-continuation-gate-test tests/pinned_continuation_gate_test.cpp)
+    add_executable(oreslang-pinned-continuation-gate-test
+        tests/pinned_continuation_gate_test.cpp
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c)
+    set_target_properties(oreslang-pinned-continuation-gate-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_include_directories(oreslang-pinned-continuation-gate-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-pinned-continuation-gate-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-pinned-continuation-gate-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
