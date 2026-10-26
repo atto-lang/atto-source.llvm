@@ -5190,7 +5190,7 @@ void resolve_future_pipeline_contracts(Program& program) {
                         !native_pure_scalar_tree(*stage.result))
                     throw std::runtime_error(
                         "native Future<int> pipeline stage v1 requires one pure "
-                        "sync int -> int function with no captures/effects");
+                        "int -> int callable with no captures/effects");
 
                 types::FuturePipelinePlan plan;
                 plan.declaration_identity =
