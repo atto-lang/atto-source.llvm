@@ -1,0 +1,15 @@
+fnc touch(int n): int { return n; }
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int { return n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  let chosen: int = 0;
+  try select {
+    when worker.send_async(1): -> { touch(43); }
+    default -> { chosen = 42; }
+  }
+  stop worker;
+  return chosen;
+}
