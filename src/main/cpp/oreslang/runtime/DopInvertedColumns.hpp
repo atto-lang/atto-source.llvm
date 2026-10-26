@@ -60,7 +60,7 @@ private:
 template<class... Fields>
 class InvertedColumns {
     static_assert(sizeof...(Fields) != 0, "an inverted class needs at least one field");
-    static_assert((!std::is_cv_v<Fields> && ...),
+    static_assert(((!std::is_const_v<Fields> && !std::is_volatile_v<Fields>) && ...),
                   "phase-one columns reject cv-qualified field types");
     static_assert(((detail::inverted_scalar_field_v<Fields>
                     || detail::is_fixed_record_v<Fields>) && ...),
