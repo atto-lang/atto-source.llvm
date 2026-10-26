@@ -87,9 +87,13 @@ fn main() {
         // precisely one compiler-generated call to the CONTROL await bridge.
         let await_calls = ir.lines().filter(|line|
             line.contains("call ") &&
-            line.contains("@oreslang_source_actor_await_ready(")).count();
+            line.contains("@oreslang_source_actor_await_ready_effect(")).count();
         assert_eq!(await_calls, 1,
             "{name}: source HasFuture await must emit exactly one resume call");
+        for symbol in ["main.ready.throw", "main.ready.status",
+                       "oreslang_source_actor_unhandled_ready_effect"] {
+            assert!(ir.contains(symbol), "{name}: missing typed effect boundary {symbol}");
+        }
         let ll = work.join(format!("ready-{index}.ll"));
         fs::write(&ll, &ir).expect("write LLVM IR");
         let bin = work.join(format!("ready-{index}"));
@@ -125,5 +129,45 @@ fn main() {
             expected_trace(&stderr, name);
         }
         println!("PASS {name} actual native AOT, repeated 4 times, sanitized={sanitize}");
+
+        // GNU/ELF link wrapping forces stop before constructor admission in
+        // the actual compiler-produced guest. No test-only source syntax or
+        // replacement compiler is involved. macOS keeps the success coverage;
+        // the portable C runtime race test covers its failure projection.
+        if cfg!(target_os = "linux") {
+            let shim = work.join("stop-before-ready.c");
+            fs::write(&shim, r#"
+#include "oreslang/runtime/SourceActorBootstrap.h"
+void* __real_oreslang_source_actor_spawn(OresSourceActorInit, OresSourceActorMessage, uint64_t);
+int32_t __real_oreslang_source_actor_await_ready_effect(void*, OresSourceActorContinuation, uint64_t, int64_t*);
+void* __wrap_oreslang_source_actor_spawn(OresSourceActorInit init, OresSourceActorMessage msg, uint64_t fields) {
+    oreslang_source_actor_test_hold_initialization(1);
+    return __real_oreslang_source_actor_spawn(init, msg, fields);
+}
+int32_t __wrap_oreslang_source_actor_await_ready_effect(void* actor, OresSourceActorContinuation next, uint64_t site, int64_t* result) {
+    oreslang_source_actor_request_stop(actor);
+    oreslang_source_actor_test_hold_initialization(0);
+    return __real_oreslang_source_actor_await_ready_effect(actor, next, site, result);
+}
+"#).expect("write deterministic race shim");
+            let failed_bin = work.join(format!("ready-failed-{index}"));
+            // Reuse the exact compiler output, runtime sources and sanitizer
+            // options; the final -o overrides the successful executable path.
+            link.arg(&shim)
+                .args(["-Wl,--wrap=oreslang_source_actor_spawn",
+                       "-Wl,--wrap=oreslang_source_actor_await_ready_effect", "-o"])
+                .arg(&failed_bin);
+            run(&mut link, "link native typed readiness failure");
+            let failed = Command::new(&failed_bin).output().expect("run failed readiness");
+            assert_eq!(failed.status.code(), Some(1), "{name}: failure must reach OS boundary, not abort");
+            let stderr = String::from_utf8(failed.stderr).expect("failure UTF8");
+            assert!(stderr.contains("Unhandled throw ActorTerminated:"), "{name}: {stderr}");
+            assert!(stderr.contains("outcome=3"), "{name}: {stderr}");
+            assert!(stderr.contains("constructor_on_worker=0 released=1 ready=0 accepted=0 processed=0 abandoned=0"),
+                "{name}: post-READY guest code ran or actor was not reclaimed: {stderr}");
+            assert!(stderr.contains("active=0"), "{name}: actor leak: {stderr}");
+            assert!(!stderr.contains("Sanitizer"), "{name}: sanitizer failure: {stderr}");
+            println!("PASS {name} compiled ActorTerminated propagation and cleanup, sanitized={sanitize}");
+        }
     }
 }

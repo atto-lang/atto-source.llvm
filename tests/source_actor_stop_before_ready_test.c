@@ -65,6 +65,10 @@ static void check_failed_readiness(void* actor) {
     check(outcome
         == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
     check(result == INT64_C(99));
+    check(oreslang_source_actor_await_ready_effect(
+        actor, readiness_continuation, UINT64_C(0x4243), &result)
+        == ORES_SOURCE_READY_EFFECT_ACTOR_TERMINATED);
+    check(result == INT64_C(99));
     check(atomic_load_explicit(
         &readiness_continuation_calls, memory_order_acquire) == 0);
 }
@@ -200,12 +204,12 @@ static void successful_readiness(void) {
         sched_yield();
 
     int64_t result = 0;
-    const int outcome = oreslang_source_actor_await_ready_checked(
+    const int32_t outcome = oreslang_source_actor_await_ready_effect(
         actor,
         readiness_continuation,
         UINT64_C(0x5151),
         &result);
-    check(outcome == ORES_SOURCE_ACTOR_STARTUP_READY);
+    check(outcome == ORES_SOURCE_READY_EFFECT_RETURN);
     check(result == 77);
     check(atomic_load_explicit(
         &readiness_continuation_calls, memory_order_acquire) == 1);

@@ -682,6 +682,25 @@ int oreslang_source_actor_await_ready_checked(
     return outcome;
 }
 
+int32_t oreslang_source_actor_await_ready_effect(
+        void* opaque,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token,
+        int64_t* result) {
+    const int outcome = oreslang_source_actor_await_ready_checked(
+        opaque, continuation, source_token, result);
+    if (outcome == ORES_SOURCE_ACTOR_STARTUP_READY)
+        return ORES_SOURCE_READY_EFFECT_RETURN;
+    ensure(outcome == ORES_SOURCE_ACTOR_STARTUP_TERMINATED_BEFORE_READY);
+    return ORES_SOURCE_READY_EFFECT_ACTOR_TERMINATED;
+}
+
+int32_t oreslang_source_actor_unhandled_ready_effect(int32_t effect) {
+    ensure(effect == ORES_SOURCE_READY_EFFECT_ACTOR_TERMINATED);
+    fputs("Unhandled throw ActorTerminated: actor terminated before READY\n", stderr);
+    return 1;
+}
+
 int64_t oreslang_source_actor_await_ready(
         void* opaque,
         OresSourceActorContinuation continuation,
@@ -690,7 +709,8 @@ int64_t oreslang_source_actor_await_ready(
     const int outcome = oreslang_source_actor_await_ready_checked(
         opaque, continuation, source_token, &result);
     /*
-     * Existing source lowering has no typed ActorTerminated projection yet.
+     * Legacy trusted callers have no effect output. New source lowering uses
+     * await_ready_effect and propagates its status to the host entrypoint.
      * Fail closed instead of hanging or running the continuation after failed
      * readiness; checked host/runtime callers can observe the failure exactly.
      */

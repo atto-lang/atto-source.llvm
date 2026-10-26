@@ -30,7 +30,7 @@ rejected before IR generation because reassignment would invalidate the
 single-producer/single-consumer proof.
 The ready Future is consumed once, before all post-await sends and stops,
 into the existing compiled root CONTROL continuation. The execution uses
-`oreslang_source_actor_await_ready` with its continuation provenance and
+`oreslang_source_actor_await_ready_effect` with its continuation provenance and
 scheduler-generated CONTROL turn; the actor carrier does not spin or block.
 The surrounding actor API remains the restricted one-actor, zero-suspended-
 local, scalar-return slice. The token may not be copied, shadowed, reassigned,
@@ -50,3 +50,20 @@ and asserts the same message effects and logical ancestry. Invalid
 non-ActorRef operands and unsupported lifecycle methods fail closed.
 Actual native compiler, AOT runtime and Java/GraalVM differential execution
 are **required separately** and are not established by writing these tests.
+
+## Narrow readiness failure propagation
+
+The compiler-generated scalar zero-argument main has a private i32 effect
+output: 0 means return, 1 means throw ActorTerminated. Its result slot is
+initialized and is meaningful only for return. The runtime maps its startup
+outcome to this separate effect discriminant; failure never runs the guest
+readiness continuation. Trusted main still stops/joins the actor on either
+outcome before returning to the OS wrapper. The wrapper checks the effect
+before interpreting the scalar exit value, reports an unhandled ActorTerminated
+and returns status 1 for failure. Guest calls to this special entrypoint reject.
+
+This is propagation to an unhandled OS entry boundary, not general catch/trap,
+throw payload, inter-function effect propagation, or unwind lowering. DONE uses
+its existing distinct physical-ACK/resume/reclamation path. Linux AOT tests
+force stop before constructor admission for all three readiness spellings;
+the portable runtime test checks all three startup race windows.

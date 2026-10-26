@@ -217,7 +217,7 @@ def main():
                 # A runtime declaration or source text alone is not an await:
                 # require exactly one generated call to the CONTROL bridge.
                 calls = [line for line in guest.stdout.splitlines()
-                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                         if "call i32 @oreslang_source_actor_await_ready_effect(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-await-done.ores":
                 assert "oreslang_source_actor_request_stop" in guest.stdout, name
