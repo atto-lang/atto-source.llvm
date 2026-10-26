@@ -3579,15 +3579,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_macro_aot_admission_no_runtime_fallback
         PROPERTIES TIMEOUT 20)
 
-    # Exercise the actual compiler executable too. The existing contract
-    # harness requires exit 1, the dedicated diagnostic, and empty stdout,
-    # preventing partial LLVM IR from escaping a rejected macro source.
-    oreslang_contract_test(native_macro_declaration_no_ir
-        native-macro-declaration-reject.ores
-        --diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
-    oreslang_contract_test(native_macro_invocation_no_ir
-        native-macro-invocation-reject.ores
-        --diagnostic "NATIVE_MACRO_EXPANDER_REQUIRED")
+    # Exercise the actual compiler executable without adding a Python test
+    # dependency. Rejection must exit 1, carry the dedicated diagnostic, and
+    # emit no stdout/partial LLVM IR.
+    foreach(macro_fixture IN ITEMS
+            native-macro-declaration-reject.ores
+            native-macro-invocation-reject.ores)
+        string(REPLACE ".ores" "" macro_case "${macro_fixture}")
+        add_test(NAME "native_${macro_case}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${macro_fixture}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_${macro_case}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
