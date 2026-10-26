@@ -674,6 +674,22 @@ void validate_i64_ownership(const Program& program) {
                 const auto& call = *binding.initializer;
                 array_owner(*call.left, locals, true);
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
+            } else if (!binding.task_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Task<int> await result binding");
+                const bool task_exists = std::any_of(
+                    function.source_tasks.begin(), function.source_tasks.end(),
+                    [&](const SourceTaskI64Binding& task) {
+                        return task.name == binding.task_await_name &&
+                            task.awaited;
+                    });
+                if (!task_exists)
+                    throw std::runtime_error(
+                        "ownership violation: Task<int> await lost producer provenance");
+                // Capture-free producer transfers no caller owner or borrow.
+                // The awaited scalar becomes an ordinary owned stack value.
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
