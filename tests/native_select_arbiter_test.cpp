@@ -237,17 +237,20 @@ static void throwing_revoker_does_not_skip_other_losers() {
     });
     third.arm([&] { ++third_revoke; });
 
-    bool observed = false;
-    try {
-        (void)first.try_win();
-    } catch (const std::runtime_error&) {
-        observed = true;
-    }
-    assert(observed);
+    assert(first.try_win());
     assert(second_revoke == 1);
     assert(third_revoke == 1);
     assert(select.winner().has_value() && *select.winner() == 0);
     assert(select.unarmed_loser_count() == 0);
+    assert(select.has_cleanup_failure());
+
+    bool observed = false;
+    try {
+        std::rethrow_exception(select.cleanup_failure());
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+    assert(observed);
 }
 
 static void concurrent_ready_race_has_exactly_one_winner() {
