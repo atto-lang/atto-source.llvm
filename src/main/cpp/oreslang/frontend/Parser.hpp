@@ -103,6 +103,9 @@ struct LocalBinding {
     std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
+    // Nonempty only for the first capture-free source Task<int> slice.
+    // The binding receives the result of exactly one scheduler-owned Task await.
+    std::string task_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
 };
 
@@ -162,6 +165,13 @@ struct ActorSpawnBinding {
     std::string actor_type;
     SourceType declared_type;
     std::size_t offset = 0;
+};
+
+struct SourceTaskI64Binding {
+    std::string name;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+    bool awaited = false;
 };
 struct ActorSend {
     std::string reference;
@@ -238,6 +248,9 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
+    // First executable source Task slice: one capture-free Task<int> in trusted
+    // zero-argument main, submitted before ordinary locals and awaited once.
+    std::vector<SourceTaskI64Binding> source_tasks;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
