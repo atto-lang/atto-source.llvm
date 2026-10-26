@@ -84,6 +84,8 @@ def main():
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-send-async.ores", 1, 1, None),
+        ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -114,19 +116,19 @@ def main():
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
         "source-actor-await-get-done.ores": "actor effects after await get_done are unsupported",
-        "source-actor-await-worker-twice.ores": "native source supports only one direct ActorRef lifecycle await",
+        "source-actor-await-worker-twice.ores": "native source supports only one async await boundary",
         "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
         "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
         "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
         "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-double-await.ores": "native source supports only one direct ActorRef lifecycle await",
-        "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
+        "source-actor-future-void-double-await.ores": "native source supports only one async await boundary",
+        "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef",
         "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
-        "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
-        "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
+        "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> token",
+        "source-actor-future-void-wrong-producer.ores": "Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)",
         "source-actor-future-void-send.ores": "unknown parameter",
         "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-await-again.ores": "native source supports only one direct ActorRef lifecycle await",
+        "source-actor-future-void-await-again.ores": "native source supports only one async await boundary",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
@@ -135,7 +137,7 @@ def main():
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
-        "source-actor-await-two-lifecycle.ores": "native source supports only one direct ActorRef lifecycle await",
+        "source-actor-await-two-lifecycle.ores": "native source supports only one async await boundary",
         "source-actor-await-spawn.ores": "native async/channel/select boundary unsupported",
         "source-actor-ref-local-shadow.ores": "scalar local shadows actor reference",
         "source-actor-spawn-escape.ores": "unknown parameter",
@@ -153,6 +155,14 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-send-async-unawaited-reject.ores":
+            "native send_async statement must be awaited directly or bound to Future<void>",
+        "source-actor-send-async-method-reject.ores":
+            "native send_async direct await requires trusted zero-argument main",
+        "source-actor-send-async-future-unused-reject.ores":
+            "Future<void> send_async token must be awaited exactly once",
+        "source-actor-send-async-future-stop-before-await-reject.ores":
+            "send_async Future target stopped before await",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -177,8 +187,44 @@ def main():
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
+                "source-actor-send-async.ores",
+                "source-actor-send-async-future.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-send-async.ores":
+                start_calls = [line for line in guest.stdout.splitlines()
+                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                await_calls = [line for line in guest.stdout.splitlines()
+                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
+                assert len(start_calls) == 1, (
+                    name, "expected direct send_async to submit one scheduler Future", start_calls)
+                assert len(await_calls) == 1, (
+                    name, "expected direct send_async to use logical Future await", await_calls)
+                assert ".send_async_continuation" in guest.stdout, (
+                    name, "missing generated direct send_async continuation")
+                assert "call void @oreslang_source_actor_await_send_async(" not in guest.stdout, (
+                    name, "legacy host-wait direct send_async ABI still emitted")
+            if name == "source-actor-send-async-future.ores":
+                start_calls = [line for line in guest.stdout.splitlines()
+                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                await_calls = [line for line in guest.stdout.splitlines()
+                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
+                send_calls = [line for line in guest.stdout.splitlines()
+                              if "call void @oreslang_source_actor_send(" in line]
+                assert len(start_calls) == 1, (
+                    name, "expected one eager send_async Future submission", start_calls)
+                assert len(await_calls) == 1, (
+                    name, "expected one logical Future<void> continuation await", await_calls)
+                assert len(send_calls) == 1, (
+                    name, "expected one post-await ordinary send", send_calls)
+                assert ".send_future_continuation" in guest.stdout, (
+                    name, "missing generated post-await send Future continuation")
+                start_pos = guest.stdout.find(
+                    "call ptr @oreslang_source_actor_send_async_start(")
+                await_pos = guest.stdout.find(
+                    "call i64 @oreslang_source_actor_await_send_future(")
+                assert 0 <= start_pos < await_pos, (
+                    name, "send_async Future start must precede logical await")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -249,6 +295,20 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-send-async.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert (
+                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
+                    in trace_lines[0]), trace_lines[0]
+            if name == "source-actor-send-async-future.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert (
+                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
+                    in trace_lines[0]), trace_lines[0]
             if name == "source-actor-await-done.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
