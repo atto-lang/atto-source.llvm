@@ -45,6 +45,13 @@ typedef struct {
     uint64_t continuation_generation;
     uint64_t code_generation;
     uint64_t descriptor_generation;
+    /* Exact scheduler async-descriptor slot when this wake is bound directly
+     * to send_async; UINT64_MAX for generic externally managed wake escrow.
+     * Appended after the legacy ticket prefix to preserve positional initializers. */
+    uint64_t descriptor_slot;
+    /* Terminal detail copied before callback publication. This is result data,
+     * not wake identity, and may change from zero to a completion code. */
+    uint64_t completion_code;
 } OresNativeWakeTicket;
 typedef enum {
     ORES_NATIVE_WAKE_INVALID = 0,
@@ -148,6 +155,17 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
 int ores_native_actor_scheduler_async_send_status(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
     OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
+/* Bind one scheduler-owned producer wake to this exact async-send descriptor.
+ * Binding and terminal-state observation share the scheduler mutex: PENDING
+ * keeps the reserved wake parked; READY/FAILED/CANCELLED publishes it
+ * immediately. READY remains valid if the target stopped after admission.
+ * completion_code in the callback ticket is the exact OresNativeSendStatus.
+ * One descriptor accepts at most one wake. */
+int ores_native_actor_scheduler_bind_async_send_wake(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
+    OresNativeActorRef producer, uint64_t continuation_slot,
+    uint64_t continuation_generation, uint64_t code_generation,
+    OresNativeWakeTicket* out);
 /* External-host wait only. The Future itself progresses without this wait. */
 int ores_native_actor_scheduler_await_async_send(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
