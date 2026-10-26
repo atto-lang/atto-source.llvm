@@ -36,6 +36,12 @@ reject "mutable fixed-record projection" \
 reject "nested fixed record member" \
   'int main() { using Inner = oreslang::dop::FixedRecord<std::int32_t>; using Outer = oreslang::dop::FixedRecord<Inner>; (void)Outer::encoded_size; }' \
   'fixed record members must be i32/i64/f32/f64/bool'
+reject "cv-qualified scalar column" \
+  'int main() { oreslang::dop::InvertedColumns<const std::int32_t> invalid; (void)invalid.size(); }' \
+  'phase-one columns reject cv-qualified field types'
+reject "cv-qualified fixed record member" \
+  'int main() { using R = oreslang::dop::FixedRecord<const std::int32_t>; (void)R::encoded_size; }' \
+  'fixed record members must be i32/i64/f32/f64/bool'
 printf '#include "oreslang/runtime/DopInvertedColumns.hpp"\nint main() { oreslang::dop::detail::InvertedOwnerSequence::next_.store(1); }\n' > "$tmp/private-owner.cpp"
 if "$cxx" -std=c++20 -I"$here/src/main/cpp" "$tmp/private-owner.cpp" -o "$tmp/private-owner" 2>"$tmp/private-owner.err"; then
   echo "FAIL: host code mutated the inverted owner sequence" >&2
