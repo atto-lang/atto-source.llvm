@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include "oreslang/types/FunctionEffects.hpp"
+#include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
 
 namespace oreslang {
@@ -106,6 +107,9 @@ struct LocalBinding {
     // Nonempty only for the first capture-free source Task<int> slice.
     // The binding receives the result of exactly one scheduler-owned Task await.
     std::string task_await_name;
+    // Nonempty only for the first checked Future<int> pipeline slice. The
+    // binding receives the result of exactly one scheduler-owned Future await.
+    std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
 };
 
@@ -173,6 +177,17 @@ struct SourceTaskI64Binding {
     std::size_t offset = 0;
     bool awaited = false;
 };
+
+struct SourceFuturePipelineI64Binding {
+    std::string name;
+    std::string producer_function;
+    std::vector<std::string> stages;
+    std::vector<types::FuturePipelinePlan> plans;
+    std::size_t offset = 0;
+    bool root_consumed = false;
+    bool awaited = false;
+};
+
 struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
@@ -251,6 +266,10 @@ struct Function {
     // First executable source Task slice: one capture-free Task<int> in trusted
     // zero-argument main, submitted before ordinary locals and awaited once.
     std::vector<SourceTaskI64Binding> source_tasks;
+    // First executable Future-aware value-pipeline slice. Async producers are
+    // compiled as scheduler work; sync unary stages execute on that carrier.
+    std::vector<SourceFuturePipelineI64Binding> future_pipelines;
+    bool async_source_i64 = false;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
