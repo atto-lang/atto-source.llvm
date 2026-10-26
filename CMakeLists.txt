@@ -1996,19 +1996,19 @@ if(BUILD_TESTING)
         add_custom_target(oreslang-native-structural-gate-build ALL
             DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate")
         if(ORE_CLANG)
-            add_test(NAME native_structural_shape_contract
+            add_test(NAME native_structural_shape_failclosed
                 COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate"
                     "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
         else()
-            add_test(NAME native_structural_shape_contract
+            add_test(NAME native_structural_shape_failclosed
                 COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-structural-gate"
                     "$<TARGET_FILE:oreslang-llvmc>")
         endif()
     else()
-        add_test(NAME native_structural_shape_contract
+        add_test(NAME native_structural_shape_failclosed
             COMMAND "${CMAKE_COMMAND}" -E false)
     endif()
-    set_tests_properties(native_structural_shape_contract PROPERTIES TIMEOUT 180)
+    set_tests_properties(native_structural_shape_failclosed PROPERTIES TIMEOUT 180)
     # Bounded exhaustive shared/exclusive loan and alias partitions. Keep both
     # registrations even without rustc/clang: unavailable tooling must fail.
     if(ORE_STRUCTURAL_RUSTC AND ORE_CLANG)
