@@ -180,7 +180,10 @@ int oreslang_source_actor_detach_send_future_state_checked(
  * and publishes the next logical suspension from the currently resumed
  * execution with the current continuation as parent.
  *
- * Exactly one rearm may be requested by a PC and at most four PCs are admitted.
+ * Exactly one rearm may be requested by a PC and the runtime frame admits
+ * at most four PCs. The current LLVM source slice intentionally emits at most
+ * two direct send_async PCs; the extra runtime capacity is a hard bound for
+ * staged generalization, not an undocumented compiler feature.
  * On ACCEPTED the caller must return from the current continuation without
  * further guest effects; promotion occurs only after that callback has left its
  * native stack. Descriptor/Future retirement is never performed by the carrier:
