@@ -509,8 +509,9 @@ public:
         return item;
     }
 
-    SourceExportDecl source_export_declaration() {
+    SourceExportDecl source_export_declaration(std::string owner_module = {}) {
         SourceExportDecl decl;
+        decl.owner_module = std::move(owner_module);
         decl.offset = token_.offset;
         require("export");
 
@@ -546,18 +547,22 @@ public:
         if (accept("{")) {
             if (accept("}")) fail("[EXPORT_EMPTY_GROUP] export group cannot be empty");
             for (;;) {
+                if (token_.text == ",")
+                    fail("[EXPORT_MALFORMED_LIST] leading or repeated comma in export group");
                 if (token_.text == "{")
                     fail("[EXPORT_NESTED_GROUP] nested export groups are unsupported");
                 if (export_kind_word(token_.text))
                     fail("[EXPORT_KIND_PREFIX_IN_GROUP] declaration kind belongs before group");
                 decl.items.push_back(source_export_item(decl.typed, decl.kind));
-                if (!accept(",")) break;
-                if (accept("}")) {
-                    if (decl.items.empty()) fail("[EXPORT_EMPTY_GROUP] export group cannot be empty");
-                    goto group_done;
+                if (accept(",")) {
+                    if (accept("}")) goto group_done;
+                    if (token_.text == ",")
+                        fail("[EXPORT_MALFORMED_LIST] repeated comma in export group");
+                    continue;
                 }
-                if (token_.text == ",")
-                    fail("[EXPORT_MALFORMED_LIST] repeated comma in export group");
+                if (token_.text != "}")
+                    fail("[EXPORT_MALFORMED_LIST] expected ',' or '}' after export item");
+                break;
             }
             require("}");
 group_done:;
