@@ -532,6 +532,50 @@ static void common_select_wake_fences_rearm_until_callback_exit(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void sealed_select_cancel_common_wake_releases_physical_loan(void) {
+    CommonSelectWakeState state = {0};
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            2, 1, 1, handler, NULL, NULL,
+            common_select_wake_callback, &state);
+    CHECK(scheduler != NULL);
+    state.scheduler = scheduler;
+
+    OresNativeActorRef target =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef producer =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+    CHECK(target.scheduler_domain && producer.scheduler_domain);
+
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 610, 1));
+    OresNativeSelectToken arm = {0};
+    CHECK(ores_native_select_register(&select, 0, &arm));
+
+    OresNativeSelectWakeTicket common_wake = {0};
+    CHECK(ores_native_actor_scheduler_reserve_select_wake(
+        scheduler, producer, &select, 610,
+        51, 53, 1, &common_wake));
+    CHECK(ores_native_select_active_physical_loans(&select) == 1);
+
+    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+    CHECK(!ores_native_select_arbiter_rearm(&select, 611, 1));
+    CHECK(ores_native_actor_scheduler_cancel_select_wake(
+        scheduler, common_wake));
+    CHECK(ores_native_select_active_physical_loans(&select) == 0);
+    CHECK(atomic_load_explicit(
+        &state.wake_count, memory_order_acquire) == 0);
+    CHECK(ores_native_select_arbiter_rearm(&select, 611, 1));
+
+    CHECK(ores_native_actor_scheduler_stop(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, producer));
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void scheduler_bound_send_token_cannot_commit_early(void) {
     State state = {0};
     atomic_store(&state.block, 1);
@@ -805,6 +849,7 @@ int main(void) {
     winner_race_beats_registration_exhaustion();
     immediate_terminated_target_is_terminal_select_event();
     common_select_wake_fences_rearm_until_callback_exit();
+    sealed_select_cancel_common_wake_releases_physical_loan();
     scheduler_bound_send_token_cannot_commit_early();
     sealed_selection_never_publishes_pending_send();
     stale_bound_descriptor_cannot_commit_rearmed_generation();
@@ -812,6 +857,6 @@ int main(void) {
     physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
     return 0;
 }
