@@ -137,6 +137,7 @@ public:
                                        OresNativeActorRef actor) const {
         OresNativeActorRef exact{};
         return exact_scheduler_ref(scheduler, &exact)
+            && generation_ == actor.generation
             && exact.scheduler_domain == actor.scheduler_domain
             && exact.actor_slot == actor.actor_slot
             && exact.generation == actor.generation
@@ -394,9 +395,10 @@ public:
         if ((scheduler == nullptr) != !has_scheduler_actor
                 || (scheduler != nullptr
                     && (!scheduler_actor.scheduler_domain
-                        || !scheduler_actor.generation)))
+                        || !scheduler_actor.generation
+                        || scheduler_actor.generation != generation)))
             throw std::invalid_argument(
-                "scheduled actor binding must be complete or absent");
+                "scheduled actor binding must be complete and generation-exact");
         auto& owners = registry();
         // All paths touching both locks take the same scoped pair.
         std::scoped_lock guard(mutex_, owners.mutex);
