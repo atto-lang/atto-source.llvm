@@ -114,7 +114,7 @@ pub fnc main(): int { return source(); }
         r#"async fnc source(int value): int { return value; }
 fnc keep(int value): int { return value; }
 pub fnc main(): int {
-    let Future<int> pending = source() |> keep();
+    let Future<int> pending = rt take source() |> keep();
     let int result = await pending;
     return result;
 }
@@ -124,7 +124,7 @@ pub fnc main(): int {
         r#"async fnc source(): int { return 21; }
 fnc keep(int value): int { let int copy = value; return copy; }
 pub fnc main(): int {
-    let Future<int> pending = source() |> keep();
+    let Future<int> pending = rt take source() |> keep();
     let int result = await pending;
     return result;
 }
@@ -134,7 +134,7 @@ pub fnc main(): int {
         r#"async fnc source(): int { return 21; }
 fnc add(int value): int { return value + 1; }
 pub fnc main(): int {
-    let Future<int> pending = source() |> add(1);
+    let Future<int> pending = rt take source() |> add(1);
     let int result = await pending;
     return result;
 }
@@ -154,14 +154,14 @@ pub fnc main(): int {
         r#"async fnc source(): int { return 21; }
 fnc keep(int value): int { return value; }
 pub fnc main(): int {
-    let Future<int> pending = source() |> keep();
+    let Future<int> pending = rt take source() |> keep();
     return 0;
 }
 "#, "requires one consumed checked pipeline plan");
 
     let stages = std::iter::repeat(" |> keep()").take(129).collect::<String>();
     let too_many = format!(
-        "async fnc source(): int {{ return 1; }}\nfnc keep(int value): int {{ return value; }}\npub fnc main(): int {{\n let Future<int> pending = source(){stages};\n let int result = await pending;\n return result;\n}}\n");
+        "async fnc source(): int {{ return 1; }}\nfnc keep(int value): int {{ return value; }}\npub fnc main(): int {{\n let Future<int> pending = rt take source(){stages};\n let int result = await pending;\n return result;\n}}\n");
     rejected(&compiler, &dir.0, "too-many.ores", &too_many,
         "Future pipeline exceeds 128 stages");
 
