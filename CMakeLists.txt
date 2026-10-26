@@ -1940,6 +1940,56 @@ if(BUILD_TESTING)
     set_tests_properties(native_task_capture_admission_host_only
         PROPERTIES TIMEOUT 20)
 
+    # First executable source Task<int> slice. Producer work is admitted to one
+    # shared NativeActorScheduler carrier and never invoked inline by submit.
+    # Await is trusted external-host glue only; the checked runtime API must
+    # reject a scheduler carrier rather than park it.
+    add_executable(oreslang-source-task-i64-runtime-test
+        tests/source_task_i64_runtime_test.c
+        src/main/cpp/oreslang/runtime/SourceTaskRuntime.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-source-task-i64-runtime-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-source-task-i64-runtime-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-task-i64-runtime-test PRIVATE
+        ORESLANG_SOURCE_TASK_TESTING=1)
+    target_compile_options(oreslang-source-task-i64-runtime-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-source-task-i64-runtime-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_source_task_i64_shared_scheduler_runtime
+        COMMAND oreslang-source-task-i64-runtime-test)
+    set_tests_properties(native_source_task_i64_shared_scheduler_runtime
+        PROPERTIES TIMEOUT 30)
+
+    set(ORE_SOURCE_TASK_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-task-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_SOURCE_TASK_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_task_i64_e2e.rs"
+            -o "${ORE_SOURCE_TASK_E2E}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_task_i64_e2e.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-task-i64-await.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+        VERBATIM)
+    add_custom_target(oreslang-source-task-i64-e2e-build ALL
+        DEPENDS "${ORE_SOURCE_TASK_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_source_task_i64_compiled_execution
+            COMMAND "${ORE_SOURCE_TASK_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_source_task_i64_compiled_execution
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_source_task_i64_compiled_execution
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
