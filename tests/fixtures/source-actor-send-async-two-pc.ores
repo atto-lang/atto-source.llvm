@@ -11,8 +11,10 @@ pub fnc main(): int {
   const worker: ActorRef<Worker> = spawn Worker();
   const int retained = 40;
   await worker.send_async(1);
+  // PC1 performs a normal actor effect before arming PC2.
+  worker.send(2);
   // PC1 must load retained from the runtime-owned frame to compute PC2 input.
-  await worker.send_async(retained - 38);
+  await worker.send_async(retained - 37);
   stop worker;
   return retained + 3;
 }
