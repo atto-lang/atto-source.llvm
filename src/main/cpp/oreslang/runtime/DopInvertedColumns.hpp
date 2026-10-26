@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -25,11 +26,11 @@ namespace detail {
 
 template<class T>
 inline constexpr bool inverted_scalar_field_v =
-        std::is_same_v<std::remove_cv_t<T>, std::int32_t>
-        || std::is_same_v<std::remove_cv_t<T>, std::int64_t>
-        || std::is_same_v<std::remove_cv_t<T>, float>
-        || std::is_same_v<std::remove_cv_t<T>, double>
-        || std::is_same_v<std::remove_cv_t<T>, bool>;
+        std::is_same_v<T, std::int32_t>
+        || std::is_same_v<T, std::int64_t>
+        || std::is_same_v<T, float>
+        || std::is_same_v<T, double>
+        || std::is_same_v<T, bool>;
 
 /**
  * One process-wide owner sequence shared by every inverted-column field pack.
@@ -59,6 +60,8 @@ private:
 template<class... Fields>
 class InvertedColumns {
     static_assert(sizeof...(Fields) != 0, "an inverted class needs at least one field");
+    static_assert((!std::is_cv_v<Fields> && ...),
+                  "phase-one columns reject cv-qualified field types");
     static_assert(((detail::inverted_scalar_field_v<Fields>
                     || detail::is_fixed_record_v<Fields>) && ...),
                   "phase-one columns only support i32/i64/f32/f64/bool or FixedRecord fields");
@@ -129,6 +132,21 @@ class InvertedColumns {
     static void update_columns(State& s, std::size_t row,
                                const std::tuple<Fields...>& values, std::index_sequence<I...>) {
         ((std::get<I>(s.columns)[row] = std::get<I>(values)), ...);
+    }
+    template<class T>
+    static void validate_field(const T& value) {
+        if constexpr (detail::is_fixed_record_v<T>) value.validate_canonical();
+    }
+    template<std::size_t... I>
+    static void validate_fields(const std::tuple<Fields...>& values,
+                                std::index_sequence<I...>) {
+        (validate_field(std::get<I>(values)), ...);
+    }
+    template<std::size_t... I>
+    static void scrub_columns(State& s, std::index_sequence<I...>) noexcept {
+        ((std::fill(std::get<I>(s.columns).begin(), std::get<I>(s.columns).end(),
+                    Cell<std::tuple_element_t<I, std::tuple<Fields...>>>{}),
+          std::get<I>(s.columns).clear()), ...);
     }
     template<std::size_t... I>
     static void erase_columns(State& s, std::size_t row, std::size_t last,
@@ -217,11 +235,16 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain backing state until their release. Their
-        // checked accessors reject use after owner destruction; no raw pointer,
-        // span, array reference, or mutable backing view escapes a loan.
+        // Outstanding loans retain the state object until release, but owner
+        // teardown immediately revokes access and scrubs logical column bytes.
+        // This matches the Java host reference and avoids retaining row payloads
+        // merely because a checked loan object outlives its owner.
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->closed = true;
+        scrub_columns(*state_, std::index_sequence_for<Fields...>{});
+        state_->row_slots.clear();
+        state_->slots.clear();
+        state_->free_slots.clear();
     }
 
     std::size_t size() const {
@@ -255,7 +278,9 @@ public:
         reserve_columns(s, row + 1, std::index_sequence_for<Fields...>{});
         const bool reuse = !s.free_slots.empty();
         const auto slot = reuse ? s.free_slots.back() : s.slots.size();
-        append_columns(s, std::tuple<Fields...>(fields...), std::index_sequence_for<Fields...>{});
+        const std::tuple<Fields...> values(fields...);
+        validate_fields(values, std::index_sequence_for<Fields...>{});
+        append_columns(s, values, std::index_sequence_for<Fields...>{});
         if (reuse) {
             s.free_slots.pop_back();
             s.slots[slot].row = row;
@@ -303,8 +328,9 @@ public:
         std::lock_guard<std::mutex> lock(state_->mutex);
         const auto row = resolve(*state_, h);
         if (any_loans(*state_)) throw std::logic_error("row update conflicts with active column loan");
-        update_columns(*state_, row, std::tuple<Fields...>(fields...),
-                       std::index_sequence_for<Fields...>{});
+        const std::tuple<Fields...> values(fields...);
+        validate_fields(values, std::index_sequence_for<Fields...>{});
+        update_columns(*state_, row, values, std::index_sequence_for<Fields...>{});
     }
     template<std::size_t I>
     auto get(Handle h) const -> std::tuple_element_t<I, std::tuple<Fields...>> {
@@ -321,6 +347,7 @@ public:
         const auto row = resolve(*state_, h);
         if (state_->writers[I] || state_->readers[I])
             throw std::logic_error("column has an outstanding loan");
+        validate_field(value);
         std::get<I>(state_->columns)[row] = value;
     }
     template<std::size_t I>
