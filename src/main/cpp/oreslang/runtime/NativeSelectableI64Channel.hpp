@@ -15,19 +15,16 @@
 namespace oreslang::runtime {
 
 /**
- * Host/runtime bounded i64 channel substrate for the first native static-select
- * lowering slice.
+ * Host/runtime bounded i64 channel substrate for native static-select lowering.
  *
- * This is intentionally not the source-level Channel<T> implementation yet.
- * It provides the revocable readiness registration and atomic read/write commit
- * operations needed to connect a channel to NativeSelectArbiter.
+ * Read readiness includes terminal EOF. Write readiness includes terminal
+ * closed-channel failure, so a select arm cannot hang forever when a channel
+ * closes while registered. Buffered values drain before EOF.
  *
  * Lock order contract:
  *   select arbiter -> at most one channel mutex
  *
  * Readiness callbacks are never invoked while the channel mutex is held.
- * They may be spurious and MUST call try_commit_read/try_commit_write under the
- * select arbiter's conditional commit hook before treating the case as ready.
  */
 template <std::size_t Capacity, std::size_t MaxWaiters = 64>
 class NativeSelectableI64Channel final {
@@ -35,10 +32,7 @@ class NativeSelectableI64Channel final {
     static_assert(MaxWaiters > 0, "channel waiter capacity must be positive");
 
 private:
-    enum class WaitKind {
-        Read,
-        Write,
-    };
+    enum class WaitKind { Read, Write };
 
     struct Waiter final {
         std::uint64_t id = 0;
@@ -56,9 +50,27 @@ private:
         std::array<Waiter, MaxWaiters> writers{};
         std::uint64_t next_waiter_id = 1;
         std::exception_ptr notification_failure;
+        bool closed = false;
     };
 
 public:
+    enum class ReadStatus {
+        WouldBlock,
+        Value,
+        Eof,
+    };
+
+    struct ReadResult final {
+        ReadStatus status = ReadStatus::WouldBlock;
+        std::int64_t value = 0;
+    };
+
+    enum class WriteStatus {
+        WouldBlock,
+        Written,
+        Closed,
+    };
+
     class Subscription final {
     public:
         Subscription() = default;
@@ -113,12 +125,6 @@ public:
         bool empty() const noexcept { return count_ == 0; }
         std::size_t size() const noexcept { return count_; }
 
-        /**
-         * Delivers every captured readiness notification outside channel and
-         * select locks. Notification failures never roll back the committed
-         * channel operation; the first failure is retained on the channel for
-         * supervisor/diagnostic inspection.
-         */
         void dispatch() noexcept {
             std::exception_ptr first_failure;
             for (std::size_t i = 0; i < count_; ++i) {
@@ -127,7 +133,8 @@ public:
                 try {
                     if (callback) callback();
                 } catch (...) {
-                    if (!first_failure) first_failure = std::current_exception();
+                    if (!first_failure)
+                        first_failure = std::current_exception();
                 }
             }
             count_ = 0;
@@ -140,9 +147,6 @@ public:
                 if (!state->notification_failure)
                     state->notification_failure = std::move(first_failure);
             } catch (...) {
-                // A readiness callback cannot make a committed channel
-                // operation appear to roll back. Mutex/runtime failures are
-                // outside the recoverable guest contract.
             }
         }
 
@@ -181,37 +185,84 @@ public:
         return subscribe(WaitKind::Write, std::forward<Callback>(callback));
     }
 
+    bool close() {
+        NotificationBatch readers;
+        NotificationBatch writers;
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            if (state_->closed) return false;
+            try {
+                capture_locked(state_->readers, readers);
+                capture_locked(state_->writers, writers);
+            } catch (...) {
+                readers.reset();
+                writers.reset();
+                throw;
+            }
+            state_->closed = true;
+        }
+        readers.dispatch();
+        writers.dispatch();
+        return true;
+    }
+
+    bool closed() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->closed;
+    }
+
     bool try_commit_read(const Subscription& subscription,
-                         std::int64_t& value,
+                         ReadResult& result,
                          NotificationBatch& notifications) {
         require_empty_batch(notifications);
+        result = {};
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (!matches_locked(subscription, WaitKind::Read) ||
-            state_->count == 0)
+        if (!matches_locked(subscription, WaitKind::Read))
             return false;
 
-        capture_locked(state_->writers, notifications);
-        value = state_->values[state_->head];
+        if (state_->count == 0) {
+            if (!state_->closed) return false;
+            close_locked(state_->readers[subscription.index_]);
+            result.status = ReadStatus::Eof;
+            return true;
+        }
+
+        if (state_->closed && state_->count == 1)
+            capture_locked(state_->readers, notifications);
+        else
+            capture_locked(state_->writers, notifications);
+
+        result.value = state_->values[state_->head];
         state_->head = (state_->head + 1) % Capacity;
         --state_->count;
         close_locked(state_->readers[subscription.index_]);
+        result.status = ReadStatus::Value;
         return true;
     }
 
     bool try_commit_write(const Subscription& subscription,
                           std::int64_t value,
+                          WriteStatus& result,
                           NotificationBatch& notifications) {
         require_empty_batch(notifications);
+        result = WriteStatus::WouldBlock;
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (!matches_locked(subscription, WaitKind::Write) ||
-            state_->count == Capacity)
+        if (!matches_locked(subscription, WaitKind::Write))
             return false;
+
+        if (state_->closed) {
+            close_locked(state_->writers[subscription.index_]);
+            result = WriteStatus::Closed;
+            return true;
+        }
+        if (state_->count == Capacity) return false;
 
         capture_locked(state_->readers, notifications);
         state_->values[state_->tail] = value;
         state_->tail = (state_->tail + 1) % Capacity;
         ++state_->count;
         close_locked(state_->writers[subscription.index_]);
+        result = WriteStatus::Written;
         return true;
     }
 
@@ -219,7 +270,8 @@ public:
         NotificationBatch notifications;
         {
             std::lock_guard<std::mutex> guard(state_->mutex);
-            if (state_->count == Capacity) return false;
+            if (state_->closed || state_->count == Capacity)
+                return false;
             capture_locked(state_->readers, notifications);
             state_->values[state_->tail] = value;
             state_->tail = (state_->tail + 1) % Capacity;
@@ -229,19 +281,36 @@ public:
         return true;
     }
 
-    std::optional<std::int64_t> try_read() {
+    ReadResult try_read_result() {
         NotificationBatch notifications;
-        std::int64_t value = 0;
+        ReadResult result;
         {
             std::lock_guard<std::mutex> guard(state_->mutex);
-            if (state_->count == 0) return std::nullopt;
-            capture_locked(state_->writers, notifications);
-            value = state_->values[state_->head];
+            if (state_->count == 0) {
+                if (state_->closed)
+                    result.status = ReadStatus::Eof;
+                return result;
+            }
+
+            if (state_->closed && state_->count == 1)
+                capture_locked(state_->readers, notifications);
+            else
+                capture_locked(state_->writers, notifications);
+
+            result.value = state_->values[state_->head];
             state_->head = (state_->head + 1) % Capacity;
             --state_->count;
+            result.status = ReadStatus::Value;
         }
         notifications.dispatch();
-        return value;
+        return result;
+    }
+
+    std::optional<std::int64_t> try_read() {
+        auto result = try_read_result();
+        if (result.status != ReadStatus::Value)
+            return std::nullopt;
+        return result.value;
     }
 
     std::size_t size() const {
@@ -291,10 +360,12 @@ private:
                 }
             }
             if (index == MaxWaiters)
-                throw std::overflow_error("channel select waiter capacity exhausted");
+                throw std::overflow_error(
+                    "channel select waiter capacity exhausted");
             if (state_->next_waiter_id ==
                 std::numeric_limits<std::uint64_t>::max())
-                throw std::overflow_error("channel select waiter identity exhausted");
+                throw std::overflow_error(
+                    "channel select waiter identity exhausted");
 
             const auto id = state_->next_waiter_id;
             token = Subscription(state_, kind, index, id);
@@ -304,8 +375,8 @@ private:
                 });
 
             const bool ready = kind == WaitKind::Read
-                    ? state_->count != 0
-                    : state_->count != Capacity;
+                    ? state_->count != 0 || state_->closed
+                    : state_->count != Capacity || state_->closed;
             if (ready) immediate = wrapped;
 
             auto& waiter = waiters[index];
@@ -359,7 +430,8 @@ private:
             for (const auto& waiter : waiters) {
                 if (!waiter.active) continue;
                 if (notifications.count_ == MaxWaiters)
-                    throw std::logic_error("channel notification batch overflow");
+                    throw std::logic_error(
+                        "channel notification batch overflow");
                 notifications.callbacks_[notifications.count_++] =
                     waiter.notify;
             }
@@ -369,9 +441,11 @@ private:
         }
     }
 
-    static void require_empty_batch(const NotificationBatch& notifications) {
+    static void require_empty_batch(
+            const NotificationBatch& notifications) {
         if (!notifications.empty())
-            throw std::logic_error("channel notification batch must be empty");
+            throw std::logic_error(
+                "channel notification batch must be empty");
     }
 
     std::shared_ptr<State> state_;
