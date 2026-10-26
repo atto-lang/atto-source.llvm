@@ -175,10 +175,11 @@ int ores_native_actor_scheduler_await_async_send(
     OresNativeSendStatus* outcome_out);
 int ores_native_actor_scheduler_cancel_async_send(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
-/* Release the Future descriptor after READY/FAILED/CANCELLED observation.
+/* External-host release after READY/FAILED/CANCELLED observation.
  * If its bound wake callback is currently executing, release claims retirement
- * exactly once but physical descriptor invalidation is deferred until callback
- * return. RESERVED/TRANSFERRED/READY wakes reject release. */
+ * exactly once and waits until callback return physically invalidates the exact
+ * descriptor generation. Any actor carrier call fails closed instead of
+ * parking. RESERVED/TRANSFERRED/READY wakes reject release. */
 int ores_native_actor_scheduler_release_async_send(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
 
@@ -377,6 +378,10 @@ void ores_native_actor_scheduler_test_fail_next_create(void);
 /* Test-only execution-id exhaustion control; no production symbol. */
 int ores_native_actor_scheduler_test_set_next_execution(
     OresNativeActorScheduler* scheduler, uint64_t next_execution);
+/* Test-only proof that an external release has claimed a descriptor but is
+ * still fenced behind its executing wake callback. */
+int ores_native_actor_scheduler_test_async_release_pending(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
 #endif
 #ifdef __cplusplus
 }
