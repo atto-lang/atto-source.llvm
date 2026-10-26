@@ -1,0 +1,13 @@
+async fnc source(): int {
+    return 21;
+}
+
+fnc twice(int value): int {
+    return value * 2;
+}
+
+pub fnc main(): int {
+    let Future<int> pending = rt take source() |> twice();
+    let int result = await pending;
+    return result;
+}
