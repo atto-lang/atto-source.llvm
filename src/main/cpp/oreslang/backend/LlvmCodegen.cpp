@@ -2510,6 +2510,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i32, 0)),
                 returned, failed);
             builder.SetInsertPoint(failed);
+            // The readiness effect is an OS-boundary failure, but host runtime
+            // regions were already opened before the guest call. Close them in
+            // the same record-before-string order as the normal return path
+            // before reporting ActorTerminated, otherwise failure can leak
+            // module-level record/string state.
+            if (record_runtime) builder.CreateCall(record_end);
+            if (string_runtime) builder.CreateCall(string_end);
             auto report = module.getOrInsertFunction("oreslang_source_actor_unhandled_ready_effect",
                 llvm::FunctionType::get(i32, {i32}, false));
             builder.CreateRet(builder.CreateCall(report, {status}));
