@@ -261,6 +261,8 @@ def main():
                         "source-actor-send-async-bool-local.ores"}:
                     assert "retained.detached.slot" in continuation, (
                         name, "captured local must resolve from runtime-owned detached frame")
+                    assert "detached.state.ptr.valid" in continuation, (
+                        name, "nonempty detached frame must reject a null runtime state pointer")
                     assert "retained.detached.capture" in guest.stdout, (
                         name, "guest pre-await path must copy captured scalar before detaching")
                 if name == "source-actor-send-async-bool-local.ores":
@@ -333,6 +335,8 @@ def main():
                         name, "eager Future submission must precede local capture and detach")
                     assert "retained.detached.slot" in continuation, (
                         name, "stored Future local must resolve from detached runtime frame")
+                    assert "detached.state.ptr.valid" in continuation, (
+                        name, "nonempty stored Future frame must reject a null runtime state pointer")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
