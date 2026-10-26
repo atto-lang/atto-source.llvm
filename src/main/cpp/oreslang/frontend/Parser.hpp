@@ -185,6 +185,25 @@ struct ActorAction {
     std::size_t index = 0;
 };
 
+/*
+ * Explicit compiler await-PC catalog. Legacy singleton fields below remain
+ * during staged migration, but every admitted await must have exactly one row
+ * here so validation/codegen never infer suspension structure from unrelated
+ * booleans or magic field combinations.
+ */
+struct NativeAwaitSite {
+    enum class Kind {
+        DirectSendAdmission,
+        StoredSendAdmission,
+        Ready,
+        Done
+    };
+    Kind kind = Kind::DirectSendAdmission;
+    std::size_t offset = 0;
+    std::size_t action_index = 0; // actor-action boundary at suspension
+    std::string actor;
+};
+
 struct ActorFieldWrite {
     std::string field;
     std::unique_ptr<Expression> expression;
@@ -268,6 +287,7 @@ struct Function {
     std::size_t send_future_submit_offset = 0;
     std::size_t send_future_await_offset = 0;
     std::size_t send_future_await_action_index = 0;
+    std::vector<NativeAwaitSite> await_sites;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
