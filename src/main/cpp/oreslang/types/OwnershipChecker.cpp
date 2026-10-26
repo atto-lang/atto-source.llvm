@@ -739,26 +739,6 @@ void validate_i64_ownership(const Program& program) {
                 entry.public_fields = layouts.accessible(binding.class_name, function.method_owner);
                 entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
                 entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
-                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
-                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
             } else if (binding.new_class) {
                 // Pure syntax alone is insufficient: experimental owned-int
                 // operands carry fallible region reads. Do not let one unwind
@@ -839,6 +819,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
                 entry.public_fields = layouts.accessible(binding.class_name, function.method_owner);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
                 if (!entry.class_array_fields.empty() && !binding.owner_mutable)
                     throw std::runtime_error("ownership violation: class with Array<int> fields requires let mut owner");
             } else if (binding.move_class) {
@@ -900,6 +882,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
                 entry.public_fields = layouts.accessible(binding.class_name, function.method_owner);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
             }
             return entry;
         };
