@@ -613,18 +613,42 @@ static inline int ores_native_select_seal(
     return sealed_before_winner;
 }
 
-static inline int ores_native_select_winner(
+static inline int ores_native_select_winner_generation(
         const OresNativeSelectArbiter* arbiter,
+        uint64_t generation,
         uint64_t* arm_out) {
-    if (!arbiter || !arm_out) return 0;
+    if (!arbiter || !arm_out || !generation
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire) != generation)
+        return 0;
     const uint64_t winner = atomic_load_explicit(
         &arbiter->winner, memory_order_acquire);
     if (!winner
             || winner == ORES_NATIVE_SELECT_WINNER_SEALED
             || winner == ORES_NATIVE_SELECT_WINNER_REARMING)
         return 0;
+    /*
+     * Recheck after winner observation. A stale completion may race terminal
+     * generation rearm; it must never attribute N+1's winner to N.
+     */
+    if (atomic_load_explicit(
+            &arbiter->generation, memory_order_acquire) != generation)
+        return 0;
     *arm_out = winner - UINT64_C(1);
     return 1;
+}
+
+/* Current-generation convenience for owner-local diagnostics/tests only.
+ * Async callbacks and scheduler descriptors must use the generation-fenced
+ * form above with the generation carried by their capability. */
+static inline int ores_native_select_winner(
+        const OresNativeSelectArbiter* arbiter,
+        uint64_t* arm_out) {
+    if (!arbiter) return 0;
+    const uint64_t generation = atomic_load_explicit(
+        &arbiter->generation, memory_order_acquire);
+    return ores_native_select_winner_generation(
+        arbiter, generation, arm_out);
 }
 
 static inline size_t ores_native_select_active_tokens(
