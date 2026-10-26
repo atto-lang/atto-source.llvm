@@ -2418,6 +2418,12 @@ private:
                     value.send_future_await_offset = await_offset;
                     value.send_future_await_action_index =
                         value.actor_actions.size();
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::StoredSendAdmission,
+                        await_offset,
+                        value.send_future_await_action_index,
+                        value.send_future_actor
+                    });
                     require(";");
                     continue;
                 }
@@ -2431,6 +2437,12 @@ private:
                     value.ready_await_actor = value.ready_future_actor;
                     value.ready_await_offset = await_offset;
                     value.ready_await_form = NativeAwaitForm::FutureValue;
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::Ready,
+                        await_offset,
+                        value.actor_actions.size(),
+                        value.ready_future_actor
+                    });
                     require(";");
                     continue;
                 }
@@ -2445,6 +2457,12 @@ private:
                     value.ready_await_actor = awaited;
                     value.ready_await_offset = await_offset;
                     value.ready_await_form = NativeAwaitForm::DirectHasFuture;
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::Ready,
+                        await_offset,
+                        value.actor_actions.size(),
+                        awaited
+                    });
                     continue;
                 }
                 if (token_.text != ".")
@@ -2467,6 +2485,12 @@ private:
                     value.actor_sends.push_back(std::move(send));
                     value.actor_actions.push_back({ActorAction::Kind::Send,
                                                    value.actor_sends.size() - 1});
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::DirectSendAdmission,
+                        await_offset,
+                        value.actor_actions.size() - 1,
+                        awaited
+                    });
                     continue;
                 }
                 require(")");
@@ -2479,9 +2503,21 @@ private:
                     value.ready_await_actor = awaited;
                     value.ready_await_offset = await_offset;
                     value.ready_await_form = NativeAwaitForm::ExplicitGetReady;
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::Ready,
+                        await_offset,
+                        value.actor_actions.size(),
+                        awaited
+                    });
                 } else if (lifecycle == "get_done") {
                     value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
+                    value.await_sites.push_back({
+                        NativeAwaitSite::Kind::Done,
+                        await_offset,
+                        value.actor_actions.size(),
+                        awaited
+                    });
                 } else {
                     fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done/send_async is lowered");
                 }
