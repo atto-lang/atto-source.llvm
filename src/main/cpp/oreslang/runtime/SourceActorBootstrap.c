@@ -1,18 +1,6 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
-
-/* Temporary private VM bridge declarations. Keep scheduler identity hidden
- * from source lowering; these move to NativeOresVM.h once the interface gate
- * accepts the corresponding public declaration update. */
-int ores_native_vm_configure_wake_callback(
-    OresNativeVM*, enum OresNativeVMDomain, OresNativeActorWakeFn);
-int ores_native_vm_bind_async_send_wake(
-    OresNativeVM*, enum OresNativeVMDomain, OresNativeAsyncSendTicket,
-    OresNativeActorRef, uint64_t, uint64_t, uint64_t, OresNativeWakeTicket*);
-int ores_native_vm_is_current_wake(
-    OresNativeVM*, enum OresNativeVMDomain, OresNativeWakeTicket);
-
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
