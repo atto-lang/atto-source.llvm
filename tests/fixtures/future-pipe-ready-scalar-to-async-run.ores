@@ -1,0 +1,7 @@
+async fnc increment_async(int value): int { return value + 1; }
+fnc twice(int value): int { return value * 2; }
+pub fnc main(): int {
+    val Future<int> pending = 21 |> increment_async() |> twice();
+    val int result = await pending;
+    return result;
+}
