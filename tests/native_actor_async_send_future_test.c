@@ -189,7 +189,7 @@ static void cancel_pending_never_delivers_payload(void) {
     expect_state(
         scheduler, ticket,
         ORES_NATIVE_ASYNC_SEND_CANCELLED,
-        ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE);
+        ORES_NATIVE_SEND_CANCELLED);
     CHECK(ores_native_actor_scheduler_release_async_send(scheduler, ticket));
 
     atomic_store_explicit(&state.block, 0, memory_order_release);
@@ -423,7 +423,7 @@ static void bound_wake_callback(
     while (atomic_load_explicit(&state->hold_wake, memory_order_acquire))
         sched_yield();
     if (outcome == ORES_NATIVE_WAKE_CANCELLED
-            && ticket.completion_code == ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
+            && ticket.completion_code == ORES_NATIVE_SEND_CANCELLED)
         atomic_fetch_add_explicit(
             &state->cancelled_wakes, 1, memory_order_acq_rel);
     atomic_fetch_add_explicit(&state->wake_count, 1, memory_order_acq_rel);
