@@ -218,15 +218,23 @@ def main():
                               if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 fail_cleanup_calls = [line for line in guest.stdout.splitlines()
                                       if "call void @oreslang_source_actor_stop(" in line]
+                discard_calls = [line for line in guest.stdout.splitlines()
+                                 if "call i32 @oreslang_source_actor_discard_send_future_checked(" in line]
+                discard_calls = [line for line in guest.stdout.splitlines()
+                                 if "call i32 @oreslang_source_actor_discard_send_future_checked(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected direct send_async to checked-submit one scheduler Future", start_calls)
                 assert "call ptr @oreslang_source_actor_send_async_start(" not in guest.stdout, (
                     name, "aborting unchecked send_async start ABI still emitted")
                 assert "direct.send_async.start.failed" in guest.stdout, (
                     name, "missing immediate send_async failure cleanup branch")
-                assert len(fail_cleanup_calls) == 1, (
-                    name, "immediate direct send_async failure must synchronously reclaim actor",
+                assert len(fail_cleanup_calls) == 2, (
+                    name, "start and detach failure branches must both reclaim actor",
                     fail_cleanup_calls)
+                assert len(discard_calls) == 1, (
+                    name, "detach handoff failure must consume the started Future", discard_calls)
+                assert "future.detach.direct.send.failed" in guest.stdout, (
+                    name, "missing direct detach failure cleanup branch")
                 assert len(detach_calls) == 1, (
                     name, "expected direct send_async to detach through runtime-owned scalar state", detach_calls)
                 assert len(wait_calls) == 1, (
@@ -273,9 +281,13 @@ def main():
                     name, "aborting unchecked send_async start ABI still emitted")
                 assert ".start.failed" in guest.stdout, (
                     name, "missing stored Future immediate-failure cleanup branch")
-                assert len(fail_cleanup_calls) == 1, (
-                    name, "immediate stored Future failure must synchronously reclaim actor",
+                assert len(fail_cleanup_calls) == 2, (
+                    name, "stored start and detach failure branches must both reclaim actor",
                     fail_cleanup_calls)
+                assert len(discard_calls) == 1, (
+                    name, "stored detach failure must consume the started Future", discard_calls)
+                assert "future.detach.send.failed" in guest.stdout, (
+                    name, "missing stored detach failure cleanup branch")
                 assert len(detach_calls) == 1, (
                     name, "expected stored Future<void> to detach through runtime-owned scalar state", detach_calls)
                 assert len(wait_calls) == 1, (
