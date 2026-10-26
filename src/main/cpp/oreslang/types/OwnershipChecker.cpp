@@ -536,7 +536,13 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 
 } // namespace
 
-void validate_i64_ownership(const Program& program) {
+void validate_i64_ownership(Program& program) {
+    // A re-validation attempt must revoke every stale lowering authorization
+    // before checking anything. Failed ownership admission therefore cannot
+    // leave executable Future-pipeline authority from an earlier pass.
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines)
+            pipeline.ownership_admitted = false;
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -1378,6 +1384,32 @@ void validate_i64_ownership(const Program& program) {
         ownership::verify(cfg);
 
     }
+
+    // Publication is compilation-unit atomic. First validate every ownership
+    // admission without mutating any pipeline authority. Only after all chains
+    // succeed do we mark them executable for LLVM lowering.
+    for (const auto& function : program.functions) {
+        for (const auto& pipeline : function.future_pipelines) {
+            std::vector<types::FuturePipelineOwnershipAdmission> admissions;
+            admissions.reserve(pipeline.plans.size());
+            for (const auto& plan : pipeline.plans) {
+                types::FuturePipelineOwnershipAdmission admission;
+                admission.declaration_identity = plan.declaration_identity;
+                admission.pipeline_node_identity = plan.pipeline_node_identity;
+                admission.input_ownership = plan.input_ownership;
+                admission.admitted = true;
+                admissions.push_back(admission);
+            }
+            if (!types::publish_future_pipeline_chain(
+                    pipeline.plans, admissions).has_value())
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline proof publication "
+                    "failed closed");
+        }
+    }
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines)
+            pipeline.ownership_admitted = true;
 }
 
 } // namespace oreslang
