@@ -155,8 +155,15 @@ int oreslang_source_actor_detach_send_future_checked(
     void* future,
     OresSourceActorContinuation continuation,
     uint64_t source_token);
-/* State-bearing compiler entry. Copies at most 16 int/bool words into the
- * runtime-owned detached frame before returning to the guest caller. */
+/* State-bearing compiler entry. Copies at most 16 scalar words into the
+ * runtime-owned detached frame before returning to the guest caller.
+ *
+ * This is a trusted compiler/runtime ABI, not a guest type-erasure boundary:
+ * lowering must admit only Copy int/bool locals, canonicalize bool to exactly
+ * 0/1, and never encode pointers, ActorRef capabilities, borrows, strings,
+ * sums, classes, arrays or other owned values as state words. The runtime
+ * deliberately does not infer source types from the copied i64 payload.
+ * state may be NULL only when state_count is zero. */
 int oreslang_source_actor_detach_send_future_state_checked(
     void* future,
     OresSourceActorStateContinuation continuation,
