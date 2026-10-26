@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/NativeActorScheduler.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -119,6 +121,28 @@ public:
         return *this == other && ticket_ == other.ticket_;
     }
 
+    // Trusted projection of the scheduler-minted incarnation captured by
+    // NativeScheduledActor::spawn. Numeric routing labels are never authority.
+    bool exact_scheduler_ref(OresNativeActorScheduler* scheduler,
+                             OresNativeActorRef* out) const {
+        if (!out) return false;
+        *out = {};
+        std::lock_guard<std::mutex> guard(ticket_->mutex);
+        if (!scheduler || ticket_->scheduler != scheduler) return false;
+        *out = ticket_->scheduler_actor;
+        return true;
+    }
+
+    bool matches_scheduler_incarnation(OresNativeActorScheduler* scheduler,
+                                       OresNativeActorRef actor) const {
+        OresNativeActorRef exact{};
+        return exact_scheduler_ref(scheduler, &exact)
+            && exact.scheduler_domain == actor.scheduler_domain
+            && exact.actor_slot == actor.actor_slot
+            && exact.generation == actor.generation
+            && ores_native_actor_scheduler_poll_ready(scheduler, exact);
+    }
+
     /**
      * Register an enqueue-only host continuation. Never run guest code from
      * this callback; the caller must post guest resumption to its scheduler.
@@ -144,6 +168,8 @@ private:
 
     struct Ticket {
         std::mutex mutex;
+        OresNativeActorScheduler* scheduler = nullptr;
+        OresNativeActorRef scheduler_actor{};
         bool settled = false;
         ActorReadyResult result;
         std::vector<ReadyContinuation> waiters;
@@ -168,6 +194,7 @@ private:
     };
 
     friend class NativeActorGroup;
+    friend class NativeScheduledActor;
 
     NativeActorRef(std::uint64_t runtime_id, std::uint64_t actor_id,
                    std::uint64_t generation, std::shared_ptr<Ticket> ticket)
