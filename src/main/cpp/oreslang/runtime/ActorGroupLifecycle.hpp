@@ -296,7 +296,8 @@ public:
         std::lock_guard<std::mutex> guard(mutex_);
         Entry* worker = find_active_locked(ref);
         if (!worker || closed_ || worker->phase == Phase::starting
-            || worker->pending_control) return false;
+            || worker->pending_control
+            || worker->ref.resource_admission_closed()) return false;
         worker->pending_control = std::move(handler);
         worker->ref.ticket_->control_reserved.store(true, std::memory_order_release);
         return true;

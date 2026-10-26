@@ -175,6 +175,14 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         CHECK(actor.resource_admission_closed());
         CHECK(!actor.delivery_closed());
 
+        // CONTROL admission itself must fail closed once finalization seals
+        // resources, even though the later delivery barrier is not published
+        // yet because terminal settlement threw.
+        int direct_control = 0;
+        CHECK(!group.enqueue_control(actor, [&] { ++direct_control; }));
+        CHECK(!group.has_pending_control(actor));
+        CHECK(direct_control == 0);
+
         // Terminal resource admission is authoritative even if DONE
         // settlement failed before delivery_closed() could be published.
         // A pre-existing READY Future must not enqueue fresh CONTROL work in
