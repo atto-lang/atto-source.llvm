@@ -1717,6 +1717,8 @@ private:
         std::unordered_set<std::string> seen;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
+            if (token_.text == "export")
+                fail("[EXPORT_LOCAL_SCOPE] export declarations are not class members");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
             // Formatter may insert 'mtd', but method identity and receiver
