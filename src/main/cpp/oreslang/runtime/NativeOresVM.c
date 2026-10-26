@@ -448,6 +448,14 @@ int ores_native_vm_cancel_select_wake(
             vm->schedulers[domain], ticket);
 }
 
+int ores_native_vm_wait_select_wake_retired(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket) {
+    return vm && valid_domain(domain)
+        && ores_native_actor_scheduler_wait_select_wake_retired(
+            vm->schedulers[domain], ticket);
+}
+
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out) {
