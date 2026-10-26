@@ -34,7 +34,7 @@ void ores_native_i64_channel1_destroy(OresNativeI64Channel1*);
 
 OresNativeI64ChannelBatch* ores_native_i64_channel_batch_open(void);
 int ores_native_i64_channel_batch_dispatch(OresNativeI64ChannelBatch*);
-void ores_native_i64_channel_batch_destroy(OresNativeI64ChannelBatch*);
+int ores_native_i64_channel_batch_destroy(OresNativeI64ChannelBatch*);
 
 int ores_native_i64_channel1_subscribe_readable(
     OresNativeI64Channel1*,
