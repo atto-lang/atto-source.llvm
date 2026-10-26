@@ -943,6 +943,31 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-gpu-fence-test PRIVATE Threads::Threads)
     add_test(NAME gpu_device_generation_quiescence_fences COMMAND oreslang-gpu-fence-test)
 
+    # First executable source Task slice: no-capture, pure scalar Task<int>.
+    # Submission completes eagerly into a compiler-owned ready-result slot;
+    # await reads that ready slot and never blocks or parks a carrier thread.
+    oreslang_contract_test(native_task_scalar_ready_ir
+        task-scalar-ready-run.ores --ir "task.ready.w.result.stack.owned")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_task_scalar_ready_runtime
+            task-scalar-ready-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_task_scalar_capture_rejected
+        task-scalar-capture-reject.ores
+        --diagnostic "native first Task slice forbids captures, calls, fields and ownership-bearing values")
+    oreslang_contract_test(native_task_scalar_double_await_rejected
+        task-scalar-double-await-reject.ores
+        --diagnostic "native first Task slice permits exactly one await per Task<int>")
+    oreslang_contract_test(native_task_scalar_unknown_await_rejected
+        task-scalar-unknown-await-reject.ores
+        --diagnostic "native await requires a previously submitted no-capture Task<int>")
+    oreslang_contract_test(native_task_scalar_result_type_rejected
+        task-scalar-result-type-reject.ores
+        --diagnostic "native first Task slice supports Task<int> only")
+    oreslang_contract_test(native_task_scalar_nested_rejected
+        task-scalar-nested-reject.ores
+        --diagnostic "nested Task requires scheduler-owned continuation lowering")
+
     # Java '/' produces a float even for int/int. Until native float lowering
     # exists, reject '/' and '%' before IR rather than silently emitting i64.
     oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
