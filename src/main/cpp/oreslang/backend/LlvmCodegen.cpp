@@ -2373,6 +2373,38 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
             std::unordered_set<std::string> stateNames;
             for (const auto& field : actor.fields) stateNames.insert(field.name);
+            const auto canonicalStateExpression =
+                [&](const auto& self, const Expression& expr) -> bool {
+                    if (expr.resolved_type != ScalarType::I64 ||
+                            !expr.resolved_class.empty() || !expr.sum_type.empty() ||
+                            expr.condition || expr.condition_lhs || expr.condition_rhs ||
+                            expr.when_true || expr.when_false ||
+                            !expr.arguments.empty() || !expr.argument_names.empty() ||
+                            !expr.type_arguments.empty() || expr.type_arguments_present)
+                        return false;
+                    const bool neutral = expr.integer == 0 && !expr.boolean;
+                    switch (expr.kind) {
+                        case Expression::Kind::Integer:
+                            return !expr.left && !expr.right && expr.name.empty() &&
+                                   !expr.boolean;
+                        case Expression::Kind::Variable:
+                            return !expr.left && !expr.right && !expr.name.empty() && neutral;
+                        case Expression::Kind::Field:
+                            return expr.left && !expr.right && !expr.name.empty() && neutral &&
+                                   expr.left->kind == Expression::Kind::Variable &&
+                                   self(self, *expr.left);
+                        case Expression::Kind::Negate:
+                            return expr.left && !expr.right && expr.name.empty() && neutral &&
+                                   self(self, *expr.left);
+                        case Expression::Kind::Add:
+                        case Expression::Kind::Subtract:
+                        case Expression::Kind::Multiply:
+                            return expr.left && expr.right && expr.name.empty() && neutral &&
+                                   self(self, *expr.left) && self(self, *expr.right);
+                        default:
+                            return false;
+                    }
+                };
             bool readsState = false;
             const auto verifyStateExpression =
                 [&](const auto& self, const Expression& expr) -> void {
@@ -2413,8 +2445,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             for (const auto& write : loan.writes) {
                 if (!stateNames.count(write.field) || !write.expression)
                     throw std::runtime_error("invalid sealed actor state write");
+                if (!canonicalStateExpression(canonicalStateExpression, *write.expression))
+                    throw std::runtime_error("noncanonical sealed actor state write expression");
                 verifyStateExpression(verifyStateExpression, *write.expression);
             }
+            if (!canonicalStateExpression(canonicalStateExpression, *loan.result))
+                throw std::runtime_error("noncanonical sealed actor state result expression");
             verifyStateExpression(verifyStateExpression, *loan.result);
             if (readsState &&
                     !actor.on_message.declared_effects.has(FunctionEffect::StateRead))
