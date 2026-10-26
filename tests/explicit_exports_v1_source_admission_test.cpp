@@ -212,7 +212,7 @@ fnc api(Hidden value): int { return value; }
     {
         const auto program = parse_unresolved_program(R"(
 export symbol as PublicSymbol;
-const int symbol = 1;
+fnc symbol(): int { return 1; }
 )");
         check(program.source_exports.size() == 1);
         check(program.source_exports.front().kind == SourceExportKind::Untyped);
