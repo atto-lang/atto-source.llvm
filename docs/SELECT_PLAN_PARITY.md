@@ -169,9 +169,9 @@ runtime contract only:
 - `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
   handle.
 
-This is **not** source-level select support. `Channel<T>`/Future registration,
-typed arm bindings, ownership/borrow checking, blocking suspension,
-continuation scheduling, channel-close semantics, policy lowering
+This is **not** source-level select support. Generic `Channel<T>`/Future
+registration, typed arm bindings, ownership/borrow checking, blocking
+suspension, continuation scheduling, policy lowering
 (`first`/`fair`/`random`), and actor generation fencing are still required.
 Until those layers are wired and tested, source `select`, including both
 `{ ... }` and `over ... end`, must continue to fail closed at the native
@@ -200,8 +200,11 @@ The runtime contract is:
 - notification callback failures are retained for diagnostics without rolling
   back a committed channel operation.
 
-Channel close/EOF semantics, unbounded/dynamic channels, typed values beyond
-native i64, fairness/random policy, suspension, actor continuation delivery and
-source syntax remain outside this slice. The frontend must continue to reject
-source static select until those contracts are implemented.
+Channel close/EOF is now part of this slice: close wakes pending readers and
+writers, buffered values drain before EOF, an empty closed channel commits EOF,
+and a selected write against a closed channel commits a terminal closed outcome
+without publication. Unbounded/dynamic channels, typed values beyond native i64,
+fairness/random policy, suspension, actor continuation delivery and source
+syntax remain outside this slice. The frontend must continue to reject source
+static select until those contracts are implemented.
 
