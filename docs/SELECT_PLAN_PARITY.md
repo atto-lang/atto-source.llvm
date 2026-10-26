@@ -132,6 +132,16 @@ This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
 mailbox admission, which is too late for a losing select arm to roll back.
 
+Static FAIR state is also scoped to the compiler source site, not to the
+process/VM group. The current two-send source scaffold keeps a fixed 64-entry
+table keyed by the compiler source token; each site owns its own monotonic
+ticket and normalizes that ticket by the arm count. Different static select
+sites therefore cannot perturb each other's first/next arm order. The table is
+bounded and site/ticket exhaustion fails closed rather than allocating or
+wrapping. This matches the Java static-ticket contract and must eventually be
+extended with explicit actor/site identity when native select is admitted
+inside actor methods.
+
 Additional stale-generation hardening is normative for this substrate:
 
 - the generation-scoped `arm_count` is atomic metadata and is published before
