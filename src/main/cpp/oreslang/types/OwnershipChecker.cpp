@@ -805,7 +805,8 @@ void validate_i64_ownership(const Program& program) {
         // require phi ownership slots, so reject the entire mixed case.
         const bool conditional_effects = std::any_of(function.statements.begin(),
             function.statements.end(), [](const Statement& stmt) {
-                return stmt.kind == Statement::Kind::Conditional;
+                return stmt.kind == Statement::Kind::Conditional ||
+                    stmt.kind == Statement::Kind::SelectChannelDefault;
             });
         std::vector<Locals> structured_exits;
         std::unordered_set<std::string> root_names;
@@ -865,6 +866,30 @@ void validate_i64_ownership(const Program& program) {
                 // in the selected arm affect the continuation exactly once,
                 // while branch-local owners still end at the arm boundary.
                 scoped_effects(stmt.then_statements, state);
+                return;
+            }
+            if (stmt.kind == Statement::Kind::SelectChannelDefault) {
+                // The write payload is evaluated before readiness is committed,
+                // so any ownership effect is common to both selected/default
+                // successors. The read binding exists only in the selected arm.
+                if (stmt.channel_write_value)
+                    check_value(*stmt.channel_write_value, state, functions);
+                Locals selected = state;
+                Locals fallback = state;
+                if (stmt.channel_read_binding) {
+                    if (!selected.emplace(stmt.channel_read_binding->name,
+                            scoped_entry(*stmt.channel_read_binding)).second)
+                        throw std::runtime_error(
+                            "ownership violation: select read binding shadows live owner");
+                }
+                scoped_effects(stmt.then_statements, selected);
+                if (stmt.channel_read_binding)
+                    selected.erase(stmt.channel_read_binding->name);
+                scoped_effects(stmt.else_statements, fallback);
+                if (!same_affine_state(selected, fallback))
+                    throw std::runtime_error(
+                        "ownership violation: channel select CFG predecessor ownership mismatch");
+                state = std::move(selected);
                 return;
             }
             if (stmt.kind == Statement::Kind::Return) {
