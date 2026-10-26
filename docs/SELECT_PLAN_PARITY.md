@@ -98,9 +98,17 @@ win the common selection and preserve the exact failure, or becomes CANCELLED
 if another arm already won. In contrast, descriptor/waiter quota exhaustion
 while registering the arm is a **select setup failure**, not a ready arm; the
 arm detaches without claiming the winner and the coordinator must clean up the
-partial selection. Stale selection/arm generations fail closed. The select
-arbiter is fixed-capacity and performs no allocation or guest callback during
-commit.
+partial selection. If another arm commits while that setup failure is being
+classified, the send arm reports CANCELLED rather than surfacing a stale
+RESOURCE_EXHAUSTED result over an already-completed selection.
+
+Registration itself is part of the generation lifetime fence: an arm enters
+`active_tokens` while still REGISTERING, before rechecking OPEN/generation.
+Therefore seal -> rearm cannot reset arm state underneath an in-flight
+registration. Selection generations are strictly monotonic and never reusable;
+same/older generations and terminal generation exhaustion fail closed. Stale
+selection/arm generations fail closed. The select arbiter is fixed-capacity and
+performs no allocation or guest callback during commit.
 
 This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
