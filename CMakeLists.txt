@@ -736,6 +736,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
 
+    # Pure host resolver security test for canonical +/ project-root imports.
+    # This does not claim pkg:/bare-path resolution or full TOML semantics.
+    add_executable(oreslang-native-project-root-import-test
+        tests/project_root_import_test.cpp)
+    target_include_directories(oreslang-native-project-root-import-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-project-root-import-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_project_root_import_security
+        COMMAND oreslang-native-project-root-import-test)
+    set_tests_properties(native_project_root_import_security PROPERTIES TIMEOUT 20)
+
     function(oreslang_contract_test name fixture)
         add_test(NAME ${name}
             COMMAND "${Python3_EXECUTABLE}"
