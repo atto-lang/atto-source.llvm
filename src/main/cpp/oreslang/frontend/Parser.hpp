@@ -355,6 +355,8 @@ struct SourceExportItem {
 };
 
 struct SourceExportDecl {
+    // empty = synthetic file/root namespace; otherwise named source module.
+    std::string owner_module;
     SourceExportScope scope = SourceExportScope::Public;
     bool typed = false;
     SourceExportKind kind = SourceExportKind::Class;
