@@ -2,6 +2,7 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -327,7 +328,9 @@ void semantic_matrix() {
 
 void module_loader_uses_source_bindings_not_native_linkage() {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() / "oreslang-explicit-export-loader-v1";
+    const fs::path root = fs::temp_directory_path() /
+        ("oreslang-explicit-export-loader-v1-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code ignored;
     fs::remove_all(root, ignored);
     fs::create_directories(root);
