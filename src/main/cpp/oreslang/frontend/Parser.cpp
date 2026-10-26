@@ -1802,13 +1802,13 @@ private:
             } else {
                 fail("Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)");
             }
-            require(";");
             const bool bound = std::any_of(value.actor_spawns.begin(),
                 value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
                     return spawn.name == future_actor;
                 });
             if (!bound)
                 fail("Future<void> requires previously spawned ActorRef");
+            require(";");
             return true;
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
