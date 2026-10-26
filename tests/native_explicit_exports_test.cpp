@@ -1,6 +1,9 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/ModuleLoader.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -322,6 +325,56 @@ void semantic_matrix() {
     }
 }
 
+void module_loader_uses_source_bindings_not_native_linkage() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "oreslang-explicit-export-loader-v1";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root);
+    struct Cleanup {
+        fs::path root;
+        ~Cleanup() { std::error_code error; fs::remove_all(root, error); }
+    } cleanup{root};
+
+    const fs::path library = root / "lib.ores";
+    const fs::path main = root / "main.ores";
+    const std::string lib_source = R"(
+        define module Lib as
+          export fnc answer as public_answer;
+          fnc answer(): int { return 42; }
+        end
+    )";
+    const std::string main_source = R"(
+        import module Lib from "./lib";
+        pub fnc main(): int { return Lib.public_answer(); }
+    )";
+    { std::ofstream out(library); out << lib_source; }
+    { std::ofstream out(main); out << main_source; }
+
+    Program linked = load_native_program(
+        main.string(), main_source, SourceIdentity{}, false, false, true);
+    const auto imported = std::find_if(
+        linked.functions.begin(), linked.functions.end(),
+        [](const Function& fn) { return fn.name == "__ores_module_1.answer"; });
+    check(imported != linked.functions.end(), "source-export alias did not link to local function");
+    check(!imported->exported, "source export alias mutated native exported linkage flag");
+    check(imported->native_internal, "imported source-only export should retain internal native linkage");
+
+    const std::string pkg_lib = R"(
+        define module Lib as
+          export[pkg] fnc answer;
+          fnc answer(): int { return 42; }
+        end
+    )";
+    { std::ofstream out(library); out << pkg_lib; }
+    rejects_code([&] {
+        (void)load_native_program(
+            main.string(),
+            R"(import module Lib from "./lib"; pub fnc main():int{return Lib.answer();})",
+            SourceIdentity{}, false, false, true);
+    }, "private or unknown");
+}
+
 void linkage_separation() {
     auto program = parse(R"(
         export fnc api;
@@ -349,6 +402,7 @@ int main() {
         syntax_matrix();
         semantic_matrix();
         linkage_separation();
+        module_loader_uses_source_bindings_not_native_linkage();
         std::cout << "PASS native explicit export parser/binding contract\n";
         return 0;
     } catch (const std::exception& error) {
