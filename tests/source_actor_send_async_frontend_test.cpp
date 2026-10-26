@@ -95,6 +95,13 @@ int main() {
     rejects(program("await worker.send_async(1); await worker.get_done(); "
                     "return 43;"),
             "native source supports only one async await boundary");
+    rejects(program("const retained: int = 7; "
+                    "await worker.send_async(1); stop worker; return retained;"),
+            "direct send_async await requires one source actor without suspended locals");
+    rejects(program("const retained: int = 7; "
+                    "const Future<void> pending = worker.send_async(1); "
+                    "await pending; stop worker; return retained;"),
+            "native Future<void> suspension cannot capture scalar/class locals");
     rejects(R"(define actor Worker as {
       let total: int = 0;
       pub fnc on_message(int n): int { await self.send_async(n); return n; }
@@ -110,5 +117,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=18\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=20 detached_no_stack_capture=1\n";
 }
