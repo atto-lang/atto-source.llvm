@@ -490,6 +490,7 @@ static void* carrier(void* raw) {
                 }
             }
 
+            release_select_wake_loan_locked(active_wake);
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
             --lane->wake_live;
@@ -1558,6 +1559,9 @@ static int reserve_wake_locked_impl(
         .descriptor_slot = descriptor_slot,
         .completion_code = 0
     };
+    w->select_arbiter = NULL;
+    w->select_generation = 0;
+    w->select_bound = 0;
     w->state = WAKE_RESERVED;
     ++s->reserved_wakes;
     ++lane->wake_live;
