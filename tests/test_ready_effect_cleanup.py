@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if readiness-effect OS failure bypasses host string cleanup."""
+"""Fail closed if readiness-effect OS failure bypasses host record/string cleanup."""
 import argparse
 import re
 import subprocess
@@ -37,6 +37,8 @@ def main():
     end = match.end() + next_function.start() if next_function else len(ir)
     host = ir[start:end]
 
+    require("@ores_record_region_begin" in host,
+            "fixture did not activate host record runtime")
     require("@ores_string_region_begin" in host,
             "fixture did not activate host string runtime")
     throw = host.find("main.ready.throw:")
@@ -44,16 +46,24 @@ def main():
     require(throw >= 0 and returned > throw,
             "readiness throw/return blocks missing or reordered")
     block = host[throw:returned]
-    cleanup = block.find("@ores_string_region_end")
+    record_cleanup = block.find("@ores_record_region_end")
+    string_cleanup = block.find("@ores_string_region_end")
     report = block.find("@oreslang_source_actor_unhandled_ready_effect")
-    require(cleanup >= 0, "readiness throw block bypasses string-region cleanup")
+    require(record_cleanup >= 0,
+            "readiness throw block bypasses record-region cleanup")
+    require(string_cleanup >= 0,
+            "readiness throw block bypasses string-region cleanup")
+    require(block.count("@ores_record_region_end") == 1,
+            "readiness throw block closes record region more than once")
+    require(block.count("@ores_string_region_end") == 1,
+            "readiness throw block closes string region more than once")
     require(report >= 0, "readiness throw block does not report ActorTerminated")
-    require(cleanup < report,
-            "ActorTerminated is reported before host string-region cleanup")
+    require(record_cleanup < string_cleanup < report,
+            "readiness failure cleanup order must be record then string then report")
     require(block.find("ret i32") > report,
             "readiness throw block returns before effect reporting")
 
-    print("READY_EFFECT_STRING_CLEANUP_PASS order=string_end-before-report")
+    print("READY_EFFECT_HOST_CLEANUP_PASS order=record_end-before-string_end-before-report")
 
 
 if __name__ == "__main__":
