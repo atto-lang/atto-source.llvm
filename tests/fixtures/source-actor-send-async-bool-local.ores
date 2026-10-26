@@ -1,0 +1,15 @@
+// Detached send_async canonicalizes a captured bool to one runtime-owned word.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  const bool retained = true;
+  await worker.send_async(1);
+  stop worker;
+  return retained ? 43 : 1;
+}
