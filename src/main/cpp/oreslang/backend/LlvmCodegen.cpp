@@ -685,6 +685,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
         if (s.kind == Statement::Kind::ForEach || s.kind == Statement::Kind::ForIndex || s.kind == Statement::Kind::Return) iteration_runtime = true;
         scan_string(s.expression.get()); scan_string(s.condition.get());
+        scan_string(s.channel_write_value.get());
         scan_string(s.loop_step.get());
         scan_string(s.condition_lhs.get()); scan_string(s.condition_rhs.get());
         if (s.branch_local) scan_string(s.branch_local->initializer.get());
@@ -858,6 +859,30 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         arrayDrop = module.getOrInsertFunction("oreslang_int_array_drop",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         arrayClose = module.getOrInsertFunction("oreslang_int_array_region_close",
+            llvm::FunctionType::get(voidTy, {native_ptr}, false));
+    }
+
+    const bool has_channel_bindings = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return !fn.channels.empty(); });
+    llvm::FunctionCallee channelNew1, channelTryWrite, channelTryRead, channelDrop;
+    if (has_channel_bindings) {
+        if (wasm32_target || cortex_m_target)
+            throw std::runtime_error(
+                "Channel<int> source lowering currently requires hosted native LLVM");
+        auto* voidTy = llvm::Type::getVoidTy(context);
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        channelNew1 = module.getOrInsertFunction(
+            "oreslang_channel_i64_new_1",
+            llvm::FunctionType::get(native_ptr, {}, false));
+        channelTryWrite = module.getOrInsertFunction(
+            "oreslang_channel_i64_try_write",
+            llvm::FunctionType::get(i32, {native_ptr, i64}, false));
+        channelTryRead = module.getOrInsertFunction(
+            "oreslang_channel_i64_try_read",
+            llvm::FunctionType::get(i32, {native_ptr, loan_ptr}, false));
+        channelDrop = module.getOrInsertFunction(
+            "oreslang_channel_i64_drop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
     }
 
@@ -1071,6 +1096,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
+        // Channel<int> is an opaque lexical capability. The runtime ABI
+        // owns the C++ object; guest IR can only pass the opaque pointer back
+        // to trusted readiness probes and drop it during lexical cleanup.
+        std::unordered_map<std::string, llvm::Value*> channelRefs;
+        for (const auto& channel : fn.channels) {
+            if (channel.capacity != 1 ||
+                    channel.declared_type.kind != SourceType::Kind::Channel ||
+                    channel.declared_type.argument != "int")
+                throw std::runtime_error(
+                    "unverified native Channel<int> capability");
+            llvm::Value* handle = builder.CreateCall(
+                channelNew1, {}, channel.name + ".channel.ref");
+            if (!channelRefs.emplace(channel.name, handle).second)
+                throw std::runtime_error(
+                    "duplicate native Channel<int> codegen owner");
+        }
+
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
@@ -1578,6 +1620,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex ||
                         action.kind == Statement::Kind::Conditional ||
                         action.kind == Statement::Kind::SelectDefault ||
+                        action.kind == Statement::Kind::SelectChannelDefault ||
                         action.kind == Statement::Kind::Return) {
                     lower_control(action); continue;
                 }
@@ -1609,6 +1652,78 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 // immediately eligible arm. Preserve its lexical scope and
                 // callable-return semantics through the normal arm lowering.
                 lower_arm(stmt.then_statements);
+                return;
+            }
+            if (stmt.kind == Statement::Kind::SelectChannelDefault) {
+                const auto channel = channelRefs.find(stmt.channel_name);
+                if (channel == channelRefs.end())
+                    throw std::runtime_error(
+                        "channel select lacks lexical runtime capability");
+
+                llvm::Value* status = nullptr;
+                llvm::Value* read_slot = nullptr;
+                if (stmt.channel_op == Statement::ChannelOp::Write) {
+                    if (!stmt.channel_write_value)
+                        throw std::runtime_error(
+                            "channel write select lacks payload");
+                    // The payload is evaluated once before the readiness probe,
+                    // matching ownership analysis on both successors.
+                    auto* payload = lower(*stmt.channel_write_value, builder,
+                        i64, storage, field_storage, declarations, &region_moves);
+                    status = builder.CreateCall(
+                        channelTryWrite, {channel->second, payload},
+                        stmt.channel_name + ".select.write.status");
+                } else {
+                    if (!stmt.channel_read_binding)
+                        throw std::runtime_error(
+                            "channel read select lacks arm binding");
+                    read_slot = entry_alloca(builder, i64, nullptr,
+                        stmt.channel_read_binding->name + ".select.read.slot");
+                    status = builder.CreateCall(
+                        channelTryRead, {channel->second, read_slot},
+                        stmt.channel_name + ".select.read.status");
+                }
+
+                auto* selected = llvm::BasicBlock::Create(
+                    context, "select.channel.ready", function);
+                auto* fallback = llvm::BasicBlock::Create(
+                    context, "select.channel.default", function);
+                auto* join = llvm::BasicBlock::Create(
+                    context, "select.channel.merge", function);
+                builder.CreateCondBr(
+                    builder.CreateICmpEQ(status,
+                        llvm::ConstantInt::get(status->getType(), 1)),
+                    selected, fallback);
+
+                builder.SetInsertPoint(selected);
+                bool inserted_read = false;
+                if (stmt.channel_read_binding) {
+                    inserted_read = storage.emplace(
+                        stmt.channel_read_binding->name, read_slot).second;
+                    if (!inserted_read)
+                        throw std::runtime_error(
+                            "channel read binding shadows codegen storage");
+                    native_lifetime_start(builder, read_slot, 8);
+                }
+                lower_arm(stmt.then_statements);
+                if (stmt.channel_read_binding) {
+                    if (!builder.GetInsertBlock()->getTerminator())
+                        native_lifetime_end(builder, read_slot, 8);
+                    storage.erase(stmt.channel_read_binding->name);
+                }
+                const bool selected_live =
+                    !builder.GetInsertBlock()->getTerminator();
+                if (selected_live) builder.CreateBr(join);
+
+                builder.SetInsertPoint(fallback);
+                lower_arm(stmt.else_statements);
+                const bool fallback_live =
+                    !builder.GetInsertBlock()->getTerminator();
+                if (fallback_live) builder.CreateBr(join);
+
+                builder.SetInsertPoint(join);
+                if (!selected_live && !fallback_live)
+                    builder.CreateUnreachable();
                 return;
             }
             if (stmt.kind == Statement::Kind::ForIndex) {
@@ -1704,7 +1819,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
                     stmt.kind == Statement::Kind::Conditional ||
-                    stmt.kind == Statement::Kind::SelectDefault) {
+                    stmt.kind == Statement::Kind::SelectDefault ||
+                    stmt.kind == Statement::Kind::SelectChannelDefault) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
@@ -2034,6 +2150,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     // llvm.lifetime.end is not a source-level destructor.
                     native_lifetime_end(builder, it->address, it->bytes);
                 }
+            }
+            for (auto it = fn.channels.rbegin(); it != fn.channels.rend(); ++it) {
+                const auto handle = channelRefs.find(it->name);
+                if (handle == channelRefs.end())
+                    throw std::runtime_error(
+                        "missing native Channel<int> cleanup capability");
+                builder.CreateCall(channelDrop, {handle->second});
             }
             if (array_region != nullptr) builder.CreateCall(arrayClose, {array_region});
             if (region != nullptr) builder.CreateCall(regionClose, {region});
