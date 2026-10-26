@@ -1233,10 +1233,14 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
      */
     if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
             || lane->next_async_sequence == 0) {
+        const int still_open =
+            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        return still_open
+            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            : ORES_NATIVE_SEND_CANCELLED;
     }
     size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
@@ -1248,10 +1252,14 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
         }
     }
     if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
+        const int still_open =
+            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        return still_open
+            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            : ORES_NATIVE_SEND_CANCELLED;
     }
 
     AsyncSendCredit* credit = &lane->async_sends[slot];
