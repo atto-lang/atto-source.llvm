@@ -38,11 +38,15 @@ def expected_prefix_last(name, actor_index, processed):
     return sum([1, 2][:processed])
 
 def llvm_function_body(ir, marker):
-    pos = ir.find(marker)
-    assert pos >= 0, ("missing LLVM function marker", marker)
-    start = ir.rfind("define ", 0, pos)
-    end = ir.find("\n}", pos)
-    assert start >= 0 and end >= 0, ("malformed LLVM function", marker)
+    definition = re.search(
+        r"^define\\s+[^\\n{]*" + re.escape(marker) + r"[^\\n{]*\\{",
+        ir,
+        re.MULTILINE,
+    )
+    assert definition is not None, ("missing LLVM function definition", marker)
+    start = definition.start()
+    end = ir.find("\n}", definition.end())
+    assert end >= 0, ("malformed LLVM function", marker)
     return ir[start:end + 2]
 
 def parse_actor_receipt(line):
