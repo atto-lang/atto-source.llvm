@@ -269,3 +269,5 @@ The exact subtree then passed the carrier regression suites, reviewed-plan valid
 dependency-cache seal/verify plus deliberate tamper rejection, and a deprivileged isolated
 guest-boundary probe. The temporary fallback branch was moved back to its original main
 commit after evidence capture. This proof contains no LLVM private source.
+
+Review-branch reconciliation commit: `19d3cdc3dec5378f32dbf06376fa94bd04bd275f`, bringing this review branch onto source `main` `7b705bf7e8c8e24f119f95a910144388e44516b6` without changing the reviewed #988 source blobs.
