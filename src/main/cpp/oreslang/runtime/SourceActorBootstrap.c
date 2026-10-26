@@ -1025,6 +1025,69 @@ static int source_send_future_valid_locked(SourceSendFuture* future) {
     return 0;
 }
 
+static void retire_consuming_send_future_terminal(
+        SourceSendFuture* future, SourceActor* actor) {
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    OresNativeVM* vm = group.vm;
+    const OresNativeAsyncSendTicket ticket = future->ticket;
+    group_unlock();
+
+    /* Called only from the descriptor's executing wake. release_async_send()
+     * explicitly permits this point: admission is terminal and the callback
+     * has already copied its authenticated descriptor identity. */
+    ensure(ores_native_vm_release_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    future->live = 0;
+    future->actor = NULL;
+    future->ticket = (OresNativeAsyncSendTicket){0};
+    --actor->send_future_live;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+}
+
+static void abandon_consuming_send_future_unbound(
+        SourceSendFuture* future, SourceActor* actor) {
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    OresNativeVM* vm = group.vm;
+    const OresNativeAsyncSendTicket ticket = future->ticket;
+    group_unlock();
+
+    if (!ores_native_vm_cancel_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket)) {
+        OresNativeAsyncSendState state = ORES_NATIVE_ASYNC_SEND_INVALID;
+        OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
+        ensure(ores_native_vm_async_send_status(
+            vm, ORES_NATIVE_VM_MAIN, ticket, &state, &outcome));
+        ensure(state == ORES_NATIVE_ASYNC_SEND_READY
+            || state == ORES_NATIVE_ASYNC_SEND_FAILED
+            || state == ORES_NATIVE_ASYNC_SEND_CANCELLED);
+    }
+    ensure(ores_native_vm_release_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    future->live = 0;
+    future->actor = NULL;
+    future->ticket = (OresNativeAsyncSendTicket){0};
+    --actor->send_future_live;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+}
+
 int oreslang_source_actor_send_async_start_checked(
         void* opaque, int64_t payload, void** future_out) {
     if (future_out) *future_out = NULL;
