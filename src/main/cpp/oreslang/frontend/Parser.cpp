@@ -506,7 +506,7 @@ public:
                 continue;
             }
             if (token_.text == "import")
-                fail("[IMPORT_AFTER_DECLARATION] imports must precede real declarations; export metadata does not close the import prelude");
+                fail("[EXPORT_IMPORT_PRELUDE] imports must precede real declarations; export metadata does not close the import prelude");
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
@@ -636,12 +636,17 @@ private:
         return declaration;
     }
 
-    static bool source_export_kind_word(std::string_view word) {
+    bool source_export_kind_word() const {
+        const auto word = token_.text;
+        if (word == "symbol") {
+            const auto next = peek_next();
+            return next.text == "#" || next.kind == Kind::Identifier || next.text == "{";
+        }
         return word == "module" || word == "actor" || word == "class" ||
                word == "fnc" || word == "routine" || word == "interface" ||
                word == "contract" || word == "trait" || word == "struct" ||
                word == "type" || word == "const" || word == "val" ||
-               word == "let" || word == "symbol" || word == "model";
+               word == "let" || word == "model";
     }
 
     SourceExportKind source_export_kind() {
@@ -660,11 +665,17 @@ private:
         else if (word == "const") kind = SourceExportKind::Const;
         else if (word == "val") kind = SourceExportKind::Val;
         else if (word == "let") kind = SourceExportKind::Let;
-        else if (word == "symbol") kind = SourceExportKind::Symbol;
+        else if (word == "symbol") {
+            const auto next = peek_next();
+            if (next.text == "#" || next.kind == Kind::Identifier || next.text == "{")
+                kind = SourceExportKind::Symbol;
+            else
+                return SourceExportKind::Untyped;
+        }
         else if (word == "model") kind = SourceExportKind::Model;
         else if (word == "string" || word == "String" || word == "int" ||
                  word == "bool" || word == "void") {
-            fail("[UNKNOWN_EXPORT_DECLARATION_KIND] typed export prefixes are declaration families, not runtime value types");
+            fail("[EXPORT_UNKNOWN_DECLARATION_KIND] typed export prefixes are declaration families, not runtime value types");
         } else {
             return SourceExportKind::Untyped;
         }
@@ -683,7 +694,7 @@ private:
             if (kind == SourceExportKind::Symbol) {
                 if (token_.kind == Kind::Identifier &&
                         peek_next().text == "as" && peek_second().text == "#")
-                    fail("[SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
+                    fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
                 fail("[EXPORT_SYMBOL_LITERAL_REQUIRED] Symbol exports name nominal #symbol identities");
             }
             item.local_name = identifier();
@@ -695,34 +706,34 @@ private:
             if (accept("#")) {
                 const std::string target = "#" + identifier();
                 if (target != item.local_name)
-                    fail("[SYMBOL_IDENTITY_MISMATCH] Symbol export identity must be unchanged");
+                    fail("[EXPORT_SYMBOL_IDENTITY_MISMATCH] Symbol export identity must be unchanged");
                 item.self_identity = true;
                 return item;
             }
             if (token_.kind == Kind::String)
-                fail("[LITERAL_EXPORT_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
+                fail("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
             if (token_.kind == Kind::Identifier)
-                fail("[SYMBOL_BINDING_ALIAS_UNSUPPORTED] Symbol identities are not ordinary binding aliases");
+                fail("[EXPORT_SYMBOL_BINDING_ALIAS_UNSUPPORTED] Symbol identities are not ordinary binding aliases");
             fail("[EXPORT_MALFORMED_ALIAS] expected the same Symbol identity after 'as'");
         }
 
         if (token_.text == "#")
-            fail("[SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] only a Symbol source may use Symbol identity after 'as'");
+            fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] only a Symbol source may use Symbol identity after 'as'");
         if (token_.kind == Kind::String)
-            fail("[LITERAL_EXPORT_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
+            fail("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
         item.external_name = identifier();
         return item;
     }
 
     void reject_source_export_suffix() {
         if (token_.text == "." || token_.text == "::" || token_.text == "/")
-            fail("[QUALIFIED_EXPORT_UNSUPPORTED] v1 local exports use simple local names only");
+            fail("[EXPORT_QUALIFIED_TARGET_UNSUPPORTED] v1 local exports use simple local names only");
         if (token_.text == "<" || token_.text == ">")
-            fail("[GENERIC_EXPORT_TARGET_UNSUPPORTED] export generic instantiations are not supported");
+            fail("[EXPORT_GENERIC_TARGET_UNSUPPORTED] export generic instantiations are not supported");
         if (token_.text == "(")
-            fail("[CALLABLE_SIGNATURE_EXPORT_UNSUPPORTED] export overload selectors use the logical family name");
+            fail("[EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED] export overload selectors use the logical family name");
         if (token_.text == "{")
-            fail("[NESTED_EXPORT_GROUP] nested export groups are not supported");
+            fail("[EXPORT_NESTED_GROUP] nested export groups are not supported");
     }
 
     void source_export_declaration(Program& program, std::string owner) {
@@ -737,33 +748,33 @@ private:
             if (token_.text == "file") declaration.scope = SourceExportScope::File;
             else if (token_.text == "pkg" || token_.text == "package")
                 declaration.scope = SourceExportScope::Package;
-            else fail("[UNKNOWN_EXPORT_SCOPE] expected file, pkg, or package export scope");
+            else fail("[EXPORT_UNKNOWN_SCOPE] expected file, pkg, or package export scope");
             advance();
             require(close);
             if (token_.text == "[" || token_.text == "(")
-                fail("[MULTIPLE_EXPORT_SCOPES] export accepts exactly one scope");
+                fail("[EXPORT_MULTIPLE_SCOPES] export accepts exactly one scope");
         }
 
         if (accept("*")) {
             if (accept("from"))
-                fail("[REEXPORT_UNSUPPORTED] export * from is reserved for future re-export syntax");
-            fail("[WILDCARD_EXPORT_UNSUPPORTED] wildcard exports are not enabled in v1");
+                fail("[EXPORT_REEXPORT_UNSUPPORTED] export * from is reserved for future re-export syntax");
+            fail("[EXPORT_WILDCARD_UNSUPPORTED] wildcard exports are not enabled in v1");
         }
         if (accept("from"))
-            fail("[REEXPORT_UNSUPPORTED] export from is reserved for future re-export syntax");
+            fail("[EXPORT_REEXPORT_UNSUPPORTED] export from is reserved for future re-export syntax");
 
         declaration.kind = source_export_kind();
 
         if (accept("{")) {
             if (accept("}"))
-                fail("[EMPTY_EXPORT_GROUP] export groups cannot be empty");
+                fail("[EXPORT_EMPTY_GROUP] export groups cannot be empty");
             for (;;) {
                 if (token_.text == ",")
-                    fail("[MALFORMED_EXPORT_LIST] leading or repeated comma in export group");
+                    fail("[EXPORT_MALFORMED_LIST] leading or repeated comma in export group");
                 if (token_.text == "{")
-                    fail("[NESTED_EXPORT_GROUP] nested export groups are not supported");
-                if (source_export_kind_word(token_.text))
-                    fail("[KIND_PREFIX_IN_GROUP] typed export kind belongs before the group");
+                    fail("[EXPORT_NESTED_GROUP] nested export groups are not supported");
+                if (source_export_kind_word())
+                    fail("[EXPORT_KIND_PREFIX_IN_GROUP] typed export kind belongs before the group");
 
                 declaration.items.push_back(source_export_item(declaration.kind));
                 if (accept(",")) {
@@ -772,7 +783,7 @@ private:
                 }
                 if (accept("}")) break;
                 reject_source_export_suffix();
-                fail("[MALFORMED_EXPORT_LIST] expected ',' or '}' after export item");
+                fail("[EXPORT_MALFORMED_LIST] expected ',' or '}' after export item");
             }
         } else {
             declaration.items.push_back(source_export_item(declaration.kind));
