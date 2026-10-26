@@ -5,6 +5,7 @@ All checks use explicit control flow. Python removes bare 'assert' statements
 under -O / PYTHONOPTIMIZE; a release harness must never silently skip gates.
 """
 import argparse
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -115,6 +116,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--fixture", required=True)
+    parser.add_argument("--fixture-git-blob")
     parser.add_argument("--ir")
     parser.add_argument("--diagnostic")
     parser.add_argument("--parser-diagnostic", action="store_true")
@@ -147,6 +149,15 @@ def main():
             "--native-runtime requires --run")
     require(not args.verify_object or bool(args.clang),
             "--verify-object requires --clang")
+    if args.fixture_git_blob is not None:
+        require(re.fullmatch(r"[0-9a-f]{40}", args.fixture_git_blob) is not None,
+                "--fixture-git-blob requires lowercase 40-hex Git SHA-1")
+        fixture_bytes = pathlib.Path(args.fixture).read_bytes()
+        git_blob = hashlib.sha1(
+            f"blob {len(fixture_bytes)}\0".encode("ascii") + fixture_bytes
+        ).hexdigest()
+        require(git_blob == args.fixture_git_blob,
+                "fixture Git blob SHA mismatch")
     cmd = [args.compiler]
     if args.target:
         cmd.append("--target=" + args.target)
@@ -319,6 +330,11 @@ if __name__ == "__main__":
     except subprocess.TimeoutExpired:
         print("contract test failed: subprocess timed out", file=sys.stderr)
         sys.exit(1)
-    except (ContractFailure, OSError) as error:
+    except ContractFailure as error:
         print(f"contract test failed: {error}", file=sys.stderr)
+        sys.exit(1)
+    except OSError:
+        # Filesystem and process-launch errors may contain absolute private
+        # paths. Keep CI diagnostics bounded and non-sensitive.
+        print("contract test failed: operating-system failure", file=sys.stderr)
         sys.exit(1)
