@@ -899,6 +899,29 @@ static void stale_seal_cannot_cancel_rearmed_generation(void) {
     CHECK(ores_native_select_active_tokens(&select) == 0);
 }
 
+static void stale_winner_observer_cannot_read_rearmed_generation(void) {
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 800, 2));
+
+    OresNativeSelectToken first = {0};
+    CHECK(ores_native_select_register(&select, 0, &first));
+    CHECK(ores_native_select_try_commit(first) == ORES_NATIVE_SELECT_WON);
+
+    uint64_t winner = UINT64_MAX;
+    CHECK(ores_native_select_winner_generation(&select, 800, &winner));
+    CHECK(winner == 0);
+    CHECK(ores_native_select_arbiter_rearm(&select, 801, 2));
+
+    OresNativeSelectToken second = {0};
+    CHECK(ores_native_select_register(&select, 1, &second));
+    CHECK(ores_native_select_try_commit(second) == ORES_NATIVE_SELECT_WON);
+
+    winner = UINT64_MAX;
+    CHECK(!ores_native_select_winner_generation(&select, 800, &winner));
+    CHECK(ores_native_select_winner_generation(&select, 801, &winner));
+    CHECK(winner == 1);
+}
+
 static void stale_select_generation_fails_closed(void) {
     OresNativeSelectArbiter select = {0};
     CHECK(ores_native_select_arbiter_init(&select, 200, 2));
@@ -939,7 +962,8 @@ int main(void) {
     physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
     stale_seal_cannot_cancel_rearmed_generation();
+    stale_winner_observer_cannot_read_rearmed_generation();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 atomic_arm_bound=1 physical_rearm_fence=1 stale_seal_fence=1 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 atomic_arm_bound=1 physical_rearm_fence=1 stale_seal_fence=1 stale_winner_fence=1 stale_generation=1");
     return 0;
 }
