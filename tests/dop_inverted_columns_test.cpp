@@ -18,7 +18,10 @@ using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
 using PackedPosition = oreslang::dop::FixedRecord<bool, double, double>;
 using RecordStore = oreslang::dop::InvertedColumns<PackedPosition, double>;
 static_assert(PackedPosition::encoded_size == 17);
+static_assert(sizeof(PackedPosition) == PackedPosition::encoded_size);
+static_assert(alignof(PackedPosition) == 1);
 static_assert(std::is_trivially_copyable_v<PackedPosition>);
+static_assert(std::is_standard_layout_v<PackedPosition>);
 static_assert(std::is_same_v<
         decltype(std::declval<RecordStore::Loan<0, false>>().span()),
         std::span<const PackedPosition>>);
@@ -104,8 +107,11 @@ int main() {
             0, 0, 0, 0, 0, 0, 240, 63,
             0, 0, 0, 0, 0, 0, 0, 64
         };
-        check(std::equal(position.bytes().begin(), position.bytes().end(), expected.begin()));
-        check(position.get<0>() && position.get<1>() == 1.0 && position.get<2>() == 2.0);
+        auto encoded = position.bytes();
+        check(std::equal(encoded.begin(), encoded.end(), expected.begin()));
+        encoded[0] = 0;
+        check(position.get<0>());
+        check(position.get<1>() == 1.0 && position.get<2>() == 2.0);
         check(PackedPosition::from_bytes(expected) == position);
 
         auto bad = expected;
