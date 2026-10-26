@@ -1,0 +1,8 @@
+async fnc source(): int { return 21; }
+fnc increment(int value): int { return value + 1; }
+fnc twice(int value): int { return value * 2; }
+pub fnc main(): int {
+    val Future<int> pending = rt take (source() |> increment()) |> twice();
+    val int result = await pending;
+    return result;
+}
