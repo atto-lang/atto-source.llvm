@@ -750,6 +750,8 @@ static void source_send_wake(
         frame->continuation = NULL;
         frame->state_continuation = frame->next_state_continuation;
         frame->detached_state_count = frame->next_state_count;
+        for (uint64_t i = 0; i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+            frame->detached_state[i] = 0;
         for (uint64_t i = 0; i < frame->next_state_count; ++i)
             frame->detached_state[i] = frame->next_state[i];
         frame->source_token = frame->next_source_token;
@@ -767,6 +769,8 @@ static void source_send_wake(
         frame->next_state_continuation = NULL;
         frame->next_source_token = 0;
         frame->next_state_count = 0;
+        for (uint64_t i = 0; i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+            frame->next_state[i] = 0;
         frame->next_link = (OresNativeSuspensionLink){0};
 
         OresNativeWakeTicket next_wake = {0};
@@ -1663,6 +1667,8 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
     frame->next_state_continuation = continuation;
     frame->next_source_token = source_token;
     frame->next_state_count = state_count;
+    for (uint64_t i = 0; i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+        frame->next_state[i] = 0;
     for (uint64_t i = 0; i < state_count; ++i)
         frame->next_state[i] = state[i];
     frame->next_link = next_link;
