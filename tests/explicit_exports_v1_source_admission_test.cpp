@@ -266,6 +266,7 @@ export fnc Thing as Shared;
     denied("export string ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_UNKNOWN_DECLARATION_KIND");
     denied("export const ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
     denied("export class Foo as \"foo\";\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+    denied("export symbol ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
 
     {
         const auto program = parse_unresolved_program(R"(
