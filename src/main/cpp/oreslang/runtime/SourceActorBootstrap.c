@@ -2136,8 +2136,16 @@ int oreslang_source_actor_wait_detached_select_send2_result(
     }
     ensure(ores_native_select_active_tokens(&frame->arbiter) == 0);
     ensure(ores_native_select_active_physical_loans(&frame->arbiter) == 0);
-    group.pending_select = NULL;
+    /* Keep pending_select pinned while the condition variable is destroyed.
+     * A competing detach must not reinitialize the embedded frame until this
+     * finalizer has retired its last synchronization object. */
+    group_unlock();
 
+    ensure(pthread_cond_destroy(&frame->completed) == 0);
+
+    group_lock();
+    ensure(group.pending_select == frame);
+    group.pending_select = NULL;
     frame->continuation = NULL;
     frame->actors[0] = frame->actors[1] = NULL;
     frame->common_wake = (OresNativeSelectWakeTicket){0};
@@ -2155,8 +2163,6 @@ int oreslang_source_actor_wait_detached_select_send2_result(
     frame->winner_arm = UINT64_MAX;
     frame->result = 0;
     group_unlock();
-
-    ensure(pthread_cond_destroy(&frame->completed) == 0);
 
     /* Guest continuation may have issued nonblocking STOP for either actor.
      * The finalizer supplies missing stop requests and alone performs joins. */
