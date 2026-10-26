@@ -229,10 +229,22 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+// Experimental host-native bootstrap only. The parser admits exactly one
+// private capacity-1 Channel<int>, one direct write, and one first-policy
+// read arm whose body returns the bound value. No suspension or escape.
+struct StaticI64SelectPlan {
+    std::string channel;
+    std::string binding;
+    std::int64_t write_value = 0;
+    std::int64_t fallback_value = 0;
+    std::size_t offset = 0;
+};
+
 struct Function {
     std::string name;
     std::vector<GenericParameter> generic_parameters;
     std::unique_ptr<ScalarWhileLoop> scalar_while;
+    std::optional<StaticI64SelectPlan> static_i64_select;
     std::vector<Parameter> parameters;
     std::vector<LocalBinding> locals;
     std::vector<Statement> statements;
@@ -370,12 +382,14 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool experimental_static_i64_select = false);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool experimental_static_i64_select = false);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang
