@@ -684,6 +684,47 @@ static void failed_stored_future_resumes_only_for_trace_cleanup(void) {
         "SOURCE_SEND_ASYNC_FAILED_RESUME_PASS guest_continuation=0 trace_cleanup=1\n");
 }
 
+static void detached_pending_stop_skips_guest_and_joins(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 916, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+    atomic_store_explicit(
+        &failed_send_continuation_seen, 0, memory_order_release);
+
+    CHECK(oreslang_source_actor_detach_send_future_checked(
+        future,
+        failed_send_resume_probe,
+        UINT64_C(0x5ef4)) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    while (!oreslang_source_actor_test_future_consuming(future))
+        sched_yield();
+
+    /* STOP wins before mailbox admission. The detached continuation must
+     * resume only for logical trace cleanup, never execute guest post-await
+     * code, and outer-host wait must still own physical reclamation. */
+    oreslang_source_actor_request_stop(actor);
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+
+    int64_t result = -1;
+    CHECK(oreslang_source_actor_wait_detached_send_result(&result)
+        == ORES_SOURCE_SEND_ASYNC_TERMINATED);
+    CHECK(result == 0);
+    CHECK(atomic_load_explicit(
+        &failed_send_continuation_seen, memory_order_acquire) == 0);
+
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DETACHED_STOP_PASS terminated=1 "
+        "guest_continuation=0 trace_cleanup=1 final_join=1\n");
+}
+
 static void stored_future_cancel_wins_only_while_pending(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -896,6 +937,7 @@ int main(void) {
     detached_future_releases_guest_stack_before_admission();
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
+    detached_pending_stop_skips_guest_and_joins();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
     rejected_ready_cancel_releases_ownership_claim();
