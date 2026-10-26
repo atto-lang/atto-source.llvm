@@ -40,6 +40,9 @@ int oreslang_source_actor_test_readiness_publication_entered(void);
  * Refuses values above the production cohort bound. */
 int oreslang_source_actor_test_set_async_waiters(void* actor, size_t waiters);
 size_t oreslang_source_actor_test_pending_async_sends(void* actor);
+/* Test-only group-mutex snapshot: a host observer or cancellation owns
+ * the opaque Future across its out-of-lock scheduler operation. */
+int oreslang_source_actor_test_future_consuming(void* future);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
