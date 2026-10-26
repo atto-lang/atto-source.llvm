@@ -1165,6 +1165,8 @@ private:
         // borrow/take/await need separate lifetime-aware lowering.
         while (token_.text != "return") {
             if (token_.kind == Kind::End || token_.text == "}") fail("actor handler requires return");
+            if (accept("await"))
+                fail("native actor await requires continuation lowering; native send_async direct await requires trusted zero-argument main");
             if (token_.text == "const") {
                 if (!method.actor_field_writes.empty())
                     fail("native actor owned temporaries must precede field writes");
@@ -1764,39 +1766,56 @@ private:
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
-        auto ready_future_local = [&]() {
+        auto future_void_local = [&]() {
             if (!((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future")) return false;
-            if (!value.ready_future_name.empty())
-                fail("native source supports only one Future<void> readiness token");
+            if (!value.ready_future_name.empty() || !value.send_future_name.empty())
+                fail("native source supports only one Future<void> token");
+            if (!value.locals.empty())
+                fail("native Future<void> suspension cannot capture scalar/class locals");
             advance();
             require("Future");
             require("<");
             if (!accept("void"))
                 fail("Future<T> requires native continuation lowering");
             require(">");
-            value.ready_future_name = identifier();
+            const std::string future_name = identifier();
             require("=");
-            value.ready_future_actor = identifier();
+            const std::string future_actor = identifier();
             require(".");
-            require("get_ready");
+            const std::string future_method = identifier();
             require("(");
-            require(")");
+            if (future_method == "get_ready") {
+                require(")");
+                value.ready_future_name = future_name;
+                value.ready_future_actor = future_actor;
+            } else if (future_method == "send_async") {
+                if (value.name != "main" || !value.parameters.empty())
+                    fail("native send_async Future<void> requires trusted zero-argument main");
+                if (!value.actor_actions.empty() || !value.statements.empty())
+                    fail("native send_async Future<void> declaration must precede actor effects");
+                value.send_future_name = future_name;
+                value.send_future_actor = future_actor;
+                value.send_future_submit_offset = token_.offset;
+                value.send_future_payload = expression();
+                require(")");
+            } else {
+                fail("Future<void> requires ActorRef.get_ready() or ActorRef.send_async(i64)");
+            }
+            require(";");
             const bool bound = std::any_of(value.actor_spawns.begin(),
                 value.actor_spawns.end(), [&](const ActorSpawnBinding& spawn) {
-                    return spawn.name == value.ready_future_actor;
+                    return spawn.name == future_actor;
                 });
             if (!bound)
-                fail("Future<void> requires previously spawned ActorRef.get_ready");
-            require(";");
+                fail("Future<void> requires previously spawned ActorRef");
             return true;
         };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
-            // Typed Future<void> is admitted ONLY as a linear lexical alias
-            // for one already-spawned ActorRef.get_ready() lifecycle promise.
-            // No scalar/object borrow crosses this suspension, and general
-            // Future<T> / async lowering must remain fail-closed.
-            if (ready_future_local()) continue;
+            // One linear Future<void> token is admitted from either
+            // ActorRef.get_ready() or ActorRef.send_async(i64). The latter
+            // starts admission immediately at declaration.
+            if (future_void_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
@@ -2165,6 +2184,9 @@ private:
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if ((token_.text == "const" || token_.text == "val")
+                    && peek_next().text == "Future")
+                fail("native Future<void> declaration must precede actor effects");
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -2378,9 +2400,19 @@ private:
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
                 advance();
-                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty())
-                    fail("native source supports only one direct ActorRef lifecycle await");
+                if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
+                        || value.send_future_await_offset != 0)
+                    fail("native source supports only one async await boundary");
                 const std::string awaited = identifier();
+                if (!value.send_future_name.empty()) {
+                    if (awaited != value.send_future_name || token_.text != ";")
+                        fail("native Future<void> await requires its declared send_async token");
+                    value.send_future_await_offset = await_offset;
+                    value.send_future_await_action_index =
+                        value.actor_actions.size();
+                    require(";");
+                    continue;
+                }
                 if (!value.ready_future_name.empty()) {
                     if (awaited != value.ready_future_name || token_.text != ";")
                         fail("native Future<void> await requires its declared readiness token");
@@ -2408,6 +2440,24 @@ private:
                 require(".");
                 const std::string lifecycle = identifier();
                 require("(");
+                if (lifecycle == "send_async") {
+                    if (value.name != "main" || !value.parameters.empty())
+                        fail("native send_async direct await requires trusted zero-argument main");
+                    if (std::any_of(value.actor_sends.begin(), value.actor_sends.end(),
+                            [](const ActorSend& prior) { return prior.await_admission; }))
+                        fail("native source supports only one async await boundary");
+                    ActorSend send;
+                    send.offset = await_offset;
+                    send.reference = awaited;
+                    send.payload = expression();
+                    send.await_admission = true;
+                    require(")");
+                    require(";");
+                    value.actor_sends.push_back(std::move(send));
+                    value.actor_actions.push_back({ActorAction::Kind::Send,
+                                                   value.actor_sends.size() - 1});
+                    continue;
+                }
                 require(")");
                 require(";");
                 if (lifecycle == "get_ready") {
@@ -2420,7 +2470,7 @@ private:
                     value.done_await_actor = awaited;
                     value.done_await_offset = await_offset;
                 } else {
-                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done is lowered");
+                    fail("native async/channel/select boundary unsupported: only ActorRef.get_ready/get_done/send_async is lowered");
                 }
                 continue;
             }
@@ -2487,6 +2537,10 @@ private:
             Statement statement;
             statement.offset = token_.offset;
             auto action = primary();
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "send_async" && token_.text == "(") {
+                fail("native send_async statement must be awaited directly or bound to Future<void>");
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
                 if (!value.done_await_actor.empty())
@@ -3022,7 +3076,8 @@ private:
             const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
-            const bool actor_send = field->name == "send" && !named_class_receiver;
+            const bool actor_send = (field->name == "send"
+                || field->name == "send_async") && !named_class_receiver;
             if (!actor_send && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
@@ -3922,7 +3977,7 @@ private:
             std::unordered_set<std::string> live_actors;
             std::unordered_map<std::string, const ActorDecl*> references;
             if (!fn.actor_spawns.empty() || !fn.ready_await_actor.empty()
-                    || !fn.done_await_actor.empty()
+                    || !fn.done_await_actor.empty() || !fn.send_future_name.empty()
                     || !fn.actor_sends.empty() || !fn.actor_stops.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() || fn.returns_void ||
                         !fn.early_returns.empty() || !fn.statements.empty())
@@ -3952,6 +4007,27 @@ private:
                             }))
                     throw std::runtime_error(
                         "Future<void> readiness token shadows a live owner");
+            }
+            if (!fn.send_future_name.empty()) {
+                if (!fn.send_future_await_offset || !fn.send_future_payload)
+                    throw std::runtime_error(
+                        "Future<void> send_async token must be awaited exactly once");
+                if (params.count(fn.send_future_name)
+                        || live_actors.count(fn.send_future_name)
+                        || std::any_of(fn.locals.begin(), fn.locals.end(),
+                            [&](const LocalBinding& item) {
+                                return item.name == fn.send_future_name;
+                            }))
+                    throw std::runtime_error(
+                        "Future<void> send_async token shadows a live owner");
+                if (!live_actors.count(fn.send_future_actor)
+                        || !references.count(fn.send_future_actor))
+                    throw std::runtime_error(
+                        "Future<void> send_async requires a live direct ActorRef receiver");
+                if (fn.actor_spawns.size() != 1 || !fn.locals.empty())
+                    throw std::runtime_error(
+                        "Future<void> send_async requires one source actor without suspended locals");
+                validate_expression(*fn.send_future_payload, params, functions);
             }
             if (!fn.ready_await_actor.empty()) {
                 /*
@@ -4129,7 +4205,9 @@ private:
                 check_statement_names(stmt, params);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
-            for (const auto& action : fn.actor_actions) {
+            for (std::size_t action_position = 0;
+                    action_position < fn.actor_actions.size(); ++action_position) {
+                const auto& action = fn.actor_actions[action_position];
                 if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
                     if (!references.count(send.reference))
@@ -4139,6 +4217,11 @@ private:
                     validate_expression(*send.payload, params, functions);
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
+                    if (!fn.send_future_name.empty()
+                            && stop == fn.send_future_actor
+                            && action_position < fn.send_future_await_action_index)
+                        throw std::runtime_error(
+                            "send_async Future target stopped before await");
                     if (!live_actors.erase(stop))
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
@@ -4299,6 +4382,9 @@ private:
                     require_scalar(*fn.actor_sends.at(action.index).payload,
                         ScalarType::I64, "native actor message payload", scalar_types);
             }
+            if (fn.send_future_payload)
+                require_scalar(*fn.send_future_payload, ScalarType::I64,
+                    "native send_async Future payload", scalar_types);
             if (fn.caught_throw_value)
                 require_scalar(*fn.caught_throw_value, ScalarType::I64,
                     "native thrown scalar", scalar_types);
