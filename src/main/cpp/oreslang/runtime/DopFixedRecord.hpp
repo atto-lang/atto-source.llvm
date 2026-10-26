@@ -15,11 +15,11 @@ namespace detail {
 
 template<class T>
 inline constexpr bool fixed_record_member_v =
-        std::is_same_v<std::remove_cv_t<T>, std::int32_t>
-        || std::is_same_v<std::remove_cv_t<T>, std::int64_t>
-        || std::is_same_v<std::remove_cv_t<T>, float>
-        || std::is_same_v<std::remove_cv_t<T>, double>
-        || std::is_same_v<std::remove_cv_t<T>, bool>;
+        std::is_same_v<T, std::int32_t>
+        || std::is_same_v<T, std::int64_t>
+        || std::is_same_v<T, float>
+        || std::is_same_v<T, double>
+        || std::is_same_v<T, bool>;
 
 template<class T>
 consteval std::size_t fixed_record_member_width() {
@@ -88,7 +88,7 @@ template<class T>
 struct is_fixed_record : std::false_type { };
 
 template<class T>
-inline constexpr bool is_fixed_record_v = is_fixed_record<std::remove_cv_t<T>>::value;
+inline constexpr bool is_fixed_record_v = is_fixed_record<T>::value;
 
 } // namespace detail
 
@@ -135,7 +135,7 @@ private:
     std::array<std::uint8_t, encoded_size> bytes_{};
 
     template<std::size_t... I>
-    static void validate(const FixedRecord& value, std::index_sequence<I...>) {
+    static void validate_members(const FixedRecord& value, std::index_sequence<I...>) {
         ((void)value.template get<I>(), ...);
     }
 
@@ -159,8 +159,12 @@ public:
         }
         FixedRecord record;
         for (std::size_t i = 0; i < encoded_size; ++i) record.bytes_[i] = encoded[i];
-        validate(record, std::index_sequence_for<Members...>{});
+        record.validate_canonical();
         return record;
+    }
+
+    void validate_canonical() const {
+        validate_members(*this, std::index_sequence_for<Members...>{});
     }
 
     template<std::size_t I>
