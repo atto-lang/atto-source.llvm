@@ -244,6 +244,42 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
     }
 }
 
+static void failed_startup_finalization_cannot_resurrect_ready() {
+    NativeActorGroup group(191006, 1);
+    auto actor = group.adopt(191006, 203, 1, [] {});
+
+    std::string injected_failure(512, 's');
+    bool threw = false;
+    fail_after_allocations.store(0, std::memory_order_release);
+    try {
+        (void)group.finalized(actor, std::move(injected_failure));
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    fail_after_allocations.store(-1, std::memory_order_release);
+    CHECK(threw);
+    CHECK(actor.resource_admission_closed());
+    CHECK(!actor.delivery_closed());
+
+    // Finalization has already sealed this incarnation. A delayed successful
+    // startup callback must not resurrect READY while terminal settlement is
+    // waiting for its serialized retry.
+    CHECK(!group.mark_ready(actor));
+
+    std::string retry_failure(512, 't');
+    CHECK(group.finalized(actor, std::move(retry_failure)));
+
+    bool ready_failed = false;
+    try { actor.get_ready().get(); }
+    catch (const std::runtime_error&) { ready_failed = true; }
+    CHECK(ready_failed);
+
+    bool done_failed = false;
+    try { actor.get_done().get(); }
+    catch (const std::runtime_error&) { done_failed = true; }
+    CHECK(done_failed);
+}
+
 static void every_finalization_allocation_failure_is_retryable() {
     bool saw_injected_failure = false;
     bool saw_success_after_window = false;
@@ -302,5 +338,6 @@ int main() {
     recycled_numeric_ref_cannot_inspect_next_control_slot();
     concurrent_registration_and_finalization_have_one_winner();
     settlement_failure_keeps_terminal_resource_seal_retryable();
+    failed_startup_finalization_cannot_resurrect_ready();
     every_finalization_allocation_failure_is_retryable();
 }

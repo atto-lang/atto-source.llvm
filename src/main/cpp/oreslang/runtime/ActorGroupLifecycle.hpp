@@ -423,7 +423,9 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* entry = find_active_locked(ref);
-            if (!entry || entry->phase != Phase::starting || closed_) return false;
+            if (!entry || entry->phase != Phase::starting || closed_
+                    || entry->ref.resource_admission_closed())
+                return false;
             entry->phase = Phase::ready;
             callbacks = settle_ticket(entry->ref, {true, ""});
         }
