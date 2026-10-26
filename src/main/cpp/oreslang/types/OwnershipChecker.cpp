@@ -659,6 +659,21 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(param.name, std::move(entry));
         }
+        for (const auto& pipeline : function.future_pipelines) {
+            if (pipeline.plans.empty() ||
+                    pipeline.plans.front().input_ownership !=
+                        pipeline_root_ownership(pipeline.root_consumed))
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline root ownership proof "
+                    "does not match source rt take shape");
+            for (std::size_t i = 1; i < pipeline.plans.size(); ++i)
+                if (pipeline.plans[i].input_ownership !=
+                        PipelineInputOwnership::OwnedPipelineValue)
+                    throw std::runtime_error(
+                        "ownership violation: Future pipeline internal edge "
+                        "lost pipeline-owned authority");
+            validate_future_pipeline_chain(pipeline.plans);
+        }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
@@ -690,6 +705,22 @@ void validate_i64_ownership(const Program& program) {
                         "ownership violation: Task<int> await lost producer provenance");
                 // Capture-free producer transfers no caller owner or borrow.
                 // The awaited scalar becomes an ordinary owned stack value.
+            } else if (!binding.future_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Future<int> await result binding");
+                const auto future = std::find_if(
+                    function.future_pipelines.begin(),
+                    function.future_pipelines.end(),
+                    [&](const SourceFuturePipelineI64Binding& pipeline) {
+                        return pipeline.name == binding.future_await_name &&
+                            pipeline.awaited;
+                    });
+                if (future == function.future_pipelines.end())
+                    throw std::runtime_error(
+                        "ownership violation: Future<int> await lost pipeline provenance");
+                validate_future_pipeline_chain(future->plans);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
