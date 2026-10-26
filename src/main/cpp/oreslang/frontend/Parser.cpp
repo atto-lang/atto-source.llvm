@@ -3851,6 +3851,7 @@ private:
                     !fn.declared_effects.has(FunctionEffect::Alloc))
                 throw std::runtime_error("filled array commit violates using signature without alloc");
             if (contains_callable_invocation(stmt.expression.get()) ||
+                    contains_callable_invocation(stmt.channel_write_value.get()) ||
                     contains_callable_invocation(stmt.condition.get()) ||
                     contains_callable_invocation(stmt.condition_lhs.get()) ||
                     contains_callable_invocation(stmt.condition_rhs.get()) ||
