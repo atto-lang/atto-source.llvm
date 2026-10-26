@@ -21,16 +21,20 @@ proposed carrier as part of this proposal.
   40241181625 and 40241178103 both completed successfully, confirming that the
   proposed destination currently has executable GitHub Actions capacity.
 - Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, current head
-  `d7eb5fb546c5d093af34a892721e998fe189d63e`, reviewed root tree
-  `fbec48d1d61cb32ec87c8a8b0b714115fecfda93`, based on
+  `3f2fc48b652582fffae29bfc2da3e507690f6ebc`, reviewed root tree
+  `bb514698ef757e2c7184cb79c2b80b90591ddb5c`, based on
   `980a9e8f2a5d2d87b0b49b8c4d764c1ccddd238e`.
 - Reviewed workflow candidate blob:
-  `6a13b894ff9bab1aaddc0600e926d00d7e01a829`.
+  `c0678f9a6fc174f3dd50b4c9dd0b60615c0b207f`.
 - Reviewed PR #988 test-plan candidate blob:
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570`.
 - Current trusted-plan runner blob: `3175155f05565cf783533e10aecb08e12f80663d`.
-- Exact-head source-free carrier run `40351259539` at `d7eb5fb546c5d093af34a892721e998fe189d63e` completed successfully across verifier, isolation, tokenless GraalVM/Maven, native CMake/CTest, and Rust offline probes.
-- Receipt-bound synthetic source-bearing run `40352545148` completed successfully at synthetic carrier commit `66194bacb70c5ca230c1a54cb07d7b8bc39b8fb1`, proving exact authorization, tokenless pre-source toolchain setup, exact-tree provenance, gitless read-only sandbox preparation, and deprivileged network-isolated execution. The synthetic source tree was `f700fabc2a274281fb521d2a899eaafbb50b4ea5`; one-use refs were revoked after evidence capture.
+- Current dependency-cache verifier/test blobs:
+  `cf3013e95c615dedc653c59852c21df9174de2fa` /
+  `08a162f7790dd5fb19d4ade4815e69ff0e6ce3d6`.
+- Current carrier-org run `40367099135` failed with zero executed steps and is infrastructure-only evidence.
+- The exact current carrier tree was mirrored by Git objects into private `usa-acc/usa-acc-infra`; all 16 blob SHAs and the recreated root tree matched exactly. Alternate-org PR run `40369486755` completed successfully across verifier, dependency-cache manifest regressions, isolation, tokenless GraalVM/Maven, native CMake/CTest, and Rust offline probes.
+- Historical full source-bearing run `40352545148` completed successfully at predecessor carrier head `d7eb5fb546c5d093af34a892721e998fe189d63e` and synthetic carrier commit `66194bacb70c5ca230c1a54cb07d7b8bc39b8fb1`. It predates dependency-cache sealing and is not current-head execution evidence.
 - The source-bearing workflow has no `contents: write` or `actions: write` authority, and all three pinned GraalVM setup steps explicitly receive an empty GitHub token with update checks disabled.
 - Historical source-free baseline run `40253715185` completed successfully at older
   carrier head `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`: pinned checkout,
@@ -48,9 +52,9 @@ proposed carrier as part of this proposal.
   contract with repository ID `1271706990`; after carrier PR #29 is independently
   approved and merged, pin the **resulting carrier `main` commit SHA** as `base_sha`
   and independently verify that its root tree equals the reviewed PR-head tree
-  `fbec48d1d61cb32ec87c8a8b0b714115fecfda93`; do not use the PR-head commit itself
+  `bb514698ef757e2c7184cb79c2b80b90591ddb5c`; do not use the PR-head commit itself
   as `base_sha` unless it is literally the resulting `main` commit. Pin workflow blob
-  `6a13b894ff9bab1aaddc0600e926d00d7e01a829` and test-plan blob
+  `c0678f9a6fc174f3dd50b4c9dd0b60615c0b207f` and test-plan blob
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570` restricted to PR `988`.
   This proposal is not effective authorization until independently reviewed
   and merged under source-repository policy.
@@ -225,3 +229,26 @@ Executed evidence:
 - exact-authorized mutated-prefetch-controller run `40353765301`: expected failure at immutable prefetch-control provenance; GraalVM and controller execution were skipped
 
 The temporary synthetic refs were revoked after evidence capture. These runs prove only the carrier mechanics. No LLVM #988 private source was transferred or executed.
+
+
+## Current dependency-cache artifact boundary proof
+
+The current carrier head adds a cross-job dependency-cache manifest boundary. The producer seals every dependency-cache regular file into a canonical manifest and passes only the manifest SHA-256 through the trusted job output. The consumer revalidates the downloaded manifest and every file byte after exact carrier provenance and before guest preparation.
+
+Current pins:
+- carrier head: `3f2fc48b652582fffae29bfc2da3e507690f6ebc`
+- carrier tree: `bb514698ef757e2c7184cb79c2b80b90591ddb5c`
+- workflow blob: `c0678f9a6fc174f3dd50b4c9dd0b60615c0b207f`
+- dependency-cache verifier: `cf3013e95c615dedc653c59852c21df9174de2fa`
+- dependency-cache tests: `08a162f7790dd5fb19d4ade4815e69ff0e6ce3d6`
+- LLVM #988 plan: `7bcc58972d329d5f02bc853fa1d908d3d24cc570`
+
+The verifier rejects symlinks, hardlinks, special files, unsafe paths, duplicate/noncanonical JSON, count/size overflow, unexpected files, and byte mutations.
+
+Executed evidence:
+- `usa-acc/usa-acc-infra` capacity canary `40368244501`, job `121731684187`: success with real steps.
+- Exact Git-object mirror commit `6d5ac86c81ba31d824be16f21c5a127f1f93766f` has root tree exactly `bb514698ef757e2c7184cb79c2b80b90591ddb5c`.
+- Exact-tree source-free run `40369486755`: success.
+- Synthetic artifact integration run `40369770317`: success. Good round-trip emitted `DEPENDENCY_CACHE_VERIFY_PASS files=2 bytes=11` and `CACHE_ARTIFACT_ROUNDTRIP_PASS`; a cache mutated after sealing was rejected with `DEPENDENCY_CACHE_DENIED: dependency-cache bytes differ from sealed manifest` and `CACHE_ARTIFACT_TAMPER_DENIED_PASS`.
+
+This alternate-org evidence contains no LLVM private source. The production source-bearing workflow at the current head still lacks a stepful run because the current carrier org stopped admitting runners; predecessor source-bearing evidence must remain classified as historical.
