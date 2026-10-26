@@ -87,6 +87,7 @@ typedef struct {
     uint64_t source_token;
     int suspend_recorded;
     int detached;
+    int finalizer_claimed;
     int wake_bound;
     int done;
     int outcome;
@@ -192,6 +193,16 @@ int oreslang_source_actor_test_future_consuming(void* opaque_future) {
 finished:
     group_unlock();
     return result;
+}
+
+int oreslang_source_actor_test_detached_finalizer_claimed(void) {
+    int claimed = 0;
+    group_lock();
+    SendAwaitFrame* frame = &group.detached_send;
+    claimed = group.pending_send == frame
+        && frame->detached && frame->finalizer_claimed;
+    group_unlock();
+    return claimed;
 }
 
 int oreslang_source_actor_test_join_waiting_on_futures(void* opaque) {
@@ -1298,10 +1309,15 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
     group_lock();
     SendAwaitFrame* frame = &group.detached_send;
     if (group.pending_send != frame || !frame->detached
+            || frame->finalizer_claimed
             || !frame->send_future || !frame->actor) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
     }
+    /* Runtime ownership may have been detached from the guest stack, but
+     * terminal finalization itself is still linear: exactly one external host
+     * may consume the frame, descriptor, Future wrapper, and final actor join. */
+    frame->finalizer_claimed = 1;
     while (!frame->done)
         ensure(pthread_cond_wait(&frame->completed, &group.mutex) == 0);
 
