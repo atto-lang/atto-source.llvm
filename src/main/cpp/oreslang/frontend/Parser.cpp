@@ -4901,12 +4901,250 @@ private:
     std::size_t conditional_depth_ = 0;
 };
 
+struct SourceLocalFamily {
+    std::string name;
+    SourceExportKind kind = SourceExportKind::Class;
+    bool implicit_public = false;
+    std::size_t declarations = 0;
+};
+
+std::string source_export_kind_name(SourceExportKind kind) {
+    switch (kind) {
+        case SourceExportKind::Module: return "module";
+        case SourceExportKind::Actor: return "actor";
+        case SourceExportKind::Class: return "class";
+        case SourceExportKind::Fnc: return "fnc";
+        case SourceExportKind::Routine: return "routine";
+        case SourceExportKind::Interface: return "interface";
+        case SourceExportKind::Contract: return "contract";
+        case SourceExportKind::Trait: return "trait";
+        case SourceExportKind::Struct: return "struct";
+        case SourceExportKind::Type: return "type";
+        case SourceExportKind::Const: return "const";
+        case SourceExportKind::Val: return "val";
+        case SourceExportKind::Let: return "let";
+        case SourceExportKind::Symbol: return "symbol";
+    }
+    throw std::runtime_error("unreachable source export kind");
+}
+
+std::string source_export_owner_id(const Program& program, const std::string& owner) {
+    const std::string prefix = program.namespace_name.empty()
+        ? "<file>" : program.namespace_name;
+    return prefix + "::" + (owner.empty() ? "__root__" : owner);
+}
+
+std::string source_family_key(const std::string& name, SourceExportKind kind) {
+    return name + "\x1f" + source_export_kind_name(kind);
+}
+
+void add_source_family(
+        std::unordered_map<std::string, SourceLocalFamily>& families,
+        std::string name,
+        SourceExportKind kind,
+        bool implicit_public) {
+    const std::string key = source_family_key(name, kind);
+    auto [it, inserted] = families.emplace(
+        key, SourceLocalFamily{name, kind, implicit_public, 1});
+    if (inserted) return;
+    if (it->second.implicit_public != implicit_public) {
+        throw std::runtime_error(
+            "OVERLOAD_VISIBILITY_CONFLICT: logical export family '" + name +
+            "' mixes public and private declarations");
+    }
+    if (kind != SourceExportKind::Fnc && kind != SourceExportKind::Routine) {
+        throw std::runtime_error(
+            "DUPLICATE_LOCAL_EXPORT_SYMBOL: duplicate local " +
+            source_export_kind_name(kind) + " '" + name + "'");
+    }
+    ++it->second.declarations;
+}
+
+std::unordered_map<std::string, SourceLocalFamily>
+source_families_for_owner(const Program& program, const std::string& owner) {
+    std::unordered_map<std::string, SourceLocalFamily> families;
+
+    // A named module is a declaration in the synthetic root namespace.
+    if (owner.empty() && !program.module.empty()) {
+        add_source_family(families, program.module, SourceExportKind::Module, false);
+        return families;
+    }
+
+    const std::string declaration_owner = program.module;
+    if (owner != declaration_owner) return families;
+
+    for (const auto& fn : program.functions) {
+        if (!fn.method_owner.empty()) continue;
+        // Compiler-owned/imported implementation slots are not source declarations.
+        if (fn.native_internal) continue;
+        add_source_family(
+            families, fn.name,
+            fn.source_routine ? SourceExportKind::Routine : SourceExportKind::Fnc,
+            fn.exported);
+    }
+    for (const auto& cls : program.classes)
+        add_source_family(families, cls.name, SourceExportKind::Class, cls.exported);
+    for (const auto& actor : program.actors)
+        add_source_family(families, actor.name, SourceExportKind::Actor, false);
+    for (const auto& contract : program.contracts)
+        add_source_family(families, contract.name, SourceExportKind::Contract, false);
+    for (const auto& type : program.type_only_declarations) {
+        if (type.module_name != owner) continue;
+        SourceExportKind kind = SourceExportKind::Type;
+        if (type.kind == TypeOnlyDecl::Kind::Trait) kind = SourceExportKind::Trait;
+        else if (type.kind == TypeOnlyDecl::Kind::Interface) kind = SourceExportKind::Interface;
+        add_source_family(families, type.name, kind, type.exported);
+    }
+    return families;
+}
+
+bool source_name_is_imported(const Program& program, const std::string& owner,
+                             const std::string& name) {
+    if (!owner.empty()) return false;
+    return std::any_of(program.imports.begin(), program.imports.end(),
+        [&](const ModuleImport& imported) { return imported.local_name == name; });
+}
+
+void add_source_binding(
+        Program& program,
+        std::unordered_map<std::string, std::size_t>& exact,
+        std::unordered_map<std::string, std::size_t>& external,
+        SourceExportBinding binding) {
+    const std::string exact_key =
+        binding.local_symbol_id + "\x1f" + binding.external_name;
+    const auto same = exact.find(exact_key);
+    if (same != exact.end()) {
+        const auto& prior = program.source_exports[same->second];
+        if (prior.scope != binding.scope)
+            throw std::runtime_error(
+                "EXPORT_SCOPE_CONFLICT: export binding '" + binding.external_name +
+                "' has conflicting scopes");
+        return;
+    }
+
+    const auto collision = external.find(binding.external_name);
+    if (collision != external.end()) {
+        const auto& prior = program.source_exports[collision->second];
+        if (prior.local_symbol_id != binding.local_symbol_id)
+            throw std::runtime_error(
+                "EXPORT_ALIAS_COLLISION: external export name '" +
+                binding.external_name + "' names different local symbols");
+    }
+
+    exact.emplace(exact_key, program.source_exports.size());
+    external.emplace(binding.external_name, program.source_exports.size());
+    program.source_exports.push_back(std::move(binding));
+}
+
+void resolve_source_exports(Program& program) {
+    program.source_exports.clear();
+
+    std::unordered_set<std::string> owners;
+    owners.insert("");
+    if (!program.module.empty()) owners.insert(program.module);
+    for (const auto& decl : program.export_declarations)
+        owners.insert(decl.owner_module);
+
+    for (const auto& owner : owners) {
+        auto families = source_families_for_owner(program, owner);
+        std::unordered_map<std::string, std::vector<const SourceLocalFamily*>> by_name;
+        for (auto& [key, family] : families)
+            by_name[family.name].push_back(&family);
+
+        std::unordered_map<std::string, std::size_t> exact;
+        std::unordered_map<std::string, std::size_t> external;
+        const std::string owner_id = source_export_owner_id(program, owner);
+
+        // Inline pub remains an implicit source binding. Existing native
+        // exported flags retain their old backend/linkage meaning separately.
+        for (const auto& [key, family] : families) {
+            if (!family.implicit_public) continue;
+            SourceExportBinding binding;
+            binding.owner_namespace_id = owner_id;
+            binding.local_name = family.name;
+            binding.local_kind = family.kind;
+            binding.external_name = family.name;
+            binding.scope = SourceExportScope::Public;
+            binding.origin = SourceExportOrigin::ImplicitPub;
+            binding.local_symbol_id = owner_id + "::" +
+                source_export_kind_name(family.kind) + "::" + family.name;
+            add_source_binding(program, exact, external, std::move(binding));
+        }
+
+        for (const auto& decl : program.export_declarations) {
+            if (decl.owner_module != owner) continue;
+            for (const auto& item : decl.items) {
+                if (item.symbol) {
+                    throw std::runtime_error(
+                        "SYMBOL_DECLARATION_NOT_LOWERED: native source Symbol "
+                        "declarations are not yet first-class export targets");
+                }
+
+                const auto named = by_name.find(item.local_name);
+                if (named == by_name.end()) {
+                    if (source_name_is_imported(program, owner, item.local_name))
+                        throw std::runtime_error(
+                            "EXPORT_IMPORTED_NAME: local export cannot re-export imported binding '" +
+                            item.local_name + "'");
+                    throw std::runtime_error(
+                        "EXPORT_UNKNOWN_TARGET: unknown local export target '" +
+                        item.local_name + "'");
+                }
+
+                std::vector<const SourceLocalFamily*> candidates;
+                for (const auto* candidate : named->second) {
+                    if (!decl.typed || candidate->kind == decl.kind)
+                        candidates.push_back(candidate);
+                }
+
+                if (decl.typed && candidates.empty()) {
+                    throw std::runtime_error(
+                        "EXPORT_KIND_MISMATCH: export kind " +
+                        source_export_kind_name(decl.kind) +
+                        " does not match local declaration '" + item.local_name + "'");
+                }
+                if (!decl.typed && candidates.size() != 1) {
+                    throw std::runtime_error(
+                        "EXPORT_AMBIGUOUS_TARGET: untyped export target '" +
+                        item.local_name + "' resolves to multiple declaration families");
+                }
+
+                const auto& family = *candidates.front();
+                SourceExportBinding binding;
+                binding.owner_namespace_id = owner_id;
+                binding.local_name = family.name;
+                binding.local_kind = family.kind;
+                binding.external_name = item.external_name;
+                binding.scope = decl.scope;
+                binding.origin = SourceExportOrigin::ExplicitExport;
+                binding.offset = decl.offset;
+                binding.local_symbol_id = owner_id + "::" +
+                    source_export_kind_name(family.kind) + "::" + family.name;
+                add_source_binding(program, exact, external, std::move(binding));
+            }
+        }
+    }
+
+    std::sort(program.source_exports.begin(), program.source_exports.end(),
+        [](const SourceExportBinding& a, const SourceExportBinding& b) {
+            if (a.owner_namespace_id != b.owner_namespace_id)
+                return a.owner_namespace_id < b.owner_namespace_id;
+            if (a.external_name != b.external_name)
+                return a.external_name < b.external_name;
+            const auto ak = source_export_kind_name(a.local_kind);
+            const auto bk = source_export_kind_name(b.local_kind);
+            if (ak != bk) return ak < bk;
+            return a.local_symbol_id < b.local_symbol_id;
+        });
+}
+
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop) {
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
+    resolve_source_exports(program);
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
