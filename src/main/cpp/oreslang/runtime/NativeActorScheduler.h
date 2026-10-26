@@ -164,6 +164,12 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
  * scheduler first atomically commits the common select winner. Only the
  * winning arm may enqueue and become READY. A losing/sealed arm becomes
  * CANCELLED without publishing its payload.
+ *
+ * The coordinator MUST register all arm tokens before invoking any source
+ * submission, because an immediately-ready operation may commit synchronously.
+ * RESOURCE_EXHAUSTED while allocating this descriptor is select-setup failure:
+ * the token is detached without claiming the winner and the coordinator must
+ * seal/cleanup the partially registered selection.
  */
 OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     OresNativeActorScheduler* scheduler, OresNativeActorRef target,
