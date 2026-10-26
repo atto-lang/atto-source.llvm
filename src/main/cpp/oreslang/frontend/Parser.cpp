@@ -451,6 +451,11 @@ public:
                 program.functions.push_back(extension_method(exported));
                 continue;
             }
+            if (accept("symbol")) {
+                program.source_symbols.push_back(
+                    source_symbol_declaration(program, exported));
+                continue;
+            }
             if (token_.text == "type" || token_.text == "trait" ||
                     token_.text == "interface") {
                 type_only_declaration(program, true, exported);
@@ -524,6 +529,11 @@ public:
                     program.functions.push_back(extension_method(public_class));
                     continue;
                 }
+                if (accept("symbol")) {
+                    program.source_symbols.push_back(
+                        source_symbol_declaration(program, public_class));
+                    continue;
+                }
                 if (token_.text == "type" || token_.text == "trait" ||
                         token_.text == "interface") {
                     type_only_declaration(program, true, public_class);
@@ -568,8 +578,9 @@ public:
         lower_extension_calls(program);
         resolve_alias_uses(program);
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
-                program.cooperative_loops.empty() && program.type_only_declarations.empty())
-            fail("expected at least one function, actor or type-only declaration");
+                program.cooperative_loops.empty() && program.type_only_declarations.empty() &&
+                program.source_symbols.empty())
+            fail("expected at least one function, actor, symbol or type-only declaration");
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
@@ -612,6 +623,17 @@ private:
         advance();
         require(";");
         program.imports.push_back(std::move(imported));
+    }
+
+    SourceSymbolDecl source_symbol_declaration(const Program& program, bool exported) {
+        SourceSymbolDecl declaration;
+        declaration.module_name = program.module;
+        declaration.exported = exported;
+        declaration.offset = token_.offset;
+        require("#");
+        declaration.name = "#" + identifier();
+        require(";");
+        return declaration;
     }
 
     static bool source_export_kind_word(std::string_view word) {
@@ -870,6 +892,20 @@ private:
                 family_for(declaration_owner, contract.name, SourceExportKind::Contract);
             family.has_private = true;
             family.contract = &contract;
+        }
+        std::unordered_set<std::string> symbol_declarations;
+        for (const auto& symbol : program.source_symbols) {
+            const std::string owner =
+                symbol.module_name.empty() ? declaration_owner : symbol.module_name;
+            const std::string key = owner + '\0' + symbol.name;
+            if (!symbol_declarations.insert(key).second)
+                throw std::runtime_error(
+                    "duplicate Symbol declaration '" + symbol.name +
+                    "' at byte " + std::to_string(symbol.offset));
+            auto& family =
+                family_for(owner, symbol.name, SourceExportKind::Symbol);
+            family.has_public = symbol.exported;
+            family.has_private = !symbol.exported;
         }
 
         std::unordered_map<std::string, std::size_t> external;
