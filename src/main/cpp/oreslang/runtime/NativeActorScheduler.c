@@ -32,6 +32,9 @@ typedef struct {
     OresNativeWakeOutcome outcome;
     WakeState state;
     uint64_t generation; /* never recycled at UINT64_MAX */
+    OresNativeSelectArbiter* select_arbiter;
+    uint64_t select_generation;
+    unsigned select_bound;
 } WakeCredit;
 typedef struct {
     uint64_t generation; /* descriptor generation, never recycled at UINT64_MAX */
@@ -43,6 +46,8 @@ typedef struct {
     unsigned wake_bound;
     OresNativeSelectToken select_token;
     unsigned select_bound;
+    OresNativeSelectWakeTicket select_wake;
+    unsigned select_wake_bound;
     /* A terminal descriptor cannot be physically retired while its bound
      * wake callback still owns WAKE_EXECUTING. The external release call may
      * claim one-shot retirement; the carrier completes it after callback exit. */
@@ -252,6 +257,17 @@ static void maybe_finish_stopped_locked(OresNativeActorScheduler* s, size_t i) {
     publish_terminal_locked(s, i);
     pthread_cond_broadcast(&s->drained);
 }
+static void release_select_wake_loan_locked(WakeCredit* credit) {
+    if (!credit || !credit->select_bound) return;
+    if (!credit->select_arbiter || !credit->select_generation
+            || !ores_native_select_release_physical_loan(
+                credit->select_arbiter, credit->select_generation))
+        abort();
+    credit->select_arbiter = NULL;
+    credit->select_generation = 0;
+    credit->select_bound = 0;
+}
+
 static void release_wake_locked(OresNativeActorScheduler* s,
         size_t i, WakeCredit* credit) {
     ActorLane* lane = &s->actors[i];
@@ -260,6 +276,7 @@ static void release_wake_locked(OresNativeActorScheduler* s,
         abort();
     --s->reserved_wakes;
     --lane->wake_live;
+    release_select_wake_loan_locked(credit);
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
     maybe_finish_stopped_locked(s, i);
@@ -273,6 +290,10 @@ static void retire_async_send_credit_locked(
         AsyncSendCredit* credit);
 static void settle_async_send_wake_locked(
         OresNativeActorScheduler* s, AsyncSendCredit* credit);
+static OresNativeWakePublishStatus publish_select_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectWakeTicket ticket,
+        OresNativeSelectToken winner);
 static void service_async_sends_locked(
         OresNativeActorScheduler* s, size_t actor_index);
 static void fail_pending_async_sends_locked(
@@ -793,6 +814,8 @@ static void retire_async_send_credit_locked(
     credit->wake_bound = 0;
     credit->select_token = (OresNativeSelectToken){0};
     credit->select_bound = 0;
+    credit->select_wake = (OresNativeSelectWakeTicket){0};
+    credit->select_wake_bound = 0;
     credit->release_pending = 0;
     if (pthread_cond_broadcast(&s->credit) != 0) abort();
 }
@@ -1123,6 +1146,8 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     credit->wake_bound = 0;
     credit->select_token = (OresNativeSelectToken){0};
     credit->select_bound = 0;
+    credit->select_wake = (OresNativeSelectWakeTicket){0};
+    credit->select_wake_bound = 0;
     credit->release_pending = 0;
     ++lane->async_live;
 
