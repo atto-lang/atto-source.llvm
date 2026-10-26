@@ -122,6 +122,24 @@ int64_t oreslang_source_actor_await_send_future(
     void* future,
     OresSourceActorContinuation continuation,
     uint64_t source_token);
+
+/*
+ * Detached compiler-main vertical slice. detach establishes runtime ownership
+ * of the suspended Future and returns without waiting for suspension capture,
+ * mailbox admission, or continuation execution. The root CONTROL turn captures
+ * the logical continuation and binds the exact scheduler descriptor itself.
+ *
+ * wait_detached_send_result is outer-host/process glue: it waits only for the
+ * detached function to finish, releases continuation/Future metadata, performs
+ * physical actor join after nonblocking stop admission, and returns the exact
+ * send outcome. It must never run on an actor carrier.
+ */
+int oreslang_source_actor_detach_send_future_checked(
+    void* future,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+int oreslang_source_actor_wait_detached_send_result(int64_t* result_out);
+
 int oreslang_source_actor_cancel_send_future(void* future);
 
 /* Exact trusted identity projection for runtime integration/tests. This copies
