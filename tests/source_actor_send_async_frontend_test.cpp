@@ -110,5 +110,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=17\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=2 negative=18\n";
 }
