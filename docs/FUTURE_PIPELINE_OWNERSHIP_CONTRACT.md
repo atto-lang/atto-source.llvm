@@ -10,23 +10,30 @@ A checked Future-aware value pipeline has exactly three input ownership states:
 - `ConsumedUpstreamOwnedPayload`: `rt take source |> stage()` transfers the root Future. Its payload must prove **Send** but need not prove Share. The eventual native lowering may revoke a still-pending root on pipeline cancellation/admission failure.
 - `OwnedPipelineValue`: every later deferred stage receives a value already owned by the pipeline. It requires **Send**, not Share.
 
-A root may never be classified as `OwnedPipelineValue`; a non-root deferred edge may never be reclassified as borrowed or consumed.
+A root may never be classified as `OwnedPipelineValue`; a non-root deferred edge may never be reclassified as borrowed or consumed. Adjacent deferred stage types must compose exactly in this initial fail-closed proof layer.
 
 ## Effect provenance
 
 Ownership and effect provenance are orthogonal. `rt take` cannot turn an opaque or forwarded Future into `CompleteStatic`.
 
-`CompleteStatic` is established only by exact producer identity. An `UpstreamFutureUnknown` prefix remains unknown through every later stage. Cumulative effect rows are monotonic and cannot silently drop earlier or current stage effects.
+`CompleteStatic` is established only by exact producer identity. An `UpstreamFutureUnknown` prefix remains unknown through every later stage. Each plan records the exact prior effect row, stage row, and cumulative row. The cumulative row must equal `prior ∪ stage`, and each non-root prior row must exactly equal the preceding stage's cumulative row. Effects may neither disappear nor be forged into a checked plan.
 
-Source exceptional effect execution remains fail-closed until native throw/raise/panic continuation unwinding exists. Plans may retain those rows without granting execution authority.
+Source exceptional effect execution remains fail-closed until native throw/raise/panic continuation unwinding exists. Executable admission checks the **cumulative** effect row so an exceptional effect from an earlier stage cannot be overlooked by a later pure stage.
 
 ## Future flattening
 
-A stage that flattens one Future layer must own exactly that stage-created Future for cancellation. A scalar stage owns no child Future. Forwarded/borrowed Futures must not be relabelled as owned merely because the surrounding pipeline is consumed.
+A stage that flattens one Future layer must own exactly that stage-created Future for cancellation **and** carry `FreshCheckedProducer` provenance. A forwarded/borrowed Future cannot be relabelled as owned merely because the surrounding pipeline root was consumed. A scalar stage carries neither child-Future ownership nor Future provenance.
 
-## Proof publication
+## Proof identity and publication
 
-The type checker may stage a plan, but executable authority may be published only after ownership admission succeeds for the same exact resolved declaration/AST proof. A failed move/use-after-take check must leave no executable pipeline proof behind.
+A staged plan binds two compiler-only identities:
+
+- the exact resolved declaration identity;
+- the exact checked value-pipe AST-node identity.
+
+Ownership admission must match both identities **and** the planned input ownership mode. A bare boolean admission result is insufficient because admission for one call must never authorize a rewritten or rebound call.
+
+Publication is atomic across the staged chain, matching the Java/Graal `CheckedFuturePipe` boundary: if any edge fails ownership admission, no earlier prefix receives executable authorization. Identity mismatches are hard errors rather than partial publication.
 
 ## Current LLVM boundary
 
