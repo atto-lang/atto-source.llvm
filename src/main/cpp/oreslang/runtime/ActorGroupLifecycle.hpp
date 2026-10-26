@@ -611,6 +611,19 @@ public:
                 item.second.ref.ticket_->detached_from_group.store(
                     true, std::memory_order_release);
         }
+        // First pass: request physical shutdown for every detached worker
+        // before running subscriber callbacks or destroying queued CONTROL
+        // captures. Either operation may execute arbitrary host code or block;
+        // neither may prevent a sibling actor from receiving its stop request.
+        for (auto& item : detached) {
+            Entry& worker = item.second;
+            if (worker.phase != Phase::stopping)
+                dispatch_stop(worker.ref, worker.stop_request);
+        }
+
+        // Second pass: retire queued delivery and publish STARTING readiness.
+        // These operations may invoke/destruct host objects, but all physical
+        // stop requests are already committed exactly once.
         for (auto& item : detached) {
             Entry& worker = item.second;
             if (worker.pending_control) {
@@ -625,8 +638,6 @@ public:
                 auto callbacks = settle_closed_before_ready(worker.ref);
                 notify(callbacks, worker.ref.ticket_->result);
             }
-            if (worker.phase != Phase::stopping)
-                dispatch_stop(worker.ref, worker.stop_request);
         }
     }
 

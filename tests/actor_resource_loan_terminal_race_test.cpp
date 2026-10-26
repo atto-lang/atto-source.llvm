@@ -403,6 +403,76 @@ static void close_after_admission_is_allocation_free_and_settles_readiness() {
     CHECK(done_b_failed);
 }
 
+static void close_stops_all_workers_before_blocking_readiness_callbacks() {
+    NativeActorGroup group(194050, 2);
+    std::atomic<int> stop_a{0};
+    std::atomic<int> stop_b{0};
+    std::atomic<int> callbacks_started{0};
+    std::atomic<int> callbacks_completed{0};
+    std::atomic<int> release_callbacks{0};
+    std::atomic<int> bad_result{0};
+
+    auto a = group.adopt(194050, 811, 1, [&] {
+        stop_a.fetch_add(1, std::memory_order_acq_rel);
+    });
+    auto b = group.adopt(194050, 812, 1, [&] {
+        stop_b.fetch_add(1, std::memory_order_acq_rel);
+    });
+    auto finalizer_a = group.runtime_finalizer(a);
+    auto finalizer_b = group.runtime_finalizer(b);
+
+    auto blocking_ready = [&](const auto& result) {
+        if (result.ready || result.error != "ActorGroup closed before ready")
+            bad_result.store(1, std::memory_order_release);
+        callbacks_started.fetch_add(1, std::memory_order_acq_rel);
+        while (!release_callbacks.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        callbacks_completed.fetch_add(1, std::memory_order_acq_rel);
+    };
+    a.when_ready(blocking_ready);
+    b.when_ready(blocking_ready);
+
+    std::thread closer([&] { group.close(); });
+    while (!callbacks_started.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    // close() must have completed its stop-only first pass for every actor
+    // before any readiness subscriber is allowed to block its second pass.
+    CHECK(stop_a.load(std::memory_order_acquire) == 1);
+    CHECK(stop_b.load(std::memory_order_acquire) == 1);
+    CHECK(callbacks_completed.load(std::memory_order_acquire) == 0);
+
+    release_callbacks.store(1, std::memory_order_release);
+    closer.join();
+
+    CHECK(!bad_result.load(std::memory_order_acquire));
+    CHECK(callbacks_started.load(std::memory_order_acquire) == 2);
+    CHECK(callbacks_completed.load(std::memory_order_acquire) == 2);
+    CHECK(stop_a.load(std::memory_order_acquire) == 1);
+    CHECK(stop_b.load(std::memory_order_acquire) == 1);
+    CHECK(a.delivery_closed());
+    CHECK(b.delivery_closed());
+    CHECK(finalizer_a.ready_for_actor_turn_quiescence());
+    CHECK(finalizer_b.ready_for_actor_turn_quiescence());
+    CHECK(finalizer_a.finalized());
+    CHECK(finalizer_b.finalized());
+
+    bool a_done_failed = false;
+    bool b_done_failed = false;
+    try { a.get_done().get(); }
+    catch (const std::runtime_error& e) {
+        a_done_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    try { b.get_done().get(); }
+    catch (const std::runtime_error& e) {
+        b_done_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    CHECK(a_done_failed);
+    CHECK(b_done_failed);
+}
+
 static void stop_workers_allocation_failure_keeps_waiters_retryable() {
     std::uint32_t injected_failures = 0;
     std::uint32_t successful_attempts = 0;
@@ -643,6 +713,7 @@ int main() {
     failed_startup_finalization_cannot_resurrect_ready();
     scalar_future_open_allocation_failures_release_one_loan();
     close_after_admission_is_allocation_free_and_settles_readiness();
+    close_stops_all_workers_before_blocking_readiness_callbacks();
     stop_workers_allocation_failure_keeps_waiters_retryable();
     stop_workers_dispatches_before_blocking_ready_callback();
     successful_done_cannot_be_rewritten_by_late_failure();
