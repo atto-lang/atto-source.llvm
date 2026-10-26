@@ -258,7 +258,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("()[]{},:;+-*/%=.<>@?!#").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -412,6 +412,163 @@ public:
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+
+    static bool export_kind_word(std::string_view word) {
+        return word == "module" || word == "actor" || word == "class" ||
+               word == "fnc" || word == "routine" || word == "interface" ||
+               word == "contract" || word == "trait" || word == "struct" ||
+               word == "type" || word == "const" || word == "val" ||
+               word == "let" || word == "symbol";
+    }
+
+    static SourceExportKind export_kind(std::string_view word) {
+        if (word == "module") return SourceExportKind::Module;
+        if (word == "actor") return SourceExportKind::Actor;
+        if (word == "class") return SourceExportKind::Class;
+        if (word == "fnc") return SourceExportKind::Fnc;
+        if (word == "routine") return SourceExportKind::Routine;
+        if (word == "interface") return SourceExportKind::Interface;
+        if (word == "contract") return SourceExportKind::Contract;
+        if (word == "trait") return SourceExportKind::Trait;
+        if (word == "struct") return SourceExportKind::Struct;
+        if (word == "type") return SourceExportKind::Type;
+        if (word == "const") return SourceExportKind::Const;
+        if (word == "val") return SourceExportKind::Val;
+        if (word == "let") return SourceExportKind::Let;
+        if (word == "symbol") return SourceExportKind::Symbol;
+        throw std::runtime_error("EXPORT_UNKNOWN_DECLARATION_KIND");
+    }
+
+    bool unknown_export_type_prefix() const {
+        if (token_.kind != Kind::Identifier) return false;
+        const auto word = token_.text;
+        if (!(word == "string" || word == "String" || word == "int" ||
+              word == "bool" || word == "float" || word == "void"))
+            return false;
+        return true;
+    }
+
+    SourceExportItem source_export_item(bool typed, SourceExportKind kind) {
+        SourceExportItem item;
+        if (accept("#")) {
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("[EXPORT_MALFORMED_TARGET] expected Symbol identifier after '#'");
+            item.local_name = "#" + std::string(token_.text);
+            item.external_name = item.local_name;
+            item.symbol = true;
+            advance();
+            if (typed && kind != SourceExportKind::Symbol)
+                fail("[EXPORT_KIND_MISMATCH] Symbol target requires export symbol or untyped export");
+            if (accept("as")) {
+                if (!accept("#")) {
+                    if (token_.kind == Kind::Identifier)
+                        fail("[EXPORT_SYMBOL_BINDING_ALIAS_UNSUPPORTED] Symbol binding aliases are unsupported in v1");
+                    fail("[EXPORT_SYMBOL_IDENTITY_MISMATCH] expected exact Symbol self-identity");
+                }
+                if (token_.kind != Kind::Identifier || reserved(token_.text))
+                    fail("[EXPORT_SYMBOL_IDENTITY_MISMATCH] expected Symbol identifier after '#'");
+                const std::string external = "#" + std::string(token_.text);
+                advance();
+                if (external != item.local_name)
+                    fail("[EXPORT_SYMBOL_IDENTITY_MISMATCH] Symbol export cannot substitute nominal identity");
+                item.external_name = external;
+                item.self_identity = true;
+            }
+            return item;
+        }
+
+        if (token_.kind != Kind::Identifier || reserved(token_.text))
+            fail("[EXPORT_MALFORMED_TARGET] expected local export name or #symbol");
+        item.local_name = std::string(token_.text);
+        item.external_name = item.local_name;
+        advance();
+
+        if (typed && kind == SourceExportKind::Symbol) {
+            if (accept("as") && accept("#"))
+                fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] Symbol identity target requires #symbol source");
+            fail("[EXPORT_KIND_MISMATCH] export symbol requires #symbol target");
+        }
+
+        if (token_.text == "." || token_.text == "::" || token_.text == "/")
+            fail("[EXPORT_QUALIFIED_TARGET_UNSUPPORTED] local export targets must be simple names");
+        if (token_.text == "<")
+            fail("[EXPORT_GENERIC_TARGET_UNSUPPORTED] export targets name declarations, not generic instantiations");
+        if (token_.text == "(")
+            fail("[EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED] export overload families by name");
+
+        if (accept("as")) {
+            if (accept("#"))
+                fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] ordinary declaration cannot alias to Symbol identity");
+            if (token_.kind == Kind::String)
+                fail("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not source export names");
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("[EXPORT_MALFORMED_ALIAS] export alias must be an identifier");
+            item.external_name = std::string(token_.text);
+            advance();
+        }
+        return item;
+    }
+
+    SourceExportDecl source_export_declaration() {
+        SourceExportDecl decl;
+        decl.offset = token_.offset;
+        require("export");
+
+        if (token_.text == "[" || token_.text == "(") {
+            const bool bracket = accept("[");
+            if (!bracket) require("(");
+            if (token_.text == "file") decl.scope = SourceExportScope::File;
+            else if (token_.text == "pkg" || token_.text == "package")
+                decl.scope = SourceExportScope::Package;
+            else fail("[EXPORT_UNKNOWN_SCOPE] expected file, pkg, or package");
+            advance();
+            require(bracket ? "]" : ")");
+            if (token_.text == "[" || token_.text == "(")
+                fail("[EXPORT_MULTIPLE_SCOPES] export accepts one scope");
+        }
+
+        if (accept("*")) {
+            if (token_.text == "from")
+                fail("[EXPORT_REEXPORT_UNSUPPORTED] export * from is reserved");
+            fail("[EXPORT_WILDCARD_UNSUPPORTED] wildcard exports are unsupported in v1");
+        }
+        if (token_.text == "from")
+            fail("[EXPORT_REEXPORT_UNSUPPORTED] export from is reserved");
+
+        if (export_kind_word(token_.text)) {
+            decl.typed = true;
+            decl.kind = export_kind(token_.text);
+            advance();
+        } else if (unknown_export_type_prefix()) {
+            fail("[EXPORT_UNKNOWN_DECLARATION_KIND] typed export uses declaration family, not runtime value type");
+        }
+
+        if (accept("{")) {
+            if (accept("}")) fail("[EXPORT_EMPTY_GROUP] export group cannot be empty");
+            for (;;) {
+                if (token_.text == "{")
+                    fail("[EXPORT_NESTED_GROUP] nested export groups are unsupported");
+                if (export_kind_word(token_.text))
+                    fail("[EXPORT_KIND_PREFIX_IN_GROUP] declaration kind belongs before group");
+                decl.items.push_back(source_export_item(decl.typed, decl.kind));
+                if (!accept(",")) break;
+                if (accept("}")) {
+                    if (decl.items.empty()) fail("[EXPORT_EMPTY_GROUP] export group cannot be empty");
+                    goto group_done;
+                }
+                if (token_.text == ",")
+                    fail("[EXPORT_MALFORMED_LIST] repeated comma in export group");
+            }
+            require("}");
+group_done:;
+        } else {
+            decl.items.push_back(source_export_item(decl.typed, decl.kind));
+        }
+
+        if (!accept(";"))
+            fail("[EXPORT_SEMICOLON_REQUIRED] export declaration must end with ';'");
+        return decl;
+    }
 
     Program parse() {
         Program program;
