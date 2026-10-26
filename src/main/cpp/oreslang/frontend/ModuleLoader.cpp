@@ -22,8 +22,11 @@ struct Unit {
     std::unordered_map<std::string, std::pair<std::size_t, std::string>> class_imports;
     // Declaration identities stay immutable while ASTs are moved/qualified.
     std::unordered_map<std::string, std::unordered_map<std::size_t, bool>> functions;
+    // Public source-export names map to immutable local declaration names.
+    // Native declaration linkage flags remain separate.
+    std::unordered_map<std::string, std::string> function_exports;
     std::unordered_set<std::string> classes;
-    std::unordered_map<std::string, bool> class_exports;
+    std::unordered_map<std::string, std::string> class_exports;
     std::unordered_map<std::string, bool> constructor_exports;
 };
 class Loader {
@@ -44,6 +47,8 @@ public:
         Program linked;
         linked.module = units.front()->program.module;
         linked.namespace_name = units.front()->program.namespace_name;
+        // Preserve root source API metadata for later closed-world reachability.
+        linked.source_exports = units.front()->program.source_exports;
         for (std::size_t index = 0; index < units.size(); ++index) {
             auto& unit = *units[index];
             if (!unit.program.type_only_declarations.empty() ||
@@ -126,8 +131,22 @@ private:
             arities.emplace(fn.parameters.size(), fn.exported);
         }
         for (const auto& cls : unit->program.classes) {
-            unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
-            unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);
+            unit->classes.insert(cls.name);
+            unit->constructor_exports.emplace(
+                cls.name, !cls.explicit_constructor || cls.constructor_exported);
+        }
+        for (const auto& binding : unit->program.source_exports) {
+            // Cross-file native module loading currently has no package identity.
+            // Only unrestricted public source exports grant import authority.
+            if (binding.scope != SourceExportScope::Public) continue;
+            if (binding.local_kind == SourceExportKind::Fnc ||
+                    binding.local_kind == SourceExportKind::Routine) {
+                unit->function_exports.emplace(
+                    binding.external_name, binding.local_name);
+            } else if (binding.local_kind == SourceExportKind::Class) {
+                unit->class_exports.emplace(
+                    binding.external_name, binding.local_name);
+            }
         }
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
@@ -185,9 +204,10 @@ private:
             const auto& target = *units[selected];
             if (imported.selected_class) {
                 const auto cls = target.class_exports.find(imported.selected_module);
-                if (cls == target.class_exports.end() || !cls->second)
+                if (cls == target.class_exports.end())
                     fail(current, "unknown or private imported class '" + imported.selected_module + "'");
-                current.class_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
+                current.class_imports.emplace(
+                    imported.local_name, std::make_pair(selected, cls->second));
             } else if (target.program.module != imported.selected_module)
                 fail(current, "imported file does not declare selected module '" + imported.selected_module + "'");
             if (!imported.selected_class) current.dependencies.emplace(imported.local_name, selected);
@@ -218,11 +238,15 @@ private:
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
         }
+        if (external) {
+            const auto exported = target->function_exports.find(member);
+            if (exported == target->function_exports.end())
+                fail(unit, "imported function is private or unknown: '" + expr->name + "'");
+            member = exported->second;
+        }
         const auto function = target->functions.find(member);
         if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
             fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
-        if (external && !function->second.at(expr->arguments.size()))
-            fail(unit, "imported function is private: '" + expr->name + "'");
         expr->name = target->prefix + member;
     }
     std::string class_type(const Unit& unit, const std::string& name, bool constructing = false) {
@@ -240,11 +264,12 @@ private:
         if (dependency == unit.dependencies.end()) fail(unit, "unknown module in class type");
         const auto& target = *units[dependency->second];
         auto member = target.class_exports.find(name.substr(dot + 1));
-        if (member == target.class_exports.end() || !member->second)
+        if (member == target.class_exports.end())
             fail(unit, "unknown or private imported class type '" + name + "'");
-        if (constructing && !target.constructor_exports.at(member->first))
+        const std::string& local_class = member->second;
+        if (constructing && !target.constructor_exports.at(local_class))
             fail(unit, "private imported constructor is not accessible");
-        return target.prefix + member->first;
+        return target.prefix + local_class;
     }
     void local(const Unit& unit, LocalBinding& binding) {
         binding_name(unit, binding.name);
