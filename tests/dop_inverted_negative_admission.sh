@@ -20,16 +20,22 @@ reject() {
 }
 reject "pointer-bearing field" \
   'int main() { oreslang::dop::InvertedColumns<int*> invalid; (void)invalid.size(); }' \
-  'phase-one columns only support pointer-free arithmetic and enum fields'
+  'phase-one columns only support pointer-free arithmetic, enum, or FixedRecord fields'
 reject "heap-owning std::string field" \
   'int main() { oreslang::dop::InvertedColumns<std::string> invalid; (void)invalid.size(); }' \
-  'phase-one columns only support pointer-free arithmetic and enum fields'
+  'phase-one columns only support pointer-free arithmetic, enum, or FixedRecord fields'
 reject "heap-owning std::vector field" \
   'int main() { oreslang::dop::InvertedColumns<std::vector<float>> invalid; (void)invalid.size(); }' \
-  'phase-one columns only support pointer-free arithmetic and enum fields'
+  'phase-one columns only support pointer-free arithmetic, enum, or FixedRecord fields'
 reject "mutable packed bool projection" \
   'int main() { oreslang::dop::InvertedColumns<bool> a; auto w = a.borrow_write<0>(); (void)w.span(); }' \
-  'bool byte lanes require canonical writes via set'
+  'bool/record byte lanes require canonical writes via set'
+reject "mutable fixed-record projection" \
+  'int main() { using R = oreslang::dop::FixedRecord<std::int32_t>; oreslang::dop::InvertedColumns<R> a; auto w = a.borrow_write<0>(); (void)w.span(); }' \
+  'bool/record byte lanes require canonical writes via set'
+reject "nested fixed record member" \
+  'int main() { using Inner = oreslang::dop::FixedRecord<std::int32_t>; using Outer = oreslang::dop::FixedRecord<Inner>; (void)Outer::encoded_size; }' \
+  'fixed record members must be i32/i64/f32/f64/bool'
 printf '#include "oreslang/runtime/DopInvertedColumns.hpp"\nint main() { oreslang::dop::detail::InvertedOwnerSequence::next_.store(1); }\n' > "$tmp/private-owner.cpp"
 if "$cxx" -std=c++20 -I"$here/src/main/cpp" "$tmp/private-owner.cpp" -o "$tmp/private-owner" 2>"$tmp/private-owner.err"; then
   echo "FAIL: host code mutated the inverted owner sequence" >&2
