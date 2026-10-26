@@ -1,4 +1,6 @@
 #include "oreslang/runtime/DopInvertedColumns.hpp"
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <bit>
@@ -13,6 +15,13 @@
 #include <unordered_set>
 
 using Store = oreslang::dop::InvertedColumns<float, std::int64_t, bool>;
+using PackedPosition = oreslang::dop::FixedRecord<bool, double, double>;
+using RecordStore = oreslang::dop::InvertedColumns<PackedPosition, double>;
+static_assert(PackedPosition::encoded_size == 17);
+static_assert(std::is_trivially_copyable_v<PackedPosition>);
+static_assert(std::is_same_v<
+        decltype(std::declval<RecordStore::Loan<0, false>>().span()),
+        std::span<const PackedPosition>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span()), std::span<const float>>);
 static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
@@ -84,6 +93,50 @@ int main() {
     });
     t1.join(); t2.join();
     check(a.get<0>(h0) == 2.5f && a.get<1>(h0) == 101);
+
+    // One-level inversion: a struct-valued field is one opaque fixed-record
+    // column cell. Member template order is compiler-canonical member-name
+    // order; this fixture models {alive: bool, x: f64, y: f64}.
+    {
+        const auto position = PackedPosition::pack(true, 1.0, 2.0);
+        const std::array<std::uint8_t, 17> expected{
+            1,
+            0, 0, 0, 0, 0, 0, 240, 63,
+            0, 0, 0, 0, 0, 0, 0, 64
+        };
+        check(std::equal(position.bytes().begin(), position.bytes().end(), expected.begin()));
+        check(position.get<0>() && position.get<1>() == 1.0 && position.get<2>() == 2.0);
+        check(PackedPosition::from_bytes(expected) == position);
+
+        auto bad = expected;
+        bad[0] = 2;
+        expect<std::invalid_argument>([&] {
+            (void)PackedPosition::from_bytes(bad);
+        });
+        expect<std::invalid_argument>([&] {
+            const std::array<std::uint8_t, 1> short_payload{0};
+            (void)PackedPosition::from_bytes(short_payload);
+        });
+
+        RecordStore records;
+        const auto h = records.push(position, 5.0);
+        const auto h2 = records.push(PackedPosition::pack(false, 6.0, 7.0), 8.0);
+        check(records.get<0>(h) == position && records.get<1>(h) == 5.0);
+        {
+            auto read = records.borrow_read<0>();
+            check(read.span().size() == 2);
+            check(read.span()[1].get<0>() == false);
+            check(read.span()[1].get<1>() == 6.0);
+        }
+        const auto replacement = PackedPosition::pack(false, -0.0, 9.0);
+        records.set<0>(h, replacement);
+        check(records.get<0>(h) == replacement);
+        check(std::bit_cast<std::uint64_t>(records.get<0>(h).get<1>())
+              == std::bit_cast<std::uint64_t>(-0.0));
+        records.erase_swap(h);
+        expect<std::out_of_range>([&] { (void)records.get<0>(h); });
+        check(records.get<1>(h2) == 8.0);
+    }
 
     // Fixed-width SoA scalar columns must preserve IEEE signed zero and
     // non-finite classification. No unchecked fast-math or implicit
