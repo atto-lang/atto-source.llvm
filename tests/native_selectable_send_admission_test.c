@@ -374,6 +374,10 @@ static void stale_select_generation_fails_closed(void) {
     CHECK(ores_native_select_detach(stale));
     CHECK(ores_native_select_active_tokens(&select) == 0);
 
+    /* OPEN generations cannot be silently reset. Finalization must first
+     * make the prior generation terminal, then rearm owns the reset gate. */
+    CHECK(!ores_native_select_arbiter_rearm(&select, 201, 2));
+    CHECK(ores_native_select_seal(&select));
     CHECK(ores_native_select_arbiter_rearm(&select, 201, 2));
     OresNativeSelectToken current = {0};
     CHECK(ores_native_select_register(&select, 0, &current));
