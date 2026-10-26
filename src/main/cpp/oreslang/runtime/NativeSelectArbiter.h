@@ -48,7 +48,7 @@ typedef struct OresNativeSelectArbiter {
     /* Physical continuation/wake loans fence generation reuse even after
      * every source registration token has logically retired. */
     atomic_size_t active_physical_loans;
-    size_t arm_count;
+    atomic_size_t arm_count;
     struct {
         atomic_uint_fast64_t generation;
         atomic_uint state;
@@ -66,7 +66,7 @@ static inline int ores_native_select_arbiter_init(
     atomic_init(&arbiter->winner, UINT64_C(0));
     atomic_init(&arbiter->active_tokens, (size_t)0);
     atomic_init(&arbiter->active_physical_loans, (size_t)0);
-    arbiter->arm_count = arm_count;
+    atomic_init(&arbiter->arm_count, arm_count);
     for (size_t i = 0; i < ORES_NATIVE_SELECT_MAX_ARMS; ++i) {
         atomic_init(&arbiter->arms[i].generation, UINT64_C(0));
         atomic_init(&arbiter->arms[i].state, ORES_NATIVE_SELECT_ARM_EMPTY);
@@ -125,7 +125,8 @@ static inline int ores_native_select_arbiter_rearm(
         return 0;
     }
 
-    arbiter->arm_count = arm_count;
+    atomic_store_explicit(
+        &arbiter->arm_count, arm_count, memory_order_relaxed);
     atomic_store_explicit(
         &arbiter->generation, generation, memory_order_relaxed);
     for (size_t i = 0; i < ORES_NATIVE_SELECT_MAX_ARMS; ++i)
@@ -207,7 +208,7 @@ static inline int ores_native_select_register(
         uint64_t arm,
         OresNativeSelectToken* out) {
     if (out) *out = (OresNativeSelectToken){0};
-    if (!arbiter || !out || arm >= arbiter->arm_count)
+    if (!arbiter || !out || arm >= atomic_load_explicit(&arbiter->arm_count, memory_order_acquire))
         return 0;
 
     /*
@@ -311,7 +312,7 @@ static inline int ores_native_select_token_registered(
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation
@@ -339,7 +340,7 @@ static inline int ores_native_select_bind_source(
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -383,7 +384,7 @@ static inline int ores_native_select_token_bound(
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation
@@ -402,7 +403,7 @@ ores_native_select_try_commit_bound(OresNativeSelectToken token) {
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -453,7 +454,7 @@ static inline int ores_native_select_detach_bound(
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -478,7 +479,7 @@ static inline OresNativeSelectCommitResult ores_native_select_try_commit(
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -528,7 +529,7 @@ static inline int ores_native_select_detach(OresNativeSelectToken token) {
             || atomic_load_explicit(
                 &token.arbiter->generation, memory_order_acquire)
                 != token.selection_generation
-            || token.arm >= token.arbiter->arm_count
+            || token.arm >= atomic_load_explicit(&token.arbiter->arm_count, memory_order_acquire)
             || atomic_load_explicit(
                 &token.arbiter->arms[token.arm].generation,
                 memory_order_acquire) != token.arm_generation)
@@ -555,7 +556,9 @@ static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
         (uint_fast64_t)ORES_NATIVE_SELECT_WINNER_SEALED,
         memory_order_acq_rel,
         memory_order_acquire);
-    for (size_t i = 0; i < arbiter->arm_count; ++i) {
+    const size_t arm_count = atomic_load_explicit(
+        &arbiter->arm_count, memory_order_acquire);
+    for (size_t i = 0; i < arm_count; ++i) {
         unsigned state = ORES_NATIVE_SELECT_ARM_REGISTERED;
         if (atomic_compare_exchange_strong_explicit(
                 &arbiter->arms[i].state,
