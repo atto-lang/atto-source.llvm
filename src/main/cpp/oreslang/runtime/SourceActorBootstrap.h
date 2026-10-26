@@ -21,6 +21,11 @@ typedef int64_t (*OresSourceActorContinuation)(void* actor);
  * escape or be retained by guest code. */
 typedef int64_t (*OresSourceActorStateContinuation)(
     void* actor, const int64_t* state, uint64_t state_count);
+/* First bounded source-select continuation slice. The runtime invokes this
+ * only on the authenticated root continuation lane after exactly one of two
+ * selectable ActorRef send admissions wins. winner_arm is 0 or 1. */
+typedef int64_t (*OresSourceSelectSend2Continuation)(
+    void* actor0, void* actor1, uint64_t winner_arm);
 
 enum {
     ORES_SOURCE_DETACHED_SCALAR_WORDS = 16,
@@ -200,6 +205,26 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
     uint64_t state_count);
 
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out);
+
+/*
+ * Restricted compiler/runtime slice for one static two-arm selectable mailbox
+ * send. The call detaches immediately after runtime ownership is established;
+ * it does not wait for either mailbox. Exactly one common select-generation
+ * wake resumes continuation on the root actor lane. The two ActorRefs must be
+ * distinct live source actors; payloads are Copy i64 in this first slice.
+ */
+int oreslang_source_actor_detach_select_send2_checked(
+    void* actor0, int64_t payload0,
+    void* actor1, int64_t payload1,
+    OresSourceSelectSend2Continuation continuation,
+    uint64_t source_token);
+
+/* Single-consumer external-host finalizer. Returns the winning send outcome
+ * (ACCEPTED for the first positive compiler slice), writes winner arm 0/1 and
+ * continuation result, physically retires both descriptors/common wake, then
+ * stops and joins both actors. Never call from an actor carrier. */
+int oreslang_source_actor_wait_detached_select_send2_result(
+    uint64_t* winner_arm_out, int64_t* result_out);
 
 int oreslang_source_actor_cancel_send_future(void* future);
 
