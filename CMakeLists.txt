@@ -1954,6 +1954,10 @@ if(BUILD_TESTING)
             native-do-select-default-over.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_do_select_default_brace_exec
             native-do-select-default-brace.ores --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_select_default_continuation_exec
+            native-do-select-default-continuation.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_select_default_nested_exec
+            native-do-select-default-nested.ores --run 44 --clang "${ORE_CLANG}")
     endif()
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
