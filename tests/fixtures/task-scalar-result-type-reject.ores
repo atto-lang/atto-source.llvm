@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    let Task<bool> w = task { return true; };
+    return 0;
+}
