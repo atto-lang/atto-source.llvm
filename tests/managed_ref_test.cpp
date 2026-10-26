@@ -82,6 +82,41 @@ int main() {
     static_assert(CompressedActorRef::max_addressable_span ==
                   UINT64_C(34359738360)); // 32 GiB - 8 at 8-byte alignment
 
+    // Physical density: a managed-reference field/column consumes exactly
+    // four bytes per element (native64 remains eight). A compressed word
+    // is an arena-relative scalar, NOT a host pointer or actor capability.
+    static_assert(sizeof(std::array<CompressedActorRef, 64>) == 64 * 4);
+    static_assert(sizeof(std::array<NativeActorManagedRef, 64>) == 64 * 8);
+    static_assert(sizeof(std::array<DenseIndex32<EntityTag>, 64>) == 64 * 4);
+    static_assert(std::is_trivially_copyable<CompressedActorRef>::value);
+    static_assert(std::is_trivially_copyable<NativeActorManagedRef>::value);
+
+    // Alternate alignment shifts must preserve their 32-bit encoding even
+    // when the host pointer width and default actor ref mode differ.
+    alignas(16) std::array<std::byte, 64> aligned_arena{};
+    const auto aligned_base =
+        reinterpret_cast<std::uintptr_t>(aligned_arena.data());
+    using Aligned16Ref = ActorManagedRef<ManagedRefMode::Compressed32, 4>;
+    auto aligned = Aligned16Ref::encode(
+        aligned_base, aligned_arena.size(), aligned_base + 48);
+    CHECK(aligned && aligned->storage() == 4);
+    CHECK(aligned->decode(aligned_base, aligned_arena.size()) == aligned_base + 48);
+    CHECK(!Aligned16Ref::encode(
+        aligned_base, aligned_arena.size(), aligned_base + 8));
+    CHECK(!Aligned16Ref::encode(
+        aligned_base + 8, aligned_arena.size() - 8, aligned_base + 16));
+    CHECK(!Aligned16Ref::encode(
+        aligned_base, aligned_arena.size(), aligned_base + 64));
+
+    // A different arena base can decode the same bits to a different host
+    // address. Callers must independently prove actor identity/incarnation,
+    // object-start, generation and live borrow authority before dereference.
+    alignas(8) std::array<std::byte, 64> foreign_arena{};
+    const auto foreign_base =
+        reinterpret_cast<std::uintptr_t>(foreign_arena.data());
+    CHECK(first->decode(foreign_base, foreign_arena.size()) == foreign_base);
+    CHECK(foreign_base != base);
+
     // The full 32-bit range is real even though no enormous actor arena is
     // allocated for this boundary test. High-bit words must be treated as
     // unsigned stored data, never as signed Java/LLVM guest integers.
