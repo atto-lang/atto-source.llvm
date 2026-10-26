@@ -769,7 +769,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=api):
-            with self.assertRaisesRegex(v3.Denied, "bypasses"):
+            with self.assertRaisesRegex(v3.Denied, "bypass policy"):
                 v3.checked_carrier_main("trusted/ci", carrier_contract())
 
         def drift_api(route, method="GET", payload=None):
@@ -1275,7 +1275,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     reviews["bypass_pull_request_allowances"] = {
                         "users": [], "teams": [], "apps": [], **extra,
                     }
-                    with self.assertRaisesRegex(v3.Denied, "bypasses"):
+                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
                         v3.source_protection()
 
     def test_protected_carrier_rejects_unknown_review_bypass_fields(self):
@@ -1319,7 +1319,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     reviews["bypass_pull_request_allowances"] = {
                         "users": [], "teams": [], "apps": [], **extra,
                     }
-                    with self.assertRaisesRegex(v3.Denied, "bypasses"):
+                    with self.assertRaisesRegex(v3.Denied, "bypass policy"):
                         v3.checked_carrier_main("trusted/ci", carrier_contract())
 
 
@@ -1354,7 +1354,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=api):
-            for value in (None, [], {"users": [], "teams": []}):
+            for value in (None, [], {"users": [], "teams": []}, {"users": [], "apps": []}, {"teams": [], "apps": []}):
                 with self.subTest(value=value):
                     if value is None:
                         reviews.pop("bypass_pull_request_allowances", None)
@@ -1384,7 +1384,7 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             raise AssertionError(route)
 
         with patch.object(v3, "gh_api", side_effect=api):
-            for value in (None, [], {"users": [], "apps": []}):
+            for value in (None, [], {"users": [], "teams": []}, {"users": [], "apps": []}, {"teams": [], "apps": []}):
                 with self.subTest(value=value):
                     if value is None:
                         reviews.pop("bypass_pull_request_allowances", None)
