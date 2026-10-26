@@ -709,8 +709,13 @@ static void root_select_suspend_turn(void) {
     if (!generation || generation == UINT64_MAX) abort();
     frame->selection_generation = generation;
 
-    int setup_ok = ores_native_select_arbiter_init(
-        &frame->arbiter, generation, 2);
+    const uint64_t prior_generation = atomic_load_explicit(
+        &frame->arbiter.generation, memory_order_acquire);
+    int setup_ok = prior_generation == 0
+        ? ores_native_select_arbiter_init(
+            &frame->arbiter, generation, 2)
+        : ores_native_select_arbiter_rearm(
+            &frame->arbiter, generation, 2);
     if (setup_ok)
         setup_ok = ores_native_select_register(
             &frame->arbiter, 0, &frame->tokens[0]);
