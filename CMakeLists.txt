@@ -1310,10 +1310,10 @@ if(BUILD_TESTING)
         --target wasm32-unknown-unknown
         --diagnostic "wasm32 sealed actor state awaits scoped state-loan lowering")
     add_test(NAME native_sealed_state_ir_effect_contract
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/sealed_state_ir_contract.py"
-            --compiler "$<TARGET_FILE:oreslang-llvmc>"
-            --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_FIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_sealed_state_ir_contract.cmake")
     set_tests_properties(native_sealed_state_ir_effect_contract PROPERTIES TIMEOUT 60)
     # Runs the exact codegen-admission header without LLVM libraries. This
     # validates fail-closed input shape, not source-to-native compilation.
