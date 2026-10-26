@@ -1113,6 +1113,52 @@ int oreslang_source_actor_await_send_future_checked(void* opaque_future) {
     return (int)outcome;
 }
 
+int oreslang_source_actor_discard_send_future_checked(void* opaque_future) {
+    SourceSendFuture* future = (SourceSendFuture*)opaque_future;
+    if (!future) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    if (!source_send_future_valid_locked(future) || future->consuming) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    future->consuming = 1;
+    SourceActor* actor = future->actor;
+    OresNativeVM* vm = group.vm;
+    const OresNativeAsyncSendTicket ticket = future->ticket;
+    group_unlock();
+
+    OresNativeSendStatus outcome = ORES_NATIVE_SEND_CANCELLED;
+    if (!ores_native_vm_cancel_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket)) {
+        outcome = ORES_NATIVE_SEND_INVALID_REF;
+        ensure(ores_native_vm_await_async_send(
+            vm, ORES_NATIVE_VM_MAIN, ticket, &outcome));
+    }
+    ensure(ores_native_vm_release_async_send(
+        vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    group_lock();
+    ensure(source_send_future_valid_locked(future)
+        && future->consuming && future->actor == actor
+        && actor->send_future_live > 0);
+    future->live = 0;
+    future->actor = NULL;
+    future->ticket = (OresNativeAsyncSendTicket){0};
+    --actor->send_future_live;
+    ensure(pthread_cond_broadcast(&group.async_waiters_changed) == 0);
+    group_unlock();
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DISCARD_PASS outcome=%d consumed=1\n",
+        (int)outcome);
+#endif
+    return (int)outcome;
+}
+
 int oreslang_source_actor_await_send_future_continuation_checked(
         void* opaque_future,
         OresSourceActorContinuation continuation,
