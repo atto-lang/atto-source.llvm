@@ -1908,11 +1908,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::BasicBlock::Create(context, "state.valid", resume);
             auto* state_invalid =
                 llvm::BasicBlock::Create(context, "state.invalid", resume);
+            llvm::Value* detached_state_valid = resumed.CreateICmpEQ(
+                resumed_state_count,
+                llvm::ConstantInt::get(i64, detached_words),
+                "detached.state.count.valid");
+            if (detached_words != 0) {
+                detached_state_valid = resumed.CreateAnd(
+                    detached_state_valid,
+                    resumed.CreateIsNotNull(
+                        resumed_state, "detached.state.ptr.valid"),
+                    "detached.state.shape.valid");
+            }
             resumed.CreateCondBr(
-                resumed.CreateICmpEQ(
-                    resumed_state_count,
-                    llvm::ConstantInt::get(i64, detached_words),
-                    "detached.state.count.valid"),
+                detached_state_valid,
                 state_valid,
                 state_invalid);
             resumed.SetInsertPoint(state_invalid);
@@ -2088,11 +2096,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 llvm::BasicBlock::Create(context, "state.valid", resume);
             auto* state_invalid =
                 llvm::BasicBlock::Create(context, "state.invalid", resume);
+            llvm::Value* detached_state_valid = resumed.CreateICmpEQ(
+                resumed_state_count,
+                llvm::ConstantInt::get(i64, detached_words),
+                "detached.state.count.valid");
+            if (detached_words != 0) {
+                detached_state_valid = resumed.CreateAnd(
+                    detached_state_valid,
+                    resumed.CreateIsNotNull(
+                        resumed_state, "detached.state.ptr.valid"),
+                    "detached.state.shape.valid");
+            }
             resumed.CreateCondBr(
-                resumed.CreateICmpEQ(
-                    resumed_state_count,
-                    llvm::ConstantInt::get(i64, detached_words),
-                    "detached.state.count.valid"),
+                detached_state_valid,
                 state_valid,
                 state_invalid);
             resumed.SetInsertPoint(state_invalid);
