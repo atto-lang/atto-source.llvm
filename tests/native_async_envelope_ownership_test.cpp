@@ -130,6 +130,30 @@ static void malformed_scheduler_binding_rejects_before_group_publication() {
     CHECK(threw);
     CHECK(group.worker_count() == 0);
 
+    // A complete ref from another scheduler can have the same public
+    // slot/generation. That numeric coincidence must fail before group
+    // publication when paired with this scheduler pointer.
+    auto* foreign = ores_native_actor_scheduler_open(
+        2, 1, 1, on_data, nullptr);
+    CHECK(foreign);
+    const auto foreign_target =
+        ores_native_actor_scheduler_spawn(foreign, 1);
+    CHECK(foreign_target.actor_slot == f.target.actor_slot);
+    CHECK(foreign_target.generation == f.target.generation);
+    CHECK(foreign_target.scheduler_domain != f.target.scheduler_domain);
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, foreign_target.generation, [] {},
+            f.scheduler, foreign_target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+    ores_native_actor_scheduler_retire(foreign);
+    CHECK(ores_native_actor_scheduler_try_destroy(foreign));
+
     finish_scheduler(f);
 }
 
