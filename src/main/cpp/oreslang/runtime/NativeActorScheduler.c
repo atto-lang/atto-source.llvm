@@ -1146,7 +1146,7 @@ int ores_native_actor_scheduler_cancel_async_send(
         if (!lane->async_pending) abort();
         --lane->async_pending;
         credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
-        credit->outcome = ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE;
+        credit->outcome = ORES_NATIVE_SEND_CANCELLED;
         credit->sequence = 0;
         settle_async_send_wake_locked(s, credit);
         service_async_sends_locked(s, (size_t)ticket.target.actor_slot);
@@ -1285,7 +1285,7 @@ static OresNativeWakeOutcome async_send_terminal_wake_outcome(
                 abort();
             return ORES_NATIVE_WAKE_FAILED;
         case ORES_NATIVE_ASYNC_SEND_CANCELLED:
-            if (credit->outcome != ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
+            if (credit->outcome != ORES_NATIVE_SEND_CANCELLED)
                 abort();
             return ORES_NATIVE_WAKE_CANCELLED;
         default:
