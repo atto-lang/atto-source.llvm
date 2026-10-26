@@ -774,6 +774,66 @@ static void concurrent_arms_have_exactly_one_winner(void) {
     }
 }
 
+typedef struct {
+    OresNativeSelectArbiter* arbiter;
+    atomic_int* stop;
+    atomic_uint* successes;
+} RearmRegisterRace;
+
+static void* rearm_register_race_thread(void* raw) {
+    RearmRegisterRace* race = (RearmRegisterRace*)raw;
+    while (!atomic_load_explicit(race->stop, memory_order_acquire)) {
+        OresNativeSelectToken token = {0};
+        if (ores_native_select_register(race->arbiter, 63, &token)) {
+            atomic_fetch_add_explicit(
+                race->successes, 1u, memory_order_acq_rel);
+            CHECK(ores_native_select_detach(token));
+        }
+    }
+    return NULL;
+}
+
+static void concurrent_rearm_and_registration_use_atomic_arm_bound(void) {
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 400, 64));
+
+    atomic_int stop = ATOMIC_VAR_INIT(0);
+    atomic_uint successes = ATOMIC_VAR_INIT(0);
+    RearmRegisterRace race = {&select, &stop, &successes};
+    pthread_t registrar;
+    CHECK(pthread_create(
+        &registrar, NULL, rearm_register_race_thread, &race) == 0);
+
+    uint64_t generation = 400;
+    for (unsigned round = 0; round < 2000; ++round) {
+        (void)ores_native_select_seal(&select);
+        while (ores_native_select_active_tokens(&select) != 0)
+            sched_yield();
+
+        ++generation;
+        const size_t arms = (round & 1u) ? 64u : 1u;
+        while (!ores_native_select_arbiter_rearm(
+                &select, generation, arms))
+            sched_yield();
+
+        /*
+         * Arm 63 is invalid for the one-arm generation. The registrar races
+         * this bound read against rearm deliberately; the bound itself must
+         * be atomic C11 metadata rather than a plain size_t data race.
+         */
+        if (arms == 1u) {
+            OresNativeSelectToken invalid = {0};
+            CHECK(!ores_native_select_register(&select, 63, &invalid));
+        }
+    }
+
+    atomic_store_explicit(&stop, 1, memory_order_release);
+    (void)ores_native_select_seal(&select);
+    CHECK(pthread_join(registrar, NULL) == 0);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+    CHECK(atomic_load_explicit(&successes, memory_order_acquire) != 0);
+}
+
 static void physical_select_loan_fences_generation_rearm(void) {
     OresNativeSelectArbiter select = {0};
     CHECK(ores_native_select_arbiter_init(&select, 280, 1));
@@ -854,9 +914,10 @@ int main(void) {
     sealed_selection_never_publishes_pending_send();
     stale_bound_descriptor_cannot_commit_rearmed_generation();
     concurrent_arms_have_exactly_one_winner();
+    concurrent_rearm_and_registration_use_atomic_arm_bound();
     physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 atomic_arm_bound=1 physical_rearm_fence=1 stale_generation=1");
     return 0;
 }
