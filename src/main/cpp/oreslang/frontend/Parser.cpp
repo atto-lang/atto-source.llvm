@@ -5136,20 +5136,8 @@ void resolve_future_pipeline_contracts(Program& program) {
             }
             types::validate_future_pipeline_chain(pipeline.plans);
 
-            std::vector<types::FuturePipelineOwnershipAdmission> admissions;
-            admissions.reserve(pipeline.plans.size());
-            for (const auto& plan : pipeline.plans) {
-                types::FuturePipelineOwnershipAdmission admission;
-                admission.declaration_identity = plan.declaration_identity;
-                admission.pipeline_node_identity = plan.pipeline_node_identity;
-                admission.input_ownership = plan.input_ownership;
-                admission.admitted = true;
-                admissions.push_back(admission);
-            }
-            if (!types::publish_future_pipeline_chain(
-                    pipeline.plans, admissions).has_value())
-                throw std::runtime_error(
-                    "Future pipeline ownership proof publication failed closed");
+            // Type/shape checking stages plans only. Executable authority is
+            // admitted by OwnershipChecker after the complete ownership pass.
         }
     }
 }
