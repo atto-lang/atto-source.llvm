@@ -502,6 +502,64 @@ static void sealed_selection_never_publishes_pending_send(void) {
     close_target(scheduler, target);
 }
 
+static void stale_bound_descriptor_cannot_commit_rearmed_generation(void) {
+    State state = {0};
+    atomic_store(&state.block, 1);
+    OresNativeActorRef target = {0};
+    OresNativeActorScheduler* scheduler = open_target(&state, &target);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, target, 70)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state);
+
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 500, 2));
+    OresNativeSelectToken stale_send = {0}, stale_other = {0};
+    CHECK(ores_native_select_register(&select, 0, &stale_send));
+    CHECK(ores_native_select_register(&select, 1, &stale_other));
+
+    OresNativeAsyncSendTicket send = {0};
+    CHECK(ores_native_actor_scheduler_submit_selectable_async(
+        scheduler, target, 71, stale_send, &send)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    expect_send_state(
+        scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
+
+    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+    CHECK(ores_native_select_arbiter_rearm(&select, 501, 2));
+
+    OresNativeSelectToken current_a = {0}, current_b = {0};
+    CHECK(ores_native_select_register(&select, 0, &current_a));
+    CHECK(ores_native_select_register(&select, 1, &current_b));
+
+    /* Credit release services the stale physical descriptor after rearm.
+     * Its old generation must only cancel itself; it cannot claim arm 0 of
+     * generation 501. */
+    atomic_store_explicit(&state.block, 0, memory_order_release);
+    OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
+    CHECK(ores_native_actor_scheduler_await_async_send(
+        scheduler, send, &outcome));
+    CHECK(outcome == ORES_NATIVE_SEND_CANCELLED);
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
+
+    CHECK(ores_native_select_try_commit(current_b)
+        == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_try_commit(current_a)
+        == ORES_NATIVE_SELECT_LOST);
+    uint64_t winner = UINT64_MAX;
+    CHECK(ores_native_select_winner(&select, &winner));
+    CHECK(winner == 1);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(atomic_load_explicit(
+        &state.observed_count, memory_order_acquire) == 1);
+    CHECK(state.observed[0] == 70);
+    close_target(scheduler, target);
+}
+
 typedef struct {
     OresNativeSelectToken token;
     atomic_int* go;
@@ -603,9 +661,10 @@ int main(void) {
     immediate_terminated_target_is_terminal_select_event();
     scheduler_bound_send_token_cannot_commit_early();
     sealed_selection_never_publishes_pending_send();
+    stale_bound_descriptor_cannot_commit_rearmed_generation();
     concurrent_arms_have_exactly_one_winner();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 scheduler_token_handoff=1 sealed_no_publish=1 concurrent_winner=512 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 stale_generation=1");
     return 0;
 }
