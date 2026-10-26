@@ -1556,7 +1556,11 @@ private:
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
-        if (owner.empty() && !accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (owner.empty()) {
+            if (accept("fnc")) value.source_routine = false;
+            else if (accept("routine")) value.source_routine = true;
+            else fail("expected fnc or routine");
+        }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
