@@ -43,6 +43,9 @@ size_t oreslang_source_actor_test_pending_async_sends(void* actor);
 /* Test-only group-mutex snapshot: a host observer or cancellation owns
  * the opaque Future across its out-of-lock scheduler operation. */
 int oreslang_source_actor_test_future_consuming(void* future);
+/* True only while join_done has reached the actor reclamation fence and is
+ * waiting specifically for live async waiters/Future wrappers to retire. */
+int oreslang_source_actor_test_join_waiting_on_futures(void* actor);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
