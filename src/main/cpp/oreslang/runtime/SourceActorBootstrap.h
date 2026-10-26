@@ -71,7 +71,7 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  * admission state. No actor carrier may call the observing wait; such a call
  * returns WOULD_DEADLOCK instead of parking a carrier.
  *
- * Values 0..5 deliberately preserve OresNativeSendStatus for future typed
+ * Values 0..6 deliberately preserve OresNativeSendStatus for future typed
  * compiler projection. WOULD_DEADLOCK is source-runtime specific.
  */
 enum {
@@ -86,7 +86,8 @@ enum {
         ORES_NATIVE_SEND_RESOURCE_EXHAUSTED,
     ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE =
         ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE,
-    ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK = 6
+    ORES_SOURCE_SEND_ASYNC_CANCELLED = ORES_NATIVE_SEND_CANCELLED,
+    ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK = 7
 };
 int oreslang_source_actor_await_send_async_checked(
     void* actor, int64_t payload);
