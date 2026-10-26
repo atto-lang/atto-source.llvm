@@ -524,12 +524,22 @@ int ores_native_actor_scheduler_configure_wake_callback(
         OresNativeActorScheduler* s, OresNativeActorWakeFn wake_callback) {
     if (!s || !wake_callback) return 0;
     lock(s);
-    const int ok = !s->retired
+    int ok = !s->retired
         && s->wake_callback == NULL
         && s->started_workers == 0
         && s->accepted == 0
         && s->outstanding == 0
         && s->reserved_wakes == 0;
+    if (ok) {
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            const ActorLane* lane = &s->actors[i];
+            if (lane->spawned || lane->retired || lane->wake_live
+                    || lane->wake_ready) {
+                ok = 0;
+                break;
+            }
+        }
+    }
     if (ok) s->wake_callback = wake_callback;
     unlock(s);
     return ok;
@@ -1162,9 +1172,8 @@ int ores_native_actor_scheduler_submit(OresNativeActorScheduler* s,
 static WakeCredit* matching_wake_locked(
         OresNativeActorScheduler* s, OresNativeWakeTicket t) {
     /* Wake mutation APIs are part of the public trusted-host ABI and may be
-     * called with a scheduler opened through the legacy no-wake constructors.
-     * Such schedulers deliberately have no wake table; fail closed instead of
-     * dereferencing a NULL per-lane wake pointer. */
+     * called on a scheduler whose preallocated wake escrow was never activated.
+     * Fail closed unless a trusted bootstrap installed the callback. */
     if (!s->wake_callback || !matching(s, t.producer)
             || t.slot >= ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
         return NULL;
