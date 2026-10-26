@@ -335,6 +335,35 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     return false;
 }
 
+bool native_capture_free_task_tree(
+        const Expression& expr, std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Boolean) return true;
+    if ((expr.kind == K::Negate || expr.kind == K::LogicalNot) && expr.left)
+        return native_capture_free_task_tree(*expr.left, depth + 1);
+    if ((expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::NotEqual || expr.kind == K::Less ||
+            expr.kind == K::LessEqual || expr.kind == K::Greater ||
+            expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
+            expr.kind == K::LogicalOr || expr.kind == K::LogicalXor) &&
+            expr.left && expr.right)
+        return native_capture_free_task_tree(*expr.left, depth + 1) &&
+            native_capture_free_task_tree(*expr.right, depth + 1);
+    if (expr.kind == K::Conditional && expr.when_true && expr.when_false &&
+            (expr.condition || (expr.condition_lhs && expr.condition_rhs)))
+        return (!expr.condition ||
+                    native_capture_free_task_tree(*expr.condition, depth + 1)) &&
+            (!expr.condition_lhs ||
+                    native_capture_free_task_tree(*expr.condition_lhs, depth + 1)) &&
+            (!expr.condition_rhs ||
+                    native_capture_free_task_tree(*expr.condition_rhs, depth + 1)) &&
+            native_capture_free_task_tree(*expr.when_true, depth + 1) &&
+            native_capture_free_task_tree(*expr.when_false, depth + 1);
+    return false;
+}
+
 struct NativeCallSignature {
     std::vector<std::string> parameters;
     std::vector<GenericParameter> generics;
@@ -1764,6 +1793,39 @@ private:
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
         };
+        auto source_task_local = [&]() {
+            if (!(token_.text == "let" && peek_next().text == "Task"))
+                return false;
+            if (!owner.empty() || value.name != "main" ||
+                    !value.parameters.empty())
+                fail("native Task<int> v1 requires zero-argument top-level main");
+            if (!value.source_tasks.empty())
+                fail("native Task<int> v1 supports exactly one source Task");
+            if (!value.locals.empty() || !value.actor_spawns.empty() ||
+                    !value.ready_future_name.empty())
+                fail("native Task<int> v1 must be the first lexical binding");
+
+            SourceTaskI64Binding task;
+            task.offset = token_.offset;
+            require("let");
+            require("Task");
+            require("<");
+            require("int");
+            require(">");
+            task.name = identifier();
+            require("=");
+            require("task");
+            require("{");
+            require("return");
+            task.result = expression();
+            require(";");
+            require("}");
+            require(";");
+            if (!native_capture_free_task_tree(*task.result))
+                fail("native Task<int> v1 producer must be capture-free and scalar");
+            value.source_tasks.push_back(std::move(task));
+            return true;
+        };
         auto ready_future_local = [&]() {
             if (!((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future")) return false;
@@ -1796,6 +1858,7 @@ private:
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
+            if (source_task_local()) continue;
             if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
@@ -1807,7 +1870,29 @@ private:
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
-                binding.name = identifier(); require("="); binding.initializer = expression();
+                binding.name = identifier();
+                require("=");
+                if (accept("await")) {
+                    if (binding.scalar_type != ScalarType::I64 ||
+                            value.source_tasks.empty())
+                        fail("native Task<int> await requires an int result binding");
+                    if (!value.locals.empty())
+                        fail("native Task<int> v1 await must immediately consume the first Task");
+                    const std::string task_name = identifier();
+                    auto task = std::find_if(
+                        value.source_tasks.begin(), value.source_tasks.end(),
+                        [&](const SourceTaskI64Binding& item) {
+                            return item.name == task_name;
+                        });
+                    if (task == value.source_tasks.end())
+                        fail("await requires the live source Task<int> binding");
+                    if (task->awaited)
+                        fail("source Task<int> must be awaited exactly once");
+                    task->awaited = true;
+                    binding.task_await_name = task_name;
+                } else {
+                    binding.initializer = expression();
+                }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
                 const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
@@ -2005,6 +2090,10 @@ private:
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
             value.locals.push_back(std::move(binding));
         }
+        for (const auto& task : value.source_tasks)
+            if (!task.awaited)
+                fail("source Task<int> must be awaited exactly once");
+
         // Restrict the first general-source CFG slice to synchronous
         // if/else arms containing field writes or direct function calls.
         // They may change owned scalar state only when both predecessors
@@ -3794,6 +3883,7 @@ private:
                     fn.name.rfind("oreslang_owned_i64_region_", 0) == 0 ||
                     fn.name.rfind("ores_actor_i64_heap_", 0) == 0 ||
                     fn.name.rfind("oreslang_source_actor_", 0) == 0 ||
+                    fn.name.rfind("oreslang_source_task_", 0) == 0 ||
                     fn.name.rfind("oreslang_actor_", 0) == 0 ||
                     fn.name.rfind("oreslang_wasm_actor_", 0) == 0;
                 if (runtime_symbol)
@@ -4021,6 +4111,30 @@ private:
                     throw std::runtime_error(
                         "await get_done requires side-effect-free scalar return");
             }
+            if (!fn.source_tasks.empty()) {
+                if (fn.name != "main" || !fn.parameters.empty() ||
+                        fn.source_tasks.size() != 1 ||
+                        !fn.actor_spawns.empty() ||
+                        !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty())
+                    throw std::runtime_error(
+                        "native Task<int> v1 requires one capture-free Task in zero-argument main");
+                const auto& task = fn.source_tasks.front();
+                if (!task.awaited || !task.result ||
+                        !native_capture_free_task_tree(*task.result))
+                    throw std::runtime_error(
+                        "native Task<int> v1 requires one consumed capture-free producer");
+                const std::unordered_map<std::string, ScalarType> empty_variables;
+                if (validate_scalar_expression(
+                        *task.result, empty_variables, functions) !=
+                        ScalarType::I64)
+                    throw std::runtime_error(
+                        "native Task<int> producer must return int");
+                if (fn.locals.empty() ||
+                        fn.locals.front().task_await_name != task.name)
+                    throw std::runtime_error(
+                        "native Task<int> v1 await must be the first scalar local");
+            }
             for (const auto& binding : fn.locals) {
                 // Validate before publishing the name: reject self/forward reads.
                 if (binding.int_array) {
@@ -4053,6 +4167,16 @@ private:
                             validate_expression(*arg, params, functions);
                         }
                     }
+                } else if (!binding.task_await_name.empty()) {
+                    const bool task_exists = std::any_of(
+                        fn.source_tasks.begin(), fn.source_tasks.end(),
+                        [&](const SourceTaskI64Binding& task) {
+                            return task.name == binding.task_await_name &&
+                                task.awaited;
+                        });
+                    if (!task_exists)
+                        throw std::runtime_error(
+                            "native Task<int> await lost producer provenance");
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
@@ -4212,8 +4336,14 @@ private:
                     }
                     continue;
                 }
-                require_scalar(*binding.initializer, binding.scalar_type,
-                    "native scalar local initializer", scalar_types);
+                if (!binding.task_await_name.empty()) {
+                    if (binding.scalar_type != ScalarType::I64)
+                        throw std::runtime_error(
+                            "native Task<int> await result must bind int");
+                } else {
+                    require_scalar(*binding.initializer, binding.scalar_type,
+                        "native scalar local initializer", scalar_types);
+                }
                 scalar_types.emplace(binding.name, binding.scalar_type);
             }
 
