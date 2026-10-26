@@ -2393,6 +2393,102 @@ private:
             }
             if (return_guards_started)
                 fail("native statements cannot follow guarded returns");
+
+            /*
+             * First executable native select slice. Recognize only the exact
+             * static ActorRef.send_async form here; every other select spelling
+             * continues into the existing generic fail-closed boundary.
+             */
+            bool select_send2_ahead = false;
+            if (token_.text == "select") {
+                Lexer look = lexer_;
+                const auto open = look.next();
+                const auto when = look.next();
+                const auto actor = look.next();
+                const auto dot = look.next();
+                const auto send = look.next();
+                const auto lparen = look.next();
+                select_send2_ahead =
+                    open.text == "{" && when.text == "when"
+                    && actor.kind == Kind::Identifier
+                    && dot.text == "."
+                    && send.text == "send_async"
+                    && lparen.text == "(";
+            }
+            if (select_send2_ahead) {
+                if (value.name != "main" || !value.parameters.empty())
+                    fail("native selectable send requires trusted zero-argument main");
+                if (value.returns_void || value.return_type != ScalarType::I64
+                        || !value.return_class.empty()
+                        || !value.pending_return_type_alias.empty()
+                        || !value.return_sum.empty())
+                    fail("native selectable send requires scalar int main result");
+                if (value.actor_spawns.size() != 2
+                        || !value.locals.empty()
+                        || !value.statements.empty()
+                        || !value.actor_actions.empty()
+                        || !value.await_sites.empty()
+                        || !value.ready_future_name.empty()
+                        || !value.send_future_name.empty())
+                    fail("native selectable send requires exactly two source actors and no other suspended/effect state");
+
+                auto selection = std::make_unique<NativeSelectSend2>();
+                selection->offset = token_.offset;
+                require("select");
+                require("{");
+                for (std::size_t arm_index = 0; arm_index < 2; ++arm_index) {
+                    NativeSelectSendArm arm;
+                    arm.offset = token_.offset;
+                    require("when");
+                    arm.actor = identifier();
+                    require(".");
+                    require("send_async");
+                    require("(");
+                    arm.payload = expression();
+                    require(")");
+                    require(":");
+                    require("->");
+                    require("{");
+
+                    for (std::size_t stop_index = 0; stop_index < 2; ++stop_index) {
+                        require("stop");
+                        arm.stops.push_back(identifier());
+                        require(";");
+                    }
+                    require("return");
+                    arm.result = expression();
+                    require(";");
+                    require("}");
+
+                    if (!arm.payload
+                            || arm.payload->kind != Expression::Kind::Integer)
+                        fail("native selectable send payload requires Copy int literal");
+                    if (!arm.result
+                            || arm.result->kind != Expression::Kind::Integer)
+                        fail("native selectable send arm result requires int literal");
+                    selection->arms.push_back(std::move(arm));
+                }
+                require("}");
+                if (selection->arms.size() != 2
+                        || selection->arms[0].actor == selection->arms[1].actor)
+                    fail("native selectable send requires two distinct ActorRef arms");
+
+                std::unordered_set<std::string> selected_actors{
+                    selection->arms[0].actor,
+                    selection->arms[1].actor
+                };
+                for (const auto& arm : selection->arms) {
+                    std::unordered_set<std::string> stopped(
+                        arm.stops.begin(), arm.stops.end());
+                    if (stopped.size() != 2 || stopped != selected_actors)
+                        fail("native selectable send arm must stop both selected actors exactly once");
+                }
+
+                value.select_send2 = std::move(selection);
+                require("}");
+                return value;
+            }
+
             if (ready_future_local()) continue;
             if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
                 value.statements.push_back(scoped_local()); continue;
