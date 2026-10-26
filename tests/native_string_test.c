@@ -64,6 +64,7 @@ int main(void) {
     CHECK(sizeof(void*)==8 && sizeof(OreslangNativeString)==16);
     CHECK(offsetof(OreslangNativeString,byte_length)==8);
     OreslangNativeString a={0},b={0},c={0},raw={0},quoted={0},emoji={0},quoted_emoji={0};
+    OreslangNativeString nul={0},nul_clone={0},suffix={0},nul_join={0};
     CHECK(oreslang_string_new_utf8((const unsigned char*)"hi",2,&a)==ORESLANG_STRING_OK);
     CHECK(oreslang_string_clone(&a,&b)==ORESLANG_STRING_OK);
     CHECK(a.data!=b.data && memcmp(a.data,b.data,2)==0);
@@ -71,6 +72,16 @@ int main(void) {
     CHECK(c.byte_length==4 && memcmp(c.data,"hihi",4)==0);
     CHECK(oreslang_string_clone(&a,&a)==ORESLANG_STRING_INVALID);
     CHECK(oreslang_string_concat(&a,&b,&b)==ORESLANG_STRING_INVALID);
+    const unsigned char nul_bytes[]={'a',0,'b'};
+    CHECK(oreslang_string_new_utf8(nul_bytes,sizeof(nul_bytes),&nul)==ORESLANG_STRING_OK);
+    CHECK(oreslang_string_clone(&nul,&nul_clone)==ORESLANG_STRING_OK);
+    CHECK(nul_clone.byte_length==sizeof(nul_bytes)
+          && memcmp(nul_clone.data,nul_bytes,sizeof(nul_bytes))==0);
+    CHECK(oreslang_string_new_utf8((const unsigned char*)"c",1,&suffix)==ORESLANG_STRING_OK);
+    CHECK(oreslang_string_concat(&nul,&suffix,&nul_join)==ORESLANG_STRING_OK);
+    const unsigned char nul_joined[]={'a',0,'b','c'};
+    CHECK(nul_join.byte_length==sizeof(nul_joined)
+          && memcmp(nul_join.data,nul_joined,sizeof(nul_joined))==0);
     const unsigned char chars[]={'a',0,'\n','"','\\'};
     CHECK(oreslang_string_new_utf8(chars,sizeof(chars),&raw)==ORESLANG_STRING_OK);
     CHECK(oreslang_string_json_quote(&raw,&quoted)==ORESLANG_STRING_OK);
@@ -94,6 +105,8 @@ int main(void) {
     oreslang_string_drop(&a);oreslang_string_drop(&a);oreslang_string_drop(&b);
     oreslang_string_drop(&c);oreslang_string_drop(&raw);oreslang_string_drop(&quoted);
     oreslang_string_drop(&emoji);oreslang_string_drop(&quoted_emoji);
+    oreslang_string_drop(&nul);oreslang_string_drop(&nul_clone);
+    oreslang_string_drop(&suffix);oreslang_string_drop(&nul_join);
     CHECK(!a.data && !a.byte_length);
     test_strict_json_unquote();
     puts("native owned UTF-8 String ABI and strict bounded JSON quote/unquote codec: PASS");
