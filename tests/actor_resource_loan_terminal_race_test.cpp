@@ -327,6 +327,83 @@ static void scalar_future_open_allocation_failures_release_one_loan() {
     CHECK(injected_failures >= 3);
 }
 
+static void stop_workers_allocation_failure_keeps_waiters_retryable() {
+    std::uint32_t injected_failures = 0;
+    std::uint32_t successful_attempts = 0;
+
+    // Sweep enough allocation sites to cover vector staging, both rejection
+    // strings/exception objects, and the transition into the commit phase.
+    // Any std::bad_alloc must leave all readiness waiter vectors intact so a
+    // retry delivers every callback and stop request exactly once.
+    for (long long fail_index = 0; fail_index < 24; ++fail_index) {
+        const auto runtime =
+            193000 + static_cast<std::uint64_t>(fail_index);
+        NativeActorGroup group(runtime, 2);
+        int stop_a = 0;
+        int stop_b = 0;
+        auto a = group.adopt(runtime, 701, 1, [&] { ++stop_a; });
+        auto b = group.adopt(runtime, 702, 1, [&] { ++stop_b; });
+
+        int ready_a = 0;
+        int ready_b = 0;
+        bool bad_ready_result = false;
+        a.when_ready([&](const auto& result) {
+            if (result.ready || result.error != "worker stopped before ready")
+                bad_ready_result = true;
+            ++ready_a;
+        });
+        b.when_ready([&](const auto& result) {
+            if (result.ready || result.error != "worker stopped before ready")
+                bad_ready_result = true;
+            ++ready_b;
+        });
+
+        bool injected = false;
+        fail_after_allocations.store(fail_index, std::memory_order_release);
+        try {
+            group.stop_workers();
+        } catch (const std::bad_alloc&) {
+            injected = true;
+        }
+        fail_after_allocations.store(-1, std::memory_order_release);
+
+        if (injected) {
+            ++injected_failures;
+            // Retry after the synthetic allocator fault. No callback removed
+            // by the failed attempt may have been lost.
+            group.stop_workers();
+        } else {
+            ++successful_attempts;
+        }
+
+        CHECK(!bad_ready_result);
+        CHECK(ready_a == 1);
+        CHECK(ready_b == 1);
+        CHECK(stop_a == 1);
+        CHECK(stop_b == 1);
+
+        CHECK(group.finalized(a));
+        CHECK(group.finalized(b));
+        bool a_done_failed = false;
+        bool b_done_failed = false;
+        try { a.get_done().get(); }
+        catch (const std::runtime_error& e) {
+            a_done_failed =
+                std::string(e.what()) == "worker stopped before ready";
+        }
+        try { b.get_done().get(); }
+        catch (const std::runtime_error& e) {
+            b_done_failed =
+                std::string(e.what()) == "worker stopped before ready";
+        }
+        CHECK(a_done_failed);
+        CHECK(b_done_failed);
+    }
+
+    CHECK(injected_failures > 0);
+    CHECK(successful_attempts > 0);
+}
+
 static void successful_done_cannot_be_rewritten_by_late_failure() {
     NativeActorGroup group(191007, 1);
     auto actor = group.adopt(191007, 204, 1, [] {});
@@ -439,6 +516,7 @@ int main() {
     settlement_failure_keeps_terminal_resource_seal_retryable();
     failed_startup_finalization_cannot_resurrect_ready();
     scalar_future_open_allocation_failures_release_one_loan();
+    stop_workers_allocation_failure_keeps_waiters_retryable();
     successful_done_cannot_be_rewritten_by_late_failure();
     concurrent_finalization_publishes_exact_winner();
     every_finalization_allocation_failure_is_retryable();

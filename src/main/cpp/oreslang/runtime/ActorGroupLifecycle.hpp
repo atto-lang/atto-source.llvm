@@ -533,6 +533,7 @@ public:
         struct Rejection {
             NativeActorRef ref;
             ActorReadyResult result;
+            std::exception_ptr failure;
             std::vector<NativeActorRef::ReadyContinuation> callbacks;
         };
         std::vector<std::pair<NativeActorRef, StopRequest>> stops;
@@ -547,16 +548,26 @@ public:
                 if (worker.phase == Phase::stopping) continue;
                 stops.emplace_back(worker.ref, worker.stop_request);
                 if (worker.phase == Phase::starting) {
-                    // Construct every failure string BEFORE touching any
-                    // readiness ticket or stop phase. OOM leaves the entire
-                    // group unchanged and allows a later stop/close retry.
-                    rejections.push_back(
-                        Rejection{worker.ref, {false, "worker stopped before ready"}, {}});
+                    // Stage every allocating failure object BEFORE touching any
+                    // readiness ticket or stop phase. Without the exception_ptr
+                    // staging, OOM while settling a later worker could leave an
+                    // earlier ticket settled with its waiter vector already
+                    // removed but never notified.
+                    ActorReadyResult result{false, "worker stopped before ready"};
+                    auto failure = std::make_exception_ptr(
+                        std::runtime_error(result.error));
+                    rejections.push_back(Rejection{
+                        worker.ref, std::move(result), std::move(failure), {}});
                 }
             }
+            // All potentially allocating rejection construction is complete.
+            // Ticket settlement below is now a no-allocation commit/swap phase,
+            // so stop_workers is all-or-nothing with respect to waiter removal.
             for (auto& rejection : rejections)
-                rejection.callbacks = settle_ticket(
-                    rejection.ref, std::move(rejection.result));
+                rejection.callbacks = settle_ticket_prepared(
+                    rejection.ref,
+                    std::move(rejection.result),
+                    rejection.failure);
             for (auto& item : workers_) {
                 Entry& worker = item.second;
                 if (worker.phase != Phase::stopping)
@@ -733,13 +744,13 @@ private:
         return ref.ticket_->terminal_failure;
     }
 
-    static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
-            const NativeActorRef& ref, ActorReadyResult result) {
+    static std::vector<NativeActorRef::ReadyContinuation>
+    settle_ticket_prepared(
+            const NativeActorRef& ref,
+            ActorReadyResult result,
+            std::exception_ptr failure) {
         std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
         if (ref.ticket_->settled) return {};
-        std::exception_ptr failure;
-        if (!result.ready)
-            failure = std::make_exception_ptr(std::runtime_error(result.error));
         ref.ticket_->result = std::move(result);
         if (failure) ref.ticket_->ready_promise.set_exception(failure);
         else ref.ticket_->ready_promise.set_value();
@@ -747,6 +758,15 @@ private:
         std::vector<NativeActorRef::ReadyContinuation> callbacks;
         callbacks.swap(ref.ticket_->waiters);
         return callbacks;
+    }
+
+    static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(
+            const NativeActorRef& ref, ActorReadyResult result) {
+        std::exception_ptr failure;
+        if (!result.ready)
+            failure = std::make_exception_ptr(std::runtime_error(result.error));
+        return settle_ticket_prepared(
+            ref, std::move(result), std::move(failure));
     }
 
     static std::vector<NativeActorRef::DoneContinuation> settle_done(
