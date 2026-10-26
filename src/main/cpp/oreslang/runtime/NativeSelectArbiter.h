@@ -45,6 +45,9 @@ typedef struct OresNativeSelectArbiter {
     atomic_uint_fast64_t generation;
     atomic_uint_fast64_t winner;
     atomic_size_t active_tokens;
+    /* Physical continuation/wake loans fence generation reuse even after
+     * every source registration token has logically retired. */
+    atomic_size_t active_physical_loans;
     size_t arm_count;
     struct {
         atomic_uint_fast64_t generation;
@@ -62,6 +65,7 @@ static inline int ores_native_select_arbiter_init(
     atomic_init(&arbiter->generation, generation);
     atomic_init(&arbiter->winner, UINT64_C(0));
     atomic_init(&arbiter->active_tokens, (size_t)0);
+    atomic_init(&arbiter->active_physical_loans, (size_t)0);
     arbiter->arm_count = arm_count;
     for (size_t i = 0; i < ORES_NATIVE_SELECT_MAX_ARMS; ++i) {
         atomic_init(&arbiter->arms[i].generation, UINT64_C(0));
@@ -77,7 +81,9 @@ static inline int ores_native_select_arbiter_rearm(
     if (!arbiter || !generation || generation == UINT64_MAX
             || !arm_count || arm_count > ORES_NATIVE_SELECT_MAX_ARMS
             || atomic_load_explicit(
-                &arbiter->active_tokens, memory_order_acquire) != 0)
+                &arbiter->active_tokens, memory_order_acquire) != 0
+            || atomic_load_explicit(
+                &arbiter->active_physical_loans, memory_order_acquire) != 0)
         return 0;
     const uint64_t prior_generation = atomic_load_explicit(
         &arbiter->generation, memory_order_acquire);
@@ -111,7 +117,9 @@ static inline int ores_native_select_arbiter_rearm(
             memory_order_acquire))
         return 0;
     if (atomic_load_explicit(
-            &arbiter->active_tokens, memory_order_acquire) != 0) {
+            &arbiter->active_tokens, memory_order_acquire) != 0
+            || atomic_load_explicit(
+                &arbiter->active_physical_loans, memory_order_acquire) != 0) {
         atomic_store_explicit(
             &arbiter->winner, terminal, memory_order_release);
         return 0;
@@ -131,6 +139,67 @@ static inline int ores_native_select_arbiter_rearm(
     atomic_store_explicit(
         &arbiter->winner, UINT64_C(0), memory_order_release);
     return 1;
+}
+
+/*
+ * Retain one generation-scoped physical continuation/wake loan. The retain is
+ * lock-free but rechecks generation/winner after increment; rearm also checks
+ * the loan count before and after claiming REARMING, so neither side can reset
+ * the generation underneath an in-flight retain.
+ */
+static inline int ores_native_select_retain_physical_loan(
+        OresNativeSelectArbiter* arbiter,
+        uint64_t generation) {
+    if (!arbiter || !generation || generation == UINT64_MAX
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire) != generation
+            || atomic_load_explicit(
+                &arbiter->winner, memory_order_acquire) != 0)
+        return 0;
+
+    atomic_fetch_add_explicit(
+        &arbiter->active_physical_loans, (size_t)1, memory_order_acq_rel);
+
+    if (atomic_load_explicit(
+            &arbiter->generation, memory_order_acquire) != generation
+            || atomic_load_explicit(
+                &arbiter->winner, memory_order_acquire)
+                == ORES_NATIVE_SELECT_WINNER_REARMING) {
+        atomic_fetch_sub_explicit(
+            &arbiter->active_physical_loans, (size_t)1,
+            memory_order_acq_rel);
+        return 0;
+    }
+    return 1;
+}
+
+static inline int ores_native_select_release_physical_loan(
+        OresNativeSelectArbiter* arbiter,
+        uint64_t generation) {
+    if (!arbiter || !generation
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire) != generation)
+        return 0;
+    size_t current = atomic_load_explicit(
+        &arbiter->active_physical_loans, memory_order_acquire);
+    while (current != 0) {
+        if (atomic_compare_exchange_weak_explicit(
+                &arbiter->active_physical_loans,
+                &current,
+                current - 1,
+                memory_order_acq_rel,
+                memory_order_acquire))
+            return 1;
+    }
+    return 0;
+}
+
+static inline size_t ores_native_select_active_physical_loans(
+        const OresNativeSelectArbiter* arbiter) {
+    return arbiter
+        ? atomic_load_explicit(
+            &arbiter->active_physical_loans, memory_order_acquire)
+        : 0;
 }
 
 static inline int ores_native_select_register(
