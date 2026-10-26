@@ -110,6 +110,14 @@ typedef struct {
     uint64_t next_state_count;
     int64_t next_state[ORES_SOURCE_DETACHED_SCALAR_WORDS];
     OresNativeSuspensionLink next_link;
+
+    /* Descriptor release is external-host-only. Completed PC descriptors and
+     * an unbound next-PC descriptor (if suspension minting fails) stay pinned
+     * here until the outer finalizer runs after all wake callbacks are off-stack. */
+    uint32_t completed_send_count;
+    SourceSendFuture* completed_send_futures[
+        ORES_SOURCE_DETACHED_MAX_PCS - 1];
+    SourceSendFuture* abandoned_send_future;
 } SendAwaitFrame;
 
 typedef struct {
@@ -730,17 +738,10 @@ static void source_send_wake(
             && frame->next_state_count <= ORES_SOURCE_DETACHED_SCALAR_WORDS
             && ores_native_store_handle_valid(
                 frame->next_link.continuation));
-        group_unlock();
-
-        /*
-         * The old descriptor is terminal and its wake is executing now. Drop
-         * that Future before exposing the next PC in the shared frame.
-         */
-        retire_consuming_send_future_terminal(previous, rearm_actor);
-
-        group_lock();
-        ensure(frame == group.pending_send && !frame->done
-            && frame->rearm_requested && !frame->rearm_terminal);
+        ensure(frame->completed_send_count
+            < ORES_SOURCE_DETACHED_MAX_PCS - 1);
+        frame->completed_send_futures[
+            frame->completed_send_count++] = previous;
         ensure(frame->next_send_future == next
             && source_send_future_valid_locked(next)
             && next->consuming && next->actor == rearm_actor);
@@ -1147,9 +1148,10 @@ static void retire_consuming_send_future_terminal(
     const OresNativeAsyncSendTicket ticket = future->ticket;
     group_unlock();
 
-    /* Called only from the descriptor's executing wake. release_async_send()
-     * explicitly permits this point: admission is terminal and the callback
-     * has already copied its authenticated descriptor identity. */
+    /* External-host finalization only. Scheduler release rejects every actor
+     * carrier so descriptor identity cannot disappear while a wake callback
+     * is still executing on its stack. */
+    ensure(!ores_native_actor_scheduler_is_carrier_thread());
     ensure(ores_native_vm_release_async_send(
         vm, ORES_NATIVE_VM_MAIN, ticket));
 
@@ -1652,8 +1654,8 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
         frame->rearm_requested = 1;
         frame->rearm_terminal = 1;
         frame->rearm_outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        frame->abandoned_send_future = next;
         group_unlock();
-        abandon_consuming_send_future_unbound(next, actor);
         return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
     }
 
@@ -1703,6 +1705,19 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
 
     ensure(source_send_future_valid_locked(future)
         && future->consuming && future->actor == actor);
+    ensure(frame->completed_send_count < ORES_SOURCE_DETACHED_MAX_PCS);
+    for (uint32_t i = 0; i < frame->completed_send_count; ++i) {
+        SourceSendFuture* completed = frame->completed_send_futures[i];
+        ensure(completed && completed != future
+            && source_send_future_valid_locked(completed)
+            && completed->consuming && completed->actor == actor);
+    }
+    if (frame->abandoned_send_future) {
+        ensure(frame->abandoned_send_future != future
+            && source_send_future_valid_locked(frame->abandoned_send_future)
+            && frame->abandoned_send_future->consuming
+            && frame->abandoned_send_future->actor == actor);
+    }
 
     /*
      * A failed root CONTROL admission never minted a logical continuation.
@@ -1723,7 +1738,20 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
      * its pthread_cond_t while this finalizer still owns the old frame.
      */
     ensure(group.pending_send == frame);
+    const uint32_t completed_send_count = frame->completed_send_count;
+    SourceSendFuture* completed_send_futures[
+        ORES_SOURCE_DETACHED_MAX_PCS - 1] = {0};
+    for (uint32_t i = 0; i < completed_send_count; ++i)
+        completed_send_futures[i] = frame->completed_send_futures[i];
+    SourceSendFuture* abandoned_send_future = frame->abandoned_send_future;
     group_unlock();
+
+    for (uint32_t i = 0; i < completed_send_count; ++i)
+        retire_consuming_send_future_terminal(
+            completed_send_futures[i], actor);
+    if (abandoned_send_future)
+        abandon_consuming_send_future_unbound(
+            abandoned_send_future, actor);
 
     if (!wake_bound)
         (void)ores_native_vm_cancel_async_send(
