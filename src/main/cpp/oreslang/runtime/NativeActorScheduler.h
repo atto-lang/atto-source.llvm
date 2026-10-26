@@ -336,6 +336,12 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_select_wake(
 int ores_native_actor_scheduler_cancel_select_wake(
     OresNativeActorScheduler* scheduler,
     OresNativeSelectWakeTicket ticket);
+/* External-host physical barrier. Waits until the exact common wake
+ * slot+generation is no longer RESERVED/READY/EXECUTING. Never call from any
+ * actor carrier; frame/arbiter storage may be reclaimed only after success. */
+int ores_native_actor_scheduler_wait_select_wake_retired(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectWakeTicket ticket);
 
 int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer,
