@@ -194,37 +194,53 @@ def main():
             if name == "source-actor-send-async.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call ptr @oreslang_source_actor_send_async_start(" in line]
-                await_calls = [line for line in guest.stdout.splitlines()
-                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
+                detach_calls = [line for line in guest.stdout.splitlines()
+                                if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
+                wait_calls = [line for line in guest.stdout.splitlines()
+                              if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected direct send_async to submit one scheduler Future", start_calls)
-                assert len(await_calls) == 1, (
-                    name, "expected direct send_async to use logical Future await", await_calls)
+                assert len(detach_calls) == 1, (
+                    name, "expected direct send_async to detach the guest continuation", detach_calls)
+                assert len(wait_calls) == 1, (
+                    name, "expected host entry to wait only on detached terminal result", wait_calls)
                 assert ".send_async_continuation" in guest.stdout, (
                     name, "missing generated direct send_async continuation")
+                assert "call i64 @oreslang_source_actor_await_send_future(" not in guest.stdout, (
+                    name, "synchronous guest-stack Future await ABI still emitted")
                 assert "call void @oreslang_source_actor_await_send_async(" not in guest.stdout, (
                     name, "legacy host-wait direct send_async ABI still emitted")
             if name == "source-actor-send-async-future.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call ptr @oreslang_source_actor_send_async_start(" in line]
-                await_calls = [line for line in guest.stdout.splitlines()
-                               if "call i64 @oreslang_source_actor_await_send_future(" in line]
+                detach_calls = [line for line in guest.stdout.splitlines()
+                                if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
+                wait_calls = [line for line in guest.stdout.splitlines()
+                              if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 send_calls = [line for line in guest.stdout.splitlines()
                               if "call void @oreslang_source_actor_send(" in line]
+                request_stop_calls = [line for line in guest.stdout.splitlines()
+                                      if "call void @oreslang_source_actor_request_stop(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected one eager send_async Future submission", start_calls)
-                assert len(await_calls) == 1, (
-                    name, "expected one logical Future<void> continuation await", await_calls)
+                assert len(detach_calls) == 1, (
+                    name, "expected one detached Future<void> continuation", detach_calls)
+                assert len(wait_calls) == 1, (
+                    name, "expected host entry to await detached terminal result", wait_calls)
                 assert len(send_calls) == 1, (
                     name, "expected one post-await ordinary send", send_calls)
+                assert len(request_stop_calls) == 1, (
+                    name, "post-await STOP must be nonblocking continuation cleanup", request_stop_calls)
                 assert ".send_future_continuation" in guest.stdout, (
                     name, "missing generated post-await send Future continuation")
+                assert "call i64 @oreslang_source_actor_await_send_future(" not in guest.stdout, (
+                    name, "synchronous guest-stack Future await ABI still emitted")
                 start_pos = guest.stdout.find(
                     "call ptr @oreslang_source_actor_send_async_start(")
-                await_pos = guest.stdout.find(
-                    "call i64 @oreslang_source_actor_await_send_future(")
-                assert 0 <= start_pos < await_pos, (
-                    name, "send_async Future start must precede logical await")
+                detach_pos = guest.stdout.find(
+                    "call i32 @oreslang_source_actor_detach_send_future_checked(")
+                assert 0 <= start_pos < detach_pos, (
+                    name, "send_async Future start must precede detached continuation handoff")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -295,19 +311,15 @@ def main():
                                if "SOURCE_AWAIT_READY_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
-            if name == "source-actor-send-async.ores":
+            if name in {
+                    "source-actor-send-async.ores",
+                    "source-actor-send-async-future.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
-                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
+                               if "SOURCE_DETACHED_SEND_FUTURE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert (
-                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
-                    in trace_lines[0]), trace_lines[0]
-            if name == "source-actor-send-async-future.ores":
-                trace_lines = [line for line in executed.stderr.splitlines()
-                               if "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS" in line]
-                assert len(trace_lines) == 1, (name, trace_lines)
-                assert (
-                    "outcome=0 execution_id_persisted=1 fresh_resume=1 root_slot=63"
+                    "outcome=0 guest_stack_released=1 "
+                    "host_settlement_observer=0 final_join=1"
                     in trace_lines[0]), trace_lines[0]
             if name == "source-actor-await-done.ores":
                 trace_lines = [line for line in executed.stderr.splitlines()
