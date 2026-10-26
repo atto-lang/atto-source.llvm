@@ -82,6 +82,7 @@ fn main() {
         .arg(&runtime)
         .arg(&scheduler)
         .arg("-I").arg(&include)
+        .arg("-std=c11")
         .arg("-pthread")
         .arg("-DORESLANG_SOURCE_TASK_TESTING=1")
         .arg("-o").arg(&exe)
