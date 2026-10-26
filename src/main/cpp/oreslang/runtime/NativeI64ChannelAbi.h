@@ -27,7 +27,8 @@ typedef void (*OresNativeI64ChannelNotifyFn)(
 OresNativeI64Channel1* ores_native_i64_channel1_open(void);
 int ores_native_i64_channel1_close(OresNativeI64Channel1*);
 int ores_native_i64_channel1_is_closed(const OresNativeI64Channel1*);
-int ores_native_i64_channel1_try_write(OresNativeI64Channel1*, int64_t value);
+int ores_native_i64_channel1_try_write(
+    OresNativeI64Channel1*, int64_t value, int* status);
 int ores_native_i64_channel1_try_read(
     OresNativeI64Channel1*, int* status, int64_t* value);
 void ores_native_i64_channel1_destroy(OresNativeI64Channel1*);
