@@ -70,6 +70,18 @@ int main() {
     CHECK(stored_main.actor_actions[0].kind == oreslang::ActorAction::Kind::Send);
     CHECK(stored_main.actor_actions[1].kind == oreslang::ActorAction::Kind::Stop);
 
+    auto stored_local = oreslang::parse_program(program(
+        "const Future<void> pending = worker.send_async(1); "
+        "const int retained = 40; "
+        "await pending; worker.send(2); stop worker; return retained + 3;"));
+    CHECK(stored_local.functions.size() == 1);
+    const auto& stored_local_main = stored_local.functions.front();
+    CHECK(stored_local_main.send_future_name == "pending");
+    CHECK(stored_local_main.locals.size() == 1);
+    CHECK(stored_local_main.locals.front().name == "retained");
+    CHECK(stored_local_main.actor_sends.size() == 1);
+    CHECK(stored_local_main.actor_actions.size() == 2);
+
     auto direct_local = oreslang::parse_program(program(
         "const int retained = 40; "
         "await worker.send_async(1); stop worker; return retained + 3;"));
@@ -133,5 +145,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=3 negative=20 detached_scalar_capture=1 frame_words=16\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=4 negative=20 detached_scalar_capture=1 stored_scalar_capture=1 frame_words=16\n";
 }
