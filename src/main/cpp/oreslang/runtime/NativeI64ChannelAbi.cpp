@@ -127,7 +127,9 @@ extern "C" int ores_native_i64_channel1_try_write(
             *status = ORES_NATIVE_I64_WRITE_WRITTEN;
             return 1;
         }
-        *status = ORES_NATIVE_I64_WRITE_WOULD_BLOCK;
+        *status = channel->channel.closed()
+            ? ORES_NATIVE_I64_WRITE_CLOSED
+            : ORES_NATIVE_I64_WRITE_WOULD_BLOCK;
         return 1;
     });
 }
