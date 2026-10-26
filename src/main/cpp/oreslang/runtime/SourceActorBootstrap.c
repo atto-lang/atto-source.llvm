@@ -147,6 +147,11 @@ static _Thread_local OresNativeExecutionHandle current_source_execution;
  * ORESLANG_SOURCE_ACTOR_TESTING is enabled under -Werror. */
 static void group_lock(void);
 static void group_unlock(void);
+static int source_send_future_valid_locked(SourceSendFuture* future);
+static void retire_consuming_send_future_terminal(
+    SourceSendFuture* future, SourceActor* actor);
+static void abandon_consuming_send_future_unbound(
+    SourceSendFuture* future, SourceActor* actor);
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 static atomic_int test_hold_initialization;
