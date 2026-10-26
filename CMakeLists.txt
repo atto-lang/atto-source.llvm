@@ -2201,6 +2201,8 @@ if(BUILD_TESTING)
     endif()
 
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
+    oreslang_contract_test(native_named_method_labels_rejected named-method-unbound-label-reject.ores
+        --diagnostic "native named method arguments are not yet supported")
     oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
         --diagnostic "unknown named argument")
     oreslang_contract_test(native_named_call_duplicate_slot named-call-duplicate-reject.ores
