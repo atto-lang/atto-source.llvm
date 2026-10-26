@@ -37,6 +37,14 @@ def expected_prefix_last(name, actor_index, processed):
         return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
+def llvm_function_body(ir, marker):
+    pos = ir.find(marker)
+    assert pos >= 0, ("missing LLVM function marker", marker)
+    start = ir.rfind("define ", 0, pos)
+    end = ir.find("\n}", pos)
+    assert start >= 0 and end >= 0, ("malformed LLVM function", marker)
+    return ir[start:end + 2]
+
 def parse_actor_receipt(line):
     """Strictly parse the complete current native stop receipt."""
     parts = line.split()
@@ -210,6 +218,14 @@ def main():
                     name, "synchronous guest-stack Future await ABI still emitted")
                 assert "call void @oreslang_source_actor_await_send_async(" not in guest.stdout, (
                     name, "legacy host-wait direct send_async ABI still emitted")
+                continuation = llvm_function_body(
+                    guest.stdout, ".send_async_continuation")
+                stop_pos = continuation.find(
+                    "call void @oreslang_source_actor_request_stop(")
+                return_pos = continuation.rfind("ret i64")
+                assert 0 <= stop_pos < return_pos, (
+                    name, "STOP admission must precede final return in resumed state",
+                    continuation)
             if name == "source-actor-send-async-future.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call ptr @oreslang_source_actor_send_async_start(" in line]
@@ -241,6 +257,16 @@ def main():
                     "call i32 @oreslang_source_actor_detach_send_future_checked(")
                 assert 0 <= start_pos < detach_pos, (
                     name, "send_async Future start must precede detached continuation handoff")
+                continuation = llvm_function_body(
+                    guest.stdout, ".send_future_continuation")
+                send_pos = continuation.find(
+                    "call void @oreslang_source_actor_send(")
+                stop_pos = continuation.find(
+                    "call void @oreslang_source_actor_request_stop(")
+                return_pos = continuation.rfind("ret i64")
+                assert 0 <= send_pos < stop_pos < return_pos, (
+                    name, "post-await actor effects must retain lexical order",
+                    continuation)
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
