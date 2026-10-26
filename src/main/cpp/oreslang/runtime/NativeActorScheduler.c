@@ -40,6 +40,10 @@ typedef struct {
     OresNativeSendStatus outcome;
     OresNativeWakeTicket wake;
     unsigned wake_bound;
+    /* A terminal descriptor cannot be physically retired while its bound
+     * wake callback still owns WAKE_EXECUTING. The external release call may
+     * claim one-shot retirement; the carrier completes it after callback exit. */
+    unsigned release_pending;
 } AsyncSendCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
@@ -259,6 +263,11 @@ static void release_wake_locked(OresNativeActorScheduler* s,
 }
 static WakeCredit* matching_wake_locked(
         OresNativeActorScheduler* s, OresNativeWakeTicket ticket);
+static AsyncSendCredit* matching_async_send_locked(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket);
+static void retire_async_send_credit_locked(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket,
+        AsyncSendCredit* credit);
 static void settle_async_send_wake_locked(
         OresNativeActorScheduler* s, AsyncSendCredit* credit);
 static void service_async_sends_locked(
@@ -431,10 +440,39 @@ static void* carrier(void* raw) {
             if (!active_wake || active_wake->state != WAKE_EXECUTING
                     || !lane->wake_live || s->wakes_completed == UINT64_MAX)
                 abort();
+
+            /* A descriptor release requested by the trusted observer while
+             * this callback was executing is only a logical one-shot claim.
+             * Retire the descriptor after callback return, while both wake
+             * and descriptor identities are still generation-checkable. */
+            AsyncSendCredit* deferred_release = NULL;
+            OresNativeAsyncSendTicket deferred_ticket = {0};
+            if (wake_ticket.descriptor_slot != UINT64_MAX) {
+                deferred_ticket = (OresNativeAsyncSendTicket){
+                    .target = wake_ticket.target,
+                    .slot = wake_ticket.descriptor_slot,
+                    .generation = wake_ticket.descriptor_generation
+                };
+                deferred_release =
+                    matching_async_send_locked(s, deferred_ticket);
+                if (deferred_release && deferred_release->release_pending) {
+                    WakeCredit* descriptor_wake =
+                        deferred_release->wake_bound
+                            ? matching_wake_locked(s, deferred_release->wake)
+                            : NULL;
+                    if (descriptor_wake != active_wake) abort();
+                } else {
+                    deferred_release = NULL;
+                }
+            }
+
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
             --lane->wake_live;
             ++s->wakes_completed;
+            if (deferred_release)
+                retire_async_send_credit_locked(
+                    s, deferred_ticket, deferred_release);
         }
         if (kind == 2) ++s->control_completed;
         if (lane_has_work(lane)) pthread_cond_signal(&s->ready);
@@ -735,6 +773,25 @@ static AsyncSendCredit* matching_async_send_locked(
     return credit;
 }
 
+static void retire_async_send_credit_locked(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket,
+        AsyncSendCredit* credit) {
+    if (!s || !credit || credit->state == ORES_NATIVE_ASYNC_SEND_PENDING
+            || credit->state == ORES_NATIVE_ASYNC_SEND_INVALID)
+        abort();
+    ActorLane* lane = &s->actors[ticket.target.actor_slot];
+    if (!lane->async_live) abort();
+    --lane->async_live;
+    credit->state = ORES_NATIVE_ASYNC_SEND_INVALID;
+    credit->outcome = ORES_NATIVE_SEND_INVALID_REF;
+    credit->sequence = 0;
+    credit->payload = 0;
+    credit->wake = (OresNativeWakeTicket){0};
+    credit->wake_bound = 0;
+    credit->release_pending = 0;
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
+}
+
 static AsyncSendCredit* oldest_pending_async_locked(ActorLane* lane) {
     AsyncSendCredit* oldest = NULL;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
@@ -1014,6 +1071,7 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     credit->sequence = 0;
     credit->wake = (OresNativeWakeTicket){0};
     credit->wake_bound = 0;
+    credit->release_pending = 0;
     ++lane->async_live;
 
     *out = (OresNativeAsyncSendTicket){
@@ -1103,25 +1161,24 @@ int ores_native_actor_scheduler_release_async_send(
     if (!s) return 0;
     lock(s);
     AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
-    WakeCredit* bound_wake = credit && credit->wake_bound
-        ? matching_wake_locked(s, credit->wake) : NULL;
-    const int wake_observer_safe = !bound_wake
-        || bound_wake->state == WAKE_EXECUTING;
-    const int ok = credit
+    int ok = credit
         && credit->state != ORES_NATIVE_ASYNC_SEND_PENDING
         && credit->state != ORES_NATIVE_ASYNC_SEND_INVALID
-        && wake_observer_safe;
+        && !credit->release_pending;
     if (ok) {
-        ActorLane* lane = &s->actors[ticket.target.actor_slot];
-        if (!lane->async_live) abort();
-        --lane->async_live;
-        credit->state = ORES_NATIVE_ASYNC_SEND_INVALID;
-        credit->outcome = ORES_NATIVE_SEND_INVALID_REF;
-        credit->sequence = 0;
-        credit->payload = 0;
-        credit->wake = (OresNativeWakeTicket){0};
-        credit->wake_bound = 0;
-        if (pthread_cond_broadcast(&s->credit) != 0) abort();
+        WakeCredit* bound_wake = credit->wake_bound
+            ? matching_wake_locked(s, credit->wake) : NULL;
+        if (!bound_wake) {
+            retire_async_send_credit_locked(s, ticket, credit);
+        } else if (bound_wake->state == WAKE_EXECUTING) {
+            /* Claim release exactly once but keep descriptor identity alive
+             * until the scheduler regains control after the callback returns. */
+            credit->release_pending = 1;
+        } else {
+            /* RESERVED/TRANSFERRED/READY still has a future observer that may
+             * read descriptor identity or completion_code. */
+            ok = 0;
+        }
     }
     unlock(s);
     return ok;
@@ -1195,24 +1252,42 @@ static WakeCredit* matching_wake_locked(
     return w;
 }
 
+static OresNativeWakeOutcome async_send_terminal_wake_outcome(
+        const AsyncSendCredit* credit) {
+    if (!credit) abort();
+    switch (credit->state) {
+        case ORES_NATIVE_ASYNC_SEND_READY:
+            if (credit->outcome != ORES_NATIVE_SEND_ACCEPTED) abort();
+            return ORES_NATIVE_WAKE_READY;
+        case ORES_NATIVE_ASYNC_SEND_FAILED:
+            /* These are the only post-submission failure sources today:
+             * target/scheduler termination, or failure to reserve execution
+             * capacity when queued mailbox credit later becomes available. */
+            if (credit->outcome != ORES_NATIVE_SEND_TERMINATED
+                    && credit->outcome != ORES_NATIVE_SEND_RESOURCE_EXHAUSTED)
+                abort();
+            return ORES_NATIVE_WAKE_FAILED;
+        case ORES_NATIVE_ASYNC_SEND_CANCELLED:
+            if (credit->outcome != ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
+                abort();
+            return ORES_NATIVE_WAKE_CANCELLED;
+        default:
+            abort();
+    }
+}
+
 static void settle_async_send_wake_locked(
         OresNativeActorScheduler* s, AsyncSendCredit* credit) {
     if (!credit || !credit->wake_bound) return;
     WakeCredit* w = matching_wake_locked(s, credit->wake);
-    if (!w || w->state != WAKE_RESERVED) abort();
+    if (!w || w->state != WAKE_RESERVED || credit->release_pending) abort();
 
-    OresNativeWakeOutcome wake_outcome;
-    if (credit->state == ORES_NATIVE_ASYNC_SEND_READY) {
+    const OresNativeWakeOutcome wake_outcome =
+        async_send_terminal_wake_outcome(credit);
+    if (wake_outcome == ORES_NATIVE_WAKE_READY) {
         /* Mailbox admission already linearized under this scheduler mutex.
          * Record irreversible transfer before publishing the producer wake. */
         w->state = WAKE_TRANSFERRED;
-        wake_outcome = ORES_NATIVE_WAKE_READY;
-    } else if (credit->state == ORES_NATIVE_ASYNC_SEND_FAILED) {
-        wake_outcome = ORES_NATIVE_WAKE_FAILED;
-    } else if (credit->state == ORES_NATIVE_ASYNC_SEND_CANCELLED) {
-        wake_outcome = ORES_NATIVE_WAKE_CANCELLED;
-    } else {
-        abort();
     }
 
     ActorLane* producer = &s->actors[credit->wake.producer.actor_slot];
