@@ -112,6 +112,34 @@ int ores_native_vm_publish_supervised_failure(
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);
+/* External-host only; atomically waits for real scheduler mailbox capacity.
+ * Never call from a carrier in the selected domain. */
+OresNativeSendStatus ores_native_vm_wait_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, uint64_t payload);
+OresNativeSendStatus ores_native_vm_submit_async(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, uint64_t payload,
+    OresNativeAsyncSendTicket* out);
+int ores_native_vm_async_send_status(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket,
+    OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
+int ores_native_vm_await_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out);
+int ores_native_vm_cancel_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket);
+int ores_native_vm_release_async_send(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeAsyncSendTicket ticket);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+size_t ores_native_vm_test_waiting_sends(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+size_t ores_native_vm_test_pending_async_sends(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+#endif
 /* Reject supervisor stop until all its registered direct children have
  * drained AND their terminal notices have been admitted to priority CONTROL.
  * VM-wide retirement still drains previously accepted actor work, but it
