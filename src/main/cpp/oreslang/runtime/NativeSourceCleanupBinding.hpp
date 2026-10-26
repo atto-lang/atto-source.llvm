@@ -22,6 +22,9 @@ public:
 
     // Check a fresh generation-fenced, live CLAIMED continuation record
     // instead of trusting a naked (actor, generation, continuation) tuple.
+    // actor_id names the allocation OWNER (actor slot), never the scheduler
+    // runtime domain. The record must also prove that its allocation domain
+    // is the same runtime domain that owns the claimed execution.
     // Caller MUST prevent store destruction and concurrent claim retirement
     // between verification and dispatch; a get() alone is not a carrier lease.
     bool claimed() const noexcept {
@@ -34,9 +37,10 @@ public:
         return ores_native_continuation_store_get(store_, handle_, &record) &&
             record.state == ORES_CONTINUATION_CLAIMED &&
             record.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR &&
-            record.allocation.domain == ticket_.actor_id &&
+            record.allocation.domain != 0 &&
+            record.allocation.owner == ticket_.actor_id &&
             record.allocation.generation == ticket_.actor_generation &&
-            record.execution_id.runtime_domain == ticket_.actor_id &&
+            record.execution_id.runtime_domain == record.allocation.domain &&
             record.code_generation == code_generation_ &&
             record.source_token == source_token_;
     }
