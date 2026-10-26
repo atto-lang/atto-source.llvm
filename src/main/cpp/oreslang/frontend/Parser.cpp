@@ -4197,6 +4197,63 @@ private:
                     throw std::runtime_error(
                         "await get_done requires side-effect-free scalar return");
             }
+            if (fn.async_source_i64) {
+                if (fn.name == "main" || fn.exported ||
+                        !fn.parameters.empty() || fn.returns_void ||
+                        fn.return_type != ScalarType::I64 ||
+                        !fn.return_class.empty() || !fn.return_sum.empty() ||
+                        !fn.generic_parameters.empty() ||
+                        fn.has_declared_effects || !fn.locals.empty() ||
+                        !fn.statements.empty() || !fn.early_returns.empty() ||
+                        !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
+                        !fn.actor_field_writes.empty() ||
+                        !fn.source_tasks.empty() ||
+                        !fn.future_pipelines.empty() ||
+                        !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty() ||
+                        fn.scalar_while || fn.caught_throw_value ||
+                        !fn.result ||
+                        !native_capture_free_task_tree(*fn.result))
+                    throw std::runtime_error(
+                        "native async Future<int> producer v1 must be a private "
+                        "capture-free zero-argument int producer");
+            }
+            if (!fn.future_pipelines.empty()) {
+                if (fn.name != "main" || !fn.parameters.empty() ||
+                        fn.future_pipelines.size() != 1 ||
+                        !fn.source_tasks.empty() ||
+                        !fn.generic_parameters.empty() ||
+                        fn.has_declared_effects ||
+                        fn.scalar_while || fn.caught_throw_value ||
+                        !fn.actor_spawns.empty() ||
+                        !fn.actor_actions.empty() ||
+                        !fn.actor_field_writes.empty() ||
+                        !fn.ready_await_actor.empty() ||
+                        !fn.done_await_actor.empty())
+                    throw std::runtime_error(
+                        "native Future<int> pipeline v1 requires one checked "
+                        "pipeline in synchronous zero-argument main");
+                const auto& pipeline = fn.future_pipelines.front();
+                if (!pipeline.awaited || pipeline.stages.empty() ||
+                        pipeline.plans.size() != pipeline.stages.size())
+                    throw std::runtime_error(
+                        "native Future<int> pipeline v1 requires one consumed "
+                        "checked pipeline plan");
+                if (fn.locals.empty() ||
+                        fn.locals.front().future_await_name != pipeline.name)
+                    throw std::runtime_error(
+                        "native Future<int> pipeline await must be the first scalar local");
+                if (std::any_of(
+                        fn.locals.begin(), fn.locals.end(),
+                        [&](const LocalBinding& local) {
+                            return local.name == pipeline.name;
+                        }))
+                    throw std::runtime_error(
+                        "source Future<int> binding cannot be shadowed by a scalar local");
+                types::validate_future_pipeline_chain(pipeline.plans);
+                for (const auto& plan : pipeline.plans)
+                    types::validate_executable_future_pipeline_plan(plan);
+            }
             if (!fn.source_tasks.empty()) {
                 if (fn.name != "main" || !fn.parameters.empty() ||
                         fn.source_tasks.size() != 1 ||
