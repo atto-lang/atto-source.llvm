@@ -514,6 +514,41 @@ static void pending_stop_publishes_exact_failed_wake(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void duplicate_send_wake_bind_fails_closed(void) {
+    BoundWakeState state = {0};
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            2, 2, 2, handler, NULL, NULL, bound_wake_callback, &state);
+    CHECK(scheduler != NULL);
+    state.scheduler = scheduler;
+    OresNativeActorRef target =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef producer =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+
+    OresNativeAsyncSendTicket send = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, target, 801, &send) == ORES_NATIVE_SEND_ACCEPTED);
+    OresNativeWakeTicket first = {0}, duplicate = {0};
+    CHECK(ores_native_actor_scheduler_bind_async_send_wake(
+        scheduler, send, producer, 41, 43, 1, &first));
+    CHECK(!ores_native_actor_scheduler_bind_async_send_wake(
+        scheduler, send, producer, 47, 53, 1, &duplicate));
+    CHECK(duplicate.slot_generation == 0);
+
+    while (!atomic_load_explicit(&state.wake_seen, memory_order_acquire))
+        sched_yield();
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
+
+    CHECK(ores_native_actor_scheduler_stop(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, producer));
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 int main(void) {
     immediate_resource_failure_does_not_mint_future();
     immediate_future_is_ready_before_await();
@@ -526,6 +561,7 @@ int main(void) {
     cross_scheduler_carrier_rejects_host_lifecycle_barriers();
     ready_future_wake_survives_target_stop();
     pending_stop_publishes_exact_failed_wake();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1");
+    duplicate_send_wake_bind_fails_closed();
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1");
     return 0;
 }
