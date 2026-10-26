@@ -142,6 +142,32 @@ This is still not a public portable I/O API. The literal-fd form exists to
 prove compiler → continuation → VM-NIO → scheduler → compiled-resume ownership
 end to end before typed nonblocking stream/socket abstractions are admitted.
 
+### Typed readable runtime outcome
+
+The trusted source runtime now exposes
+`oreslang_source_actor_await_readable_checked()` with the nominal
+`OresSourceReadableAwaitOutcome` values:
+
+- `READY`: the authenticated actor-lane continuation ran exactly once and the
+  scalar result is returned;
+- `CANCELLED`: the actor-owned one-shot watch was cancelled, the persisted
+  continuation was retired, and guest continuation code did not run;
+- `TERMINATED`: the source-root producer retired before wake transfer or
+  publication could admit the continuation;
+- `FAILED`: admission or internal handoff failed without guest continuation
+  execution.
+
+The output scalar is initialized to zero before admission and overwritten only
+for `READY`. The existing compiler-generated
+`oreslang_source_actor_await_readable()` wrapper intentionally still requires
+`READY` and aborts/fails closed for other outcomes. This keeps public source
+syntax unchanged until a real `Result<..., ...>` binding has ownership and
+lifetime lowering.
+
+A Linux production-runtime matrix drives all four outcomes. Test-only hooks can
+cancel the exact currently admitted actor-owned watch or stop the compiler-owned
+root producer; those hooks are excluded from ordinary source builds.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:

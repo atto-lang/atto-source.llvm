@@ -167,6 +167,34 @@ int oreslang_source_actor_test_readiness_publication_entered(void) {
     return atomic_load_explicit(
         &test_readiness_publication_entered, memory_order_acquire);
 }
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+int oreslang_source_actor_test_cancel_readable_await(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    if (!frame || !frame->admitted || frame->done) {
+        group_unlock();
+        return 0;
+    }
+    OresNativeVM* vm = group.vm;
+    const OresNativeActorNioWatch watch = frame->awaiting.watch;
+    group_unlock();
+    return ores_native_vm_nio_try_cancel_actor(vm, watch);
+}
+
+int oreslang_source_actor_test_stop_readable_root(void) {
+    group_lock();
+    ReadableAwaitFrame* frame = group.pending_readable;
+    if (!frame || !frame->admitted || frame->done
+            || !group.vm || !group.root_ref.scheduler_domain) {
+        group_unlock();
+        return 0;
+    }
+    const int stopped = ores_native_vm_stop_sealed(
+        group.vm, ORES_NATIVE_VM_MAIN, group.root_ref);
+    group_unlock();
+    return stopped;
+}
+#endif
 #endif
 
 static void ensure(int condition) { if (!condition) abort(); }
@@ -999,15 +1027,17 @@ int64_t oreslang_source_actor_await_done(
 }
 
 #ifdef ORESLANG_SOURCE_ACTOR_NIO
-int64_t oreslang_source_actor_await_readable(
+OresSourceReadableAwaitOutcome oreslang_source_actor_await_readable_checked(
         void* opaque,
         int64_t fd,
         OresSourceActorContinuation continuation,
-        uint64_t source_token) {
+        uint64_t source_token,
+        int64_t* result_out) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
     ensure(continuation != NULL && fd >= 0 && fd <= INT32_MAX);
-    ensure(source_token != UINT64_MAX);
+    ensure(source_token != UINT64_MAX && result_out != NULL);
+    *result_out = 0;
 
     /* Trusted top-level glue may block on the reactor completion signal. */
     OresNativeExecutionContext carrier = {0};
@@ -1078,7 +1108,7 @@ int64_t oreslang_source_actor_await_readable(
             group.continuations, frame.link.continuation));
         group_unlock();
         ensure(pthread_cond_destroy(&frame.completed) == 0);
-        ensure(0 && "source readable await admission failed");
+        return ORES_SOURCE_READABLE_AWAIT_FAILED;
     }
     frame.admitted = 1;
 
@@ -1110,12 +1140,14 @@ int64_t oreslang_source_actor_await_readable(
         ores_native_vm_nio_dispatch_actor_await(vm, completion);
     if (dispatched != ORES_NATIVE_NIO_AWAIT_PUBLISHED) {
         /* STOP-before-transfer has no wake callback. Retire the persisted
-         * continuation here so trusted-main never waits forever. */
+         * continuation here so trusted-main never waits forever. INVALID is
+         * an internal handoff failure; PRODUCER_RETIRED is typed termination. */
         group_lock();
         ensure(group.pending_readable == &frame && !frame.done);
         ensure(ores_native_continuation_store_cancel(
             group.continuations, frame.link.continuation));
-        frame.outcome = 3;
+        frame.outcome =
+            dispatched == ORES_NATIVE_NIO_AWAIT_PRODUCER_RETIRED ? 3 : 4;
         frame.done = 1;
         ensure(pthread_cond_signal(&frame.completed) == 0);
         group_unlock();
@@ -1149,9 +1181,27 @@ int64_t oreslang_source_actor_await_readable(
         (unsigned long long)source_token);
 #endif
 
-    /* Typed cancellation/I/O error projection is deliberately not source
-     * lowered yet. The first slice fails closed unless readiness resumed once. */
-    ensure(outcome == 1);
+    if (outcome == 1) {
+        *result_out = result;
+        return ORES_SOURCE_READABLE_AWAIT_READY;
+    }
+    if (outcome == 2) return ORES_SOURCE_READABLE_AWAIT_CANCELLED;
+    if (outcome == 3) return ORES_SOURCE_READABLE_AWAIT_TERMINATED;
+    return ORES_SOURCE_READABLE_AWAIT_FAILED;
+}
+
+int64_t oreslang_source_actor_await_readable(
+        void* opaque,
+        int64_t fd,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    int64_t result = 0;
+    const OresSourceReadableAwaitOutcome outcome =
+        oreslang_source_actor_await_readable_checked(
+            opaque, fd, continuation, source_token, &result);
+    /* Existing compiler lowering remains fail-closed until a source Result
+     * binding is admitted. Non-READY never executes the continuation. */
+    ensure(outcome == ORES_SOURCE_READABLE_AWAIT_READY);
     return result;
 }
 #endif
