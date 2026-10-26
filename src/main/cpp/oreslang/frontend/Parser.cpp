@@ -5145,7 +5145,6 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop).parse();
     resolve_source_exports(program);
-    resolve_source_exports(program);
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
