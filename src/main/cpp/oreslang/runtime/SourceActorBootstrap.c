@@ -1619,10 +1619,10 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
         const int64_t* state,
         uint64_t state_count) {
     SourceActor* actor = (SourceActor*)opaque_actor;
-    if (!actor || !continuation
-            || state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS
-            || (state_count != 0 && state == NULL))
+    if (!actor || !continuation || (state_count != 0 && state == NULL))
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS)
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
     if (!ores_native_actor_scheduler_is_carrier_thread()
             || !ores_native_store_handle_valid(current_source_execution))
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
