@@ -1079,7 +1079,10 @@ private:
             }
             if (family.klass) {
                 for (const auto& field : family.klass->fields) {
-                    if (!field.public_member) continue;
+                    const bool in_source_api =
+                        field.public_member ||
+                        (!family.klass->explicit_constructor && field.constructor_argument);
+                    if (!in_source_api) continue;
                     if (!field.class_name.empty()) referenced.push_back(field.class_name);
                     if (!field.array_record_class.empty())
                         referenced.push_back(field.array_record_class);
