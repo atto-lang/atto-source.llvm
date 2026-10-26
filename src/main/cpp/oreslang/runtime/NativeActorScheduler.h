@@ -220,6 +220,12 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control,
     OresNativeActorPanicFn on_panic, OresNativeActorWakeFn on_wake, void* ctx);
+/* Bootstrap-only wake activation for schedulers opened through the legacy VM
+ * path. Wake storage is preallocated at scheduler creation, so this performs
+ * no allocation and starts no carriers. It succeeds only before any accepted
+ * work, carrier creation, retirement, or prior wake callback installation. */
+int ores_native_actor_scheduler_configure_wake_callback(
+    OresNativeActorScheduler* scheduler, OresNativeActorWakeFn on_wake);
 OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_future,
