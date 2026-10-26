@@ -98,17 +98,9 @@ win the common selection and preserve the exact failure, or becomes CANCELLED
 if another arm already won. In contrast, descriptor/waiter quota exhaustion
 while registering the arm is a **select setup failure**, not a ready arm; the
 arm detaches without claiming the winner and the coordinator must clean up the
-partial selection. If another arm commits while that setup failure is being
-classified, the send arm reports CANCELLED rather than surfacing a stale
-RESOURCE_EXHAUSTED result over an already-completed selection.
-
-Registration itself is part of the generation lifetime fence: an arm enters
-`active_tokens` while still REGISTERING, before rechecking OPEN/generation.
-Therefore seal -> rearm cannot reset arm state underneath an in-flight
-registration. Selection generations are strictly monotonic and never reusable;
-same/older generations and terminal generation exhaustion fail closed. Stale
-selection/arm generations fail closed. The select arbiter is fixed-capacity and
-performs no allocation or guest callback during commit.
+partial selection. Stale selection/arm generations fail closed. The select
+arbiter is fixed-capacity and performs no allocation or guest callback during
+commit.
 
 This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
@@ -126,6 +118,58 @@ The next vertical step is a common generation-fenced select continuation that
 all registered sources can notify after arbitration, followed by one static
 compiled `.ores` fixture. Until then, existing fail-closed source fixtures
 must remain unchanged.
+
+## October 26 — one common select-generation continuation wake
+
+The next runtime layer reserves **one** producer continuation wake for an
+entire select generation. It reuses the scheduler's existing preallocated
+eight-credit wake escrow; there is no per-arm guest callback queue.
+
+The scheduler mints the nonzero selection generation and reserves one generic
+wake bound to the producer continuation. The coordinator then:
+
+1. registers **all** arm tokens in the fixed-capacity arbiter;
+2. attaches every token to that exact common wake identity;
+3. only then submits source-specific operations.
+
+An arm token carries numeric wake coordinates plus the arbiter pointer and
+selection generation. The underlying `WakeCredit` is independently tagged
+with that exact arbiter pointer/generation. This extra tag is required because
+ordinary generic wakes also use `descriptor_slot == UINT64_MAX`; descriptor
+coordinates alone are not proof of select authority.
+
+When an async mailbox send wins, the scheduler publishes the common wake
+automatically after the send outcome and mailbox admission are committed.
+A pending send that wins with STOP/resource failure publishes the same wake as
+FAILED. A losing send publishes nothing. For an **immediate synchronous
+terminal** result (for example, target already stopped), the send operation
+commits the select winner but does not publish the wake itself: the coordinator
+must first store the exact result, then publish the common wake, so the resumed
+continuation cannot race uninitialized result state. Non-send sources follow
+the same record-result-before-publish rule.
+
+The common wake's `completion_code` is `arm_index + 1`; it identifies the
+winner but is not a guest value or error payload. Source-specific result/error
+storage remains in the compiler/runtime select frame.
+
+Generation reuse is physically fenced, not merely logically fenced. A select
+arbiter may rearm only after:
+
+- the prior generation is terminal;
+- all prior arm tokens are retired; **and**
+- the prior common wake has fully left RESERVED/READY/EXECUTING and the wake
+  callback has returned.
+
+The scheduler tags and scans the exact arbiter/generation to prove that last
+condition. Old tokens cannot publish a new generation's wake, and ordinary
+generic wakes cannot alias a select wake.
+
+This still does **not** enable guest source `select`. The next compiler slice
+must allocate one bounded select continuation frame, lower a tiny static arm
+set to this runtime protocol, clean up all loser registrations on partial setup
+failure, and prove one real `.ores` program through LLVM and native execution.
+Existing unsupported source-select fixtures remain fail-closed until that
+vertical proof exists.
 
 ## Native implementation acceptance requirements
 
