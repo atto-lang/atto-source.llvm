@@ -26,7 +26,7 @@ def main():
                       f"  target.field{count-1} = 42;\n  return;\n}}\n"
                       f"pub fnc main(): int {{\n"
                       f"  let mut Record record = new Record();\n"
-                      f"  change(rt borrow mut record);\n"
+                      f"  change(rt mut borrow record);\n"
                       f"  return record.field{count-1};\n}}\n")
             file = directory / f"layout-{count}.ores"
             file.write_text(source)
@@ -112,11 +112,11 @@ def main():
                 # class field each callee accesses.
                 overlap_shapes = (
                     ("mutable_shared", "borrow mut", "borrow",
-                     "rt borrow mut", "rt borrow"),
+                     "rt mut borrow", "rt borrow"),
                     ("shared_mutable", "borrow", "borrow mut",
-                     "rt borrow", "rt borrow mut"),
+                     "rt borrow", "rt mut borrow"),
                     ("mutable_mutable", "borrow mut", "borrow mut",
-                     "rt borrow mut", "rt borrow mut"),
+                     "rt mut borrow", "rt mut borrow"),
                 )
                 for label, left_mode, right_mode, left_arg, right_arg in overlap_shapes:
                     invalid = (f"define class Record as\n{fields}\nend\n"
@@ -144,7 +144,7 @@ def main():
                                    f"pub fnc main(): int {{\n"
                                    f"  let mut Record left = new Record();\n"
                                    f"  let mut Record right = new Record();\n"
-                                   f"  return combine(rt borrow mut left, rt borrow right);\n}}\n")
+                                   f"  return combine(rt mut borrow left, rt borrow right);\n}}\n")
                     positive = directory / f"distinct-owner-{count}.ores"
                     positive.write_text(independent)
                     emitted = execute([args.compiler, str(positive)])
@@ -167,9 +167,9 @@ def main():
                     # An exclusive loan ends at the call boundary. Two
                     # successive calls borrowing the same owner are legal.
                     successive = source.replace(
-                        "  change(rt borrow mut record);\n",
-                        "  change(rt borrow mut record);\n"
-                        "  change(rt borrow mut record);\n")
+                        "  change(rt mut borrow record);\n",
+                        "  change(rt mut borrow record);\n"
+                        "  change(rt mut borrow record);\n")
                     if successive == source:
                         raise AssertionError((count, "missing call site in template"))
                     subsequent = directory / f"successive-exclusive-{count}.ores"

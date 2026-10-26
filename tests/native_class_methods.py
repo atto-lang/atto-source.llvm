@@ -41,7 +41,7 @@ def main():
         ('shared-reborrow', {'main.ores':COUNTER+'''fnc read(borrow Counter c):int{return c.read()+2;}
           pub fnc main():int{let Counter c=new Counter();return read(rt borrow c);}'''}),
         ('exclusive-reborrow', {'main.ores':COUNTER+'''fnc bump(borrow mut Counter c):void{c.add(2);return;}
-          pub fnc main():int{let mut Counter c=new Counter();bump(rt borrow mut c);return c.read();}'''}),
+          pub fnc main():int{let mut Counter c=new Counter();bump(rt mut borrow c);return c.read();}'''}),
         ('same-type-private-local', {'main.ores':'''define class Box as let int value=21;
           pub read():int{let Box other=new Box();return self.value+other.value;} end
           pub fnc main():int{let Box b=new Box();return b.read();}'''}),

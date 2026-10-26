@@ -143,5 +143,62 @@ int main() {
         check(concurrent.live_count() == 0);
         check(concurrent.transport_credits() == 0);
     }
+    // Reconciled transport-loss and admission attacks from the older API.
+    {
+        NativeIpcReceiptLedger lost(2);
+        auto local = id(1), accepted = id(2);
+        lost.admit(local); lost.admit(accepted);
+        lost.transition(accepted, IpcReceiptStage::remote_accepted, true);
+        check(lost.transport_credits() == 1);
+        check(lost.mark_transport_lost() == 2);
+        check(lost.mark_transport_lost() == 0);
+        check(lost.invariant() && lost.live_count() == 0 && lost.transport_credits() == 0);
+        rejected([&] { lost.admit(local); });
+        rejected([&] { lost.transition(accepted, IpcReceiptStage::handler_committed, true); });
+        check(!lost.can_replay(local) && !lost.can_replay(accepted));
+        lost.admit(id(3));
+        check(lost.mark_transport_lost() == 1);
+    }
+    for (int mutation = 0; mutation < 6; ++mutation) {
+        auto invalid = id();
+        switch (mutation) {
+            case 0: invalid.tenant = "other!"; break;
+            case 1: invalid.sender_incarnation = 0; break;
+            case 2: invalid.payload_sha256[0] = 'G'; break;
+            case 3: invalid.transport_session = "../traversal"; break;
+            case 4: invalid.message_sequence = std::uint64_t{1} << 63; break;
+            default: invalid.payload_sha256 = "short"; break;
+        }
+        rejected([&] { NativeIpcReceiptLedger probe(1); probe.admit(invalid); });
+    }
+    rejected([] { NativeIpcReceiptLedger probe(0); });
+    rejected([] { NativeIpcReceiptLedger probe(65537); });
+    {
+        NativeIpcReceiptLedger attempts(8);
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> workers;
+        for (std::uint64_t lane = 0; lane < 8; ++lane) {
+            workers.emplace_back([&, lane] {
+                for (std::uint64_t j = 0; j < 2000; ++j) {
+                    auto msg = id(lane * 2000 + j + 1);
+                    try {
+                        attempts.admit(msg);
+                        attempts.transition(msg, IpcReceiptStage::remote_accepted, true);
+                        attempts.transition(msg, IpcReceiptStage::handler_committed, true);
+                    } catch (const std::invalid_argument&) {
+                        // Admission raced a later monotonic sequence.
+                    } catch (const std::overflow_error&) {
+                        // Bounded correlation admission can be full.
+                    } catch (...) { ++unexpected; }
+                }
+            });
+        }
+        for (auto& worker : workers) worker.join();
+        check(unexpected.load() == 0);
+        check(attempts.invariant() && attempts.live_count() <= 8);
+        attempts.mark_transport_lost();
+        check(attempts.invariant() && attempts.live_count() == 0 && attempts.transport_credits() == 0);
+    }
     return 0;
 }
+
