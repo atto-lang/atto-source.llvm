@@ -249,10 +249,22 @@ int oreslang_source_actor_test_detached_state_cleared(void) {
         && !frame->detached
         && !frame->finalizer_claimed
         && !frame->wake_bound
-        && !frame->done;
+        && !frame->done
+        && !frame->rearm_requested
+        && !frame->rearm_terminal
+        && frame->next_send_future == NULL
+        && frame->next_state_continuation == NULL
+        && frame->next_source_token == 0
+        && frame->next_state_count == 0
+        && frame->completed_send_count == 0
+        && frame->abandoned_send_future == NULL;
     for (size_t i = 0;
             cleared && i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
-        cleared = frame->detached_state[i] == 0;
+        cleared = frame->detached_state[i] == 0
+            && frame->next_state[i] == 0;
+    for (size_t i = 0;
+            cleared && i < ORES_SOURCE_DETACHED_MAX_PCS - 1; ++i)
+        cleared = frame->completed_send_futures[i] == NULL;
     group_unlock();
     return cleared;
 }
