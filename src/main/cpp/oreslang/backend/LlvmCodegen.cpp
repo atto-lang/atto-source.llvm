@@ -1261,9 +1261,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
         for (const auto& pipeline : fn.future_pipelines) {
             if (!has_source_tasks || pipeline.plans.empty() ||
-                    pipeline.stages.empty())
+                    pipeline.stages.empty() || !pipeline.ownership_admitted)
                 throw std::runtime_error(
-                    "source Future<int> pipeline lacks checked lowering plan");
+                    "source Future<int> pipeline lacks post-ownership lowering authority");
             auto* producer = llvm::Function::Create(
                 llvm::FunctionType::get(i64, {}, false),
                 llvm::Function::InternalLinkage,
