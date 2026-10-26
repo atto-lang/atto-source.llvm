@@ -398,6 +398,58 @@ int main() {
         }
     }
 
+    // Opening a frame may also race whole-group close. If open linearizes
+    // first, the returned frame must be immediately reconcilable through the
+    // generation-fenced detach barrier. If close linearizes first, open must
+    // reject. No detached PENDING frame may survive either ordering.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        NativeActorGroup open_close_group(15000 + iteration, 1);
+        auto open_close_owner = open_close_group.adopt(
+            15000 + iteration, 1, 1, [] {});
+        check(open_close_group.mark_ready(open_close_owner),
+              "open/close race owner not ready");
+
+        std::atomic<int> start_open_close{0};
+        std::shared_ptr<NativeScalarFutureAwait> opened;
+        bool open_rejected = false;
+        std::thread opener([&] {
+            while (!start_open_close.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            try {
+                opened = NativeScalarFutureAwait::open(
+                    open_close_owner, 7000 + iteration);
+            } catch (const std::logic_error&) {
+                open_rejected = true;
+            }
+        });
+        std::thread closer([&] {
+            while (!start_open_close.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            open_close_group.close();
+        });
+
+        start_open_close.store(1, std::memory_order_release);
+        opener.join();
+        closer.join();
+
+        check(open_rejected || bool(opened),
+              "open/close race produced no admission outcome");
+        check(!(open_rejected && opened),
+              "open/close race both rejected and returned frame");
+        check(open_close_owner.delivery_closed(),
+              "open/close race did not publish delivery barrier");
+
+        if (opened) {
+            check(opened->cancel_if_owner_detached(
+                      opened->id(), open_close_owner),
+                  "open/close winner was not reconciled after detach");
+            check(opened->phase() == NativeScalarFutureAwait::Phase::cancelled,
+                  "open/close race leaked nonterminal Future");
+            check(!opened->complete(opened->id(), iteration),
+                  "detached open/close Future resurrected");
+        }
+    }
+
     // Group close may drop an already-reserved CONTROL callback. The Future
     // must observe that generation-fenced loss and become cancellable rather
     // than remaining permanently scheduled.
