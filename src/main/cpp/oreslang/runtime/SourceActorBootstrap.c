@@ -1330,7 +1330,12 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
         ensure(ores_native_continuation_store_release(
             group.continuations, frame->link.continuation));
     }
-    group.pending_send = NULL;
+    /*
+     * Keep pending_send pinned to this embedded frame through descriptor and
+     * Future retirement. A competing trusted-host detach must not reinitialize
+     * its pthread_cond_t while this finalizer still owns the old frame.
+     */
+    ensure(group.pending_send == frame);
     group_unlock();
 
     if (!wake_bound)
@@ -1340,6 +1345,7 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
         vm, ORES_NATIVE_VM_MAIN, ticket));
 
     group_lock();
+    ensure(group.pending_send == frame);
     ensure(source_send_future_valid_locked(future)
         && future->consuming && future->actor == actor
         && actor->send_future_live > 0);
@@ -1351,7 +1357,12 @@ int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
     group_unlock();
 
     ensure(pthread_cond_destroy(&frame->completed) == 0);
+
+    group_lock();
+    ensure(group.pending_send == frame);
+    group.pending_send = NULL;
     *frame = (SendAwaitFrame){0};
+    group_unlock();
 
     /*
      * Successful compiler continuations request STOP themselves after all
