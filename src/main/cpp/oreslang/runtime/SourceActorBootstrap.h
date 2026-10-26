@@ -24,6 +24,7 @@ typedef int64_t (*OresSourceActorStateContinuation)(
 
 enum {
     ORES_SOURCE_DETACHED_SCALAR_WORDS = 16,
+    ORES_SOURCE_DETACHED_MAX_PCS = 4,
     ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
     ORES_SOURCE_ACTOR_STARTUP_INITIALIZING = 1,
     ORES_SOURCE_ACTOR_STARTUP_READY = 2,
@@ -162,6 +163,26 @@ int oreslang_source_actor_detach_send_future_state_checked(
     uint64_t source_token,
     const int64_t* state,
     uint64_t state_count);
+
+/*
+ * Carrier-only next-PC transition for a detached direct send_async state
+ * machine. It checked-submits the next payload, snapshots Copy scalar state,
+ * and publishes the next logical suspension from the currently resumed
+ * execution with the current continuation as parent. The scheduler descriptor
+ * remains the sole mailbox-admission authority. Up to four PCs are admitted.
+ *
+ * A synchronous next-send failure is recorded as the detached frame's terminal
+ * outcome; callers must return from the current continuation normally so the
+ * wake epilogue can finish the current logical execution exactly once.
+ */
+int oreslang_source_actor_rearm_detached_send_state_checked(
+    void* actor,
+    int64_t payload,
+    OresSourceActorStateContinuation continuation,
+    uint64_t source_token,
+    const int64_t* state,
+    uint64_t state_count);
+
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out);
 
 int oreslang_source_actor_cancel_send_future(void* future);
