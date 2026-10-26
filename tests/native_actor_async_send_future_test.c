@@ -521,6 +521,66 @@ static void pending_stop_publishes_exact_failed_wake(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void pending_resource_exhaustion_publishes_exact_failed_wake(void) {
+    BoundWakeState state = {0};
+    atomic_store(&state.target.block, 1);
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            2, 1, 2, handler, NULL, NULL, bound_wake_callback, &state);
+    CHECK(scheduler != NULL);
+    state.scheduler = scheduler;
+
+    /* Leave exactly one execution id for the producer wake. The target's
+     * blocking turn consumes UINT64_MAX-1; the bound wake reserves UINT64_MAX.
+     * When target credit returns there is no execution id left for DATA, so
+     * the pending send must fail RESOURCE_EXHAUSTED and wake the producer. */
+    CHECK(ores_native_actor_scheduler_test_set_next_execution(
+        scheduler, UINT64_MAX - UINT64_C(1)));
+
+    OresNativeActorRef target =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef producer =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+    CHECK(target.scheduler_domain && producer.scheduler_domain);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, target, 721)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state.target);
+
+    OresNativeAsyncSendTicket send = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, target, 722, &send) == ORES_NATIVE_SEND_ACCEPTED);
+    expect_state(scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
+
+    OresNativeWakeTicket wake = {0};
+    CHECK(ores_native_actor_scheduler_bind_async_send_wake(
+        scheduler, send, producer, 33, 39, 1, &wake));
+    CHECK(!ores_native_actor_scheduler_release_async_send(scheduler, send));
+
+    atomic_store_explicit(&state.target.block, 0, memory_order_release);
+    while (!atomic_load_explicit(&state.wake_seen, memory_order_acquire))
+        sched_yield();
+    while (ores_native_actor_scheduler_wakes_completed(scheduler) == 0)
+        sched_yield();
+
+    CHECK(atomic_load_explicit(
+        &state.wake_outcome, memory_order_acquire) == ORES_NATIVE_WAKE_FAILED);
+    CHECK(state.wake_ticket.completion_code
+        == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    expect_state(scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_FAILED, ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
+
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, producer));
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void duplicate_send_wake_bind_fails_closed(void) {
     BoundWakeState state = {0};
     OresNativeActorScheduler* scheduler =
@@ -657,9 +717,10 @@ int main(void) {
     cross_scheduler_carrier_rejects_host_lifecycle_barriers();
     ready_future_wake_survives_target_stop();
     pending_stop_publishes_exact_failed_wake();
+    pending_resource_exhaustion_publishes_exact_failed_wake();
     duplicate_send_wake_bind_fails_closed();
     bounded_wake_escrow_rejects_ninth_bind();
     wake_activation_is_bootstrap_only();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 exact_resource_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
     return 0;
 }
