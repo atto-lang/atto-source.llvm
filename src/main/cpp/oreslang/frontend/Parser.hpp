@@ -186,6 +186,9 @@ struct SourceFuturePipelineI64Binding {
     std::size_t offset = 0;
     bool root_consumed = false;
     bool awaited = false;
+    // Set only after the complete ownership pass succeeds for the compilation
+    // unit. Codegen must never consume a merely type-staged plan.
+    bool ownership_admitted = false;
 };
 
 struct ActorSend {
