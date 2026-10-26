@@ -121,6 +121,14 @@ OresNativeSendStatus ores_native_vm_submit_async(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload,
     OresNativeAsyncSendTicket* out);
+/* Nonblocking select-bound mailbox admission. The supplied token is the
+ * sole winner authority; this VM façade preserves the selected execution
+ * domain instead of exposing its scheduler pointer to source-runtime glue. */
+OresNativeSendStatus ores_native_vm_submit_selectable_async(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef actor, uint64_t payload,
+    OresNativeSelectToken select_token,
+    OresNativeAsyncSendTicket* out);
 int ores_native_vm_async_send_status(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket,
