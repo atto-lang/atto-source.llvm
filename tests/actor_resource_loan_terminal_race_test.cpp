@@ -183,6 +183,14 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         CHECK(!group.has_pending_control(actor));
         CHECK(direct_control == 0);
 
+        // The same terminal seal must retire ordinary user-turn admission.
+        // Otherwise a failed finalization settlement could re-enter actor code
+        // before its serialized finalization retry completes.
+        int direct_user_turn = 0;
+        CHECK(group.run_user_turn(actor, [&] { ++direct_user_turn; })
+              == NativeActorGroup::UserTurn::retired);
+        CHECK(direct_user_turn == 0);
+
         // Terminal resource admission is authoritative even if DONE
         // settlement failed before delivery_closed() could be published.
         // A pre-existing READY Future must not enqueue fresh CONTROL work in

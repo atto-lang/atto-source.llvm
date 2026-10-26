@@ -224,7 +224,8 @@ public:
         {
             std::lock_guard<std::mutex> guard(mutex_);
             Entry* worker = find_active_locked(ref);
-            if (closed_ || !worker || worker->phase == Phase::starting)
+            if (closed_ || !worker || worker->phase == Phase::starting
+                    || worker->ref.resource_admission_closed())
                 return UserTurn::retired;
             if (worker->pending_control) return UserTurn::busy;
             ticket = worker->ref.ticket_;
