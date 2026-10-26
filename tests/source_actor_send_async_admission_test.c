@@ -618,10 +618,11 @@ static void detached_scalar_state_is_copied_before_guest_return(void) {
         &detached_state_resume_seen, memory_order_acquire) == 1);
     CHECK(ores_native_vm_test_async_send_host_wait_calls()
         == host_waits_before);
+    CHECK(oreslang_source_actor_test_detached_state_cleared());
 
     fprintf(stderr,
         "SOURCE_SEND_ASYNC_DETACHED_STATE_PASS copied=2 overbound_rejected=1 "
-        "guest_stack_released=1 final_join=1\n");
+        "state_zeroed=1 guest_stack_released=1 final_join=1\n");
 }
 
 static atomic_int detached_max_state_resume_seen;
@@ -688,9 +689,10 @@ static void detached_scalar_state_accepts_exact_bound(void) {
     CHECK(result == 43);
     CHECK(atomic_load_explicit(
         &detached_max_state_resume_seen, memory_order_acquire) == 1);
+    CHECK(oreslang_source_actor_test_detached_state_cleared());
 
     fprintf(stderr,
-        "SOURCE_SEND_ASYNC_DETACHED_STATE_BOUND_PASS words=16 null_state_rejected=1 copied=16 final_join=1\n");
+        "SOURCE_SEND_ASYNC_DETACHED_STATE_BOUND_PASS words=16 null_state_rejected=1 copied=16 state_zeroed=1 final_join=1\n");
 }
 
 typedef struct {
