@@ -624,6 +624,75 @@ static void detached_scalar_state_is_copied_before_guest_return(void) {
         "guest_stack_released=1 final_join=1\n");
 }
 
+static atomic_int detached_max_state_resume_seen;
+
+static int64_t detached_max_state_resume_probe(
+        void* actor, const int64_t* state, uint64_t state_count) {
+    CHECK(actor != NULL);
+    CHECK(state != NULL);
+    CHECK(state_count == ORES_SOURCE_DETACHED_SCALAR_WORDS);
+    for (uint64_t i = 0; i + 1 < state_count; ++i)
+        CHECK(state[i] == (int64_t)(i + 1));
+    CHECK(state[state_count - 1] == 42);
+    atomic_store_explicit(
+        &detached_max_state_resume_seen, 1, memory_order_release);
+    oreslang_source_actor_request_stop(actor);
+    return state[0] + state[state_count - 1];
+}
+
+static void detached_scalar_state_accepts_exact_bound(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 919, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    int64_t state[ORES_SOURCE_DETACHED_SCALAR_WORDS];
+    for (uint64_t i = 0; i + 1 < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+        state[i] = (int64_t)(i + 1);
+    state[ORES_SOURCE_DETACHED_SCALAR_WORDS - 1] = 42;
+    atomic_store_explicit(
+        &detached_max_state_resume_seen, 0, memory_order_release);
+
+    CHECK(oreslang_source_actor_detach_send_future_state_checked(
+        future,
+        detached_max_state_resume_probe,
+        UINT64_C(0x5ef7),
+        NULL,
+        1) == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+    CHECK(!oreslang_source_actor_test_future_consuming(future));
+
+    CHECK(oreslang_source_actor_detach_send_future_state_checked(
+        future,
+        detached_max_state_resume_probe,
+        UINT64_C(0x5ef7),
+        state,
+        ORES_SOURCE_DETACHED_SCALAR_WORDS)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+
+    for (uint64_t i = 0; i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+        state[i] = -1;
+    CHECK(oreslang_source_actor_test_future_consuming(future));
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    int64_t result = -1;
+    CHECK(oreslang_source_actor_wait_detached_send_result(&result)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(result == 43);
+    CHECK(atomic_load_explicit(
+        &detached_max_state_resume_seen, memory_order_acquire) == 1);
+
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DETACHED_STATE_BOUND_PASS words=16 null_state_rejected=1 copied=16 final_join=1\n");
+}
+
 typedef struct {
     atomic_int started;
     int status;
@@ -1108,6 +1177,7 @@ int main(void) {
     atomic_init(&logical_send_resume_seen, 0);
     atomic_init(&detached_send_resume_seen, 0);
     atomic_init(&detached_state_resume_seen, 0);
+    atomic_init(&detached_max_state_resume_seen, 0);
     atomic_init(&teardown_resume_entered, 0);
     atomic_init(&release_teardown_resume, 0);
     atomic_init(&failed_send_continuation_seen, 0);
@@ -1122,6 +1192,7 @@ int main(void) {
     stored_future_await_resumes_fresh_root_continuation();
     detached_future_releases_guest_stack_before_admission();
     detached_scalar_state_is_copied_before_guest_return();
+    detached_scalar_state_accepts_exact_bound();
     detached_result_finalizer_is_single_consumer();
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
