@@ -52,6 +52,7 @@ private:
         std::size_t head = 0;
         std::size_t tail = 0;
         std::size_t count = 0;
+        bool closed = false;
         std::array<Waiter, MaxWaiters> readers{};
         std::array<Waiter, MaxWaiters> writers{};
         std::uint64_t next_waiter_id = 1;
@@ -59,6 +60,31 @@ private:
     };
 
 public:
+    enum class ReadOutcome {
+        NotReady,
+        Value,
+        Eof,
+    };
+
+    struct ReadResult final {
+        ReadOutcome outcome = ReadOutcome::NotReady;
+        std::int64_t value = 0;
+
+        bool has_value() const noexcept {
+            return outcome == ReadOutcome::Value;
+        }
+
+        bool eof() const noexcept {
+            return outcome == ReadOutcome::Eof;
+        }
+    };
+
+    enum class WriteOutcome {
+        NotReady,
+        Written,
+        Closed,
+    };
+
     class Subscription final {
     public:
         Subscription() = default;
@@ -182,35 +208,60 @@ public:
     }
 
     bool try_commit_read(const Subscription& subscription,
-                         std::int64_t& value,
+                         ReadResult& result,
                          NotificationBatch& notifications) {
         require_empty_batch(notifications);
+        result = {};
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (!matches_locked(subscription, WaitKind::Read) ||
-            state_->count == 0)
+        if (!matches_locked(subscription, WaitKind::Read))
             return false;
 
-        capture_locked(state_->writers, notifications);
-        value = state_->values[state_->head];
-        state_->head = (state_->head + 1) % Capacity;
-        --state_->count;
+        if (state_->count != 0) {
+            capture_locked(state_->writers, notifications);
+            result.outcome = ReadOutcome::Value;
+            result.value = state_->values[state_->head];
+            state_->head = (state_->head + 1) % Capacity;
+            --state_->count;
+            close_locked(state_->readers[subscription.index_]);
+            return true;
+        }
+
+        if (!state_->closed)
+            return false;
+
+        // Closed + drained is a terminal selectable read. It wins the select
+        // without fabricating a value or mutating channel storage.
+        result.outcome = ReadOutcome::Eof;
         close_locked(state_->readers[subscription.index_]);
         return true;
     }
 
     bool try_commit_write(const Subscription& subscription,
                           std::int64_t value,
+                          WriteOutcome& outcome,
                           NotificationBatch& notifications) {
         require_empty_batch(notifications);
+        outcome = WriteOutcome::NotReady;
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (!matches_locked(subscription, WaitKind::Write) ||
-            state_->count == Capacity)
+        if (!matches_locked(subscription, WaitKind::Write))
+            return false;
+
+        if (state_->closed) {
+            // A closed write is terminal readiness: the select case may win,
+            // but no value is ever published.
+            outcome = WriteOutcome::Closed;
+            close_locked(state_->writers[subscription.index_]);
+            return true;
+        }
+
+        if (state_->count == Capacity)
             return false;
 
         capture_locked(state_->readers, notifications);
         state_->values[state_->tail] = value;
         state_->tail = (state_->tail + 1) % Capacity;
         ++state_->count;
+        outcome = WriteOutcome::Written;
         close_locked(state_->writers[subscription.index_]);
         return true;
     }
@@ -219,7 +270,7 @@ public:
         NotificationBatch notifications;
         {
             std::lock_guard<std::mutex> guard(state_->mutex);
-            if (state_->count == Capacity) return false;
+            if (state_->closed || state_->count == Capacity) return false;
             capture_locked(state_->readers, notifications);
             state_->values[state_->tail] = value;
             state_->tail = (state_->tail + 1) % Capacity;
@@ -242,6 +293,26 @@ public:
         }
         notifications.dispatch();
         return value;
+    }
+
+    bool close() {
+        NotificationBatch reader_notifications;
+        NotificationBatch writer_notifications;
+        {
+            std::lock_guard<std::mutex> guard(state_->mutex);
+            if (state_->closed) return false;
+            state_->closed = true;
+            capture_locked(state_->readers, reader_notifications);
+            capture_locked(state_->writers, writer_notifications);
+        }
+        reader_notifications.dispatch();
+        writer_notifications.dispatch();
+        return true;
+    }
+
+    bool is_closed() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->closed;
     }
 
     std::size_t size() const {
@@ -304,8 +375,8 @@ private:
                 });
 
             const bool ready = kind == WaitKind::Read
-                    ? state_->count != 0
-                    : state_->count != Capacity;
+                    ? (state_->count != 0 || state_->closed)
+                    : (state_->closed || state_->count != Capacity);
             if (ready) immediate = wrapped;
 
             auto& waiter = waiters[index];
