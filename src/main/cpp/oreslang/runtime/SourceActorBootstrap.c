@@ -1108,11 +1108,27 @@ int oreslang_source_actor_try_select_send_default_checked(
      * identical to the asynchronous selectable-send winner protocol.
      */
     static _Atomic uint64_t next_try_select_generation = UINT64_C(1);
-    const uint64_t generation = atomic_fetch_add_explicit(
-        &next_try_select_generation, UINT64_C(1), memory_order_acq_rel);
-    if (!generation || generation == UINT64_MAX) {
-        group_unlock();
-        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    uint64_t generation = atomic_load_explicit(
+        &next_try_select_generation, memory_order_acquire);
+    for (;;) {
+        /*
+         * Never wrap or recycle a selection generation. Even though this
+         * first try-select keeps tokens stack-local, preserving the global
+         * monotonic rule prevents a future widening from inheriting an ABA
+         * alias at exactly the exhaustion boundary.
+         */
+        if (!generation || generation == UINT64_MAX) {
+            group_unlock();
+            return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        }
+        const uint64_t next = generation + UINT64_C(1);
+        if (atomic_compare_exchange_weak_explicit(
+                &next_try_select_generation,
+                &generation,
+                next,
+                memory_order_acq_rel,
+                memory_order_acquire))
+            break;
     }
 
     OresNativeSelectArbiter select = {0};
