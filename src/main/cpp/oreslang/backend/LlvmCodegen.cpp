@@ -1940,8 +1940,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 awaited_payload,
                 "direct.send_async");
 
-            auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+            if (fn.locals.size() > 16)
+                throw std::runtime_error(
+                    "direct send_async detached scalar frame exceeds 16 words");
+            for (const auto& local : fn.locals) {
+                if (local.heap_owned || local.int_array
+                        || !local.class_name.empty()
+                        || local.new_class || local.record_view || local.move_class
+                        || !local.sum_type.empty()
+                        || local.scalar_type == ScalarType::String)
+                    throw std::runtime_error(
+                        "direct send_async detached frame accepts only Copy int/bool locals");
+            }
+
+            const std::uint64_t detached_words =
+                static_cast<std::uint64_t>(fn.locals.size());
+            auto* continuation_type = llvm::FunctionType::get(
+                i64, {native_ptr, native_ptr, i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -1950,11 +1965,41 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* admitted =
                 llvm::BasicBlock::Create(context, "admitted", resume);
             llvm::IRBuilder<> resumed(admitted);
-            auto* resumed_actor = &*resume->arg_begin();
+            auto argument = resume->arg_begin();
+            auto* resumed_actor = &*argument++;
+            auto* resumed_state = &*argument++;
+            auto* resumed_state_count = &*argument;
             resumed_actor->setName(awaited_send.reference);
+            resumed_state->setName("$detached.state");
+            resumed_state_count->setName("$detached.state.count");
 
-            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            auto* state_valid =
+                llvm::BasicBlock::Create(context, "state.valid", resume);
+            auto* state_invalid =
+                llvm::BasicBlock::Create(context, "state.invalid", resume);
+            resumed.CreateCondBr(
+                resumed.CreateICmpEQ(
+                    resumed_state_count,
+                    llvm::ConstantInt::get(i64, detached_words),
+                    "detached.state.count.valid"),
+                state_valid,
+                state_invalid);
+            resumed.SetInsertPoint(state_invalid);
+            resumed.CreateCall(native_trap(module));
+            resumed.CreateUnreachable();
+            resumed.SetInsertPoint(state_valid);
+
+            std::unordered_map<std::string, llvm::Value*> resumed_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
+            for (std::size_t i = 0; i < fn.locals.size(); ++i) {
+                llvm::Value* slot = resumed.CreateGEP(
+                    i64,
+                    resumed_state,
+                    llvm::ConstantInt::get(i64, i),
+                    fn.locals[i].name + ".detached.slot");
+                resumed_storage.emplace(fn.locals[i].name, slot);
+            }
+
             for (std::size_t i = direct_send_await_action_index + 1;
                     i < fn.actor_actions.size(); ++i) {
                 const auto& action = fn.actor_actions[i];
@@ -1967,7 +2012,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         *send.payload,
                         resumed,
                         i64,
-                        no_storage,
+                        resumed_storage,
                         no_fields,
                         declarations,
                         nullptr);
@@ -1984,22 +2029,46 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 *fn.result,
                 resumed,
                 i64,
-                no_storage,
+                resumed_storage,
                 no_fields,
                 declarations,
                 nullptr);
             resumed.CreateRet(continuation_result);
 
+            llvm::Value* detached_state = llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(native_ptr));
+            if (!fn.locals.empty()) {
+                detached_state = builder.CreateAlloca(
+                    i64,
+                    llvm::ConstantInt::get(i64, detached_words),
+                    "direct.send_async.detached.state");
+                for (std::size_t i = 0; i < fn.locals.size(); ++i) {
+                    llvm::Value* destination = builder.CreateGEP(
+                        i64,
+                        detached_state,
+                        llvm::ConstantInt::get(i64, i),
+                        fn.locals[i].name + ".detached.capture");
+                    builder.CreateStore(
+                        builder.CreateLoad(
+                            i64,
+                            storage.at(fn.locals[i].name),
+                            fn.locals[i].name + ".detached.value"),
+                        destination);
+                }
+            }
+
             llvm::Value* continuation_ptr =
                 builder.CreatePointerCast(resume, native_ptr);
             llvm::Value* detach_status = builder.CreateCall(
-                sourceDetachSendFuture,
+                sourceDetachSendFutureState,
                 {
                     direct_future,
                     continuation_ptr,
                     llvm::ConstantInt::get(
                         llvm::cast<llvm::IntegerType>(i64),
-                        static_cast<std::uint64_t>(awaited_send.offset))
+                        static_cast<std::uint64_t>(awaited_send.offset)),
+                    detached_state,
+                    llvm::ConstantInt::get(i64, detached_words)
                 },
                 "future.detach.direct.send.status");
             awaited_result = builder.CreateZExt(
