@@ -1000,11 +1000,13 @@ void validate_i64_ownership(const Program& program) {
                 throw std::runtime_error("ownership violation: unsupported conditional arm effect");
             }
         };
-        for (const auto& stmt : function.statements) {
+        auto check_top_statement = [&](const Statement& stmt) {
             if (stmt.kind == Statement::Kind::Defer) {
-                if (!structured_exits.empty()) throw std::runtime_error("defer after structured return requires path-specific registration");
+                if (!structured_exits.empty())
+                    throw std::runtime_error(
+                        "defer after structured return requires path-specific registration");
                 deferred_effects.push_back(&stmt);
-                continue;
+                return;
             }
             if (stmt.kind == Statement::Kind::Conditional) {
                 // The bool condition executes once before the branch. Its
@@ -1033,18 +1035,75 @@ void validate_i64_ownership(const Program& program) {
                         "ownership violation: conditional CFG predecessor ownership mismatch at byte " +
                         std::to_string(stmt.offset));
                 locals = std::move(then_state);
-                continue;
+                return;
             }
             check_effect(stmt, locals);
             if (stmt.kind == Statement::Kind::ScopedLocal)
                 root_names.insert(stmt.branch_local->name);
-        }
-        // Actor sends transfer scalar payloads in lexical send/stop order.
-        // Do not let the backend load moved locals or leak raw borrow pointers.
-        for (const auto& action : function.actor_actions) {
-            if (action.kind == ActorAction::Kind::Send) {
-                const auto& send = function.actor_sends.at(action.index);
-                check_value(*send.payload, locals, functions);
+        };
+
+        /*
+         * Statements and actor sends live in separate AST vectors for codegen,
+         * but ownership is a source-order property. Checking every statement
+         * before every send can hide:
+         *
+         *   worker.send(rt take value);
+         *   observe(value);                 // must be use-after-move
+         *
+         * Replay all ownership-affecting top-level events by source offset.
+         * Stored send_async starts are included at declaration/submission time,
+         * not at their later await.
+         */
+        enum class LexicalEffectKind { Statement, Send, StoredAsyncSend };
+        struct LexicalEffect {
+            std::size_t offset;
+            LexicalEffectKind kind;
+            std::size_t index;
+        };
+        std::vector<LexicalEffect> lexical_effects;
+        lexical_effects.reserve(
+            function.statements.size() + function.actor_sends.size() +
+            (function.send_future_payload ? 1u : 0u));
+        for (std::size_t i = 0; i < function.statements.size(); ++i)
+            lexical_effects.push_back({
+                function.statements[i].offset,
+                LexicalEffectKind::Statement,
+                i});
+        for (std::size_t i = 0; i < function.actor_sends.size(); ++i)
+            lexical_effects.push_back({
+                function.actor_sends[i].offset,
+                LexicalEffectKind::Send,
+                i});
+        if (function.send_future_payload)
+            lexical_effects.push_back({
+                function.send_future_submit_offset,
+                LexicalEffectKind::StoredAsyncSend,
+                0});
+        std::stable_sort(
+            lexical_effects.begin(),
+            lexical_effects.end(),
+            [](const LexicalEffect& left, const LexicalEffect& right) {
+                return left.offset < right.offset;
+            });
+
+        for (const auto& effect : lexical_effects) {
+            switch (effect.kind) {
+                case LexicalEffectKind::Statement:
+                    check_top_statement(function.statements.at(effect.index));
+                    break;
+                case LexicalEffectKind::Send:
+                    // Both send and direct-await send_async use ActorSend and
+                    // therefore the exact same ownership boundary.
+                    check_value(
+                        *function.actor_sends.at(effect.index).payload,
+                        locals,
+                        functions);
+                    break;
+                case LexicalEffectKind::StoredAsyncSend:
+                    // Future<void> submission is eager. Ownership is checked at
+                    // declaration/submission, never deferred until await.
+                    check_value(*function.send_future_payload, locals, functions);
+                    break;
             }
         }
         auto check_deferred_exit = [&](Locals& path) {
