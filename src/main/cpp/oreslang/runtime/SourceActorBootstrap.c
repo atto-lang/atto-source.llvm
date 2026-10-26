@@ -21,6 +21,7 @@
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 #define SOURCE_ROOT_CONTROL_SEND_SUSPEND UINT64_C(5)
 #define SOURCE_ROOT_CONTROL_SELECT_SUSPEND UINT64_C(6)
+#define SOURCE_SELECT_FAIR_SITES 64u
 
 typedef struct SourceActor SourceActor;
 typedef struct {
@@ -151,6 +152,12 @@ typedef struct {
 } SelectAwaitFrame;
 
 typedef struct {
+    uint64_t source_token;
+    uint64_t next_ticket;
+    int occupied;
+} SourceSelectFairSite;
+
+typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t async_waiters_changed;
     OresNativeVM* vm;
@@ -169,9 +176,12 @@ typedef struct {
     size_t next_slot;
     size_t live;
     size_t peak;
-    /* Deterministic FAIR cursor for the first static two-arm source-select
-     * slice. It advances once per selection while the source runtime is live. */
-    size_t select_fair_cursor;
+    /*
+     * Fixed-capacity source-site FAIR tickets. A static select site's order is
+     * independent of other sites in the same root actor/runtime. No dynamic
+     * map/allocation is permitted on this compiler/runtime path.
+     */
+    SourceSelectFairSite select_fair_sites[SOURCE_SELECT_FAIR_SITES];
 } SourceActorGroup;
 
 /* Process-local trusted-main group; the compiler only supports linear refs
@@ -358,6 +368,41 @@ size_t oreslang_source_actor_test_pending_async_sends(void* opaque) {
 static void ensure(int condition) { if (!condition) abort(); }
 static void group_lock(void) { ensure(pthread_mutex_lock(&group.mutex) == 0); }
 static void group_unlock(void) { ensure(pthread_mutex_unlock(&group.mutex) == 0); }
+
+static int source_select_fair_start_locked(
+        uint64_t source_token,
+        size_t arm_count,
+        size_t* start_out) {
+    if (!source_token || !arm_count || !start_out)
+        return 0;
+
+    SourceSelectFairSite* empty = NULL;
+    SourceSelectFairSite* site = NULL;
+    for (size_t i = 0; i < SOURCE_SELECT_FAIR_SITES; ++i) {
+        SourceSelectFairSite* candidate = &group.select_fair_sites[i];
+        if (candidate->occupied) {
+            if (candidate->source_token == source_token) {
+                site = candidate;
+                break;
+            }
+        } else if (!empty) {
+            empty = candidate;
+        }
+    }
+    if (!site) {
+        if (!empty) return 0;
+        empty->source_token = source_token;
+        empty->next_ticket = 0;
+        empty->occupied = 1;
+        site = empty;
+    }
+
+    if (site->next_ticket == UINT64_MAX)
+        return 0;
+    const uint64_t ticket = site->next_ticket++;
+    *start_out = (size_t)(ticket % arm_count);
+    return 1;
+}
 
 static int same_allocation(
         OresNativeAllocationDomainRef a,
@@ -737,8 +782,10 @@ static void root_select_suspend_turn(void) {
         frame->wake_reserved = setup_ok;
     }
 
-    const size_t fair_start = group.select_fair_cursor % 2;
-    group.select_fair_cursor = (group.select_fair_cursor + 1) % 2;
+    size_t fair_start = 0;
+    if (setup_ok)
+        setup_ok = source_select_fair_start_locked(
+            frame->source_token, 2, &fair_start);
     for (size_t step = 0; setup_ok && step < 2; ++step) {
         const size_t i = (fair_start + step) % 2;
         const OresNativeSendStatus status =
@@ -2728,7 +2775,8 @@ void oreslang_source_actor_join_done(void* opaque) {
 #endif
         group.next_slot = 0;
         group.peak = 0;
-        group.select_fair_cursor = 0;
+        for (size_t i = 0; i < SOURCE_SELECT_FAIR_SITES; ++i)
+            group.select_fair_sites[i] = (SourceSelectFairSite){0};
     }
     group_unlock();
 }
