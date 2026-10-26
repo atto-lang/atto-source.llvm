@@ -810,6 +810,35 @@ static AsyncSendCredit* oldest_pending_async_locked(ActorLane* lane) {
     return oldest;
 }
 
+static void settle_selectable_failure_locked(
+        OresNativeActorScheduler* s,
+        AsyncSendCredit* credit,
+        OresNativeSendStatus outcome) {
+    if (!credit || credit->state != ORES_NATIVE_ASYNC_SEND_PENDING)
+        abort();
+    if (!credit->select_bound) {
+        credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
+        credit->outcome = outcome;
+        return;
+    }
+
+    /*
+     * A terminal send failure is itself a selectable terminal event. It may
+     * claim the common winner only if no other arm committed first. If this
+     * arm already lost/sealed/staled, retire it as CANCELLED without running
+     * a guest branch or fabricating target admission.
+     */
+    const OresNativeSelectCommitResult selected =
+        ores_native_select_try_commit(credit->select_token);
+    if (selected == ORES_NATIVE_SELECT_WON) {
+        credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
+        credit->outcome = outcome;
+    } else {
+        credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
+        credit->outcome = ORES_NATIVE_SEND_CANCELLED;
+    }
+}
+
 static void fail_pending_async_sends_locked(
         OresNativeActorScheduler* s, size_t actor_index,
         OresNativeSendStatus outcome) {
@@ -819,8 +848,7 @@ static void fail_pending_async_sends_locked(
         AsyncSendCredit* credit = &lane->async_sends[i];
         if (credit->state != ORES_NATIVE_ASYNC_SEND_PENDING)
             continue;
-        credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
-        credit->outcome = outcome;
+        settle_selectable_failure_locked(s, credit, outcome);
         credit->sequence = 0;
         settle_async_send_wake_locked(s, credit);
         ++failed;
@@ -847,23 +875,41 @@ static void service_async_sends_locked(
         if (!credit) abort();
 
         /*
-         * If execution-id or worker capacity cannot support the now-available
-         * target credit, this cohort cannot remain silently pending: no later
-         * mailbox release is guaranteed to wake it. Fail every still-pending
-         * Future explicitly as RESOURCE_EXHAUSTED.
+         * Preflight every resource that enqueue_locked can fail for before a
+         * selectable arm commits its irreversible winner token. The scheduler
+         * mutex keeps these conditions stable through the subsequent enqueue.
          */
+        const int new_lane = !lane->active && !lane_has_work(lane);
         if (s->accepted >= UINT64_MAX - s->reserved_wakes
-                || !execution_slot_available_locked(s)) {
+                || !execution_slot_available_locked(s)
+                || !ensure_workers_locked(
+                    s, s->runnable_lanes + (size_t)new_lane)) {
             fail_pending_async_sends_locked(
                 s, actor_index, ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
             return;
         }
 
-        if (!enqueue_locked(s, actor_index, credit->payload)) {
-            fail_pending_async_sends_locked(
-                s, actor_index, ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
-            return;
+        if (credit->select_bound) {
+            const OresNativeSelectCommitResult selected =
+                ores_native_select_try_commit(credit->select_token);
+            if (selected != ORES_NATIVE_SELECT_WON) {
+                credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
+                credit->outcome = ORES_NATIVE_SEND_CANCELLED;
+                credit->sequence = 0;
+                if (!lane->async_pending) abort();
+                --lane->async_pending;
+                settle_async_send_wake_locked(s, credit);
+                continue;
+            }
         }
+
+        /*
+         * After the selectable winner commits, enqueue must be infallible
+         * under this same scheduler lock: target credit, execution id, worker
+         * availability and scheduler liveness were all preflighted above.
+         */
+        if (!enqueue_locked(s, actor_index, credit->payload))
+            abort();
 
         credit->state = ORES_NATIVE_ASYNC_SEND_READY;
         credit->outcome = ORES_NATIVE_SEND_ACCEPTED;
