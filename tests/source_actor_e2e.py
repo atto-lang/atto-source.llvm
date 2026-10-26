@@ -220,8 +220,6 @@ def main():
                                       if "call void @oreslang_source_actor_stop(" in line]
                 discard_calls = [line for line in guest.stdout.splitlines()
                                  if "call i32 @oreslang_source_actor_discard_send_future_checked(" in line]
-                discard_calls = [line for line in guest.stdout.splitlines()
-                                 if "call i32 @oreslang_source_actor_discard_send_future_checked(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected direct send_async to checked-submit one scheduler Future", start_calls)
                 assert "call ptr @oreslang_source_actor_send_async_start(" not in guest.stdout, (
@@ -275,6 +273,8 @@ def main():
                                       if "call void @oreslang_source_actor_request_stop(" in line]
                 fail_cleanup_calls = [line for line in guest.stdout.splitlines()
                                       if "call void @oreslang_source_actor_stop(" in line]
+                discard_calls = [line for line in guest.stdout.splitlines()
+                                 if "call i32 @oreslang_source_actor_discard_send_future_checked(" in line]
                 assert len(start_calls) == 1, (
                     name, "expected one eager checked send_async Future submission", start_calls)
                 assert "call ptr @oreslang_source_actor_send_async_start(" not in guest.stdout, (
