@@ -349,8 +349,43 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+enum class SourceExportScope { File, Package, Public };
+enum class SourceExportKind {
+    Untyped, Module, Actor, Class, Fnc, Routine, Interface, Contract,
+    Trait, Type, Const, Val, Let, Symbol, Model
+};
+
+struct SourceExportItem {
+    std::string local_name;
+    std::string external_name; // empty means local spelling
+    bool symbol_literal = false;
+    bool self_identity = false;
+};
+
+struct SourceExportDecl {
+    std::string owner_namespace; // "$root" or wrapped module name
+    SourceExportScope scope = SourceExportScope::Public;
+    SourceExportKind kind = SourceExportKind::Untyped;
+    std::vector<SourceExportItem> items;
+    std::size_t offset = 0;
+};
+
+struct SourceExportBinding {
+    enum class Origin { ImplicitPub, ExplicitExport };
+    std::string owner_namespace;
+    std::string local_symbol_id;
+    SourceExportKind local_kind = SourceExportKind::Untyped;
+    std::string local_name;
+    std::string external_name;
+    SourceExportScope scope = SourceExportScope::Public;
+    Origin origin = Origin::ExplicitExport;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
+    std::vector<SourceExportDecl> source_exports;
+    std::vector<SourceExportBinding> source_export_bindings;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string namespace_name;
     std::string module;
