@@ -1467,7 +1467,30 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_send_async_real_mailbox_admission
         PROPERTIES TIMEOUT 45)
 
-
+    add_executable(oreslang-source-actor-select-send2-admission-test
+        tests/source_actor_select_send2_admission_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-select-send2-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-select-send2-admission-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-select-send2-admission-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-select-send2-admission-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-select-send2-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_select_send2_real_mailbox_admission
+        COMMAND oreslang-source-actor-select-send2-admission-test)
+    set_tests_properties(source_actor_select_send2_real_mailbox_admission
+        PROPERTIES TIMEOUT 45)
 
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
