@@ -7,11 +7,22 @@ typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 extern "C" {
 #endif
 typedef struct OresNativeActorScheduler OresNativeActorScheduler;
+/* Thread-local trusted observation across ALL schedulers/domains. External
+ * host waits must reject a carrier even when it belongs to another scheduler. */
+int ores_native_actor_scheduler_is_carrier_thread(void);
 typedef struct {
     uint64_t scheduler_domain;
     uint64_t actor_slot;
     uint64_t generation;
 } OresNativeActorRef;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Snapshot under the scheduler mutex. Nonzero proves wait_send has reached
+ * the FULL -> cond_wait registration boundary, not merely entered its caller. */
+size_t ores_native_actor_scheduler_test_waiting_sends(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+size_t ores_native_actor_scheduler_test_pending_async_sends(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+#endif
 
 /* Native scheduler-owned continuation wake escrow. Each producer actor has a
  * finite, preallocated pool, separate from DATA and supervisor CONTROL. This
@@ -98,6 +109,55 @@ typedef enum {
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+/* Trusted external-host backpressure bridge. MAILBOX_FULL is waited out under
+ * the scheduler mutex and retried at the exact credit-release linearization.
+ * Never call from one of this scheduler's actor carriers. Unlike repeated
+ * try_send(), transient FULL observations are not counted as rejected sends. */
+OresNativeSendStatus ores_native_actor_scheduler_wait_send(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
+
+/*
+ * Bounded nonblocking send_async Future substrate.
+ *
+ * submit_async begins admission immediately without parking a host thread.
+ * Only MAILBOX_FULL becomes asynchronous. INVALID_REF, TERMINATED and
+ * RESOURCE_EXHAUSTED propagate from submit_async immediately with a zero
+ * ticket and do not consume a Future descriptor. If target credit alone is
+ * unavailable, one generation-fenced descriptor is queued in target-local
+ * FIFO order. Physical credit release services pending async sends under the
+ * same scheduler mutex before a racing synchronous sender can steal that slot.
+ * STOP fails still-pending futures; already READY futures remain READY because
+ * mailbox admission was irrevocable.
+ */
+enum { ORES_NATIVE_ASYNC_SENDS_PER_ACTOR = 256 };
+typedef enum {
+    ORES_NATIVE_ASYNC_SEND_INVALID = 0,
+    ORES_NATIVE_ASYNC_SEND_PENDING = 1,
+    ORES_NATIVE_ASYNC_SEND_READY = 2,
+    ORES_NATIVE_ASYNC_SEND_FAILED = 3,
+    ORES_NATIVE_ASYNC_SEND_CANCELLED = 4
+} OresNativeAsyncSendState;
+typedef struct {
+    OresNativeActorRef target;
+    uint64_t slot;
+    uint64_t generation;
+} OresNativeAsyncSendTicket;
+OresNativeSendStatus ores_native_actor_scheduler_submit_async(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef target,
+    uint64_t payload, OresNativeAsyncSendTicket* out);
+int ores_native_actor_scheduler_async_send_status(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
+    OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
+/* External-host wait only. The Future itself progresses without this wait. */
+int ores_native_actor_scheduler_await_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
+    OresNativeSendStatus* outcome_out);
+int ores_native_actor_scheduler_cancel_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
+/* Release the Future descriptor after READY/FAILED/CANCELLED observation. */
+int ores_native_actor_scheduler_release_async_send(
+    OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
+
 /* Compatibility API: 1 iff accepted, 0 otherwise. Prefer typed try_send. */
 int ores_native_actor_scheduler_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
@@ -118,9 +178,9 @@ int ores_native_actor_scheduler_terminal_state(
     OresNativeActorScheduler* scheduler,
     OresNativeActorRef actor,
     OresNativeActorTerminalState* output);
-/* Trusted external supervisor barrier: block only the host caller until
- * the selected stopped actor drains. This is NOT a guest await/Future;
- * never invoke it on a scheduler worker/actor carrier. */
+/* Trusted external supervisor barrier: block only a non-carrier host caller
+ * until the selected stopped actor drains. This is NOT a guest await/Future;
+ * carriers of ANY scheduler are rejected, including foreign schedulers. */
 int ores_native_actor_scheduler_wait_done(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Handler runs on the scheduler worker pool, never on the submitting carrier.
@@ -176,6 +236,13 @@ int ores_native_actor_scheduler_transfer_wake(
 /* Cancellation succeeds only while still RESERVED (not transferred). */
 int ores_native_actor_scheduler_cancel_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
+/* Terminalize a still-RESERVED async-send continuation as FAILED without
+ * requiring the target actor to remain live. This is the target STOP/seal
+ * path: no mailbox credit transferred, so admission remains rejected, but a
+ * still-live producer must resume cooperatively with the failure. Racing
+ * cancel/transfer/failure has exactly one winner. */
+OresNativeWakePublishStatus ores_native_actor_scheduler_fail_reserved_wake(
+    OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
 /* Explicit rollback for an aborted transfer before envelope publication.
  * This is NOT late producer cancellation and must settle the send as failed. */
 int ores_native_actor_scheduler_abort_transferred_wake(
@@ -214,7 +281,8 @@ int ores_native_actor_scheduler_submit(
     OresNativeActorScheduler* scheduler, size_t actor_index, uint64_t payload);
 /* No new tasks after retirement, but previously accepted tasks drain. */
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
-/* Wait for every accepted callback to complete; may not be called from its worker. */
+/* Wait for every accepted callback to complete; external host threads only.
+ * Any scheduler's actor carrier is rejected to prevent cross-pool deadlocks. */
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
@@ -234,6 +302,7 @@ int ores_native_actor_scheduler_current_execution_context(
  * Caller must fence the scheduler's lifetime. */
 int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* scheduler);
 /* Requires retirement, drained tasks AND caller-owned submitter fence.
+ * May join OS workers: no scheduler's actor carrier may invoke this API.
  * Returns 0 when not ready; after success the pointer is invalid.
  */
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* scheduler);
