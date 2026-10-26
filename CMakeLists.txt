@@ -1755,6 +1755,28 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-managed-ref-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_managed_reference_width_and_dod_layout
         COMMAND oreslang-managed-ref-test)
+
+    # Run both physical-reference defaults in every build configuration, and
+    # force NDEBUG variants even when CI configures a Debug build. The runtime
+    # assertions must survive Release optimizations and keep testing native64
+    # fallback independently of compressed32.
+    foreach(ref_variant IN ITEMS native64 ndebug native64_ndebug)
+        set(ref_target "oreslang-managed-ref-test-${ref_variant}")
+        add_executable(${ref_target} tests/managed_ref_test.cpp)
+        target_include_directories(${ref_target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(${ref_target} PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        if(ref_variant MATCHES "native64")
+            target_compile_definitions(${ref_target} PRIVATE
+                ORES_MANAGED_REF_DEFAULT_NATIVE64=1)
+        endif()
+        if(ref_variant MATCHES "ndebug")
+            target_compile_definitions(${ref_target} PRIVATE NDEBUG=1)
+        endif()
+        add_test(NAME native_managed_reference_${ref_variant}_contract
+            COMMAND ${ref_target})
+    endforeach()
     # Nonescaping int loans are supported at checked call boundaries only;
     # a reference still cannot be returned or stored, or cross suspension.
     oreslang_contract_test(reject_rt_borrow unsupported-rt-borrow.ores --diagnostic "borrowed reference may only be passed")
