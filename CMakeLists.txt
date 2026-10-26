@@ -1347,7 +1347,13 @@ if(BUILD_TESTING)
     oreslang_contract_test(source_actor_typed_ready_future_continuation_ir
         source-actor-future-void-ready.ores --ir "ready_continuation")
     oreslang_contract_test(source_actor_typed_ready_future_runtime_ir
-        source-actor-future-void-ready.ores --ir "oreslang_source_actor_await_ready")
+        source-actor-future-void-ready.ores --ir "call i32 @oreslang_source_actor_await_ready_effect(")
+    oreslang_contract_test(source_actor_ready_effect_os_boundary_ir
+        source-actor-await-ready.ores --ir "main.ready.throw")
+    oreslang_contract_test(source_actor_direct_ready_effect_os_boundary_ir
+        source-actor-await-worker.ores --ir "oreslang_source_actor_unhandled_ready_effect")
+    oreslang_contract_test(source_actor_token_ready_effect_os_boundary_ir
+        source-actor-future-void-ready.ores --ir "main.ready.status")
     oreslang_contract_test(reject_source_actor_unused_ready_future
         source-actor-future-void-unused.ores
         --diagnostic "Future<void> readiness token must be awaited exactly once")

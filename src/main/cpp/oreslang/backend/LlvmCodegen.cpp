@@ -523,6 +523,9 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::Call: {
             llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            if (callee->hasFnAttribute("oreslang.ready.effect"))
+                throw std::runtime_error(
+                    "readiness main is an OS entrypoint; guest calls require typed effect propagation");
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
                 ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
@@ -894,8 +897,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             "oreslang_source_actor_request_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceAwaitReady = module.getOrInsertFunction(
-            "oreslang_source_actor_await_ready",
-            llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+            "oreslang_source_actor_await_ready_effect",
+            llvm::FunctionType::get(llvm::Type::getInt32Ty(context),
+                {native_ptr, native_ptr, i64, native_pointer_type(context, i64)}, false));
         sourceAwaitDone = module.getOrInsertFunction(
             "oreslang_source_actor_await_done",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
@@ -976,15 +980,26 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         const bool owning = class_owns_arrays(fn.return_class);
         owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
+        if (!fn.ready_await_actor.empty()) {
+            if (!native_main || fn.name != "main" || !fn.parameters.empty() ||
+                    fn.returns_void || owning)
+                throw std::runtime_error("typed readiness effect requires scalar zero-argument native main");
+            argument_types.push_back(native_pointer_type(context, llvm::Type::getInt32Ty(context)));
+        }
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, fn.native_internal ? llvm::Function::InternalLinkage : llvm::Function::ExternalLinkage, symbol, module);
+        if (!fn.ready_await_actor.empty()) {
+            declaration->addFnAttr("oreslang.ready.effect");
+            declaration->setLinkage(llvm::Function::InternalLinkage);
+        }
         // Forward references must already expose parameter labels.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
             if (label_index < fn.parameters.size()) formal.setName(fn.parameters[label_index].name);
+            else if (!fn.ready_await_actor.empty()) formal.setName("$ready.effect");
             else if (label_index < fn.parameters.size() + hidden.size())
                 formal.setName("$region." + fn.parameters[hidden.at(label_index - fn.parameters.size())].name);
             else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
@@ -1750,16 +1765,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
 
             llvm::Value* continuation_ptr =
                 builder.CreatePointerCast(resume, native_ptr);
-            awaited_result = builder.CreateCall(
+            auto* ready_result = builder.CreateAlloca(i64, nullptr, "future.await.result.slot");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), ready_result);
+            auto* ready_effect = builder.CreateCall(
                 sourceAwaitReady,
                 {
                     actorRefs.at(fn.ready_await_actor),
                     continuation_ptr,
                     llvm::ConstantInt::get(
                         llvm::cast<llvm::IntegerType>(i64),
-                        static_cast<std::uint64_t>(fn.ready_await_offset))
+                        static_cast<std::uint64_t>(fn.ready_await_offset)),
+                    ready_result
                 },
-                "future.await.result");
+                "future.await.effect");
+            builder.CreateStore(ready_effect, &*function->arg_begin());
+            awaited_result = builder.CreateLoad(i64, ready_result, "future.await.result");
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Stop)
@@ -2479,7 +2499,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.CreateRet(llvm::ConstantInt::get(i32, 1));
             builder.SetInsertPoint(ready);
         }
-        llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* result = nullptr;
+        if (!main_it->ready_await_actor.empty()) {
+            auto* effect = builder.CreateAlloca(i32, nullptr, "main.ready.effect");
+            builder.CreateStore(llvm::ConstantInt::get(i32, 0), effect);
+            result = builder.CreateCall(guest, {effect});
+            auto* status = builder.CreateLoad(i32, effect, "main.ready.status");
+            auto* returned = llvm::BasicBlock::Create(context, "main.ready.return", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "main.ready.throw", host_main);
+            builder.CreateCondBr(builder.CreateICmpEQ(status, llvm::ConstantInt::get(i32, 0)),
+                returned, failed);
+            builder.SetInsertPoint(failed);
+            auto report = module.getOrInsertFunction("oreslang_source_actor_unhandled_ready_effect",
+                llvm::FunctionType::get(i32, {i32}, false));
+            builder.CreateRet(builder.CreateCall(report, {status}));
+            builder.SetInsertPoint(returned);
+        } else result = builder.CreateCall(guest);
         llvm::Value* records_ok = record_runtime
             ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);

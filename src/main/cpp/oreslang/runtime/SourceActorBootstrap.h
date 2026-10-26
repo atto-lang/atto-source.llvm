@@ -78,15 +78,30 @@ int64_t oreslang_source_actor_await_ready(
     OresSourceActorContinuation continuation,
     uint64_t source_token);
 
-/* Host/runtime projection of the same readiness observer. Returns READY or
- * TERMINATED_BEFORE_READY; the continuation runs only on READY. The compiler
- * wrapper above remains fail-closed until typed ActorTerminated propagation is
- * lowered for source await. */
+/* Host/runtime startup-state observer. Returns READY or TERMINATED_BEFORE_READY;
+ * the continuation runs only on READY. The legacy wrapper above remains
+ * fail-closed; new source lowering uses the separate effect ABI below. */
 int oreslang_source_actor_await_ready_checked(
     void* actor,
     OresSourceActorContinuation continuation,
     uint64_t source_token,
     int64_t* result);
+
+/* Narrow compiler effect ABI, distinct from the startup state enum. The
+ * caller owns result storage and must ignore it on a non-return effect.
+ * No C++ exception, longjmp, guest catch/trap or general unwind is involved.
+ * The trusted caller must still stop/join the actor on either outcome. */
+enum {
+    ORES_SOURCE_READY_EFFECT_RETURN = 0,
+    ORES_SOURCE_READY_EFFECT_ACTOR_TERMINATED = 1
+};
+int32_t oreslang_source_actor_await_ready_effect(
+    void* actor,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+/* Called only at the OS entry boundary after actor cleanup. */
+int32_t oreslang_source_actor_unhandled_ready_effect(int32_t effect);
 
 /*
  * Restricted compiler-generated terminal await slice:
