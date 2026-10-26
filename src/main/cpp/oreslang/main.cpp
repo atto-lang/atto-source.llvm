@@ -169,6 +169,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_static_i64_select = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -229,6 +230,11 @@ int main(int argc, char** argv) {
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
+        } else if (arg == "--experimental-static-i64-select") {
+            if (experimental_static_i64_select) {
+                std::cerr << "duplicate static i64 select option\n"; return 2;
+            }
+            experimental_static_i64_select = true;
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -288,7 +294,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-static-i64-select] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -308,6 +314,12 @@ int main(int argc, char** argv) {
         }
         if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
+        if (experimental_static_i64_select &&
+                (wasm32_target || cortex_m_target || experimental_owned_int ||
+                 experimental_rt_scalar_loop || native_hard_rt_profile ||
+                 tree_shake || !tree_shake_roots.empty()))
+            throw std::runtime_error(
+                "static i64 select experiment requires ordinary host codegen with no other lowering experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
         if (native_hard_rt_profile && (wasm32_target || cortex_m_target))
@@ -315,8 +327,10 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
-        auto ast = oreslang::load_native_program(path, text, source_identity, experimental_owned_int,
-                                                 experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target);
+        auto ast = oreslang::load_native_program(
+            path, text, source_identity, experimental_owned_int,
+            experimental_rt_scalar_loop, experimental_static_i64_select,
+            !wasm32_target && !cortex_m_target);
 
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
@@ -363,7 +377,7 @@ int main(int argc, char** argv) {
             // Never lower native actors, heap regions or unverified host calls
             // merely because they happen to compile into some LLVM IR.
             if (experimental_owned_int || experimental_rt_scalar_loop ||
-                !ast.module.empty() || !ast.classes.empty() ||
+                experimental_static_i64_select || !ast.module.empty() || !ast.classes.empty() ||
                 !ast.cooperative_loops.empty() || ast.functions.empty())
                 throw std::runtime_error("cortex-m target supports only freestanding scalar functions");
             constexpr std::size_t max_functions = 64;
