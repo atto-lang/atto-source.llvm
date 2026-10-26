@@ -5046,6 +5046,93 @@ void add_source_binding(
     program.source_exports.push_back(std::move(binding));
 }
 
+
+int source_export_scope_rank(SourceExportScope scope) {
+    switch (scope) {
+        case SourceExportScope::File: return 0;
+        case SourceExportScope::Package: return 1;
+        case SourceExportScope::Public: return 2;
+    }
+    throw std::runtime_error("unreachable source export scope");
+}
+
+bool builtin_source_signature_type(std::string_view name) {
+    return name.empty() || name == "int" || name == "bool" ||
+           name == "string" || name == "String" || name == "void" ||
+           name == "Option" || name == "Result";
+}
+
+void validate_source_export_api_leaks(const Program& program) {
+    std::unordered_map<std::string, int> visible_type_scope;
+    for (const auto& binding : program.source_exports) {
+        if (binding.local_kind != SourceExportKind::Type &&
+            binding.local_kind != SourceExportKind::Class &&
+            binding.local_kind != SourceExportKind::Trait &&
+            binding.local_kind != SourceExportKind::Interface &&
+            binding.local_kind != SourceExportKind::Contract &&
+            binding.local_kind != SourceExportKind::Actor)
+            continue;
+        const std::string key =
+            binding.owner_namespace_id + "\x1f" + binding.local_name;
+        auto [it, inserted] = visible_type_scope.emplace(
+            key, source_export_scope_rank(binding.scope));
+        if (!inserted)
+            it->second = std::max(
+                it->second, source_export_scope_rank(binding.scope));
+    }
+
+    const std::string declaration_owner =
+        source_export_owner_id(program, program.module);
+    auto local_families = source_families_for_owner(program, program.module);
+    std::unordered_set<std::string> local_type_names;
+    for (const auto& [key, family] : local_families) {
+        if (family.kind == SourceExportKind::Type ||
+            family.kind == SourceExportKind::Class ||
+            family.kind == SourceExportKind::Trait ||
+            family.kind == SourceExportKind::Interface ||
+            family.kind == SourceExportKind::Contract ||
+            family.kind == SourceExportKind::Actor)
+            local_type_names.insert(family.name);
+    }
+
+    auto require_visible = [&](std::string_view type_name,
+                               SourceExportScope required_scope,
+                               std::string_view exported_name) {
+        if (builtin_source_signature_type(type_name) ||
+            !local_type_names.count(std::string(type_name)))
+            return;
+        const std::string key =
+            declaration_owner + "\x1f" + std::string(type_name);
+        const auto found = visible_type_scope.find(key);
+        const int available =
+            found == visible_type_scope.end() ? -1 : found->second;
+        if (available < source_export_scope_rank(required_scope)) {
+            throw std::runtime_error(
+                "EXPORT_API_LEAK: export '" + std::string(exported_name) +
+                "' exposes narrower local type '" + std::string(type_name) + "'");
+        }
+    };
+
+    for (const auto& binding : program.source_exports) {
+        if (binding.owner_namespace_id != declaration_owner) continue;
+        if (binding.local_kind != SourceExportKind::Fnc &&
+            binding.local_kind != SourceExportKind::Routine)
+            continue;
+        for (const auto& fn : program.functions) {
+            if (!fn.method_owner.empty() || fn.native_internal ||
+                fn.name != binding.local_name ||
+                (fn.source_routine ? SourceExportKind::Routine : SourceExportKind::Fnc)
+                    != binding.local_kind)
+                continue;
+            for (const auto& parameter : fn.parameters)
+                require_visible(
+                    parameter.source_type_name, binding.scope, binding.external_name);
+            require_visible(
+                fn.source_return_type_name, binding.scope, binding.external_name);
+        }
+    }
+}
+
 void resolve_source_exports(Program& program) {
     program.source_exports.clear();
 
@@ -5134,6 +5221,8 @@ void resolve_source_exports(Program& program) {
             }
         }
     }
+
+    validate_source_export_api_leaks(program);
 
     std::sort(program.source_exports.begin(), program.source_exports.end(),
         [](const SourceExportBinding& a, const SourceExportBinding& b) {
