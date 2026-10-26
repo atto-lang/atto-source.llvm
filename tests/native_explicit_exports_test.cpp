@@ -145,6 +145,45 @@ void syntax_matrix() {
                  "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
 }
 
+void local_scope_rejections() {
+    rejects_code([&] {
+        (void)parse(R"(
+            fnc bad(): int {
+              export X;
+              return 1;
+            }
+        )");
+    }, "EXPORT_LOCAL_SCOPE");
+
+    rejects_code([&] {
+        (void)parse(R"(
+            define class Box as
+              export X;
+            end
+        )");
+    }, "EXPORT_LOCAL_SCOPE");
+
+    rejects_code([&] {
+        (void)parse(R"(
+            define actor Worker as
+              let value: int = 0;
+              pub fnc on_message(int message): int {
+                export X;
+                return message;
+              }
+            end
+        )");
+    }, "EXPORT_LOCAL_SCOPE");
+
+    rejects_code([&] {
+        (void)parse(R"(
+            define interface Api as
+              export X;
+            end
+        )");
+    }, "EXPORT_LOCAL_SCOPE");
+}
+
 void semantic_matrix() {
     check(has_binding(parse(R"(
         export class X;
@@ -433,6 +472,7 @@ void linkage_separation() {
 int main() {
     try {
         syntax_matrix();
+        local_scope_rejections();
         semantic_matrix();
         linkage_separation();
         module_loader_uses_source_bindings_not_native_linkage();
