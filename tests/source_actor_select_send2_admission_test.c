@@ -143,9 +143,13 @@ int main(void) {
         "SOURCE_SELECT_SEND2_RUNTIME_PASS winner=1 loser_payload=0 "
         "root_continuation=1 physical_cleanup=1\n");
 
-    /* Keep four actors live in one runtime so the FAIR cursor survives the
-     * first pair's finalization. With both arms immediately admissible, the
-     * first select starts at arm 0 and the next starts at arm 1. */
+    /*
+     * FAIR state is source-site-local, not VM-global. Keep six actors live so
+     * pair finalization cannot reset the group while we prove:
+     *   site A first invocation -> arm 0
+     *   site B first invocation -> arm 0 (independent)
+     *   site A second invocation -> arm 1 (same-site rotation)
+     */
     atomic_init(&fair_continuations, 0u);
     void* a0 = oreslang_source_actor_spawn(
         init_actor, passthrough_message, 1);
@@ -155,11 +159,20 @@ int main(void) {
         init_actor, passthrough_message, 1);
     void* b1 = oreslang_source_actor_spawn(
         init_actor, passthrough_message, 1);
-    CHECK(a0 && a1 && b0 && b1);
-    wait_ready(a0); wait_ready(a1); wait_ready(b0); wait_ready(b1);
+    void* c0 = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    void* c1 = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(a0 && a1 && b0 && b1 && c0 && c1);
+    wait_ready(a0); wait_ready(a1);
+    wait_ready(b0); wait_ready(b1);
+    wait_ready(c0); wait_ready(c1);
+
+    const uint64_t site_a = UINT64_C(0x6e02);
+    const uint64_t site_b = UINT64_C(0x6e03);
 
     CHECK(oreslang_source_actor_detach_select_send2_checked(
-        a0, 1001, a1, 1002, fair_selected, UINT64_C(0x6e02))
+        a0, 1001, a1, 1002, fair_selected, site_a)
         == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
     winner = UINT64_MAX;
     result = 0;
@@ -169,7 +182,17 @@ int main(void) {
     CHECK(result == 40);
 
     CHECK(oreslang_source_actor_detach_select_send2_checked(
-        b0, 1003, b1, 1004, fair_selected, UINT64_C(0x6e03))
+        b0, 1003, b1, 1004, fair_selected, site_b)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    winner = UINT64_MAX;
+    result = 0;
+    CHECK(oreslang_source_actor_wait_detached_select_send2_result(
+        &winner, &result) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(winner == 0);
+    CHECK(result == 40);
+
+    CHECK(oreslang_source_actor_detach_select_send2_checked(
+        c0, 1005, c1, 1006, fair_selected, site_a)
         == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
     winner = UINT64_MAX;
     result = 0;
@@ -178,10 +201,10 @@ int main(void) {
     CHECK(winner == 1);
     CHECK(result == 41);
     CHECK(atomic_load_explicit(
-        &fair_continuations, memory_order_acquire) == 2u);
+        &fair_continuations, memory_order_acquire) == 3u);
 
     fprintf(stderr,
-        "SOURCE_SELECT_SEND2_FAIR_PASS immediate_winners=0,1 "
-        "round_robin=1\n");
+        "SOURCE_SELECT_SEND2_FAIR_PASS site_a=0,1 site_b=0 "
+        "source_site_isolation=1\n");
     return 0;
 }
