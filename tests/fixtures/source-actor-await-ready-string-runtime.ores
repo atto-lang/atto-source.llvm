@@ -1,0 +1,18 @@
+fnc helper(): string {
+  return "ready cleanup";
+}
+
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+
+pub fnc main(): int throws ActorTerminated {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await worker.get_ready();
+  stop worker;
+  return 43;
+}
