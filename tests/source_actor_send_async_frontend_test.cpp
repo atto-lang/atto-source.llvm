@@ -44,6 +44,11 @@ int main() {
         CHECK(main.actor_sends[i].reference == "worker");
     }
     CHECK(main.actor_actions[3].kind == oreslang::ActorAction::Kind::Stop);
+    CHECK(main.await_sites.size() == 1);
+    CHECK(main.await_sites[0].kind
+        == oreslang::NativeAwaitSite::Kind::DirectSendAdmission);
+    CHECK(main.await_sites[0].action_index == 0);
+    CHECK(main.await_sites[0].actor == "worker");
 
     rejects(program("worker.send_async(1); stop worker; return 43;"),
             "native send_async statement must be awaited directly or bound to Future<void>");
@@ -69,6 +74,11 @@ int main() {
     CHECK(stored_main.actor_actions.size() == 2);
     CHECK(stored_main.actor_actions[0].kind == oreslang::ActorAction::Kind::Send);
     CHECK(stored_main.actor_actions[1].kind == oreslang::ActorAction::Kind::Stop);
+    CHECK(stored_main.await_sites.size() == 1);
+    CHECK(stored_main.await_sites[0].kind
+        == oreslang::NativeAwaitSite::Kind::StoredSendAdmission);
+    CHECK(stored_main.await_sites[0].action_index == 0);
+    CHECK(stored_main.await_sites[0].actor == "worker");
 
     auto stored_local = oreslang::parse_program(program(
         "const Future<void> pending = worker.send_async(1); "
@@ -110,6 +120,17 @@ int main() {
     CHECK(two_pc_main.actor_sends[2].await_admission);
     CHECK(two_pc_main.actor_actions[3].kind
         == oreslang::ActorAction::Kind::Stop);
+    CHECK(two_pc_main.await_sites.size() == 2);
+    CHECK(two_pc_main.await_sites[0].kind
+        == oreslang::NativeAwaitSite::Kind::DirectSendAdmission);
+    CHECK(two_pc_main.await_sites[1].kind
+        == oreslang::NativeAwaitSite::Kind::DirectSendAdmission);
+    CHECK(two_pc_main.await_sites[0].action_index == 0);
+    CHECK(two_pc_main.await_sites[1].action_index == 2);
+    CHECK(two_pc_main.await_sites[0].actor == "worker");
+    CHECK(two_pc_main.await_sites[1].actor == "worker");
+    CHECK(two_pc_main.await_sites[0].offset
+        < two_pc_main.await_sites[1].offset);
 
     rejects(program("const Future<void> pending = worker.send_async(1); "
                     "stop worker; return 43;"),
