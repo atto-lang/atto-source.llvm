@@ -28,6 +28,9 @@ typedef struct {
     OresNativeAsyncSendTicket ticket;
     uint64_t generation;
     int live;
+    /* Under group.mutex: exactly one host observer OR canceller owns this
+     * one-shot wrapper while scheduler calls run outside that mutex. */
+    int consuming;
 } SourceSendFuture;
 
 struct SourceActor {
@@ -922,6 +925,7 @@ int oreslang_source_actor_send_async_start_checked(
     future->actor = instance;
     future->ticket = ticket;
     future->live = 1;
+    future->consuming = 0;
     ++instance->send_future_live;
     *future_out = future;
     group_unlock();
@@ -940,7 +944,7 @@ void* oreslang_source_actor_send_async_start(
 int oreslang_source_actor_await_send_future_checked(void* opaque_future) {
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
     group_lock();
-    if (!source_send_future_valid_locked(future)) {
+    if (!source_send_future_valid_locked(future) || future->consuming) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
     }
@@ -948,6 +952,10 @@ int oreslang_source_actor_await_send_future_checked(void* opaque_future) {
         group_unlock();
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
     }
+    /* Reserve exclusive terminal ownership before dropping the group lock.
+     * Without this claim, concurrent cancel could release the descriptor
+     * while await is sleeping and trigger an abort in the host bridge. */
+    future->consuming = 1;
     SourceActor* actor = future->actor;
     OresNativeVM* vm = group.vm;
     const OresNativeAsyncSendTicket ticket = future->ticket;
@@ -992,7 +1000,11 @@ int oreslang_source_actor_await_send_future_continuation_checked(
     ensure(pthread_cond_init(&frame.completed, NULL) == 0);
 
     group_lock();
-    ensure(source_send_future_valid_locked(future));
+    if (!source_send_future_valid_locked(future) || future->consuming) {
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
     SourceActor* actor = future->actor;
     OresNativeVM* vm = group.vm;
     const OresNativeAsyncSendTicket ticket = future->ticket;
@@ -1007,6 +1019,7 @@ int oreslang_source_actor_await_send_future_continuation_checked(
         group.root_ref,
         SOURCE_ROOT_CONTROL_SEND_RESUME);
     ensure(frame.resume_future != NULL);
+    future->consuming = 1;
     group.pending_send = &frame;
 
     /*
@@ -1092,18 +1105,27 @@ int64_t oreslang_source_actor_await_send_future(
 int oreslang_source_actor_cancel_send_future(void* opaque_future) {
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
     group_lock();
-    if (!source_send_future_valid_locked(future)) {
+    if (!source_send_future_valid_locked(future) || future->consuming) {
         group_unlock();
         return 0;
     }
+    /* Cancellation and observation are mutually exclusive even while the
+     * scheduler's cancellation API runs outside the source-group lock. */
+    future->consuming = 1;
     SourceActor* actor = future->actor;
     OresNativeVM* vm = group.vm;
     const OresNativeAsyncSendTicket ticket = future->ticket;
     group_unlock();
 
     if (!ores_native_vm_cancel_async_send(
-            vm, ORES_NATIVE_VM_MAIN, ticket))
+            vm, ORES_NATIVE_VM_MAIN, ticket)) {
+        group_lock();
+        ensure(source_send_future_valid_locked(future)
+            && future->consuming && future->actor == actor);
+        future->consuming = 0;
+        group_unlock();
         return 0;
+    }
     ensure(ores_native_vm_release_async_send(
         vm, ORES_NATIVE_VM_MAIN, ticket));
 
