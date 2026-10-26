@@ -15,6 +15,9 @@
 
 namespace oreslang::runtime {
 
+template <typename T>
+class NativeAsyncEnvelopeTxn;
+
 /**
  * Host-runtime-only, independently bounded URGENT/NORMAL/BULK user inbox.
  *
@@ -30,6 +33,7 @@ namespace oreslang::runtime {
  */
 template <typename T>
 class PriorityActorInbox final {
+    struct PreloanedPublicationTag;
 public:
     enum class Lane { Urgent, Normal, Bulk };
     enum class Dispatch { Control, User, Idle, Busy, Retired };
@@ -309,6 +313,24 @@ public:
     }
 
 private:
+    struct PreloanedPublicationTag {
+        PreloanedPublicationTag() = default;
+    };
+    friend class NativeAsyncEnvelopeTxn<T>;
+
+    /**
+     * Friend-only async publication after NativeAsyncEnvelopeTxn already owns
+     * one exact-incarnation resource loan. On success that existing loan moves
+     * into the real envelope; no second retain occurs.
+     */
+    bool offer_owned_preloaned_to(PreloanedPublicationTag,
+                                  const NativeActorRef& target, Lane lane,
+                                  std::unique_ptr<T>& value,
+                                  std::size_t bytes) {
+        AdmissionGuard admission(*this, &target, false);
+        return port(lane).offer_owned(value, bytes);
+    }
+
     // Prevent a send started before bind_target() from publishing into a
     // newly bound actor. Drop the fairness lock BEFORE moving a payload: its
     // user-supplied move constructor may re-enter the inbox. RAII makes all
@@ -317,7 +339,8 @@ private:
         PriorityActorInbox& inbox;
         bool retained = false;
         bool committed = false;
-        AdmissionGuard(PriorityActorInbox& inbox, const NativeActorRef* target)
+        AdmissionGuard(PriorityActorInbox& inbox, const NativeActorRef* target,
+                       bool retain_target_loan = true)
             : inbox(inbox) {
             std::lock_guard<std::mutex> guard(inbox.service_mutex_);
             if (inbox.sealed_)
@@ -325,8 +348,10 @@ private:
             if (target) {
                 if (!inbox.bound_target_ || !inbox.same_target(*target))
                     throw std::logic_error("stale or foreign actor mailbox target");
-                inbox.bound_actor_->retain_resource_loan();
-                retained = true;
+                if (retain_target_loan) {
+                    inbox.bound_actor_->retain_resource_loan();
+                    retained = true;
+                }
             } else if (inbox.bound_target_) {
                 throw std::logic_error("bound actor inbox requires target admission");
             }
