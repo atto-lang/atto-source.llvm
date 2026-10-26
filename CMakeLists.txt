@@ -51,6 +51,7 @@ if(BUILD_TESTING)
     add_executable(oreslang-native-explicit-exports-test
         tests/native_explicit_exports_test.cpp
         src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/ModuleLoader.cpp
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
