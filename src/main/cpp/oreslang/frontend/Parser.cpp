@@ -459,6 +459,10 @@ public:
                 if (exported) fail("duplicate pub modifier");
                 exported = true;
             }
+            if (token_.text == "macro") {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+            }
             if (token_.text == "mtd") {
                 program.functions.push_back(extension_method(exported));
                 continue;
@@ -527,6 +531,10 @@ public:
                     if (public_class) fail("duplicate pub modifier");
                     public_class = true;
                 }
+                if (token_.text == "macro") {
+                    fail("NATIVE_MACRO_EXPANDER_REQUIRED: define macro is compile-time-only; "
+                         "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+                }
                 if (token_.text == "mtd") {
                     program.functions.push_back(extension_method(public_class));
                     continue;
@@ -556,6 +564,9 @@ public:
                 } else fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
+            } else if (token_.kind == Kind::Identifier && peek_next().text == "!") {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
             } else {
                 program.functions.push_back(function());
             }
@@ -2948,6 +2959,10 @@ private:
         else if (sum_variant(token_.text)) { expr->name = token_.text; advance(); }
         else expr->name = identifier();
         if (module_names_.count(expr->name) && accept(".")) expr->name += "." + identifier();
+        if (token_.text == "!") {
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                 "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+        }
         if (generic_call_type_arguments_ahead()) {
             require("<");
             expr->type_arguments_present = true;
@@ -3040,6 +3055,10 @@ private:
                 }
             }
             expr = std::move(field);
+            if (token_.text == "!") {
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
+                     "native expansion must complete before LLVM IR and runtime fallback is forbidden");
+            }
         }
         return expr;
     }
