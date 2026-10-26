@@ -12,6 +12,14 @@ Call-scoped borrows may be used inside a function that returns a plain i64
 value before sending. Direct `rt borrow` as a send payload is forbidden.
 The parser separately validates actor reference identity and send/stop order.
 
+Ownership replay is lexical across the compiler's separate statement and actor-action
+vectors. A send payload that performs `rt take` therefore invalidates its source before
+any later call/write/return is checked. Stored `Future<void> f = actor.send_async(...)`
+is checked at its eager submission offset, not at the later `await f`. Direct-await
+`send_async` uses the same `ActorSend` payload checker as synchronous `send`.
+This ordering rule is required even while the executable send_async subset is i64-only;
+otherwise broadening payload types later would inherit a latent use-after-submit hole.
+
 Checks do **not** enable class-valued actor messages, actor heap migrations,
 `await`, continuation suspension, cancellation or cross-actor loan transfer.
 Those require typed payload layouts, provenance and quiescent cleanup.
