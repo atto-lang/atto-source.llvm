@@ -67,6 +67,11 @@ struct Expression {
     std::vector<std::string> argument_names; // indexed in lexical source order
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
+    // Source provenance for the restricted native value-pipe slice. The
+    // expression is still lowered through the ordinary scalar ABI; these
+    // bits are compiler proof metadata only.
+    bool value_pipe_stage = false;
+    std::size_t value_pipe_stage_count = 0;
     mutable std::string sum_type;
 };
 
@@ -104,6 +109,11 @@ struct LocalBinding {
     std::size_t offset = 0;
     std::string sum_type;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    // First executable Future<int> slice: a compiler-owned ready Future is
+    // represented by the same i64 payload slot plus non-Copy source metadata.
+    // General/pending Future<T> representation remains fail-closed.
+    bool future_int = false;
+    bool await_future = false;
 };
 
 struct ClassField {
@@ -268,6 +278,10 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Restricted ready async producer/stage. Codegen still emits the scalar
+    // body normally; callers treat the result as a compiler-owned ready
+    // Future<int> only after the Future-pipeline proof gate succeeds.
+    bool async_ready = false;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
