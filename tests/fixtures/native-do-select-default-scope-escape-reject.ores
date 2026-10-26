@@ -1,0 +1,9 @@
+// A select-arm local is lexical and must not escape after the selected arm.
+pub fnc main(): int {
+  do select over
+    default: {
+      const int hidden = 44;
+    }
+  end
+  return hidden;
+}

@@ -859,6 +859,14 @@ void validate_i64_ownership(const Program& program) {
                     throw std::runtime_error("ownership violation: conditional CFG predecessor ownership mismatch");
                 state = std::move(yes); return;
             }
+            if (stmt.kind == Statement::Kind::SelectDefault) {
+                // A default-only procedural select has exactly one reachable
+                // arm. Check it as an ordinary lexical scope: moves/borrows
+                // in the selected arm affect the continuation exactly once,
+                // while branch-local owners still end at the arm boundary.
+                scoped_effects(stmt.then_statements, state);
+                return;
+            }
             if (stmt.kind == Statement::Kind::Return) {
                 const Locals before = state;
                 if (stmt.expression) check_value(*stmt.expression, state, functions);

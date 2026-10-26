@@ -1,0 +1,14 @@
+// Nested procedural selects preserve lexical locals and structured return.
+pub fnc main(): int {
+  do select {
+    default: {
+      const int hidden = 44;
+      do select over
+        default: {
+          return hidden;
+        }
+      end
+    }
+  }
+  return 0;
+}

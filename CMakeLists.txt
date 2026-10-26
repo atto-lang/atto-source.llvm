@@ -1945,6 +1945,21 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(reject_static_select_over unsupported-static-select-over.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(reject_nb_select_over unsupported-nb-select-over.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(reject_do_nb_select_over unsupported-do-nb-select-over.ores --diagnostic "native async/channel/select boundary unsupported")
+    oreslang_contract_test(reject_do_select_channel_arm unsupported-do-select-read-over.ores --diagnostic "native do select currently supports only a single default arm")
+    oreslang_contract_test(reject_do_select_default_scope_escape native-do-select-default-scope-escape-reject.ores --diagnostic "unknown parameter 'hidden'")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_do_select_default_over_exec
+            native-do-select-default-over.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_select_default_brace_exec
+            native-do-select-default-brace.ores --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_select_default_continuation_exec
+            native-do-select-default-continuation.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_select_default_nested_exec
+            native-do-select-default-nested.ores --run 44 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
     # SelectPlan factories and persistent case writes must fail closed.

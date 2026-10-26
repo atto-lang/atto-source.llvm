@@ -1,0 +1,9 @@
+// Brace and over/end outer delimiters must lower identically.
+pub fnc main(): int {
+  do select {
+    default: {
+      return 43;
+    }
+  }
+  return 0;
+}

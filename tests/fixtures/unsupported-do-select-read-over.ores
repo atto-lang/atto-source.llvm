@@ -1,0 +1,9 @@
+// Source Channel<T> descriptors are not admitted by the native bootstrap yet.
+pub fnc main(): int {
+  do select over
+    when readch inbox: val value {
+      return value;
+    }
+  end
+  return 0;
+}

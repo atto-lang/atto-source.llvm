@@ -1,0 +1,9 @@
+// Value-producing/static plain select remains fail-closed in native LLVM.
+pub fnc main(): int {
+  select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}
