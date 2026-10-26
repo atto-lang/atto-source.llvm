@@ -111,6 +111,33 @@ int main() {
     const oreslang::types::Capabilities inconsistent{false, true, true};
     REQUIRE(!inconsistent.has(AutoTrait::Share));
 
+    // Every combination of dyn bounds, negative traits, and actor-sharing
+    // domain must preserve Share => Send && Sync. Keep these runtime REQUIREs
+    // active in optimized/NDEBUG test builds.
+    for (int bounds = 0; bounds < 8; ++bounds) {
+        for (int domain = 0; domain < 2; ++domain) {
+            for (int negatives = 0; negatives < 8; ++negatives) {
+                AutoType candidate;
+                candidate.kind = AutoTypeKind::Dyn;
+                candidate.shareable_domain = domain != 0;
+                for (int index = 0; index < 3; ++index) {
+                    AutoTrait trait = index == 0 ? AutoTrait::Send
+                            : (index == 1 ? AutoTrait::Sync : AutoTrait::Share);
+                    if ((bounds & (1 << index)) != 0) candidate.dyn_bounds.insert(trait);
+                    if ((negatives & (1 << index)) != 0) candidate.negative.insert(trait);
+                }
+                const auto caps = oreslang::types::infer_auto_traits(candidate);
+                const bool expected_send = (bounds & 1) != 0 && (negatives & 1) == 0;
+                const bool expected_sync = (bounds & 2) != 0 && (negatives & 2) == 0;
+                const bool expected_share = domain != 0 && (bounds & 4) != 0
+                        && (negatives & 4) == 0 && expected_send && expected_sync;
+                REQUIRE(caps.send == expected_send);
+                REQUIRE(caps.sync == expected_sync);
+                REQUIRE(caps.share == expected_share);
+            }
+        }
+    }
+
     AutoType opaque_nominal;
     opaque_nominal.kind = AutoTypeKind::Nominal;
     const auto opaque_caps = oreslang::types::infer_auto_traits(opaque_nominal);
