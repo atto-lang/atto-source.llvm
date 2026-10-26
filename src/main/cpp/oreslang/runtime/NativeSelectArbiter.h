@@ -33,9 +33,12 @@ typedef enum {
     ORES_NATIVE_SELECT_ARM_EMPTY = 0,
     ORES_NATIVE_SELECT_ARM_REGISTERING = 1,
     ORES_NATIVE_SELECT_ARM_REGISTERED = 2,
-    ORES_NATIVE_SELECT_ARM_COMMITTING = 3,
-    ORES_NATIVE_SELECT_ARM_COMMITTED = 4,
-    ORES_NATIVE_SELECT_ARM_DETACHED = 5
+    /* Ownership transferred to one runtime source implementation. Generic
+     * coordinator commit/detach APIs no longer have authority over this arm. */
+    ORES_NATIVE_SELECT_ARM_BOUND = 3,
+    ORES_NATIVE_SELECT_ARM_COMMITTING = 4,
+    ORES_NATIVE_SELECT_ARM_COMMITTED = 5,
+    ORES_NATIVE_SELECT_ARM_DETACHED = 6
 } OresNativeSelectArmState;
 
 typedef struct OresNativeSelectArbiter {
@@ -251,6 +254,154 @@ static inline int ores_native_select_token_registered(
         &token.arbiter->winner, memory_order_acquire) == 0;
 }
 
+/*
+ * Transfer one registered arm into a source implementation (for example the
+ * scheduler-owned async-send descriptor). After this succeeds, the caller's
+ * copied token is observation-only: generic try_commit()/detach() reject it.
+ *
+ * The source must use the BOUND-only helpers below. This prevents a coordinator
+ * or stale helper from declaring a selectable send the winner before the
+ * source's real irreversible commit point (mailbox-credit publication).
+ */
+static inline int ores_native_select_bind_source(
+        OresNativeSelectToken token) {
+    if (!token.arbiter || !token.selection_generation
+            || !token.arm_generation
+            || atomic_load_explicit(
+                &token.arbiter->generation, memory_order_acquire)
+                != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
+            || atomic_load_explicit(
+                &token.arbiter->arms[token.arm].generation,
+                memory_order_acquire) != token.arm_generation)
+        return 0;
+
+    unsigned expected = ORES_NATIVE_SELECT_ARM_REGISTERED;
+    if (!atomic_compare_exchange_strong_explicit(
+            &token.arbiter->arms[token.arm].state,
+            &expected,
+            ORES_NATIVE_SELECT_ARM_BOUND,
+            memory_order_acq_rel,
+            memory_order_acquire))
+        return 0;
+
+    /* A winner/seal can race the handoff. If it did, retire this token here so
+     * the source never publishes work for a selection it no longer owns. */
+    if (atomic_load_explicit(
+            &token.arbiter->winner, memory_order_acquire) != 0
+            || atomic_load_explicit(
+                &token.arbiter->generation, memory_order_acquire)
+                != token.selection_generation) {
+        unsigned bound = ORES_NATIVE_SELECT_ARM_BOUND;
+        if (atomic_compare_exchange_strong_explicit(
+                &token.arbiter->arms[token.arm].state,
+                &bound,
+                ORES_NATIVE_SELECT_ARM_DETACHED,
+                memory_order_acq_rel,
+                memory_order_acquire))
+            atomic_fetch_sub_explicit(
+                &token.arbiter->active_tokens, (size_t)1,
+                memory_order_acq_rel);
+        return 0;
+    }
+    return 1;
+}
+
+static inline int ores_native_select_token_bound(
+        OresNativeSelectToken token) {
+    if (!token.arbiter || !token.selection_generation
+            || !token.arm_generation
+            || atomic_load_explicit(
+                &token.arbiter->generation, memory_order_acquire)
+                != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
+            || atomic_load_explicit(
+                &token.arbiter->arms[token.arm].generation,
+                memory_order_acquire) != token.arm_generation
+            || atomic_load_explicit(
+                &token.arbiter->arms[token.arm].state,
+                memory_order_acquire) != ORES_NATIVE_SELECT_ARM_BOUND)
+        return 0;
+    return atomic_load_explicit(
+        &token.arbiter->winner, memory_order_acquire) == 0;
+}
+
+static inline OresNativeSelectCommitResult
+ores_native_select_try_commit_bound(OresNativeSelectToken token) {
+    if (!token.arbiter || !token.selection_generation
+            || !token.arm_generation
+            || atomic_load_explicit(
+                &token.arbiter->generation, memory_order_acquire)
+                != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
+            || atomic_load_explicit(
+                &token.arbiter->arms[token.arm].generation,
+                memory_order_acquire) != token.arm_generation)
+        return ORES_NATIVE_SELECT_INVALID;
+
+    unsigned expected = ORES_NATIVE_SELECT_ARM_BOUND;
+    if (!atomic_compare_exchange_strong_explicit(
+            &token.arbiter->arms[token.arm].state,
+            &expected,
+            ORES_NATIVE_SELECT_ARM_COMMITTING,
+            memory_order_acq_rel,
+            memory_order_acquire))
+        return ORES_NATIVE_SELECT_INVALID;
+
+    uint_fast64_t winner = 0;
+    const uint_fast64_t encoded = token.arm + UINT64_C(1);
+    if (atomic_compare_exchange_strong_explicit(
+            &token.arbiter->winner,
+            &winner,
+            encoded,
+            memory_order_acq_rel,
+            memory_order_acquire)) {
+        atomic_store_explicit(
+            &token.arbiter->arms[token.arm].state,
+            ORES_NATIVE_SELECT_ARM_COMMITTED,
+            memory_order_release);
+        atomic_fetch_sub_explicit(
+            &token.arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+        return ORES_NATIVE_SELECT_WON;
+    }
+
+    atomic_store_explicit(
+        &token.arbiter->arms[token.arm].state,
+        ORES_NATIVE_SELECT_ARM_DETACHED,
+        memory_order_release);
+    atomic_fetch_sub_explicit(
+        &token.arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+    return winner == ORES_NATIVE_SELECT_WINNER_SEALED
+            || winner == ORES_NATIVE_SELECT_WINNER_REARMING
+        ? ORES_NATIVE_SELECT_SEALED
+        : ORES_NATIVE_SELECT_LOST;
+}
+
+static inline int ores_native_select_detach_bound(
+        OresNativeSelectToken token) {
+    if (!token.arbiter || !token.selection_generation
+            || !token.arm_generation
+            || atomic_load_explicit(
+                &token.arbiter->generation, memory_order_acquire)
+                != token.selection_generation
+            || token.arm >= token.arbiter->arm_count
+            || atomic_load_explicit(
+                &token.arbiter->arms[token.arm].generation,
+                memory_order_acquire) != token.arm_generation)
+        return 0;
+    unsigned expected = ORES_NATIVE_SELECT_ARM_BOUND;
+    if (!atomic_compare_exchange_strong_explicit(
+            &token.arbiter->arms[token.arm].state,
+            &expected,
+            ORES_NATIVE_SELECT_ARM_DETACHED,
+            memory_order_acq_rel,
+            memory_order_acquire))
+        return 0;
+    atomic_fetch_sub_explicit(
+        &token.arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+    return 1;
+}
+
 static inline OresNativeSelectCommitResult ores_native_select_try_commit(
         OresNativeSelectToken token) {
     if (!token.arbiter || !token.selection_generation
@@ -337,6 +488,17 @@ static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
         memory_order_acquire);
     for (size_t i = 0; i < arbiter->arm_count; ++i) {
         unsigned state = ORES_NATIVE_SELECT_ARM_REGISTERED;
+        if (atomic_compare_exchange_strong_explicit(
+                &arbiter->arms[i].state,
+                &state,
+                ORES_NATIVE_SELECT_ARM_DETACHED,
+                memory_order_acq_rel,
+                memory_order_acquire)) {
+            atomic_fetch_sub_explicit(
+                &arbiter->active_tokens, (size_t)1, memory_order_acq_rel);
+            continue;
+        }
+        state = ORES_NATIVE_SELECT_ARM_BOUND;
         if (atomic_compare_exchange_strong_explicit(
                 &arbiter->arms[i].state,
                 &state,
