@@ -81,7 +81,35 @@ int main() {
 
     AutoType denied = scalar();
     denied.negative.insert(AutoTrait::Send);
-    REQUIRE(!oreslang::types::infer_auto_traits(denied).send);
+    const auto no_send = oreslang::types::infer_auto_traits(denied);
+    REQUIRE(!no_send.send && !no_send.share);
+    denied.negative.clear();
+    denied.negative.insert(AutoTrait::Sync);
+    const auto no_sync = oreslang::types::infer_auto_traits(denied);
+    REQUIRE(no_sync.send && !no_sync.sync && !no_sync.share);
+
+    AutoType share_only_dyn;
+    share_only_dyn.kind = AutoTypeKind::Dyn;
+    share_only_dyn.shareable_domain = true;
+    share_only_dyn.dyn_bounds = {AutoTrait::Share};
+    const auto share_only_caps = oreslang::types::infer_auto_traits(share_only_dyn);
+    REQUIRE(!share_only_caps.send && !share_only_caps.sync && !share_only_caps.share);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Send);
+    REQUIRE(!oreslang::types::infer_auto_traits(share_only_dyn).share);
+    share_only_dyn.dyn_bounds.erase(AutoTrait::Send);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Sync);
+    REQUIRE(!oreslang::types::infer_auto_traits(share_only_dyn).share);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Send);
+    REQUIRE(oreslang::types::infer_auto_traits(share_only_dyn).share);
+
+    AutoType raw_caps;
+    raw_caps.kind = AutoTypeKind::Nominal;
+    raw_caps.complete_nominal_layout = true;
+    raw_caps.shareable_domain = true;
+    raw_caps.negative.insert(AutoTrait::Send);
+    REQUIRE(!oreslang::types::infer_auto_traits(raw_caps).share);
+    const oreslang::types::Capabilities inconsistent{false, true, true};
+    REQUIRE(!inconsistent.has(AutoTrait::Share));
 
     AutoType opaque_nominal;
     opaque_nominal.kind = AutoTypeKind::Nominal;
