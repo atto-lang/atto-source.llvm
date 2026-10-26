@@ -2,8 +2,11 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+_Static_assert(CHAR_BIT == 8, "compact actor graph ABI requires eight-bit bytes");
+_Static_assert(sizeof(uint32_t) == 4, "compact actor graph edges must occupy four bytes");
 #define ORES_MAX_SLOTS 4096u
 #define ORES_MAX_LOANS 64u
 #define ORES_MAX_SLOT_BYTES (1024u * 1024u)
