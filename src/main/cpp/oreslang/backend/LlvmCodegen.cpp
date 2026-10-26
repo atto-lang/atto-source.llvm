@@ -71,6 +71,7 @@ struct RegionMoveLowering {
     const NativeClassLayouts* layouts = nullptr;
     const Program* sum_program = nullptr;
     llvm::FunctionCallee sum_check;
+    const std::unordered_map<std::string, const Function*>* source_functions = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -522,71 +523,123 @@ llvm::Value* lower(const Expression& expr,
             return value;
         }
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const std::string slot =
+                native_function_slot(expr.name, expr.arguments.size());
+            llvm::Function* callee = functions.at(slot);
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
-                ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
+                ? moves->class_array_parameters->at(slot) : no_hidden;
             const bool owning = moves && moves->owning_results &&
-                moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
-            if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
-                throw std::runtime_error("native named call argument count mismatch");
-            }
-            if (!expr.argument_names.empty()
-                    && expr.argument_names.size() != expr.arguments.size()) {
+                moves->owning_results->at(slot);
+            if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size()) {
                 throw std::runtime_error("invalid native call label layout");
             }
-            std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
-            std::vector<const Expression*> ordered_source(expr.arguments.size(), nullptr);
-            std::vector<bool> filled(expr.arguments.size(), false);
+
+            const Function* source_callee = nullptr;
+            if (moves && moves->source_functions) {
+                const auto source_it = moves->source_functions->find(slot);
+                if (source_it != moves->source_functions->end())
+                    source_callee = source_it->second;
+            }
+            if (!source_callee ||
+                    source_callee->parameters.size() != expr.arguments.size()) {
+                throw std::runtime_error(
+                    "native call lacks verified source-formal metadata");
+            }
+
+            std::vector<std::vector<llvm::Value*>> expanded(
+                source_callee->parameters.size());
+            std::vector<const Expression*> ordered_source(
+                source_callee->parameters.size(), nullptr);
+            std::vector<bool> filled(source_callee->parameters.size(), false);
             std::size_t positional = 0;
             bool named_seen = false;
+
+            // Evaluate source arguments left-to-right. Structural arguments are
+            // readonly named values, so projection performs only scalar loads
+            // at the argument's lexical evaluation point.
             for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
                 const std::string label = expr.argument_names.empty()
-                        ? std::string{} : expr.argument_names[i];
-                std::size_t target;
+                    ? std::string{} : expr.argument_names[i];
+                std::size_t target = positional;
                 if (!label.empty()) {
                     named_seen = true;
-                    target = 0;
-                    bool matched = false;
-                    for (const auto& formal : callee->args()) {
-                        if (formal.getName().str() == label) {
-                            matched = true;
-                            break;
-                        }
-                        ++target;
-                    }
-                    if (!matched) {
-                        throw std::runtime_error("unknown native named argument '" + label + "'");
+                    auto formal = std::find_if(
+                        source_callee->parameters.begin(),
+                        source_callee->parameters.end(),
+                        [&](const Parameter& p) { return p.name == label; });
+                    if (formal == source_callee->parameters.end())
+                        throw std::runtime_error(
+                            "unknown native named argument '" + label + "'");
+                    target = static_cast<std::size_t>(
+                        formal - source_callee->parameters.begin());
+                } else {
+                    if (named_seen)
+                        throw std::runtime_error(
+                            "native positional argument after named argument");
+                    ++positional;
+                }
+                if (target >= expanded.size() || filled[target])
+                    throw std::runtime_error(
+                        "duplicate native named call binding");
+                filled[target] = true;
+                const Expression& argument = *expr.arguments[i];
+                ordered_source[target] = &argument;
+                const Parameter& formal = source_callee->parameters[target];
+
+                if (!formal.structural_contract.empty()) {
+                    if (argument.kind != Expression::Kind::Variable)
+                        throw std::runtime_error(
+                            "verified structural argument lost named provenance");
+                    for (const auto& field : formal.structural_fields) {
+                        const std::string key =
+                            field_key(argument.name, field.name);
+                        const auto field_it = field_storage.find(key);
+                        if (field_it == field_storage.end())
+                            throw std::runtime_error(
+                                "verified structural field projection is missing");
+                        expanded[target].push_back(
+                            builder.CreateLoad(
+                                i64, field_it->second,
+                                argument.name + "." + field.name +
+                                    ".structural.value"));
                     }
                 } else {
-                    if (named_seen) {
-                        throw std::runtime_error("native positional argument after named argument");
-                    }
-                    target = positional++;
+                    expanded[target].push_back(lower(
+                        argument, builder, i64, storage, field_storage,
+                        functions, moves));
                 }
-                if (target >= ordered.size() || filled[target]) {
-                    throw std::runtime_error("duplicate native named call binding");
-                }
-                filled[target] = true;
-                ordered_source[target] = expr.arguments[i].get();
-                // Emit instructions in source order, not in formal-slot order.
-                ordered[target] = lower(*expr.arguments[i], builder, i64,
-                                        storage, field_storage, functions, moves);
             }
+
+            std::vector<llvm::Value*> ordered;
+            for (auto& values : expanded)
+                ordered.insert(ordered.end(), values.begin(), values.end());
+
             for (std::size_t parameter : hidden) {
                 const auto& arg = *ordered_source.at(parameter);
-                if (!arg.left || (arg.left->kind != Expression::Kind::Variable && arg.left->kind != Expression::Kind::Field) ||
-                        (arg.kind != Expression::Kind::Borrow && arg.kind != Expression::Kind::BorrowMut))
-                    throw std::runtime_error("collection class argument lacks named borrowed provenance");
-                ordered.push_back(moves->class_array_regions->at(native_place_key(*arg.left)));
+                if (!arg.left ||
+                        (arg.left->kind != Expression::Kind::Variable &&
+                         arg.left->kind != Expression::Kind::Field) ||
+                        (arg.kind != Expression::Kind::Borrow &&
+                         arg.kind != Expression::Kind::BorrowMut))
+                    throw std::runtime_error(
+                        "collection class argument lacks named borrowed provenance");
+                ordered.push_back(
+                    moves->class_array_regions->at(native_place_key(*arg.left)));
             }
             if (owning) {
                 if (!moves->result_destination || !moves->result_region)
-                    throw std::runtime_error("owning call result requires explicit destination ownership");
+                    throw std::runtime_error(
+                        "owning call result requires explicit destination ownership");
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
-            return builder.CreateCall(callee, ordered,
+            if (callee->arg_size() != ordered.size())
+                throw std::runtime_error(
+                    "native projected call argument count mismatch");
+            return builder.CreateCall(
+                callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
         }
     }
@@ -928,6 +981,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     std::unordered_map<std::string, bool> class_has_arrays;
     std::unordered_map<std::string, std::vector<std::size_t>> class_array_parameters;
     std::unordered_map<std::string, bool> owning_results;
+    std::unordered_map<std::string, std::size_t> value_abi_arity;
+    std::unordered_map<std::string, const Function*> source_functions;
+    for (const auto& fn : source.functions)
+        source_functions.emplace(
+            native_function_slot(fn.name, fn.parameters.size()), &fn);
     for (const auto& source_class : source.classes) {
         const auto& cls = flat_classes.at(source_class.name);
         record_classes.emplace(cls.name, &cls);
@@ -962,35 +1020,54 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             ? native_function_slot(base_symbol, source_arity)
             : base_symbol;
         std::vector<llvm::Type*> argument_types;
-        for (const auto& param : fn.parameters)
-            argument_types.push_back(param.class_name.empty()
-                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : native_pointer_type(context, class_types.at(param.class_name)));
+        std::vector<std::string> value_labels;
+        for (const auto& param : fn.parameters) {
+            if (!param.structural_contract.empty()) {
+                for (const auto& field : param.structural_fields) {
+                    argument_types.push_back(i64);
+                    value_labels.push_back(param.name + "." + field.name);
+                }
+            } else {
+                argument_types.push_back(param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name)));
+                value_labels.push_back(param.name);
+            }
+        }
+        const std::string function_slot =
+            native_function_slot(fn.name, fn.parameters.size());
+        value_abi_arity.emplace(function_slot, value_labels.size());
         std::vector<std::size_t> hidden;
         for (std::size_t i = 0; i < fn.parameters.size(); ++i)
             if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
                 hidden.push_back(i);
                 argument_types.push_back(native_ptr);
             }
-        class_array_parameters.emplace(native_function_slot(fn.name, fn.parameters.size()), hidden);
+        class_array_parameters.emplace(function_slot, hidden);
         const bool owning = class_owns_arrays(fn.return_class);
-        owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
+        owning_results.emplace(function_slot, owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
             argument_types, false);
         llvm::Function* declaration = llvm::Function::Create(
             signature, fn.native_internal ? llvm::Function::InternalLinkage : llvm::Function::ExternalLinkage, symbol, module);
-        // Forward references must already expose parameter labels.
+        // Forward references expose source labels for ordinary values and
+        // compiler-owned field labels for expanded structural projections.
         std::size_t label_index = 0;
         for (auto& formal : declaration->args()) {
-            if (label_index < fn.parameters.size()) formal.setName(fn.parameters[label_index].name);
-            else if (label_index < fn.parameters.size() + hidden.size())
-                formal.setName("$region." + fn.parameters[hidden.at(label_index - fn.parameters.size())].name);
-            else formal.setName(label_index == fn.parameters.size() + hidden.size() ? "$result" : "$result.region");
+            if (label_index < value_labels.size())
+                formal.setName(value_labels[label_index]);
+            else if (label_index < value_labels.size() + hidden.size())
+                formal.setName("$region." + fn.parameters[
+                    hidden.at(label_index - value_labels.size())].name);
+            else
+                formal.setName(
+                    label_index == value_labels.size() + hidden.size()
+                        ? "$result" : "$result.region");
             ++label_index;
         }
-        declarations.emplace(native_function_slot(fn.name, fn.parameters.size()), declaration);
+        declarations.emplace(function_slot, declaration);
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
@@ -1012,34 +1089,69 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             return names;
         };
 
-        const auto& hidden = class_array_parameters.at(native_function_slot(fn.name, fn.parameters.size()));
-        const bool owning_return = owning_results.at(native_function_slot(fn.name, fn.parameters.size()));
-        llvm::Value* result_destination = owning_return ? function->getArg(fn.parameters.size() + hidden.size()) : nullptr;
-        llvm::Value* result_region = owning_return ? function->getArg(fn.parameters.size() + hidden.size() + 1) : nullptr;
+        const std::string function_slot =
+            native_function_slot(fn.name, fn.parameters.size());
+        const auto& hidden = class_array_parameters.at(function_slot);
+        const bool owning_return = owning_results.at(function_slot);
+        const std::size_t physical_values = value_abi_arity.at(function_slot);
+        llvm::Value* result_destination = owning_return
+            ? function->getArg(physical_values + hidden.size()) : nullptr;
+        llvm::Value* result_region = owning_return
+            ? function->getArg(physical_values + hidden.size() + 1) : nullptr;
         for (std::size_t i = 0; i < hidden.size(); ++i)
-            class_array_regions.emplace(fn.parameters[hidden[i]].name, function->getArg(fn.parameters.size() + i));
-        std::size_t index = 0;
-        for (auto& arg : function->args()) {
-            if (index == fn.parameters.size()) break;
-            const Parameter& param = fn.parameters[index++];
+            class_array_regions.emplace(
+                fn.parameters[hidden[i]].name,
+                function->getArg(physical_values + i));
+
+        std::size_t physical_index = 0;
+        for (const Parameter& param : fn.parameters) {
+            if (!param.structural_contract.empty()) {
+                for (const auto& field : param.structural_fields) {
+                    llvm::Argument& arg = *function->getArg(physical_index++);
+                    arg.setName(param.name + "." + field.name);
+                    llvm::Value* incoming = &arg;
+                    if (field.scalar_type == ScalarType::Bool) {
+                        incoming = builder.CreateZExt(
+                            builder.CreateICmpNE(
+                                &arg, llvm::ConstantInt::get(i64, 0),
+                                param.name + "." + field.name + ".bool.abi.i1"),
+                            i64,
+                            param.name + "." + field.name + ".bool.abi");
+                    }
+                    llvm::Value* slot = builder.CreateAlloca(
+                        i64, nullptr,
+                        param.name + "." + field.name + ".slot");
+                    builder.CreateStore(incoming, slot);
+                    field_storage.emplace(
+                        field_key(param.name, field.name), slot);
+                }
+                continue;
+            }
+
+            llvm::Argument& arg = *function->getArg(physical_index++);
             arg.setName(param.name);
             if (!param.class_name.empty()) {
                 storage.emplace(param.name, &arg);
-                for (const auto& [field, field_index] : field_indices.at(param.class_name)) {
+                for (const auto& [field, field_index] :
+                        field_indices.at(param.class_name)) {
                     field_storage.emplace(field_key(param.name, field),
-                        builder.CreateStructGEP(class_types.at(param.class_name), &arg,
-                            static_cast<unsigned>(field_index), param.name + "." + field));
+                        builder.CreateStructGEP(
+                            class_types.at(param.class_name), &arg,
+                            static_cast<unsigned>(field_index),
+                            param.name + "." + field));
                 }
                 register_subobjects(param.name, param.class_name, &arg);
             } else if (param.mode == Parameter::Mode::Value) {
-                llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
+                llvm::Value* slot =
+                    builder.CreateAlloca(i64, nullptr, param.name + ".slot");
                 llvm::Value* incoming = &arg;
                 if (param.scalar_type == ScalarType::Bool) {
                     // Public/native callers are not trusted to preserve the
                     // source-level canonical bool representation. Normalize
                     // every nonzero ABI value to exactly 1 at function entry.
                     incoming = builder.CreateZExt(
-                        builder.CreateICmpNE(&arg, llvm::ConstantInt::get(i64, 0),
+                        builder.CreateICmpNE(
+                            &arg, llvm::ConstantInt::get(i64, 0),
                             param.name + ".bool.abi.i1"),
                         i64, param.name + ".bool.abi");
                 }
@@ -1049,6 +1161,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 storage.emplace(param.name, &arg);
             }
         }
+        if (physical_index != physical_values)
+            throw std::runtime_error(
+                "structural physical ABI arity mismatch");
 
         for (const auto& parameter : fn.parameters) if (!parameter.sum_type.empty()) {
             auto* handle = builder.CreateLoad(i64, storage.at(parameter.name));
@@ -1200,6 +1315,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.source_functions = &source_functions;
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
