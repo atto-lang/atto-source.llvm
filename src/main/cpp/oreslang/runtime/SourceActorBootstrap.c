@@ -994,7 +994,8 @@ static void open_group_locked(void) {
     ensure(!group.vm && !group.executions && !group.continuations);
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL
-        && group.pending_send == NULL);
+        && group.pending_send == NULL
+        && group.pending_select == NULL);
 
     /*
      * Live trace stores are process-local runtime metadata. They hold logical
@@ -1959,7 +1960,8 @@ int oreslang_source_actor_await_ready_checked(
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
         && group.pending_ready == NULL && group.pending_done == NULL
-        && group.pending_send == NULL);
+        && group.pending_send == NULL
+        && group.pending_select == NULL);
     frame.ready_future = ores_native_vm_actor_future_open(
         group.vm,
         ORES_NATIVE_VM_MAIN,
@@ -2053,7 +2055,8 @@ int64_t oreslang_source_actor_await_done(
     group_lock();
     ensure(group.vm && group.root_ref.scheduler_domain
         && group.pending_ready == NULL && group.pending_done == NULL
-        && group.pending_send == NULL);
+        && group.pending_send == NULL
+        && group.pending_select == NULL);
     OresNativeVM* vm = group.vm;
     const OresNativeActorRef target = instance->ref;
     frame.done_future = ores_native_vm_actor_future_open(
@@ -2268,7 +2271,8 @@ void oreslang_source_actor_join_done(void* opaque) {
 
     if (group.live == 0) {
         ensure(group.pending_ready == NULL && group.pending_done == NULL
-            && group.pending_send == NULL);
+            && group.pending_send == NULL
+        && group.pending_select == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
 
