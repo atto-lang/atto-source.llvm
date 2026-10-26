@@ -34,7 +34,9 @@ jobs:
                   defines=(-DORES_MANAGED_REF_DEFAULT_NATIVE64=1)
                 fi
                 binary="$RUNNER_TEMP/managed-ref-${compiler}-${mode}-${ref}"
-                "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror                   "${args[@]}" "${defines[@]}"                   -I src/main/cpp tests/managed_ref_test.cpp -o "$binary"
+                "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
+                  "${args[@]}" "${defines[@]}" \
+                  -I src/main/cpp tests/managed_ref_test.cpp -o "$binary"
                 "$binary"
               done
             done
@@ -52,6 +54,9 @@ jobs:
               defines=(-DORES_MANAGED_REF_DEFAULT_NATIVE64=1)
             fi
             binary="$RUNNER_TEMP/managed-ref-sanitized-${ref}"
-            clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror               -fsanitize=address,undefined -fno-omit-frame-pointer               "${defines[@]}" -I src/main/cpp               tests/managed_ref_test.cpp -o "$binary"
+            clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              "${defines[@]}" -I src/main/cpp \
+              tests/managed_ref_test.cpp -o "$binary"
             "$binary"
           done
