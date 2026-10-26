@@ -402,6 +402,8 @@ typedef struct {
     OresNativeActorScheduler* scheduler;
     atomic_int wake_seen;
     atomic_int wake_outcome;
+    atomic_uint wake_count;
+    atomic_uint cancelled_wakes;
     OresNativeWakeTicket wake_ticket;
 } BoundWakeState;
 
@@ -413,6 +415,11 @@ static void bound_wake_callback(
     CHECK(ores_native_actor_scheduler_is_current_wake(
         state->scheduler, ticket));
     state->wake_ticket = ticket;
+    if (outcome == ORES_NATIVE_WAKE_CANCELLED
+            && ticket.completion_code == ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
+        atomic_fetch_add_explicit(
+            &state->cancelled_wakes, 1, memory_order_acq_rel);
+    atomic_fetch_add_explicit(&state->wake_count, 1, memory_order_acq_rel);
     atomic_store_explicit(
         &state->wake_outcome, (int)outcome, memory_order_release);
     atomic_store_explicit(&state->wake_seen, 1, memory_order_release);
@@ -549,6 +556,69 @@ static void duplicate_send_wake_bind_fails_closed(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void bounded_wake_escrow_rejects_ninth_bind(void) {
+    BoundWakeState state = {0};
+    atomic_store(&state.target.block, 1);
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            2, 1, 2, handler, NULL, NULL, bound_wake_callback, &state);
+    CHECK(scheduler != NULL);
+    state.scheduler = scheduler;
+    OresNativeActorRef target =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef producer =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, target, 901)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state.target);
+
+    OresNativeAsyncSendTicket sends[ORES_NATIVE_WAKE_CREDITS_PER_ACTOR + 1];
+    for (size_t i = 0; i < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR + 1; ++i) {
+        sends[i] = (OresNativeAsyncSendTicket){0};
+        CHECK(ores_native_actor_scheduler_submit_async(
+            scheduler, target, 910 + i, &sends[i]) == ORES_NATIVE_SEND_ACCEPTED);
+    }
+
+    for (size_t i = 0; i < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++i) {
+        OresNativeWakeTicket wake = {0};
+        CHECK(ores_native_actor_scheduler_bind_async_send_wake(
+            scheduler, sends[i], producer, 100 + i, 200 + i, 1, &wake));
+    }
+    OresNativeWakeTicket overflow = {0};
+    CHECK(!ores_native_actor_scheduler_bind_async_send_wake(
+        scheduler, sends[ORES_NATIVE_WAKE_CREDITS_PER_ACTOR],
+        producer, 999, 1000, 1, &overflow));
+    CHECK(overflow.slot_generation == 0);
+    CHECK(ores_native_actor_scheduler_outstanding_wake_loans(
+        scheduler, producer) == ORES_NATIVE_WAKE_CREDITS_PER_ACTOR);
+
+    for (size_t i = 0; i < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR + 1; ++i)
+        CHECK(ores_native_actor_scheduler_cancel_async_send(scheduler, sends[i]));
+
+    while (atomic_load_explicit(&state.wake_count, memory_order_acquire)
+            != ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
+        sched_yield();
+    while (ores_native_actor_scheduler_wakes_completed(scheduler)
+            != ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
+        sched_yield();
+    CHECK(atomic_load_explicit(
+        &state.cancelled_wakes, memory_order_acquire)
+        == ORES_NATIVE_WAKE_CREDITS_PER_ACTOR);
+
+    for (size_t i = 0; i < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR + 1; ++i)
+        CHECK(ores_native_actor_scheduler_release_async_send(scheduler, sends[i]));
+
+    atomic_store_explicit(&state.target.block, 0, memory_order_release);
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, producer));
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 int main(void) {
     immediate_resource_failure_does_not_mint_future();
     immediate_future_is_ready_before_await();
@@ -562,6 +632,7 @@ int main(void) {
     ready_future_wake_survives_target_stop();
     pending_stop_publishes_exact_failed_wake();
     duplicate_send_wake_bind_fails_closed();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1");
+    bounded_wake_escrow_rejects_ninth_bind();
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8");
     return 0;
 }
