@@ -93,10 +93,14 @@ credit becomes available, the scheduler:
 3. enqueues the mailbox payload **only if that send arm won**.
 
 A losing or sealed send arm becomes CANCELLED without message publication.
-STOP/resource failure is also a terminal select event: it may win the common
-selection and preserve the exact failure, or becomes CANCELLED if another arm
-already won. Stale selection/arm generations fail closed. The select arbiter
-is fixed-capacity and performs no allocation or guest callback during commit.
+STOP or a **post-registration** send failure is a terminal select event: it may
+win the common selection and preserve the exact failure, or becomes CANCELLED
+if another arm already won. In contrast, descriptor/waiter quota exhaustion
+while registering the arm is a **select setup failure**, not a ready arm; the
+arm detaches without claiming the winner and the coordinator must clean up the
+partial selection. Stale selection/arm generations fail closed. The select
+arbiter is fixed-capacity and performs no allocation or guest callback during
+commit.
 
 This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
