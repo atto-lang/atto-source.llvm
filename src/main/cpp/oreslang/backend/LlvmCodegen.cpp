@@ -1246,7 +1246,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             source_task_handles.emplace(
                 task.name,
                 builder.CreateCall(
-                    taskStart, {producer},
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        task.name + ".task.producer.abi")},
                     task.name + ".task.handle"));
         }
 
