@@ -229,6 +229,25 @@ public:
         ensure_open(*state_);
         return state_->row_slots.size();
     }
+    /**
+     * Checked dense bracket index to stable logical row handle.
+     */
+    Handle index(std::int64_t row_index) const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        ensure_open(*state_);
+        if (row_index < 0
+                || row_index > std::numeric_limits<std::int32_t>::max()
+                || static_cast<std::size_t>(row_index) >= state_->row_slots.size())
+            throw std::out_of_range("inverted row index outside current length");
+        const auto slot_index =
+                state_->row_slots[static_cast<std::size_t>(row_index)];
+        if (slot_index >= state_->slots.size())
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        const auto& slot = state_->slots[slot_index];
+        if (!slot.live || slot.row != static_cast<std::size_t>(row_index))
+            throw std::logic_error("corrupt inverted dense-row mapping");
+        return Handle{state_->issuer, state_->owner, slot_index, slot.generation};
+    }
     // Explicit growth avoids reallocations inside future append batches.
     // Reserving any field is structural and excludes every outstanding loan.
     void reserve(std::size_t capacity) {
