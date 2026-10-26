@@ -282,6 +282,7 @@ static void release_wake_locked(OresNativeActorScheduler* s,
      * retired. Arbiter rearm is lock-free and may begin immediately once this
      * counter reaches zero. */
     release_select_wake_loan_locked(credit);
+    if (pthread_cond_broadcast(&s->credit) != 0) abort();
     maybe_finish_stopped_locked(s, i);
 }
 static WakeCredit* matching_wake_locked(
@@ -500,6 +501,7 @@ static void* carrier(void* raw) {
             /* Callback stack and wake identity are now retired. Only now may
              * a new select generation reuse the arbiter. */
             release_select_wake_loan_locked(active_wake);
+            if (pthread_cond_broadcast(&s->credit) != 0) abort();
             if (deferred_release)
                 retire_async_send_credit_locked(
                     s, deferred_ticket, deferred_release);
@@ -1800,6 +1802,27 @@ int ores_native_actor_scheduler_cancel_select_wake(
             s, (size_t)ticket.wake.producer.actor_slot, w);
     unlock(s);
     return ok;
+}
+
+int ores_native_actor_scheduler_wait_select_wake_retired(
+        OresNativeActorScheduler* s,
+        OresNativeSelectWakeTicket ticket) {
+    if (!s || executing != NULL || !ticket.wake.slot_generation)
+        return 0;
+    lock(s);
+    for (;;) {
+        WakeCredit* w = matching_wake_locked(s, ticket.wake);
+        if (!w) {
+            unlock(s);
+            return 1;
+        }
+        if (!w->select_bound || w->select_arbiter != ticket.arbiter
+                || w->select_generation != ticket.selection_generation) {
+            unlock(s);
+            return 0;
+        }
+        if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
+    }
 }
 
 int ores_native_actor_scheduler_reserve_wake(
