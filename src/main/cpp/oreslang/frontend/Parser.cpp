@@ -564,6 +564,7 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
+        resolve_structural_parameters(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
@@ -761,6 +762,49 @@ private:
         }
     }
 
+    void resolve_structural_parameters(Program& program) {
+        std::unordered_map<std::string, const TypeOnlyDecl*> interfaces;
+        for (const auto& decl : program.type_only_declarations) {
+            if (decl.kind == TypeOnlyDecl::Kind::Interface)
+                interfaces.emplace(decl.name, &decl);
+        }
+
+        for (auto& fn : program.functions) {
+            for (auto& param : fn.parameters) {
+                if (param.structural_contract.empty()) continue;
+                if (param.mode != Parameter::Mode::Value)
+                    throw std::runtime_error(
+                        "STRUCTURAL_MUTABILITY_UNSUPPORTED: structural parameters are readonly views");
+                const auto found = interfaces.find(param.structural_contract);
+                if (found == interfaces.end())
+                    throw std::runtime_error(
+                        "STRUCTURAL_UNKNOWN_INTERFACE: structural parameter names unknown interface '" +
+                        param.structural_contract + "'");
+                const TypeOnlyDecl& contract = *found->second;
+                if (!contract.parents.empty())
+                    throw std::runtime_error(
+                        "STRUCTURAL_INTERFACE_INHERITANCE_UNSUPPORTED: first native structural slice requires a direct interface shape");
+                if (!contract.methods.empty())
+                    throw std::runtime_error(
+                        "STRUCTURAL_METHOD_UNSUPPORTED: first native structural slice admits field-only interfaces");
+                if (contract.fields.empty())
+                    throw std::runtime_error(
+                        "STRUCTURAL_EMPTY_SHAPE_UNSUPPORTED: structural interface must require at least one field");
+                if (contract.fields.size() > 16)
+                    throw std::runtime_error(
+                        "STRUCTURAL_FIELD_BUDGET: maximum 16 fields in native structural projection");
+                for (const auto& field : contract.fields) {
+                    StructuralField resolved;
+                    resolved.name = field.name;
+                    if (field.type_name == "int") resolved.scalar_type = ScalarType::I64;
+                    else if (field.type_name == "bool") resolved.scalar_type = ScalarType::Bool;
+                    else resolved.scalar_type = resolve_scalar_alias(field.type_name);
+                    param.structural_fields.push_back(std::move(resolved));
+                }
+            }
+        }
+    }
+
     void type_only_declaration(Program& program, bool already_defined = false,
                                bool before_public = false) {
         bool exported = before_public;
@@ -819,11 +863,28 @@ private:
             std::unordered_set<std::string> member_names;
             while (token_.kind != Kind::End &&
                     token_.text != (braces ? "}" : "end")) {
+                if (decl.kind == TypeOnlyDecl::Kind::Interface &&
+                        token_.kind == Kind::Identifier &&
+                        peek_next().text == ":") {
+                    if (decl.fields.size() >= 16)
+                        fail("STRUCTURAL_FIELD_BUDGET: maximum 16 interface shape fields");
+                    TypeOnlyDecl::Field field;
+                    field.name = identifier();
+                    if (!member_names.insert("field:" + field.name).second)
+                        fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate interface field '" + field.name + "'");
+                    require(":");
+                    field.type_name = type_only_scalar(false);
+                    require(";");
+                    decl.fields.push_back(std::move(field));
+                    continue;
+                }
                 if (decl.methods.size() >= 128)
                     fail("TYPE_ONLY_MEMBER_BUDGET: maximum 128 method signatures");
                 require("fnc");
                 TypeOnlyDecl::Method method;
                 method.name = identifier();
+                if (member_names.count("field:" + method.name))
+                    fail("TYPE_ONLY_DUPLICATE_MEMBER: interface field/method name collision '" + method.name + "'");
                 require("(");
                 std::unordered_set<std::string> formal_names;
                 if (!accept(")")) {
@@ -851,7 +912,7 @@ private:
                 // Method overload identity is name + arity, not return type.
                 const std::string key = method.name + "/" +
                     std::to_string(method.parameter_types.size());
-                if (!member_names.insert(key).second)
+                if (!member_names.insert("method:" + key).second)
                     fail("TYPE_ONLY_DUPLICATE_MEMBER: duplicate method slot '" + key + "'");
                 if (!accept(":")) {
                     // '=' and '>' are separate lexer tokens: require adjacency.
@@ -1647,7 +1708,11 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (accept("int")) {
+                if (accept("structural")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("STRUCTURAL_MUTABILITY_UNSUPPORTED: structural parameters are implicit readonly views");
+                    parameter.structural_contract = identifier();
+                } else if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
                 } else if (accept("bool")) {
                     parameter.scalar_type = ScalarType::Bool;
@@ -1681,7 +1746,8 @@ private:
             require(")");
         }
         for (const auto& parameter : value.parameters)
-            if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
+            if (!parameter.class_name.empty() || !parameter.structural_contract.empty())
+                class_receivers_.insert(parameter.name);
         const bool arrow_return_type = !accept(":");
         if (arrow_return_type) require("->");
         value.returns_void = accept("void");
@@ -3814,7 +3880,8 @@ private:
                 signature.parameter_generic_types.push_back(param.generic_type);
                 signature.parameter_scalar_types.push_back(param.scalar_type);
                 signature.parameter_is_scalar.push_back(
-                    param.class_name.empty() && param.generic_type.empty() && param.sum_type.empty());
+                    param.class_name.empty() && param.generic_type.empty() &&
+                    param.sum_type.empty() && param.structural_contract.empty());
             }
             signature.return_type = fn.return_type;
             signature.returns_void = fn.returns_void;
@@ -4183,8 +4250,11 @@ private:
             };
             for (const auto& parameter : fn.parameters) class_scalars(parameter.name, parameter.class_name);
             for (const auto& binding : fn.locals) class_scalars(binding.name, binding.class_name);
-            for (const auto& param : fn.parameters)
+            for (const auto& param : fn.parameters) {
                 scalar_types.emplace(param.name, param.scalar_type);
+                for (const auto& field : param.structural_fields)
+                    scalar_types.emplace(param.name + "." + field.name, field.scalar_type);
+            }
 
             auto require_scalar = [&](const Expression& expr, ScalarType expected,
                                       const char* where, const TypeMap& env) {
