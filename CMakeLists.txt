@@ -1354,6 +1354,12 @@ if(BUILD_TESTING)
         source-actor-await-worker.ores --ir "oreslang_source_actor_unhandled_ready_effect")
     oreslang_contract_test(source_actor_token_ready_effect_os_boundary_ir
         source-actor-future-void-ready.ores --ir "main.ready.status")
+    add_test(NAME source_actor_ready_effect_string_cleanup
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ready_effect_cleanup.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-actor-await-ready-string-runtime.ores")
+    set_tests_properties(source_actor_ready_effect_string_cleanup PROPERTIES TIMEOUT 30)
     oreslang_contract_test(reject_source_actor_unused_ready_future
         source-actor-future-void-unused.ores
         --diagnostic "Future<void> readiness token must be awaited exactly once")
