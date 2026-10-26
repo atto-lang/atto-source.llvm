@@ -672,12 +672,220 @@ static void root_send_suspend_turn(void) {
     group_unlock();
 }
 
+static void root_select_suspend_turn(void) {
+    group_lock();
+    SelectAwaitFrame* frame = group.pending_select;
+    ensure(frame == &group.detached_select
+        && !frame->done && !frame->suspend_recorded);
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle origin = {0, 0};
+    ensure(ores_native_execution_context_store_insert(
+        group.executions, &physical, &origin));
+    OresNativeContinuationHandle no_parent = {0, 0};
+    ensure(ores_native_await_trace_suspend(
+        group.executions,
+        group.continuations,
+        origin,
+        no_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT,
+        1,
+        frame->source_token,
+        &frame->link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, origin));
+    frame->suspend_recorded = 1;
+
+    uint64_t generation = atomic_fetch_add_explicit(
+        &next_select_generation, UINT64_C(1), memory_order_relaxed);
+    if (!generation || generation == UINT64_MAX) abort();
+    frame->selection_generation = generation;
+
+    int setup_ok = ores_native_select_arbiter_init(
+        &frame->arbiter, generation, 2);
+    if (setup_ok)
+        setup_ok = ores_native_select_register(
+            &frame->arbiter, 0, &frame->tokens[0]);
+    if (setup_ok)
+        setup_ok = ores_native_select_register(
+            &frame->arbiter, 1, &frame->tokens[1]);
+
+    if (setup_ok) {
+        setup_ok = ores_native_vm_reserve_select_wake(
+            group.vm,
+            ORES_NATIVE_VM_MAIN,
+            group.root_ref,
+            &frame->arbiter,
+            generation,
+            frame->link.continuation.slot,
+            frame->link.continuation.generation,
+            1,
+            &frame->common_wake);
+        frame->wake_reserved = setup_ok;
+    }
+
+    for (size_t i = 0; setup_ok && i < 2; ++i) {
+        const OresNativeSendStatus status =
+            ores_native_vm_submit_selectable_async_with_wake(
+                group.vm,
+                ORES_NATIVE_VM_MAIN,
+                frame->actors[i]->ref,
+                (uint64_t)frame->payloads[i],
+                frame->tokens[i],
+                frame->common_wake,
+                &frame->sends[i]);
+        frame->immediate_status[i] = (int)status;
+        frame->send_live[i] = frame->sends[i].generation != 0;
+
+        /* Descriptor/waiter exhaustion is selection setup failure. Terminal
+         * target state is a selectable event and CANCELLED means another arm
+         * already committed, so neither is setup failure here. */
+        if (status == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+                || status == ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
+            setup_ok = 0;
+    }
+
+    if (!setup_ok) {
+        for (size_t i = 0; i < 2; ++i) {
+            if (frame->send_live[i])
+                (void)ores_native_vm_cancel_async_send(
+                    group.vm, ORES_NATIVE_VM_MAIN, frame->sends[i]);
+        }
+        (void)ores_native_select_seal(&frame->arbiter);
+        if (frame->wake_reserved) {
+            ensure(ores_native_vm_cancel_select_wake(
+                group.vm, ORES_NATIVE_VM_MAIN, frame->common_wake));
+            frame->wake_reserved = 0;
+        }
+        ensure(ores_native_continuation_store_cancel(
+            group.continuations, frame->link.continuation));
+        frame->outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        frame->winner_arm = UINT64_MAX;
+        frame->done = 1;
+    } else {
+        frame->setup_complete = 1;
+    }
+
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+
+static void source_select_wake(
+        OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome wake_outcome) {
+    SelectAwaitFrame* frame;
+    OresSourceSelectSend2Continuation continuation;
+    SourceActor* actor0;
+    SourceActor* actor1;
+    OresNativeSuspensionLink link;
+    uint64_t winner_arm;
+    int outcome;
+
+    group_lock();
+    frame = group.pending_select;
+    ensure(frame == &group.detached_select
+        && frame->suspend_recorded && frame->setup_complete && !frame->done);
+    ensure(wake_outcome == ORES_NATIVE_WAKE_READY);
+    ensure(ticket.producer.scheduler_domain == group.root_ref.scheduler_domain
+        && ticket.producer.actor_slot == group.root_ref.actor_slot
+        && ticket.producer.generation == group.root_ref.generation
+        && ticket.target.scheduler_domain == group.root_ref.scheduler_domain
+        && ticket.target.actor_slot == group.root_ref.actor_slot
+        && ticket.target.generation == group.root_ref.generation);
+    ensure(ticket.continuation_slot == frame->link.continuation.slot
+        && ticket.continuation_generation == frame->link.continuation.generation
+        && ticket.code_generation == 1
+        && ticket.descriptor_slot == UINT64_MAX
+        && ticket.descriptor_generation == frame->selection_generation
+        && ticket.completion_code >= 1
+        && ticket.completion_code <= 2);
+
+    winner_arm = ticket.completion_code - UINT64_C(1);
+    uint64_t recorded_winner = UINT64_MAX;
+    ensure(ores_native_select_winner(
+        &frame->arbiter, &recorded_winner));
+    ensure(recorded_winner == winner_arm);
+
+    outcome = frame->immediate_status[winner_arm];
+    if (frame->send_live[winner_arm]) {
+        OresNativeAsyncSendState state = ORES_NATIVE_ASYNC_SEND_INVALID;
+        OresNativeSendStatus exact = ORES_NATIVE_SEND_INVALID_REF;
+        ensure(ores_native_vm_async_send_status(
+            group.vm, ORES_NATIVE_VM_MAIN,
+            frame->sends[winner_arm], &state, &exact));
+        ensure(state == ORES_NATIVE_ASYNC_SEND_READY
+            || state == ORES_NATIVE_ASYNC_SEND_FAILED);
+        outcome = (int)exact;
+    }
+    ensure(outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED
+        || outcome == ORES_SOURCE_SEND_ASYNC_TERMINATED
+        || outcome == ORES_SOURCE_SEND_ASYNC_INVALID_REF
+        || outcome == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+
+    ensure(ores_native_continuation_store_notify_ready(
+        group.continuations, frame->link.continuation));
+    continuation = frame->continuation;
+    actor0 = frame->actors[0];
+    actor1 = frame->actors[1];
+    link = frame->link;
+    frame->winner_arm = winner_arm;
+    frame->outcome = outcome;
+    group_unlock();
+
+    OresNativeExecutionContext physical = {0};
+    ensure(ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &physical));
+    ensure(physical.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    ensure(physical.allocation.owner == SOURCE_GROUP_ROOT_SLOT);
+
+    OresNativeExecutionHandle resumed = {0, 0};
+    OresNativeExecutionContext logical = {0};
+    ensure(ores_native_await_trace_ready_resume_begin(
+        group.executions,
+        group.continuations,
+        physical.id,
+        link,
+        &resumed,
+        &logical));
+    ensure(same_allocation(logical.allocation, physical.allocation));
+
+    int64_t result = 0;
+    if (outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED) {
+        ensure(continuation != NULL);
+        ensure(!ores_native_store_handle_valid(current_source_execution));
+        current_source_execution = resumed;
+        result = continuation(actor0, actor1, winner_arm);
+        current_source_execution = (OresNativeExecutionHandle){0, 0};
+    }
+
+    ensure(ores_native_await_trace_resume_finish(group.continuations, link));
+    ensure(ores_native_execution_context_store_release(
+        group.executions, resumed));
+
+    group_lock();
+    ensure(frame == group.pending_select && !frame->done);
+    frame->result = result;
+    frame->done = 1;
+    ensure(pthread_cond_signal(&frame->completed) == 0);
+    group_unlock();
+}
+
 static void source_send_wake(
         void* raw, size_t slot, OresNativeWakeTicket ticket,
         OresNativeWakeOutcome wake_outcome) {
     ensure(raw == &group && slot == SOURCE_GROUP_ROOT_SLOT);
     ensure(ores_native_vm_is_current_wake(
         group.vm, ORES_NATIVE_VM_MAIN, ticket));
+
+    if (ticket.descriptor_slot == UINT64_MAX) {
+        source_select_wake(ticket, wake_outcome);
+        return;
+    }
 
     SendAwaitFrame* frame;
     OresSourceActorContinuation continuation;
@@ -879,6 +1087,7 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         else if (payload == SOURCE_ROOT_CONTROL_DONE_SUSPEND) root_done_suspend_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_RESUME) root_done_resume_turn();
         else if (payload == SOURCE_ROOT_CONTROL_SEND_SUSPEND) root_send_suspend_turn();
+        else if (payload == SOURCE_ROOT_CONTROL_SELECT_SUSPEND) root_select_suspend_turn();
         else abort();
         return;
     }
