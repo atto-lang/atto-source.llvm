@@ -1,0 +1,15 @@
+// Detached send_async captures one Copy scalar into the runtime-owned frame.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  const int retained = 40;
+  await worker.send_async(1);
+  stop worker;
+  return retained + 3;
+}
