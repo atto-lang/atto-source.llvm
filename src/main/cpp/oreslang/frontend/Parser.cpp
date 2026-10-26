@@ -3874,6 +3874,89 @@ private:
                 if (!parameter.pending_type_alias.empty())
                     throw std::runtime_error("unresolved native scalar parameter type before ABI admission");
             validate_declared_effects(fn, program);
+
+            /* Await structure is compiler-owned state-machine metadata. Keep
+             * legacy fields during staged migration, but require a bijection:
+             * no await may exist only as a boolean/offset and no catalog row may
+             * invent a suspension boundary. */
+            std::size_t catalog_direct = 0;
+            std::size_t catalog_stored = 0;
+            std::size_t catalog_ready = 0;
+            std::size_t catalog_done = 0;
+            for (const auto& site : fn.await_sites) {
+                if (site.offset == 0)
+                    throw std::runtime_error(
+                        "invalid native await catalog: zero source offset");
+                switch (site.kind) {
+                    case NativeAwaitSite::Kind::DirectSendAdmission: {
+                        ++catalog_direct;
+                        if (site.action_index >= fn.actor_actions.size())
+                            throw std::runtime_error(
+                                "invalid native await catalog: direct action index");
+                        const auto& action =
+                            fn.actor_actions.at(site.action_index);
+                        if (action.kind != ActorAction::Kind::Send
+                                || action.index >= fn.actor_sends.size())
+                            throw std::runtime_error(
+                                "invalid native await catalog: direct action kind");
+                        const auto& send = fn.actor_sends.at(action.index);
+                        if (!send.await_admission
+                                || send.offset != site.offset
+                                || send.reference != site.actor)
+                            throw std::runtime_error(
+                                "invalid native await catalog: direct send mismatch");
+                        break;
+                    }
+                    case NativeAwaitSite::Kind::StoredSendAdmission:
+                        ++catalog_stored;
+                        if (fn.send_future_name.empty()
+                                || site.offset != fn.send_future_await_offset
+                                || site.action_index
+                                    != fn.send_future_await_action_index
+                                || site.actor != fn.send_future_actor)
+                            throw std::runtime_error(
+                                "invalid native await catalog: stored send mismatch");
+                        break;
+                    case NativeAwaitSite::Kind::Ready:
+                        ++catalog_ready;
+                        if (site.offset != fn.ready_await_offset
+                                || site.actor != fn.ready_await_actor
+                                || site.action_index > fn.actor_actions.size())
+                            throw std::runtime_error(
+                                "invalid native await catalog: ready mismatch");
+                        break;
+                    case NativeAwaitSite::Kind::Done:
+                        ++catalog_done;
+                        if (site.offset != fn.done_await_offset
+                                || site.actor != fn.done_await_actor
+                                || site.action_index > fn.actor_actions.size())
+                            throw std::runtime_error(
+                                "invalid native await catalog: done mismatch");
+                        break;
+                }
+            }
+            const std::size_t legacy_direct =
+                static_cast<std::size_t>(std::count_if(
+                    fn.actor_sends.begin(), fn.actor_sends.end(),
+                    [](const ActorSend& send) {
+                        return send.await_admission;
+                    }));
+            if (catalog_direct != legacy_direct
+                    || catalog_stored !=
+                        static_cast<std::size_t>(
+                            fn.send_future_await_offset != 0)
+                    || catalog_ready !=
+                        static_cast<std::size_t>(
+                            fn.ready_await_offset != 0)
+                    || catalog_done !=
+                        static_cast<std::size_t>(
+                            fn.done_await_offset != 0)
+                    || catalog_stored > 1
+                    || catalog_ready > 1
+                    || catalog_done > 1)
+                throw std::runtime_error(
+                    "invalid native await catalog: legacy/catalog divergence");
+
             std::function<bool(const Statement&)> ordered_frame = [&](const Statement& s) {
                 return s.kind == Statement::Kind::ScopedLocal || s.kind == Statement::Kind::ScalarWrite ||
                     std::any_of(s.then_statements.begin(), s.then_statements.end(), ordered_frame) ||
