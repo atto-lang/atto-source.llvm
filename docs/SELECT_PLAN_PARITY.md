@@ -177,3 +177,31 @@ Until those layers are wired and tested, source `select`, including both
 `{ ... }` and `over ... end`, must continue to fail closed at the native
 frontend boundary.
 
+## Selectable bounded i64 channel substrate
+
+A stacked runtime slice adds `NativeSelectableI64Channel<Capacity, MaxWaiters>`
+for the first native scalar select profile. It is deliberately narrower than
+source `Channel<T>` and exists to prove the channel/select transaction before
+frontend lowering.
+
+The runtime contract is:
+
+- fixed-capacity i64 buffering;
+- revocable readable/writable subscriptions with generation-checked identities;
+- readiness callbacks never run while the channel mutex is held;
+- callbacks are advisory/spurious and must recheck through the arbiter;
+- a read removes a value only inside `NativeSelectArbiter::try_win_if`;
+- a write publishes a value only inside `NativeSelectArbiter::try_win_if`;
+- a losing read therefore cannot consume, and a losing write cannot publish;
+- state transitions capture opposite-direction notifications before mutation,
+  then dispatch them after select/channel locks are released;
+- stale captured notifications are harmless because commit validates the
+  subscription identity again;
+- notification callback failures are retained for diagnostics without rolling
+  back a committed channel operation.
+
+Channel close/EOF semantics, unbounded/dynamic channels, typed values beyond
+native i64, fairness/random policy, suspension, actor continuation delivery and
+source syntax remain outside this slice. The frontend must continue to reject
+source static select until those contracts are implemented.
+
