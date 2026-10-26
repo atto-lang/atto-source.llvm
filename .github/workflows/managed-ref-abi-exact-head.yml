@@ -20,6 +20,15 @@ jobs:
         with:
           persist-credentials: false
           submodules: false
+          # Avoid the synthetic refs/pull/N/merge commit: test the exact head.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact checked-out source commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
       - name: GCC and Clang compressed32/native64 Debug/Release
         shell: bash
         run: |
