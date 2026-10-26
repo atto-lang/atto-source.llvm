@@ -2011,6 +2011,12 @@ private:
         // agree at the join; checked below by the ownership verifier.
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
         std::function<Statement()> foreach_statement;
+        std::function<Statement()> select_default_statement;
+        auto starts_do_select = [&]() {
+            if (token_.text != "do") return false;
+            Lexer look = lexer_;
+            return look.next().text == "select";
+        };
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
@@ -2093,6 +2099,9 @@ private:
                 if (token_.text == "for" && !finally_scope) {
                     actions.push_back(foreach_statement()); continue;
                 }
+                if (starts_do_select() && !finally_scope) {
+                    actions.push_back(select_default_statement()); continue;
+                }
                 if (token_.text == "while" || token_.text == "for" ||
                         token_.text == "loop") {
                     fail("native realtime source loop requires verified LLVM continuation lowering");
@@ -2161,10 +2170,49 @@ private:
             }
             return actions;
         };
+        select_default_statement = [&]() {
+            Statement selection;
+            selection.kind = Statement::Kind::SelectDefault;
+            selection.offset = token_.offset;
+            require("do");
+            require("select");
+
+            bool over_delimited = false;
+            if (accept("{")) {
+                // Braced static-select body.
+            } else if (accept("over")) {
+                over_delimited = true;
+            } else {
+                fail("native do select default lowering requires '{ ... }' or 'over ... end'");
+            }
+
+            // First executable source slice is deliberately narrow. It proves
+            // procedural select CFG/cleanup without inventing a native-only
+            // Channel<T> source representation. Channel/Future arms remain
+            // fail-closed until their typed source descriptors are admitted.
+            if (token_.text != "default")
+                fail("native do select currently supports only a single default arm");
+            require("default");
+            require(":");
+            accept("->");
+            require("{");
+            selection.then_statements = branch_arm(false, false);
+            require("}");
+
+            if (over_delimited) require("end");
+            else require("}");
+            return selection;
+        };
         bool return_guards_started = false;
         bool terminal_try_finally = false;
         std::size_t branch_count = 0;
         while (token_.text != "return") {
+            if (starts_do_select()) {
+                if (terminal_try_finally || return_guards_started)
+                    fail("native do select cannot enter protected/return-guard scope");
+                value.statements.push_back(select_default_statement());
+                continue;
+            }
             if (token_.text == "while" && experimental_rt_scalar_loop_) {
                 if (value.scalar_while || value.locals.size() != 1 ||
                         !value.statements.empty() || !value.early_returns.empty() ||
@@ -4086,6 +4134,12 @@ private:
                     for (const auto& action : stmt.then_statements) check_statement_names(action, body);
                     return;
                 }
+                if (stmt.kind == Statement::Kind::SelectDefault) {
+                    NameSet body = names;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_names(action, body);
+                    return;
+                }
                 if (stmt.kind == Statement::Kind::Conditional) {
                     if (stmt.condition) validate_expression(*stmt.condition, names, functions);
                     else {
@@ -4242,6 +4296,12 @@ private:
                     (void)validate_scalar_expression(*stmt.expression, env, functions);
                     TypeMap body = env; scoped_type(*stmt.branch_local, body);
                     for (const auto& action : stmt.then_statements) check_statement_types(action, body);
+                    return;
+                }
+                if (stmt.kind == Statement::Kind::SelectDefault) {
+                    TypeMap body = env;
+                    for (const auto& action : stmt.then_statements)
+                        check_statement_types(action, body);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Conditional) {
