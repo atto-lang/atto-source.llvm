@@ -3578,6 +3578,26 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-explicit-exports-v1-test)
     set_tests_properties(native_explicit_exports_v1_source_admission
         PROPERTIES TIMEOUT 25)
+
+    add_executable(oreslang-native-explicit-exports-v1-loader-test
+        tests/explicit_exports_v1_module_loader_test.cpp
+        src/main/cpp/oreslang/frontend/ModuleLoader.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-explicit-exports-v1-loader-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-explicit-exports-v1-loader-test SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-explicit-exports-v1-loader-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_features(oreslang-native-explicit-exports-v1-loader-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-explicit-exports-v1-loader-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_explicit_exports_v1_module_loader
+        COMMAND oreslang-native-explicit-exports-v1-loader-test)
+    set_tests_properties(native_explicit_exports_v1_module_loader
+        PROPERTIES TIMEOUT 25)
 endif()
 
 # Dependency-free, executable import/source admission boundary. This test
