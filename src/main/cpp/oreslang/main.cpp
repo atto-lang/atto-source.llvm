@@ -108,18 +108,27 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
             if (reachable.insert(matches.front()).second) pending.push_back(matches.front());
         }
     } else {
+        std::unordered_set<std::string> source_export_families;
+        for (const auto& binding : program.source_export_bindings) {
+            if (binding.local_kind == oreslang::SourceExportKind::Fnc ||
+                    binding.local_kind == oreslang::SourceExportKind::Routine) {
+                source_export_families.insert(binding.local_name);
+            }
+        }
+
         for (const auto& function : program.functions) {
-            if (function.exported || function.name == "main") {
+            const bool source_api_root =
+                source_export_families.count(function.name) != 0;
+            if (function.exported || source_api_root || function.name == "main") {
                 const std::string key =
                     oreslang::realtime_detail::function_key(
                         function.name, function.parameters.size());
                 if (reachable.insert(key).second) pending.push_back(key);
             }
-            if (function.exported) {
-                // LLVM names overloaded families according to family
-                // cardinality. Preserve every sibling of a public overload in
-                // conservative mode so removing a private sibling cannot
-                // silently rename the surviving exported ABI symbol.
+            if (function.exported || source_api_root) {
+                // Preserve every sibling of a source-exported logical overload
+                // family. This is a reachability decision only: explicit source
+                // exports never mutate Function::exported or LLVM linkage.
                 for (const auto& sibling : program.functions) {
                     if (sibling.name != function.name) continue;
                     const std::string sibling_key =
@@ -133,7 +142,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     }
     if (pending.empty())
         throw std::runtime_error(
-            "tree shaking requires an explicit root, main, or at least one pub function");
+            "tree shaking requires an explicit root, main, pub function, or source export");
 
     std::size_t scanned_edges = 0;
     for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
