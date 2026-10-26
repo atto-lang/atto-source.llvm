@@ -1121,8 +1121,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 builder.CreateICmpEQ(
                     status,
                     llvm::ConstantInt::get(
-                        llvm::Type::getInt32Ty(context),
-                        ORES_NATIVE_SEND_ACCEPTED)),
+                        llvm::Type::getInt32Ty(context), 0)),
                 accepted,
                 failed);
 
