@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeActorScheduler.h"
 
+#include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -686,6 +687,23 @@ static void bounded_wake_escrow_rejects_ninth_bind(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeAsyncSendTicket ticket;
+    atomic_int started;
+    atomic_int done;
+    int result;
+} AsyncReleaseThread;
+
+static void* release_async_descriptor(void* raw) {
+    AsyncReleaseThread* state = (AsyncReleaseThread*)raw;
+    atomic_store_explicit(&state->started, 1, memory_order_release);
+    state->result = ores_native_actor_scheduler_release_async_send(
+        state->scheduler, state->ticket);
+    atomic_store_explicit(&state->done, 1, memory_order_release);
+    return NULL;
+}
+
 static void release_during_executing_wake_is_deferred(void) {
     BoundWakeState state = {0};
     atomic_store_explicit(&state.hold_wake, 1, memory_order_release);
@@ -713,14 +731,31 @@ static void release_during_executing_wake_is_deferred(void) {
     while (!atomic_load_explicit(&state.wake_entered, memory_order_acquire))
         sched_yield();
 
-    /* Release is accepted exactly once, but the descriptor remains readable
-     * until the callback has returned to the scheduler. */
-    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
-    CHECK(!ores_native_actor_scheduler_release_async_send(scheduler, send));
+    AsyncReleaseThread release = {
+        .scheduler = scheduler, .ticket = send, .result = -1
+    };
+    atomic_init(&release.started, 0);
+    atomic_init(&release.done, 0);
+    pthread_t releaser;
+    CHECK(pthread_create(
+        &releaser, NULL, release_async_descriptor, &release) == 0);
+    while (!atomic_load_explicit(&release.started, memory_order_acquire))
+        sched_yield();
+    while (!ores_native_actor_scheduler_test_async_release_pending(
+            scheduler, send))
+        sched_yield();
+
+    /* The release owner is parked behind callback exit; descriptor identity
+     * remains valid and a second release attempt is rejected. */
+    CHECK(!atomic_load_explicit(&release.done, memory_order_acquire));
     expect_state(scheduler, send,
         ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+    CHECK(!ores_native_actor_scheduler_release_async_send(scheduler, send));
 
     atomic_store_explicit(&state.hold_wake, 0, memory_order_release);
+    CHECK(pthread_join(releaser, NULL) == 0);
+    CHECK(release.result);
+    CHECK(atomic_load_explicit(&release.done, memory_order_acquire));
     while (!atomic_load_explicit(&state.wake_exited, memory_order_acquire))
         sched_yield();
     while (ores_native_actor_scheduler_wakes_completed(scheduler) == 0)
