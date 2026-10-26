@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "oreslang/runtime/NativeExecutionContext.h"
+#include "oreslang/runtime/NativeSelectToken.h"
 typedef struct OresNativePhysicalTurnGate OresNativePhysicalTurnGate;
 #ifdef __cplusplus
 extern "C" {
@@ -153,6 +154,21 @@ typedef struct {
 OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     OresNativeActorScheduler* scheduler, OresNativeActorRef target,
     uint64_t payload, OresNativeAsyncSendTicket* out);
+/*
+ * Selectable mailbox admission uses the exact same scheduler async-send
+ * descriptor pool and FIFO target credits as submit_async. The select token
+ * is an arbitration capability only; it does not own a second message queue.
+ *
+ * Unlike ordinary send_async, a selectable descriptor does not enqueue merely
+ * because target credit becomes available. At that credit boundary the
+ * scheduler first atomically commits the common select winner. Only the
+ * winning arm may enqueue and become READY. A losing/sealed arm becomes
+ * CANCELLED without publishing its payload.
+ */
+OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef target,
+    uint64_t payload, OresNativeSelectToken select_token,
+    OresNativeAsyncSendTicket* out);
 int ores_native_actor_scheduler_async_send_status(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
     OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
