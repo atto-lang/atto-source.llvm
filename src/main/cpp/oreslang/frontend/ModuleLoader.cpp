@@ -25,6 +25,11 @@ struct Unit {
     std::unordered_set<std::string> classes;
     std::unordered_map<std::string, bool> class_exports;
     std::unordered_map<std::string, bool> constructor_exports;
+    // Public source API names are resolved through ExportBinding, independently
+    // of native linkage. Values are immutable local declaration spellings.
+    std::unordered_map<std::string, std::string> function_source_exports;
+    std::unordered_map<std::string, std::string> class_source_exports;
+    std::unordered_map<std::string, std::string> module_source_exports;
 };
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
@@ -129,6 +134,26 @@ private:
             unit->classes.insert(cls.name); unit->class_exports.emplace(cls.name, cls.exported);
             unit->constructor_exports.emplace(cls.name, !cls.explicit_constructor || cls.constructor_exported);
         }
+        for (const auto& binding : unit->program.source_export_bindings) {
+            if (binding.scope != SourceExportScope::Public) continue;
+            switch (binding.local_kind) {
+                case SourceExportKind::Fnc:
+                case SourceExportKind::Routine:
+                    unit->function_source_exports.emplace(
+                        binding.external_name, binding.local_name);
+                    break;
+                case SourceExportKind::Class:
+                    unit->class_source_exports.emplace(
+                        binding.external_name, binding.local_name);
+                    break;
+                case SourceExportKind::Module:
+                    unit->module_source_exports.emplace(
+                        binding.external_name, binding.local_name);
+                    break;
+                default:
+                    break;
+            }
+        }
         paths.emplace(unit->path.string(), index);
         units.push_back(std::move(unit));
         auto& current = *units[index];
@@ -184,12 +209,18 @@ private:
                 fail(current, "native imported module binding conflicts with containing module");
             const auto& target = *units[selected];
             if (imported.selected_class) {
-                const auto cls = target.class_exports.find(imported.selected_module);
-                if (cls == target.class_exports.end() || !cls->second)
+                const auto cls = target.class_source_exports.find(imported.selected_module);
+                if (cls == target.class_source_exports.end())
                     fail(current, "unknown or private imported class '" + imported.selected_module + "'");
-                current.class_imports.emplace(imported.local_name, std::make_pair(selected, imported.selected_module));
-            } else if (target.program.module != imported.selected_module)
-                fail(current, "imported file does not declare selected module '" + imported.selected_module + "'");
+                current.class_imports.emplace(
+                    imported.local_name, std::make_pair(selected, cls->second));
+            } else {
+                const auto module = target.module_source_exports.find(imported.selected_module);
+                const bool legacy_module_name =
+                    target.program.module == imported.selected_module;
+                if (module == target.module_source_exports.end() && !legacy_module_name)
+                    fail(current, "imported file does not export selected module '" + imported.selected_module + "'");
+            }
             if (!imported.selected_class) current.dependencies.emplace(imported.local_name, selected);
         }
         return index;
@@ -218,12 +249,18 @@ private:
             if (binding == unit.dependencies.end()) fail(unit, "unknown native module binding");
             target = units[binding->second].get(); member = expr->name.substr(dot + 1); external = true;
         }
-        const auto function = target->functions.find(member);
-        if (function == target->functions.end() || !function->second.count(expr->arguments.size()))
+        std::string local_member = member;
+        if (external) {
+            const auto exported = target->function_source_exports.find(member);
+            if (exported == target->function_source_exports.end())
+                fail(unit, "imported function is private or unknown: '" + expr->name + "'");
+            local_member = exported->second;
+        }
+        const auto function = target->functions.find(local_member);
+        if (function == target->functions.end() ||
+                !function->second.count(expr->arguments.size()))
             fail(unit, "unknown function or wrong call arity '" + expr->name + "'");
-        if (external && !function->second.at(expr->arguments.size()))
-            fail(unit, "imported function is private: '" + expr->name + "'");
-        expr->name = target->prefix + member;
+        expr->name = target->prefix + local_member;
     }
     std::string class_type(const Unit& unit, const std::string& name, bool constructing = false) {
         const auto imported = unit.class_imports.find(name);
