@@ -870,6 +870,46 @@ static void detached_pending_stop_skips_guest_and_joins(void) {
         "guest_continuation=0 trace_cleanup=1 final_join=1\n");
 }
 
+static void discard_started_future_consumes_pending_and_ready(void) {
+    void* ready_actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(ready_actor != NULL);
+    wait_ready(ready_actor);
+
+    void* ready_future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        ready_actor, 930, &ready_future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(ready_future != NULL);
+    CHECK(oreslang_source_actor_discard_send_future_checked(ready_future)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(oreslang_source_actor_await_send_future_checked(ready_future)
+        == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    oreslang_source_actor_stop(ready_actor);
+
+    reset_blocker();
+    void* pending_actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(pending_actor != NULL);
+    wait_ready(pending_actor);
+    (void)saturate_real_mailbox(pending_actor);
+
+    void* pending_future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        pending_actor, 931, &pending_future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(pending_future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(pending_actor) == 1);
+    CHECK(oreslang_source_actor_discard_send_future_checked(pending_future)
+        == ORES_SOURCE_SEND_ASYNC_CANCELLED);
+    CHECK(oreslang_source_actor_test_pending_async_sends(pending_actor) == 0);
+    CHECK(oreslang_source_actor_await_send_future_checked(pending_future)
+        == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    oreslang_source_actor_stop(pending_actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DISCARD_RACE_PASS ready=accepted pending=cancelled consumed=1\n");
+}
+
 static void stored_future_cancel_wins_only_while_pending(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -1086,6 +1126,7 @@ int main(void) {
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
     detached_pending_stop_skips_guest_and_joins();
+    discard_started_future_consumes_pending_and_ready();
     stored_future_cancel_wins_only_while_pending();
     stop_wakes_full_waiter_as_terminated();
     rejected_ready_cancel_releases_ownership_claim();
