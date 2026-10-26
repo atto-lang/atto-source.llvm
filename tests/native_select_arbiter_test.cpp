@@ -165,6 +165,63 @@ static void registration_validation_fails_closed() {
     assert(terminal_registration);
 }
 
+static void conditional_commit_only_wins_after_operation_commits() {
+    NativeSelectArbiter<2> select;
+    auto first = select.register_case(0);
+    auto second = select.register_case(1);
+    int first_revoke = 0;
+    int second_revoke = 0;
+    int commits = 0;
+
+    first.arm([&] { ++first_revoke; });
+    second.arm([&] { ++second_revoke; });
+
+    assert(!first.try_win_if([&] {
+        ++commits;
+        return false;
+    }));
+    assert(commits == 1);
+    assert(!select.winner().has_value());
+    assert(first_revoke == 0);
+    assert(second_revoke == 0);
+
+    assert(second.try_win_if([&] {
+        ++commits;
+        return true;
+    }));
+    assert(commits == 2);
+    assert(select.winner().has_value() && *select.winner() == 1);
+    assert(first_revoke == 1);
+    assert(second_revoke == 0);
+}
+
+static void throwing_commit_leaves_select_pending() {
+    NativeSelectArbiter<2> select;
+    auto first = select.register_case(0);
+    auto second = select.register_case(1);
+    int first_revoke = 0;
+    int second_revoke = 0;
+    first.arm([&] { ++first_revoke; });
+    second.arm([&] { ++second_revoke; });
+
+    bool observed = false;
+    try {
+        (void)first.try_win_if([]() -> bool {
+            throw std::runtime_error("commit failure");
+        });
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+    assert(observed);
+    assert(!select.winner().has_value());
+    assert(first_revoke == 0);
+    assert(second_revoke == 0);
+
+    assert(second.try_win());
+    assert(first_revoke == 1);
+    assert(second_revoke == 0);
+}
+
 static void throwing_revoker_does_not_skip_other_losers() {
     NativeSelectArbiter<3> select;
     auto first = select.register_case(0);
@@ -243,6 +300,8 @@ int main() {
     task_revocation_cancels_select_without_reentrant_deadlock();
     arbiter_destruction_revokes_live_registration();
     registration_validation_fails_closed();
+    conditional_commit_only_wins_after_operation_commits();
+    throwing_commit_leaves_select_pending();
     throwing_revoker_does_not_skip_other_losers();
     concurrent_ready_race_has_exactly_one_winner();
     return 0;
