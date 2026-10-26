@@ -795,6 +795,19 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
+        /*
+         * ReadableOutcome is materialized only by the resumed continuation.
+         * Ownership sees it as a plain scalar after all pre-suspension locals
+         * have been validated; it is never an owner carried across suspension.
+         */
+        if (!function.readable_outcome_name.empty()) {
+            LocalOwnership outcome;
+            outcome.mode = Mode::Value;
+            outcome.mutable_owner = false;
+            if (!locals.emplace(function.readable_outcome_name, std::move(outcome)).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate ReadableOutcome binding");
+        }
         std::vector<const Statement*> deferred_effects;
         // Provenance for an array field is tracked as a single compile-time
         // shadow handle in this first native slice. Branch-specific moves

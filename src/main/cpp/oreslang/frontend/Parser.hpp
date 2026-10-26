@@ -14,7 +14,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool, String };
+enum class ScalarType { I64, Bool, String, ReadableOutcome };
 
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
@@ -248,6 +248,11 @@ struct Function {
     bool readable_await = false;
     std::int64_t readable_await_fd = -1;
     std::size_t readable_await_offset = 0;
+    // Optional compiler-owned post-suspension scalar binding:
+    //   await readable(fd) as ReadableOutcome outcome;
+    // This value is created only on the resumed actor lane; it is not a
+    // lexical owner carried across the suspension boundary.
+    std::string readable_outcome_name;
     // Records the syntactic protocol witness; codegen receives only a
     // checked SourceActorReadyControl resolution, not a magic name.
     NativeAwaitForm ready_await_form = NativeAwaitForm::None;

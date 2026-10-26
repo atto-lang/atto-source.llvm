@@ -1772,7 +1772,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const std::string& awaited_actor = fn.actor_spawns.front().name;
 
             auto* continuation_type =
-                llvm::FunctionType::get(i64, {native_ptr}, false);
+                llvm::FunctionType::get(i64, {native_ptr, i64}, false);
             auto* resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
@@ -1781,11 +1781,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             auto* admitted =
                 llvm::BasicBlock::Create(context, "admitted", resume);
             llvm::IRBuilder<> resumed(admitted);
-            auto* resumed_actor = &*resume->arg_begin();
+            auto arg = resume->arg_begin();
+            auto* resumed_actor = &*arg++;
             resumed_actor->setName(awaited_actor);
+            auto* readable_outcome = &*arg;
+            readable_outcome->setName("readable.outcome");
 
-            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            std::unordered_map<std::string, llvm::Value*> resumed_storage;
             const std::unordered_map<std::string, llvm::Value*> no_fields;
+            if (!fn.readable_outcome_name.empty()) {
+                auto* outcome_slot = resumed.CreateAlloca(
+                    i64, nullptr, fn.readable_outcome_name + ".slot");
+                resumed.CreateStore(readable_outcome, outcome_slot);
+                resumed_storage.emplace(
+                    fn.readable_outcome_name, outcome_slot);
+            }
+
             for (const auto& action : fn.actor_actions) {
                 if (action.kind != ActorAction::Kind::Send) continue;
                 const auto& send = fn.actor_sends.at(action.index);
@@ -1796,7 +1807,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     *send.payload,
                     resumed,
                     i64,
-                    no_storage,
+                    resumed_storage,
                     no_fields,
                     declarations,
                     nullptr);
@@ -1806,7 +1817,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 *fn.result,
                 resumed,
                 i64,
-                no_storage,
+                resumed_storage,
                 no_fields,
                 declarations,
                 nullptr);

@@ -153,7 +153,7 @@ bool reserved(std::string_view name) {
         "static", "pub", "private", "return", "defer", "throw", "raise",
         "panic", "recover", "val", "const",
         "let", "mut", "borrow", "self", "true", "false", "null", "obj", "arr",
-        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "pure",
+        "gpu", "cpu", "quantum", "over", "structural", "int", "bool", "ReadableOutcome", "pure",
         "Some", "None", "Ok", "Err", "using", "requires", "serial", "critical-read", "critical-write", "nb-select"
     };
     return std::find(std::begin(words), std::end(words), name) != std::end(words);
@@ -2050,6 +2050,10 @@ private:
                     if (fd < 0 || fd > std::numeric_limits<int>::max())
                         fail("await readable file descriptor is out of native int range");
                     require(")");
+                    if (accept("as")) {
+                        require("ReadableOutcome");
+                        value.readable_outcome_name = identifier();
+                    }
                     require(";");
                     value.readable_await = true;
                     value.readable_await_fd = fd;
@@ -2575,6 +2579,18 @@ private:
             auto expr = make_expression(Expression::Kind::Boolean, offset);
             expr->boolean = token_.text == "true";
             advance();
+            return expr;
+        }
+        if (token_.text == "ReadableOutcome") {
+            advance();
+            require(".");
+            const std::string variant = identifier();
+            auto expr = make_expression(Expression::Kind::Integer, offset);
+            if (variant == "Ready") expr->integer = 1;
+            else if (variant == "Cancelled") expr->integer = 2;
+            else if (variant == "Failed") expr->integer = 3;
+            else fail("ReadableOutcome supports only Ready, Cancelled, or Failed");
+            expr->resolved_type = ScalarType::ReadableOutcome;
             return expr;
         }
         // Explicit brace tuples and nominal Entry values have no LLVM native
@@ -3120,7 +3136,10 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
+        if (type == ScalarType::String) return "string";
+        if (type == ScalarType::Bool) return "bool";
+        if (type == ScalarType::ReadableOutcome) return "ReadableOutcome";
+        return "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -3143,7 +3162,7 @@ private:
                 return expr.kind == Expression::Kind::SumAccess ? expr.resolved_type : ScalarType::I64;
 
             case Expression::Kind::Integer:
-                return ScalarType::I64;
+                return expr.resolved_type;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
@@ -3699,6 +3718,10 @@ private:
                         fn.readable_await_fd > std::numeric_limits<int>::max())
                     throw std::runtime_error(
                         "await readable requires a native int file descriptor");
+                if (!fn.readable_outcome_name.empty() &&
+                        fn.readable_outcome_name == fn.actor_spawns.front().name)
+                    throw std::runtime_error(
+                        "ReadableOutcome binding cannot shadow an ActorRef");
                 if (contains_callable_invocation(fn.result.get()))
                     throw std::runtime_error(
                         "await readable requires side-effect-free scalar return");
@@ -3808,6 +3831,15 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_names(stmt, params);
+            if (!fn.readable_outcome_name.empty()) {
+                if (references.count(fn.readable_outcome_name))
+                    throw std::runtime_error(
+                        "ReadableOutcome binding cannot shadow an ActorRef");
+                if (!params.insert(fn.readable_outcome_name).second)
+                    throw std::runtime_error(
+                        "duplicate ReadableOutcome binding '" +
+                        fn.readable_outcome_name + "'");
+            }
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
             for (const auto& action : fn.actor_actions) {
@@ -3970,6 +4002,9 @@ private:
             };
             for (const auto& stmt : fn.statements)
                 check_statement_types(stmt, scalar_types);
+            if (!fn.readable_outcome_name.empty())
+                scalar_types.emplace(
+                    fn.readable_outcome_name, ScalarType::ReadableOutcome);
 
             for (const auto& action : fn.actor_actions) {
                 if (action.kind == ActorAction::Kind::Send)

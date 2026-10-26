@@ -16,6 +16,16 @@ typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
 
+typedef int64_t OresSourceReadableOutcome;
+enum {
+    ORES_SOURCE_READABLE_READY = 1,
+    ORES_SOURCE_READABLE_CANCELLED = 2,
+    ORES_SOURCE_READABLE_FAILED = 3
+};
+
+typedef int64_t (*OresSourceActorReadableContinuation)(
+    void* actor, OresSourceReadableOutcome outcome);
+
 enum {
     ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
     ORES_SOURCE_ACTOR_STARTUP_INITIALIZING = 1,
@@ -35,6 +45,11 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+#ifdef ORESLANG_SOURCE_ACTOR_NIO
+/* Test-only host cancellation of the currently admitted readable watch.
+ * Returns 0 while no readable watch is admitted, 1 once cancellation wins. */
+int oreslang_source_actor_test_cancel_pending_readable(void);
+#endif
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
@@ -107,6 +122,10 @@ int64_t oreslang_source_actor_await_done(
 /*
  * Linux-native first source I/O suspension slice:
  *   await readable(<literal-fd>);
+ *   await readable(<literal-fd>) as ReadableOutcome outcome;
+ *
+ * The typed form projects READY/CANCELLED/FAILED into a compiler-owned scalar
+ * enum created only after resumption on the authenticated root actor lane.
  *
  * The fd literal never becomes a suspended lexical owner. The runtime binds
  * the one-shot readiness watch to the process-local source root actor, uses
@@ -117,7 +136,7 @@ int64_t oreslang_source_actor_await_done(
 int64_t oreslang_source_actor_await_readable(
     void* actor,
     int64_t fd,
-    OresSourceActorContinuation continuation,
+    OresSourceActorReadableContinuation continuation,
     uint64_t source_token);
 
 /*

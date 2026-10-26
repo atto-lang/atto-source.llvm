@@ -142,6 +142,40 @@ This is still not a public portable I/O API. The literal-fd form exists to
 prove compiler → continuation → VM-NIO → scheduler → compiled-resume ownership
 end to end before typed nonblocking stream/socket abstractions are admitted.
 
+### Typed readable terminal outcome
+
+The same restricted source site may now bind a compiler-owned scalar outcome:
+
+```oreslang
+await readable(0) as ReadableOutcome outcome;
+```
+
+`ReadableOutcome` has exactly three values in this native slice:
+`Ready`, `Cancelled`, and `Failed`. Its C/LLVM ABI is explicitly i64;
+it is not a C enum and is not interchangeable with source `int`. Equality is
+allowed only against another `ReadableOutcome`; integer comparison/arithmetic
+is rejected before IR.
+
+The binding is created only in the resumed continuation. It is therefore not a
+lexical local carried across suspension and cannot hold ownership or borrows.
+The continuation may use it in post-await actor-message payload expressions and
+the final scalar return.
+
+All three admitted terminal NIO outcomes follow one logical continuation path:
+the persisted suspension becomes READY, the authenticated root actor lane claims
+it exactly once, guest continuation code runs exactly once with the immutable
+outcome value, and the continuation/execution records retire exactly once.
+
+Watch-registration failure has no NIO wake to transfer. Trusted host glue
+projects it as `Failed` by publishing a compiler-owned root CONTROL turn; it
+never calls guest code directly. A cancelled actor-owned watch projects
+`Cancelled` through the normal #994 scheduler-wake handoff.
+
+Producer retirement remains intentionally different. If the source-root actor
+is already retired, #994 consumes the wake without callback admission. The
+persisted continuation is cancelled and source code is not resurrected merely
+to observe an outcome.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:

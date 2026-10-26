@@ -1292,6 +1292,24 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_source_actor_await_readable_post_call_reordering
         source-actor-await-readable-post-call-reject.ores
         --diagnostic "await readable does not yet lower post-await non-actor statements")
+    oreslang_contract_test(source_actor_await_readable_typed_outcome_ir
+        source-actor-await-readable-outcome.ores
+        --ir "readable_continuation")
+    oreslang_contract_test(source_actor_await_readable_failed_outcome_ir
+        source-actor-await-readable-failed.ores
+        --ir "readable.outcome")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_int_compare
+        source-actor-await-readable-outcome-int-compare-reject.ores
+        --diagnostic "equality operands require the same scalar type")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_arithmetic
+        source-actor-await-readable-outcome-arithmetic-reject.ores
+        --diagnostic "arithmetic requires int, got ReadableOutcome")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_shadow
+        source-actor-await-readable-outcome-shadow-reject.ores
+        --diagnostic "ReadableOutcome binding cannot shadow an ActorRef")
+    oreslang_contract_test(reject_source_actor_await_readable_outcome_variant
+        source-actor-await-readable-outcome-variant-reject.ores
+        --diagnostic "ReadableOutcome supports only Ready, Cancelled, or Failed")
     # ActorRef implements HasFuture: awaiting its capability directly
     # delegates to the same get_ready() root CONTROL continuation.
     oreslang_contract_test(source_actor_hasfuture_direct_await_ir
@@ -1442,6 +1460,37 @@ if(BUILD_TESTING)
         add_test(NAME source_actor_readable_await_runtime
             COMMAND oreslang-source-actor-readable-await-runtime-test)
         set_tests_properties(source_actor_readable_await_runtime PROPERTIES TIMEOUT 30)
+
+        add_executable(oreslang-source-actor-readable-outcome-runtime-test
+            tests/source_actor_readable_outcome_runtime_test.c
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+            src/main/cpp/oreslang/runtime/NativeOresVM.c
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c
+            src/main/cpp/oreslang/runtime/NativeOresVMNio.cpp
+            src/main/cpp/oreslang/runtime/NativeEpollReactorABI.cpp)
+        target_include_directories(oreslang-source-actor-readable-outcome-runtime-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(oreslang-source-actor-readable-outcome-runtime-test PRIVATE
+            ORESLANG_SOURCE_ACTOR_TESTING
+            ORESLANG_SOURCE_ACTOR_NIO)
+        set_target_properties(oreslang-source-actor-readable-outcome-runtime-test PROPERTIES
+            LINKER_LANGUAGE CXX)
+        target_compile_features(oreslang-source-actor-readable-outcome-runtime-test PRIVATE
+            c_std_11 cxx_std_17)
+        target_compile_options(oreslang-source-actor-readable-outcome-runtime-test PRIVATE
+            $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Wpedantic -Werror>
+            $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Werror>)
+        target_link_libraries(oreslang-source-actor-readable-outcome-runtime-test PRIVATE
+            Threads::Threads)
+        add_test(NAME source_actor_readable_outcome_runtime
+            COMMAND oreslang-source-actor-readable-outcome-runtime-test)
+        set_tests_properties(source_actor_readable_outcome_runtime PROPERTIES TIMEOUT 30)
     endif()
 
     if(ORE_RT_AOT_CLANG AND ORE_RT_AOT_CXX)

@@ -25,7 +25,9 @@ static int64_t actor_message(
     return payload;
 }
 
-static int64_t resumed(void* actor) {
+static int64_t resumed(
+        void* actor, OresSourceReadableOutcome outcome) {
+    check(outcome == ORES_SOURCE_READABLE_READY);
     OresNativeExecutionHandle current = {0, 0};
     check(oreslang_source_actor_current_execution_handle(&current));
     check(ores_native_store_handle_valid(current));
