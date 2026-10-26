@@ -4034,10 +4034,26 @@ private:
             const bool direct_send_await = std::any_of(
                 fn.actor_sends.begin(), fn.actor_sends.end(),
                 [](const ActorSend& send) { return send.await_admission; });
-            if (direct_send_await
-                    && (fn.actor_spawns.size() != 1 || !fn.locals.empty()))
+            if (direct_send_await && fn.actor_spawns.size() != 1)
                 throw std::runtime_error(
-                    "direct send_async await requires one source actor without suspended locals");
+                    "direct send_async await requires one source actor");
+            if (direct_send_await) {
+                const auto copy_scalar = [](const LocalBinding& local) {
+                    return !local.heap_owned
+                        && !local.int_array
+                        && local.class_name.empty()
+                        && !local.new_class
+                        && !local.record_view
+                        && !local.move_class
+                        && local.sum_type.empty()
+                        && local.scalar_type != ScalarType::String;
+                };
+                if (fn.locals.size() > 16
+                        || !std::all_of(
+                            fn.locals.begin(), fn.locals.end(), copy_scalar))
+                    throw std::runtime_error(
+                        "direct send_async await captures only up to 16 Copy int/bool locals");
+            }
             if (!fn.ready_await_actor.empty()) {
                 /*
                  * First executable suspension is deliberately tiny: one actor
