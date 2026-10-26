@@ -1,0 +1,15 @@
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await worker.send_async(1);
+  await worker.send_async(2);
+  await worker.send_async(3);
+  stop worker;
+  return 43;
+}
