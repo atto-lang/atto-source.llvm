@@ -150,6 +150,9 @@ size_t ores_native_vm_test_waiting_sends(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
 size_t ores_native_vm_test_pending_async_sends(
     OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef actor);
+/* Process-local test counter for the blocking host observer API. Logical
+ * scheduler-wake await tests snapshot this to prove they never use that path. */
+uint64_t ores_native_vm_test_async_send_host_wait_calls(void);
 #endif
 /* Reject supervisor stop until all its registered direct children have
  * drained AND their terminal notices have been admitted to priority CONTROL.
