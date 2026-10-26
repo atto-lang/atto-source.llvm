@@ -109,7 +109,8 @@ fn main() {
     assert!(!ir.contains("structural.reflect") && !ir.contains("structural.cast"),
         "structural lowering must not use reflection or raw layout casts");
 
-    if let Some(clang) = clang {
+    let native_executed = clang.is_some();
+    if let Some(clang) = clang.as_ref() {
         let clang = clang.canonicalize().expect("clang must exist");
         run_native(&clang, &tmp.0, &structural.stdout);
     }
@@ -195,6 +196,6 @@ fnc mutate(borrow mut structural PointLike point): int { return point.x; }
 
     println!(
         "PASS: scalar control; structural width subtype -> IR{}; {} negative no-IR/no-artifact checks",
-        if clang.is_some() { " -> native return 3" } else { "" },
+        if native_executed { " -> native return 3" } else { "" },
         probes.len());
 }
