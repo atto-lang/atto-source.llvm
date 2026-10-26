@@ -354,3 +354,59 @@ extern "C" int ores_native_select2_try_commit_i64_write(
     if (context.failed || won < 0) return -1;
     return won;
 }
+
+
+namespace {
+struct ReadyNowReadContext {
+    OresNativeSelect2* select = nullptr;
+    uint32_t index = 0;
+    OresNativeI64Channel1* channel = nullptr;
+    int* status = nullptr;
+    int64_t* value = nullptr;
+    int result = 0;
+};
+
+void ready_now_read(
+        void* raw,
+        const OresNativeI64ChannelPermit* permit) noexcept {
+    auto* context = static_cast<ReadyNowReadContext*>(raw);
+    context->result = ores_native_select2_try_commit_i64_read(
+        context->select,
+        context->index,
+        context->channel,
+        permit,
+        context->status,
+        context->value);
+}
+}  // namespace
+
+extern "C" int ores_native_select2_read_i64_ready_now(
+        OresNativeSelect2* select,
+        uint32_t index,
+        OresNativeI64Channel1* channel,
+        int* status,
+        int64_t* value) {
+    if (!select || !channel || !status || !value || index >= 2)
+        return -1;
+
+    *status = ORES_NATIVE_I64_READ_WOULD_BLOCK;
+    *value = 0;
+    ReadyNowReadContext context{
+        select, index, channel, status, value, 0};
+    OresNativeI64ChannelSubscription* subscription = nullptr;
+    const int subscribed =
+        ores_native_i64_channel1_subscribe_readable(
+            channel,
+            ready_now_read,
+            &context,
+            &subscription);
+    if (subscribed != 1 || !subscription)
+        return -1;
+
+    const int closed =
+        ores_native_i64_channel_subscription_close(subscription);
+    ores_native_i64_channel_subscription_destroy(subscription);
+    if (closed < 0 || context.result < 0)
+        return -1;
+    return context.result;
+}
