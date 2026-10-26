@@ -158,7 +158,9 @@ def main():
         "source-actor-send-async-unawaited-reject.ores":
             "native send_async statement must be awaited directly or bound to Future<void>",
         "source-actor-send-async-method-reject.ores":
-            "native send_async direct await requires trusted zero-argument main",
+            "native actor await requires continuation lowering",
+        "source-actor-send-async-saturated.ores":
+            "native source supports only one async await boundary",
         "source-actor-send-async-future-unused-reject.ores":
             "Future<void> send_async token must be awaited exactly once",
         "source-actor-send-async-future-stop-before-await-reject.ores":
