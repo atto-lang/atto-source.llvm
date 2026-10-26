@@ -289,6 +289,47 @@ static void failed_startup_finalization_cannot_resurrect_ready() {
     CHECK(done_failed_exactly);
 }
 
+static void scalar_future_open_allocation_failures_release_one_loan() {
+    std::uint32_t injected_failures = 0;
+    bool saw_success = false;
+    for (long long fail_index = 0; fail_index < 8; ++fail_index) {
+        NativeActorGroup group(191200 + static_cast<std::uint64_t>(fail_index), 1);
+        auto actor = group.adopt(
+            191200 + static_cast<std::uint64_t>(fail_index),
+            400 + static_cast<std::uint64_t>(fail_index), 1, [] {});
+        CHECK(group.mark_ready(actor));
+
+        std::shared_ptr<NativeScalarFutureAwait> frame;
+        bool injected = false;
+        fail_after_allocations.store(fail_index, std::memory_order_release);
+        try {
+            frame = NativeScalarFutureAwait::open(
+                actor, 9000 + static_cast<std::uint64_t>(fail_index));
+        } catch (const std::bad_alloc&) {
+            injected = true;
+        }
+        fail_after_allocations.store(-1, std::memory_order_release);
+
+        if (injected) {
+            ++injected_failures;
+            CHECK(!frame);
+            CHECK(actor.outstanding_resource_loans() == 0);
+        } else {
+            saw_success = true;
+            CHECK(frame);
+            CHECK(actor.outstanding_resource_loans() == 1);
+            CHECK(frame->cancel(frame->id()));
+            CHECK(actor.outstanding_resource_loans() == 0);
+        }
+
+        CHECK(group.finalized(actor));
+        actor.get_done().get();
+        if (saw_success && injected_failures >= 3) break;
+    }
+    CHECK(saw_success);
+    CHECK(injected_failures >= 3);
+}
+
 static void every_finalization_allocation_failure_is_retryable() {
     bool saw_injected_failure = false;
     bool saw_success_after_window = false;
@@ -350,5 +391,6 @@ int main() {
     concurrent_registration_and_finalization_have_one_winner();
     settlement_failure_keeps_terminal_resource_seal_retryable();
     failed_startup_finalization_cannot_resurrect_ready();
+    scalar_future_open_allocation_failures_release_one_loan();
     every_finalization_allocation_failure_is_retryable();
 }

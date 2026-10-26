@@ -64,15 +64,19 @@ public:
         // until the frame terminalizes or is dropped.
         owner.retain_resource_loan();
 
-        std::shared_ptr<NativeScalarFutureAwait> frame;
+        NativeScalarFutureAwait* raw_frame = nullptr;
         try {
-            frame = std::shared_ptr<NativeScalarFutureAwait>(
-                new NativeScalarFutureAwait(owner, future_id,
-                                            std::move(capability)));
+            raw_frame = new NativeScalarFutureAwait(
+                owner, future_id, std::move(capability));
         } catch (...) {
             owner.release_resource_loan();
             throw;
         }
+
+        // The frame object owns the loan from here. If shared_ptr control-block
+        // allocation throws, shared_ptr deletes raw_frame and its destructor
+        // releases the loan exactly once.
+        std::shared_ptr<NativeScalarFutureAwait> frame(raw_frame);
 
         // Group close does not seal resource_state, so it may race after the
         // initial check and after loan admission. Reject that ordering by
