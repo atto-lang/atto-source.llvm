@@ -94,6 +94,33 @@ int main() {
         replacement.get_done().get();
     }
     {
+        // Reusing the same routing labels AND the same numeric generation must
+        // still mint a new opaque incarnation ticket. A stale ref from the
+        // retired incarnation cannot finalize, ready, or otherwise mutate the
+        // replacement merely because all public numeric fields compare equal.
+        NativeActorGroup group(101, 1);
+        auto original = group.adopt(101, 17, 9, [] {});
+        check(group.mark_ready(original), "same-generation original not ready");
+        check(group.finalized(original), "same-generation original not finalized");
+        original.get_done().get();
+
+        auto replacement = group.adopt(101, 17, 9, [] {});
+        check(original == replacement,
+              "fixture requires equal public numeric routing identity");
+        check(!original.same_incarnation(replacement),
+              "replacement unexpectedly reused opaque incarnation ticket");
+        check(!group.mark_ready(original),
+              "stale same-generation ref marked replacement ready");
+        check(!group.finalized(original),
+              "stale same-generation ref finalized replacement");
+        check(group.mark_ready(replacement),
+              "replacement exact incarnation could not become ready");
+        check(group.finalized(replacement),
+              "replacement exact incarnation could not finalize");
+        replacement.get_ready().get();
+        replacement.get_done().get();
+    }
+    {
         NativeActorGroup group(1, 2);
         int stops = 0;
         auto first = group.adopt(1, 1, 1, [&] { ++stops; });
