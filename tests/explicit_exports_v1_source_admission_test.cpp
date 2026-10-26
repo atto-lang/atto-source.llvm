@@ -184,21 +184,16 @@ fnc api(Hidden value): int { return value; }
         check(program.source_export_bindings.size() == 2);
     }
 
-    // Private class storage is not part of an exported source API signature.
-    {
-        auto program = parse_unresolved_program(R"(
+    // A private declaration-only field still participates in the backend's
+    // synthesized public positional constructor, so its type is API-visible.
+    denied(R"(
 define class Hidden as
 end
 export class Api;
 define class Api as
   private val Hidden hidden;
 end
-)");
-        check(program.source_export_bindings.size() == 1);
-        check(program.source_export_bindings.front().local_kind ==
-              SourceExportKind::Class);
-        check(program.source_export_bindings.front().local_name == "Api");
-    }
+)", "EXPORT_API_LEAK");
 
     // Public API cannot expose a package-only local type.
     denied(R"(
