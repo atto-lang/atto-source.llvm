@@ -131,10 +131,12 @@ int64_t oreslang_source_actor_await_send_future(
  * mailbox admission, or continuation execution. The root CONTROL turn captures
  * the logical continuation and binds the exact scheduler descriptor itself.
  *
- * wait_detached_send_result is outer-host/process glue: it waits only for the
+ * wait_detached_send_result is single-consumer outer-host/process glue:
+ * exactly one external host may claim finalization. It waits only for the
  * detached function to finish, releases continuation/Future metadata, performs
  * physical actor join after nonblocking stop admission, and returns the exact
- * send outcome. It must never run on an actor carrier.
+ * send outcome. Concurrent/duplicate finalizers fail closed with INVALID_REF.
+ * It must never run on an actor carrier.
  */
 int oreslang_source_actor_detach_send_future_checked(
     void* future,
