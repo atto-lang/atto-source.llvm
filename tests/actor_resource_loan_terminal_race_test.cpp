@@ -330,6 +330,56 @@ static void scalar_future_open_allocation_failures_release_one_loan() {
     CHECK(injected_failures >= 3);
 }
 
+static void successful_done_cannot_be_rewritten_by_late_failure() {
+    NativeActorGroup group(191007, 1);
+    auto actor = group.adopt(191007, 204, 1, [] {});
+    CHECK(group.mark_ready(actor));
+    CHECK(group.finalized(actor));
+    CHECK(!group.finalized(actor, "late conflicting failure"));
+    actor.get_done().get();
+}
+
+static void concurrent_finalization_publishes_exact_winner() {
+    for (std::uint32_t trial = 0; trial < 256; ++trial) {
+        NativeActorGroup group(192000 + trial, 1);
+        auto actor = group.adopt(192000 + trial, 500 + trial, 1, [] {});
+        CHECK(group.mark_ready(actor));
+
+        std::atomic<int> ready{0};
+        bool success_won = false;
+        bool failure_won = false;
+        const std::string failure = "concurrent terminal failure " + std::to_string(trial);
+
+        std::thread success_thread([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            success_won = group.finalized(actor);
+        });
+        std::thread failure_thread([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) != 2)
+                std::this_thread::yield();
+            failure_won = group.finalized(actor, failure);
+        });
+        success_thread.join();
+        failure_thread.join();
+
+        CHECK(success_won != failure_won);
+        if (success_won) {
+            actor.get_done().get();
+        } else {
+            bool exact = false;
+            try { actor.get_done().get(); }
+            catch (const std::runtime_error& e) {
+                exact = std::string(e.what()) == failure;
+            }
+            CHECK(exact);
+        }
+        CHECK(!group.finalized(actor, "post-terminal rewrite"));
+    }
+}
+
 static void every_finalization_allocation_failure_is_retryable() {
     bool saw_injected_failure = false;
     bool saw_success_after_window = false;
@@ -392,5 +442,7 @@ int main() {
     settlement_failure_keeps_terminal_resource_seal_retryable();
     failed_startup_finalization_cannot_resurrect_ready();
     scalar_future_open_allocation_failures_release_one_loan();
+    successful_done_cannot_be_rewritten_by_late_failure();
+    concurrent_finalization_publishes_exact_winner();
     every_finalization_allocation_failure_is_retryable();
 }
