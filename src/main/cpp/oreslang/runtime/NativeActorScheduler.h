@@ -112,7 +112,8 @@ typedef enum {
     ORES_NATIVE_SEND_TERMINATED = 2,
     ORES_NATIVE_SEND_MAILBOX_FULL = 3,
     ORES_NATIVE_SEND_RESOURCE_EXHAUSTED = 4,
-    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5
+    ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE = 5,
+    ORES_NATIVE_SEND_CANCELLED = 6
 } OresNativeSendStatus;
 OresNativeSendStatus ores_native_actor_scheduler_try_send(
     OresNativeActorScheduler* scheduler, OresNativeActorRef actor, uint64_t payload);
@@ -159,7 +160,7 @@ int ores_native_actor_scheduler_async_send_status(
  * Binding and terminal-state observation share the scheduler mutex: PENDING
  * keeps the reserved wake parked; READY/FAILED/CANCELLED publishes it
  * immediately. READY => ACCEPTED; FAILED => TERMINATED or RESOURCE_EXHAUSTED;
- * CANCELLED => TRANSPORT_UNAVAILABLE. Any new terminal pairing must be added
+ * CANCELLED => CANCELLED. Any new terminal pairing must be added
  * explicitly to the scheduler contract rather than flowing through silently.
  * READY remains valid if the target stopped after admission. completion_code
  * in the callback ticket is the exact OresNativeSendStatus. One descriptor
