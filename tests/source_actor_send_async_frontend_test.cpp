@@ -123,13 +123,13 @@ int main() {
             "native send_async Future<void> declaration must precede actor effects");
     rejects(program("await worker.get_ready(); await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one lifecycle/stored async await boundary");
+            "native source supports only one async await boundary");
     rejects(program("await worker; await worker.send_async(1); "
                     "stop worker; return 43;"),
-            "native source supports only one lifecycle/stored async await boundary");
+            "native source supports only one async await boundary");
     rejects(program("stop worker; await worker.get_done(); "
                     "await worker.send_async(1); return 43;"),
-            "native source supports only one lifecycle/stored async await boundary");
+            "native source supports only one async await boundary");
     rejects(program("await worker.send_async(1); "
                     "await worker.send_async(2); "
                     "await worker.send_async(3); "
