@@ -887,12 +887,23 @@ int oreslang_source_actor_await_send_async_checked(
 }
 
 static int source_send_future_valid_locked(SourceSendFuture* future) {
-    if (!future || !future->live || !future->actor) return 0;
-    SourceActor* actor = future->actor;
-    return actor->magic == SOURCE_ACTOR_MAGIC
-        && group.vm
-        && actor->ref.actor_slot < group.next_slot
-        && group.actors[actor->ref.actor_slot] == actor;
+    /*
+     * Opaque host pointers are capabilities, but a checked API must not
+     * dereference an arbitrary pointer merely to decide it is invalid. Prove
+     * membership in one currently-live actor wrapper pool first, then inspect
+     * wrapper state. Equality comparison itself does not access foreign memory.
+     */
+    if (!future || !group.vm) return 0;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        SourceActor* actor = group.actors[slot];
+        if (!actor || actor->magic != SOURCE_ACTOR_MAGIC) continue;
+        for (size_t i = 0; i < ORES_SOURCE_SEND_ASYNC_MAX_WAITERS; ++i) {
+            if (future != &actor->send_futures[i]) continue;
+            return future->live && future->actor == actor
+                && actor->ref.actor_slot == slot;
+        }
+    }
+    return 0;
 }
 
 int oreslang_source_actor_send_async_start_checked(
