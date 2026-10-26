@@ -603,7 +603,7 @@ static void source_send_wake(
         ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TERMINATED
             || send_outcome == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
     else if (wake_outcome == ORES_NATIVE_WAKE_CANCELLED)
-        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE);
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_CANCELLED);
     else
         abort();
 
