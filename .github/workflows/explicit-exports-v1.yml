@@ -37,5 +37,4 @@ jobs:
       - name: Compile production export gates
         run: cmake --build build --target oreslang-native-explicit-exports-v1-test oreslang-native-explicit-exports-v1-loader-test --parallel 2
       - name: Run production export gates
-        run: ctest --test-dir build -R '^native_explicit_exports_v1_(source_admission|module_loader)
- --output-on-failure --timeout 60
+        run: ctest --test-dir build -R '^native_explicit_exports_v1_(source_admission|module_loader)' --output-on-failure --timeout 60
