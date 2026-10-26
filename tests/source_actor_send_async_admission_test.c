@@ -542,6 +542,88 @@ static void detached_future_releases_guest_stack_before_admission(void) {
         "fresh_root_turn=1 final_join=1\n");
 }
 
+static atomic_int detached_state_resume_seen;
+
+static int64_t detached_state_resume_probe(
+        void* actor, const int64_t* state, uint64_t state_count) {
+    CHECK(actor != NULL);
+    CHECK(state != NULL);
+    CHECK(state_count == 2);
+    CHECK(state[0] == 40);
+    CHECK(state[1] == 2);
+    CHECK(ores_native_actor_scheduler_is_carrier_thread());
+    OresNativeExecutionHandle execution = {0, 0};
+    CHECK(oreslang_source_actor_current_execution_handle(&execution));
+    CHECK(ores_native_store_handle_valid(execution));
+    atomic_store_explicit(
+        &detached_state_resume_seen, 1, memory_order_release);
+    oreslang_source_actor_request_stop(actor);
+    return state[0] + 3;
+}
+
+static void detached_scalar_state_is_copied_before_guest_return(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 918, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    int64_t state[2] = {40, 2};
+    atomic_store_explicit(
+        &detached_state_resume_seen, 0, memory_order_release);
+    const uint64_t host_waits_before =
+        ores_native_vm_test_async_send_host_wait_calls();
+
+    CHECK(oreslang_source_actor_detach_send_future_state_checked(
+        future,
+        detached_state_resume_probe,
+        UINT64_C(0x5ef6),
+        state,
+        ORES_SOURCE_DETACHED_SCALAR_WORDS + 1)
+        == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+    CHECK(!oreslang_source_actor_test_future_consuming(future));
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    CHECK(oreslang_source_actor_detach_send_future_state_checked(
+        future,
+        detached_state_resume_probe,
+        UINT64_C(0x5ef6),
+        state,
+        2) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+
+    /* The runtime must have copied both words before returning. Mutating the
+     * caller's original stack buffer cannot alter the resumed state frame. */
+    state[0] = 999;
+    state[1] = 999;
+    CHECK(oreslang_source_actor_test_future_consuming(future));
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+    CHECK(atomic_load_explicit(
+        &detached_state_resume_seen, memory_order_acquire) == 0);
+    CHECK(ores_native_vm_test_async_send_host_wait_calls()
+        == host_waits_before);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    int64_t result = -1;
+    CHECK(oreslang_source_actor_wait_detached_send_result(&result)
+        == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(result == 43);
+    CHECK(atomic_load_explicit(
+        &detached_state_resume_seen, memory_order_acquire) == 1);
+    CHECK(ores_native_vm_test_async_send_host_wait_calls()
+        == host_waits_before);
+
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DETACHED_STATE_PASS copied=2 overbound_rejected=1 "
+        "guest_stack_released=1 final_join=1\n");
+}
+
 typedef struct {
     atomic_int started;
     int status;
@@ -985,6 +1067,7 @@ int main(void) {
     atomic_init(&foreign_probe_status, -1);
     atomic_init(&logical_send_resume_seen, 0);
     atomic_init(&detached_send_resume_seen, 0);
+    atomic_init(&detached_state_resume_seen, 0);
     atomic_init(&teardown_resume_entered, 0);
     atomic_init(&release_teardown_resume, 0);
     atomic_init(&failed_send_continuation_seen, 0);
@@ -998,6 +1081,7 @@ int main(void) {
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
     detached_future_releases_guest_stack_before_admission();
+    detached_scalar_state_is_copied_before_guest_return();
     detached_result_finalizer_is_single_consumer();
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
