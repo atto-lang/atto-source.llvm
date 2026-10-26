@@ -811,7 +811,6 @@ static AsyncSendCredit* oldest_pending_async_locked(ActorLane* lane) {
 }
 
 static void settle_selectable_failure_locked(
-        OresNativeActorScheduler* s,
         AsyncSendCredit* credit,
         OresNativeSendStatus outcome) {
     if (!credit || credit->state != ORES_NATIVE_ASYNC_SEND_PENDING)
@@ -848,7 +847,7 @@ static void fail_pending_async_sends_locked(
         AsyncSendCredit* credit = &lane->async_sends[i];
         if (credit->state != ORES_NATIVE_ASYNC_SEND_PENDING)
             continue;
-        settle_selectable_failure_locked(s, credit, outcome);
+        settle_selectable_failure_locked(credit, outcome);
         credit->sequence = 0;
         settle_async_send_wake_locked(s, credit);
         ++failed;
@@ -1122,6 +1121,8 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
     credit->sequence = 0;
     credit->wake = (OresNativeWakeTicket){0};
     credit->wake_bound = 0;
+    credit->select_token = (OresNativeSelectToken){0};
+    credit->select_bound = 0;
     credit->release_pending = 0;
     ++lane->async_live;
 
@@ -1195,6 +1196,8 @@ int ores_native_actor_scheduler_cancel_async_send(
     if (ok) {
         ActorLane* lane = &s->actors[ticket.target.actor_slot];
         if (!lane->async_pending) abort();
+        if (credit->select_bound)
+            (void)ores_native_select_detach(credit->select_token);
         --lane->async_pending;
         credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
         credit->outcome = ORES_NATIVE_SEND_CANCELLED;
@@ -1455,7 +1458,7 @@ int ores_native_actor_scheduler_bind_async_send_wake(
 
     lock(s);
     AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
-    int ok = credit && !credit->wake_bound
+    int ok = credit && !credit->wake_bound && !credit->select_bound
         && credit->state != ORES_NATIVE_ASYNC_SEND_INVALID;
     if (ok) {
         OresNativeWakeTicket wake = {0};
