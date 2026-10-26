@@ -164,6 +164,19 @@ int oreslang_source_actor_detach_send_future_state_checked(
     const int64_t* state,
     uint64_t state_count);
 
+/*
+ * Carrier-only next-PC transition for the detached direct send_async state
+ * machine. It checked-submits the next payload, snapshots Copy scalar state,
+ * and publishes the next logical suspension from the currently resumed
+ * execution with the current continuation as parent.
+ */
+int oreslang_source_actor_rearm_detached_send_state_checked(
+    void* actor,
+    int64_t payload,
+    OresSourceActorStateContinuation continuation,
+    uint64_t source_token,
+    const int64_t* state,
+    uint64_t state_count);
 
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out);
 
