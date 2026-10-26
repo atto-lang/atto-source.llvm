@@ -104,6 +104,7 @@ def main():
         ("source-actor-send-async-two-pc.ores", 1, 3, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-send-async-future-local.ores", 1, 2, None),
+        ("source-actor-try-select-send-default.ores", 1, None, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -217,8 +218,21 @@ def main():
                 "source-actor-send-async-two-pc.ores",
                 "source-actor-send-async-future.ores",
                 "source-actor-send-async-future-local.ores",
+                "source-actor-try-select-send-default.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-try-select-send-default.ores":
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i32 @oreslang_source_actor_try_select_send_default_checked(" in line]
+                assert len(calls) == 1, (
+                    name, "expected one scheduler-native try-select ABI call", calls)
+                assert "try.select.send" in guest.stdout, (
+                    name, "missing send-winner branch CFG")
+                assert "try.select.default" in guest.stdout, (
+                    name, "missing default-winner branch CFG")
+                assert "call void @oreslang_source_actor_await_send_async(" not in guest.stdout, (
+                    name, "try-select must not lower through blocking await compatibility ABI")
+
             if name in {
                     "source-actor-send-async.ores",
                     "source-actor-send-async-local.ores",
