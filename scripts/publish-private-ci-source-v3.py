@@ -449,12 +449,11 @@ def source_protection():
             or not isinstance(delete, dict) or delete.get("enabled") is not False):
         raise Denied("source main admin/force/delete protection incomplete")
     bypasses = reviews.get("bypass_pull_request_allowances")
-    if bypasses is not None:
-        if (not isinstance(bypasses, dict)
-                or set(bypasses) - {"users", "teams", "apps"}
-                or any(not isinstance(bypasses.get(k, []), list)
-                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
-            raise Denied("source main has pull-request review bypasses")
+    if (not isinstance(bypasses, dict)
+            or set(bypasses) - {"users", "teams", "apps"}
+            or any(not isinstance(bypasses.get(k, []), list)
+                   or bypasses.get(k) for k in ("users", "teams", "apps"))):
+        raise Denied("source main review bypass policy is missing, malformed, or nonempty")
     return valid_sha(branch.get("commit", {}).get("sha"),
                      "source protected-main SHA invalid")
 
@@ -843,12 +842,11 @@ def checked_carrier_main(repository, contract):
             or not isinstance(delete, dict) or delete.get("enabled") is not False):
         raise Denied("carrier main admin/force/delete protection incomplete")
     bypasses = reviews.get("bypass_pull_request_allowances")
-    if bypasses is not None:
-        if (not isinstance(bypasses, dict)
-                or set(bypasses) - {"users", "teams", "apps"}
-                or any(not isinstance(bypasses.get(k, []), list)
-                       or bypasses.get(k) for k in ("users", "teams", "apps"))):
-            raise Denied("carrier main has pull-request review bypasses")
+    if (not isinstance(bypasses, dict)
+            or set(bypasses) - {"users", "teams", "apps"}
+            or any(not isinstance(bypasses.get(k, []), list)
+                   or bypasses.get(k) for k in ("users", "teams", "apps"))):
+        raise Denied("carrier main review bypass policy is missing, malformed, or nonempty")
     codeowners = gh_api(
         f"repos/{repository}/contents/{CODEOWNERS_PATH}?ref={base_sha}"
     )
