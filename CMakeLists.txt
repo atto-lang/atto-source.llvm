@@ -933,6 +933,17 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_auto_traits_and_logical_dop
         COMMAND oreslang-ownership-auto-traits-dop-test)
+    # Java/Graal #2048 parity proof for per-edge Future-pipeline ownership.
+    # This is a semantic compiler gate; general native Future source lowering
+    # remains fail-closed until continuation representation is implemented.
+    add_executable(oreslang-future-pipeline-ownership-contract-test
+        tests/future_pipeline_ownership_contract_test.cpp)
+    target_include_directories(oreslang-future-pipeline-ownership-contract-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-future-pipeline-ownership-contract-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_future_pipeline_ownership_contract
+        COMMAND oreslang-future-pipeline-ownership-contract-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
