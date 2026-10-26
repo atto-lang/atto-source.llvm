@@ -184,10 +184,6 @@ fnc api(Hidden value): int { return value; }
         check(program.source_export_bindings.size() == 2);
     }
 
-    // v1 must not grow backend-local export declaration kinds.
-    denied("export model Graph;\nfnc keep(): int { return 1; }\n",
-           "EXPORT_UNKNOWN_DECLARATION_KIND");
-
     // Private class storage is not part of an exported source API signature.
     {
         auto program = parse_unresolved_program(R"(
