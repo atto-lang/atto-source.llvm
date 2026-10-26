@@ -1610,6 +1610,35 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_resource_loan_terminal_race
         COMMAND oreslang-actor-resource-loan-terminal-race-test)
     set_tests_properties(native_actor_resource_loan_terminal_race PROPERTIES TIMEOUT 60)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        add_executable(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test
+            tests/actor_resource_loan_terminal_race_test.cpp)
+        target_include_directories(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-actor-resource-loan-terminal-race-asan-ubsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_actor_resource_loan_terminal_race_asan_ubsan
+            COMMAND oreslang-actor-resource-loan-terminal-race-asan-ubsan-test)
+        set_tests_properties(native_actor_resource_loan_terminal_race_asan_ubsan PROPERTIES TIMEOUT 90)
+
+        add_executable(oreslang-actor-resource-loan-terminal-race-tsan-test
+            tests/actor_resource_loan_terminal_race_test.cpp)
+        target_include_directories(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_libraries(oreslang-actor-resource-loan-terminal-race-tsan-test PRIVATE Threads::Threads)
+        add_test(NAME native_actor_resource_loan_terminal_race_tsan
+            COMMAND oreslang-actor-resource-loan-terminal-race-tsan-test)
+        set_tests_properties(native_actor_resource_loan_terminal_race_tsan PROPERTIES TIMEOUT 90)
+    endif()
 
     add_executable(oreslang-actor-mailbox-completion-model-test
         tests/actor_mailbox_completion_model_test.cpp)
