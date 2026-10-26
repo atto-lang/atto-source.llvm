@@ -1,0 +1,9 @@
+async fnc source(): int { return 21; }
+fnc increment(int value): int { return value + 1; }
+pub fnc main(): int {
+    val Future<int> upstream = source();
+    val Future<int> first = rt take upstream |> increment();
+    val Future<int> second = rt take upstream |> increment();
+    val int result = await first;
+    return result;
+}
