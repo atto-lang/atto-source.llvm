@@ -356,6 +356,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         root = "5" * 40
         source = "6" * 40
         commit = "7" * 40
+        base_tree = "8" * 40
+        stable_blob = "9" * 40
 
         def api(route, method="GET", payload=None):
             if route == "repos/trusted/ci/git/commits/" + commit:
@@ -364,11 +366,30 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "tree": {"sha": root},
                     "parents": [{"sha": BASE}],
                 }
+            if route == "repos/trusted/ci/git/commits/" + BASE:
+                return {"sha": BASE, "tree": {"sha": base_tree}}
+            if route == "repos/trusted/ci/git/trees/" + base_tree + "?recursive=1":
+                return {
+                    "sha": base_tree,
+                    "truncated": False,
+                    "tree": [{
+                        "path": "README.md",
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": stable_blob,
+                    }],
+                }
             if route == "repos/trusted/ci/git/trees/" + root + "?recursive=1":
                 return {
                     "sha": root,
                     "truncated": False,
                     "tree": [
+                        {
+                            "path": "README.md",
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": stable_blob,
+                        },
                         {
                             "path": v3.PREFIX,
                             "mode": "040000",
@@ -389,6 +410,69 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             v3.verify_published_root_and_commit(
                 "trusted/ci", BASE, source, receipt, root, commit
             )
+
+    def test_published_root_rejects_unexpected_carrier_mutation(self):
+        receipt = "4" * 40
+        root = "5" * 40
+        source = "6" * 40
+        commit = "7" * 40
+        base_tree = "8" * 40
+        old_workflow = "a" * 40
+        new_workflow = "b" * 40
+        workflow_path = ".github/workflows/oreslang-exact-tree-carrier.yml"
+
+        def api(route, method="GET", payload=None):
+            if route == "repos/trusted/ci/git/commits/" + commit:
+                return {
+                    "sha": commit,
+                    "tree": {"sha": root},
+                    "parents": [{"sha": BASE}],
+                }
+            if route == "repos/trusted/ci/git/commits/" + BASE:
+                return {"sha": BASE, "tree": {"sha": base_tree}}
+            if route == "repos/trusted/ci/git/trees/" + base_tree + "?recursive=1":
+                return {
+                    "sha": base_tree,
+                    "truncated": False,
+                    "tree": [{
+                        "path": workflow_path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": old_workflow,
+                    }],
+                }
+            if route == "repos/trusted/ci/git/trees/" + root + "?recursive=1":
+                return {
+                    "sha": root,
+                    "truncated": False,
+                    "tree": [
+                        {
+                            "path": workflow_path,
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": new_workflow,
+                        },
+                        {
+                            "path": v3.PREFIX,
+                            "mode": "040000",
+                            "type": "tree",
+                            "sha": source,
+                        },
+                        {
+                            "path": v3.RECEIPT_PATH,
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": receipt,
+                        },
+                    ],
+                }
+            raise AssertionError(route)
+
+        with patch.object(v3, "gh_api", side_effect=api):
+            with self.assertRaisesRegex(v3.Denied, "changed outside source/receipt"):
+                v3.verify_published_root_and_commit(
+                    "trusted/ci", BASE, source, receipt, root, commit
+                )
 
     def test_handoff_requires_both_refs_absent(self):
         with patch.object(v3, "live_ref_sha", side_effect=[None, None]):
