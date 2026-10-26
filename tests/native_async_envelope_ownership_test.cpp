@@ -119,6 +119,17 @@ static void malformed_scheduler_binding_rejects_before_group_publication() {
     CHECK(threw);
     CHECK(group.worker_count() == 0);
 
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation + 1, [] {},
+            f.scheduler, f.target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
     finish_scheduler(f);
 }
 
