@@ -170,8 +170,8 @@ public:
         return detail::decode_fixed_member<T>(bytes_.data() + offset_of<I>());
     }
 
-    std::span<const std::uint8_t, encoded_size> bytes() const noexcept {
-        return std::span<const std::uint8_t, encoded_size>(bytes_);
+    std::array<std::uint8_t, encoded_size> bytes() const noexcept {
+        return bytes_;
     }
 
     bool operator==(const FixedRecord&) const = default;
