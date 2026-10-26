@@ -9,9 +9,9 @@ proposed carrier as part of this proposal.
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
 - Exact source commit for first qualification:
-  `104863ddfc166854b9e44986a1a71d5fb4ed60f6`
+  `7e7ca8e30f05eb2b75f1288eac209437f224c975`
 - Exact source Git tree:
-  `0c228624bc55d1b076e2c54bec938bdab5b76625`
+  `983d66d7b813b6a9abd40e0649ded65fe40d4cc9`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -59,7 +59,7 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 ## Freshness and reconciliation
 
 This proposal tracks LLVM #988's current-main two-parent reconciliation at
-`104863ddfc166854b9e44986a1a71d5fb4ed60f6`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
+`7e7ca8e30f05eb2b75f1288eac209437f224c975`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
 `tests/contract.py` and `tests/test_contract_harness.py` fail-closed
 infrastructure diagnostic checks, two byte-identical canonical parameter
 fixtures, and two new opaque return-position fixtures.
@@ -81,8 +81,17 @@ execution of these new predicates passed 14/14 cases across Python `-O` and
 fixture path redaction, wrapper-prefix spoof rejection, and infrastructure
 spoof rejection). This focused proof is not the complete committed Python
 harness and not a native compiler/CTest pass. Source-hosted exact-head runs at
-`104863ddfc166854b9e44986a1a71d5fb4ed60f6` again completed with zero
-executed steps; treat them as infrastructure-only failures.
+`7e7ca8e30f05eb2b75f1288eac209437f224c975` again completed with zero
+executed steps; treat them as infrastructure-only failures. In particular,
+workflow runs 40250242841 (LLVM conformance contract) and 40250242960
+(LLVM compiler and native execution) each produced a failed job with an empty
+step list.
+
+The pinned head is a two-parent current-main reconciliation: first parent
+`104863ddfc166854b9e44986a1a71d5fb4ed60f6`, second parent
+`a80fe00c5a68b8232e21cad0b58fd4858fa9ec53`. The reconciled tree preserves
+current `main` and overlays only the reviewed eight-file PR surface; GitHub
+compare reports 16 ahead / 0 behind.
 
 Native LLVM include/link and wake-test repairs were already present on newer
 `main` and were deliberately not rolled back. Any subsequent PR-head/tree
