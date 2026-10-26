@@ -2408,7 +2408,7 @@ private:
                         }));
                 if (!value.ready_await_actor.empty() || !value.done_await_actor.empty()
                         || value.send_future_await_offset != 0)
-                    fail("native source supports only one lifecycle/stored async await boundary");
+                    fail("native source supports only one async await boundary");
                 const std::string awaited = identifier();
                 if (!value.send_future_name.empty()) {
                     if (prior_direct_send_awaits != 0)
