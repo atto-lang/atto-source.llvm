@@ -102,9 +102,13 @@ void* oreslang_source_actor_send_async_start(
 int oreslang_source_actor_await_send_future_checked(void* future);
 /*
  * Compiler-facing logical await. The guest continuation is suspended on the
- * root actor, the scheduler-owned send Future settles independently, and the
- * post-await continuation resumes on a fresh root CONTROL turn. The trusted
- * outer host coordinates the barrier but no actor carrier is parked.
+ * root actor and the exact scheduler async-send descriptor is bound to a
+ * generation-fenced producer wake. Mailbox settlement publishes that wake
+ * directly; no trusted host thread polls or waits on async-send settlement.
+ *
+ * This compatibility C ABI is still synchronous to its outer caller while the
+ * resumed guest continuation finishes. Full host-stack detachment therefore
+ * remains a compiler state-machine step rather than a runtime-settlement claim.
  */
 int oreslang_source_actor_await_send_future_continuation_checked(
     void* future,
