@@ -34,15 +34,20 @@ An explicit cancellation after enqueue suppresses the queued guest callback.
 
 Group close publishes the generation-fenced
 `NativeActorRef::delivery_closed()` barrier. Per-actor physical finalization
-first seals `NativeActorRef::resource_admission_closed()`, then publishes the
-same delivery barrier when terminal settlement succeeds.
-`NativeScalarFutureAwait::open()` checks both signals before allocation and
-again after capability construction; the second check is the frame-admission
-linearization point against finalization. Thus a finalizer that sealed resource
-admission first makes the open fail closed, while an open that linearizes first
-is ordinary live work and must be reconciled if terminal lifecycle wins later.
-A close racing after successful frame creation is still handled by the existing
-detach reconciliation path. `try_schedule()` treats either
+seals `NativeActorRef::resource_admission_closed()` only by atomically
+transitioning the actor resource count from zero to its terminal bit.
+`NativeScalarFutureAwait::open()` now participates in that same arbitration:
+after fast fence checks it acquires one exact-incarnation actor resource loan,
+and that CAS-backed loan is the frame-admission linearization point against
+physical finalization. A finalizer that seals first makes the loan acquisition
+fail closed; an open that acquires the loan first forces finalization to retry
+until the frame completes, cancels, or is destroyed. The frame releases its
+loan exactly once on cancellation, callback completion (including exceptional
+exit), settle-vs-detach cancellation, failed terminal scheduling admission, or
+last-reference destruction. A close racing after successful frame creation
+still uses the generation-fenced detach reconciliation path; unlike physical
+finalization, group close does not need to seal the resource counter.
+`try_schedule()` treats either
 `delivery_closed()` or the earlier terminal `resource_admission_closed()`
 seal as authoritative. This matters if finalization seals resource admission
 but terminal promise settlement throws: the actor is retry-only and a
@@ -69,8 +74,10 @@ source compiler's future ownership checking can guarantee borrow-safe capture.
 This host-only API must never be interpreted as permission to suspend with
 an unpinned actor-owned borrow or to execute a callback on the producer thread.
 
-The `native_scalar_future_single_winner_control` CTest covers stale
-generation, foreign owner, duplicate numeric Future-ID capability isolation,
+The `native_scalar_future_single_winner_control` CTest also asserts that live
+frames block physical DONE, terminal/drop paths release their actor resource
+loan, and open-vs-finalize has exactly one CAS-backed admission winner. It
+covers stale generation, foreign owner, duplicate numeric Future-ID capability isolation,
 post-detach creation rejection, physical-resource admission sealing,
 open-vs-finalize races, exactly-once completion, fail/cancel race, CONTROL
 backpressure, revocation before execution, and no inline resume.

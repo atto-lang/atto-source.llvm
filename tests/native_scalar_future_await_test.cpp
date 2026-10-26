@@ -307,8 +307,20 @@ int main() {
           "delivery closed before per-actor finalization");
     check(!finalized_owner.resource_admission_closed(),
           "resource admission sealed before per-actor finalization");
+    check(finalized_owner.outstanding_resource_loans() == 2,
+          "live scalar Futures did not hold actor resource loans");
+    check(!finalized_group.finalized(finalized_owner),
+          "physical finalization overtook live scalar Futures");
+    check(!finalized_owner.resource_admission_closed(),
+          "failed finalization incorrectly sealed resource admission");
+    check(finalized_ready->cancel(finalized_ready->id()),
+          "READY scalar Future did not release its resource loan");
+    check(finalized_pending->cancel(finalized_pending->id()),
+          "PENDING scalar Future did not release its resource loan");
+    check(finalized_owner.outstanding_resource_loans() == 0,
+          "terminal scalar Futures leaked actor resource loans");
     check(finalized_group.finalized(finalized_owner),
-          "per-actor finalization failed");
+          "per-actor finalization failed after Future terminalization");
     check(finalized_owner.delivery_closed(),
           "per-actor finalization did not publish delivery barrier");
     check(finalized_owner.resource_admission_closed(),
@@ -377,25 +389,36 @@ int main() {
         opener.join();
         finalizer_thread.join();
 
-        check(finalized_won, "open/finalize race did not finalize actor");
         check(open_rejected || bool(opened),
               "open/finalize race produced no admission outcome");
         check(!(open_rejected && opened),
               "open/finalize race both rejected and returned frame");
+        check(finalized_won != bool(opened),
+              "open/finalize race had no single resource-admission winner");
+        check(open_rejected == finalized_won,
+              "open/finalize race rejection disagreed with finalization winner");
+
+        if (opened) {
+            check(open_race_owner.outstanding_resource_loans() == 1,
+                  "open winner did not retain a physical resource loan");
+            check(!open_race_owner.resource_admission_closed(),
+                  "losing finalizer sealed resource admission");
+            check(!open_race_owner.delivery_closed(),
+                  "losing finalizer detached the actor");
+            check(opened->cancel(opened->id()),
+                  "open winner did not terminalize");
+            check(open_race_owner.outstanding_resource_loans() == 0,
+                  "cancelled open winner leaked its resource loan");
+            check(open_race_group.finalized(open_race_owner),
+                  "finalization retry failed after Future terminalization");
+            check(!opened->complete(opened->id(), iteration),
+                  "terminal Future resurrected after finalization retry");
+        }
+
         check(open_race_owner.resource_admission_closed(),
               "open/finalize race did not seal resource admission");
         check(open_race_owner.delivery_closed(),
               "open/finalize race did not publish delivery barrier");
-
-        if (opened) {
-            check(opened->cancel_if_owner_detached(
-                      opened->id(), open_race_owner),
-                  "open winner was not reconciled after finalization");
-            check(opened->phase() == NativeScalarFutureAwait::Phase::cancelled,
-                  "open/finalize race leaked nonterminal Future");
-            check(!opened->complete(opened->id(), iteration),
-                  "finalized Future resurrected");
-        }
     }
 
     // Opening a frame may also race whole-group close. If open linearizes
@@ -408,6 +431,8 @@ int main() {
             15000 + iteration, 1, 1, [] {});
         check(open_close_group.mark_ready(open_close_owner),
               "open/close race owner not ready");
+        auto open_close_finalizer =
+            open_close_group.runtime_finalizer(open_close_owner);
 
         std::atomic<int> start_open_close{0};
         std::shared_ptr<NativeScalarFutureAwait> opened;
@@ -448,6 +473,34 @@ int main() {
             check(!opened->complete(opened->id(), iteration),
                   "detached open/close Future resurrected");
         }
+        check(open_close_owner.outstanding_resource_loans() == 0,
+              "open/close race leaked a physical resource loan");
+        check(open_close_finalizer.ready_for_resource_reclamation(),
+              "open/close race blocked physical reclamation");
+        check(open_close_finalizer.finalized(),
+              "open/close race actor did not finalize");
+    }
+
+    // Dropping the last reference to a nonterminal frame must release its
+    // physical resource loan even after group detachment.
+    {
+        NativeActorGroup drop_group(15500, 1);
+        auto drop_owner = drop_group.adopt(15500, 1, 1, [] {});
+        check(drop_group.mark_ready(drop_owner), "drop owner not ready");
+        auto drop_finalizer = drop_group.runtime_finalizer(drop_owner);
+        auto abandoned = NativeScalarFutureAwait::open(drop_owner, 7550);
+        check(drop_owner.outstanding_resource_loans() == 1,
+              "abandoned Future did not retain resource loan");
+        drop_group.close();
+        check(!drop_finalizer.ready_for_resource_reclamation(),
+              "live abandoned Future did not block reclamation");
+        abandoned.reset();
+        check(drop_owner.outstanding_resource_loans() == 0,
+              "destroyed Future leaked resource loan");
+        check(drop_finalizer.ready_for_resource_reclamation(),
+              "destroyed Future still blocked reclamation");
+        check(drop_finalizer.finalized(),
+              "detached owner did not finalize after frame drop");
     }
 
     // Group close may drop an already-reserved CONTROL callback. The Future

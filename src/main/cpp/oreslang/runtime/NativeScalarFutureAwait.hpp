@@ -49,25 +49,47 @@ public:
         if (!owner.runtime_id() || !owner.actor_id() || !owner.generation()
                 || !future_id)
             throw std::invalid_argument("invalid scalar future owner identity");
-        // Do not create fresh work for an incarnation whose generation-fenced
-        // no-new-delivery barrier is already visible. A close that races after
-        // this admission point is handled by the existing detach reconciliation
-        // path; this check specifically rejects post-detach resurrection.
+        // Fast reject an already detached/finalized incarnation before any
+        // allocation or resource-accounting mutation.
         if (owner.delivery_closed() || owner.resource_admission_closed())
             throw std::logic_error("scalar future owner delivery is closed");
-        auto frame = std::shared_ptr<NativeScalarFutureAwait>(
-            new NativeScalarFutureAwait(owner, future_id));
-        // Allocation/capability construction may race group teardown or
-        // per-actor finalization. The resource-admission seal is published
-        // before DONE settlement; delivery_closed() covers group detachment.
-        // This second check is the frame-admission linearization point.
-        if (owner.delivery_closed() || owner.resource_admission_closed())
+
+        // Allocate the opaque capability before taking the actor resource loan
+        // so allocation failure cannot strand resource accounting.
+        auto capability = std::make_shared<Capability>();
+
+        // This CAS-backed loan is the frame-admission linearization point
+        // against physical finalization. finalized() can seal resource_state
+        // only from zero, while a successfully opened frame keeps it nonzero
+        // until the frame terminalizes or is dropped.
+        owner.retain_resource_loan();
+
+        std::shared_ptr<NativeScalarFutureAwait> frame;
+        try {
+            frame = std::shared_ptr<NativeScalarFutureAwait>(
+                new NativeScalarFutureAwait(owner, future_id,
+                                            std::move(capability)));
+        } catch (...) {
+            owner.release_resource_loan();
+            throw;
+        }
+
+        // Group close does not seal resource_state, so it may race after the
+        // initial check and after loan admission. Reject that ordering by
+        // terminalizing the just-created frame, which also releases the loan.
+        if (owner.delivery_closed()) {
+            (void)frame->cancel(frame->id());
             throw std::logic_error("scalar future owner delivery is closed");
+        }
         return frame;
     }
 
     NativeScalarFutureAwait(const NativeScalarFutureAwait&) = delete;
     NativeScalarFutureAwait& operator=(const NativeScalarFutureAwait&) = delete;
+
+    ~NativeScalarFutureAwait() {
+        release_owner_loan_once();
+    }
 
     NativeScalarFutureId id() const noexcept { return id_; }
 
@@ -94,8 +116,10 @@ public:
                 return false;
             if (phase_.compare_exchange_weak(
                     observed, Phase::cancelled,
-                    std::memory_order_acq_rel, std::memory_order_acquire))
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                release_owner_loan_once();
                 return true;
+            }
         }
     }
 
@@ -136,8 +160,10 @@ public:
                 return false;
             if (phase_.compare_exchange_weak(
                     observed, Phase::cancelled,
-                    std::memory_order_acq_rel, std::memory_order_acquire))
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                release_owner_loan_once();
                 return true;
+            }
         }
     }
 
@@ -189,10 +215,12 @@ public:
                     } catch (...) {
                         self->phase_.store(
                             Phase::completed, std::memory_order_release);
+                        self->release_owner_loan_once();
                         throw;
                     }
                     self->phase_.store(
                         Phase::completed, std::memory_order_release);
+                    self->release_owner_loan_once();
                 });
         } catch (...) {
             expected = Phase::scheduled;
@@ -200,9 +228,11 @@ public:
                 (parent_ref.delivery_closed()
                  || parent_ref.resource_admission_closed())
                     ? Phase::cancelled : Phase::ready;
-            (void)phase_.compare_exchange_strong(
-                expected, fallback,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+            if (phase_.compare_exchange_strong(
+                    expected, fallback,
+                    std::memory_order_acq_rel, std::memory_order_acquire)
+                    && fallback == Phase::cancelled)
+                release_owner_loan_once();
             throw;
         }
 
@@ -214,9 +244,11 @@ public:
                 (parent_ref.delivery_closed()
                  || parent_ref.resource_admission_closed())
                     ? Phase::cancelled : Phase::ready;
-            (void)phase_.compare_exchange_strong(
-                expected, fallback,
-                std::memory_order_acq_rel, std::memory_order_acquire);
+            if (phase_.compare_exchange_strong(
+                    expected, fallback,
+                    std::memory_order_acq_rel, std::memory_order_acquire)
+                    && fallback == Phase::cancelled)
+                release_owner_loan_once();
             return false;
         }
 
@@ -228,8 +260,10 @@ public:
             expected = Phase::scheduled;
             if (phase_.compare_exchange_strong(
                     expected, Phase::cancelled,
-                    std::memory_order_acq_rel, std::memory_order_acquire))
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                release_owner_loan_once();
                 return false;
+            }
         }
         return true;
     }
@@ -237,10 +271,12 @@ public:
 private:
     struct Capability final {};
 
-    NativeScalarFutureAwait(const NativeActorRef& owner, std::uint64_t future_id)
+    NativeScalarFutureAwait(const NativeActorRef& owner,
+                            std::uint64_t future_id,
+                            std::shared_ptr<const void> capability)
         : owner_(owner),
           id_{owner.runtime_id(), owner.actor_id(), owner.generation(), future_id,
-              std::make_shared<Capability>()} {}
+              std::move(capability)} {}
 
     bool valid(const NativeScalarFutureId& ticket) const noexcept {
         return ticket.runtime_id == id_.runtime_id
@@ -266,14 +302,24 @@ private:
             return true;
         if (expected == Phase::settling_cancelled) {
             phase_.store(Phase::cancelled, std::memory_order_release);
+            release_owner_loan_once();
             return true;
         }
         std::terminate();
     }
 
+    void release_owner_loan_once() noexcept {
+        bool expected = true;
+        if (resource_loan_held_.compare_exchange_strong(
+                expected, false,
+                std::memory_order_acq_rel, std::memory_order_acquire))
+            owner_.release_resource_loan();
+    }
+
     const NativeActorRef owner_;
     const NativeScalarFutureId id_;
     std::atomic<Phase> phase_{Phase::pending};
+    std::atomic<bool> resource_loan_held_{true};
     Result result_;
 };
 
