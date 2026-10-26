@@ -21,23 +21,29 @@ proposed carrier as part of this proposal.
   40241181625 and 40241178103 both completed successfully, confirming that the
   proposed destination currently has executable GitHub Actions capacity.
 - Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, head
-  `a8d828b4215c653f0f2112bae34b3e745c68c19c`, based on
+  `8b1ff373d7abd5938bafdb7844253769767785db`, based on
   `980a9e8f2a5d2d87b0b49b8c4d764c1ccddd238e`.
 - Reviewed workflow candidate blob:
   `330eddd40c201fefbf2ac9dfadc80dfa832e7aff`.
 - Reviewed PR #988 test-plan candidate blob:
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570`.
-- Source-free workflow run `40250831573` completed successfully: pinned
-  checkout, carrier-verifier regression tests, trusted-plan-runner regression
-  tests, and the exact LLVM PR #988 plan lint all executed and passed; the
-  source-bearing job was skipped as intended because no private LLVM source is
-  present. Plan-lint blob:
-  `50ff454ee43557a888fa5158beff808124157ba1`.
+- Source-free workflow run `40251614516` completed successfully at exact
+  carrier head `8b1ff373d7abd5938bafdb7844253769767785db`: pinned checkout,
+  eight carrier-verifier regressions (including exact CODEOWNERS and duplicate-key
+  JSON rejection), six trusted-plan-runner regressions, and the exact LLVM PR #988
+  plan lint all executed and passed; the source-bearing job was skipped as intended.
+  Carrier CODEOWNERS blob: `0110a557c162204a399ebf1e628e50c9ed991439`.
+  Verifier blob: `f235c9a1056da5c6b8149643010c82b6b2dc984a`.
+  Trusted-plan runner blob: `99a48a42918f240156ed6e2db2ecb03906b46165`.
+  Plan-lint blob: `50ff454ee43557a888fa5158beff808124157ba1`.
 - Proposed protected source-policy delta, for independent review only:
   add exact allowlist entry `sonus-auris/sonus-auris.infra`; add a carrier
-  contract with repository ID `1271706990`, base SHA
-  `a8d828b4215c653f0f2112bae34b3e745c68c19c`, workflow blob
-  `330eddd40c201fefbf2ac9dfadc80dfa832e7aff`, and test-plan blob
+  contract with repository ID `1271706990`; after carrier PR #29 is independently
+  approved and merged, pin the **resulting carrier `main` commit SHA** as `base_sha`
+  and independently verify that its root tree equals the reviewed PR-head tree at
+  `8b1ff373d7abd5938bafdb7844253769767785db`; do not use the PR-head commit itself
+  as `base_sha` unless it is literally the resulting `main` commit. Pin workflow blob
+  `330eddd40c201fefbf2ac9dfadc80dfa832e7aff` and test-plan blob
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570` restricted to PR `988`.
   This proposal is not effective authorization until independently reviewed
   and merged under source-repository policy.
