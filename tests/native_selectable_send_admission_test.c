@@ -558,7 +558,7 @@ static void sealed_select_cancel_common_wake_releases_physical_loan(void) {
         51, 53, 1, &common_wake));
     CHECK(ores_native_select_active_physical_loans(&select) == 1);
 
-    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_seal(&select, 610));
     CHECK(ores_native_select_active_tokens(&select) == 0);
     CHECK(!ores_native_select_arbiter_rearm(&select, 611, 1));
     CHECK(ores_native_actor_scheduler_cancel_select_wake(
@@ -645,7 +645,7 @@ static void sealed_selection_never_publishes_pending_send(void) {
         scheduler, send,
         ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
 
-    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_seal(&select, 106));
     CHECK(ores_native_select_active_tokens(&select) == 0);
 
     /* Even if the coordinator has not yet issued source-specific loser
@@ -691,7 +691,7 @@ static void stale_bound_descriptor_cannot_commit_rearmed_generation(void) {
         scheduler, send,
         ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
 
-    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_seal(&select, 500));
     CHECK(ores_native_select_active_tokens(&select) == 0);
     CHECK(ores_native_select_arbiter_rearm(&select, 501, 2));
 
@@ -806,7 +806,7 @@ static void concurrent_rearm_and_registration_use_atomic_arm_bound(void) {
 
     uint64_t generation = 400;
     for (unsigned round = 0; round < 2000; ++round) {
-        (void)ores_native_select_seal(&select);
+        (void)ores_native_select_seal(&select, generation);
         while (ores_native_select_active_tokens(&select) != 0)
             sched_yield();
 
@@ -828,7 +828,7 @@ static void concurrent_rearm_and_registration_use_atomic_arm_bound(void) {
     }
 
     atomic_store_explicit(&stop, 1, memory_order_release);
-    (void)ores_native_select_seal(&select);
+    (void)ores_native_select_seal(&select, generation);
     CHECK(pthread_join(registrar, NULL) == 0);
     CHECK(ores_native_select_active_tokens(&select) == 0);
     CHECK(atomic_load_explicit(&successes, memory_order_acquire) != 0);
@@ -878,6 +878,27 @@ static void rearm_generation_is_strictly_monotonic(void) {
     CHECK(ores_native_select_active_tokens(&select) == 0);
 }
 
+static void stale_seal_cannot_cancel_rearmed_generation(void) {
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 700, 1));
+
+    OresNativeSelectToken first = {0};
+    CHECK(ores_native_select_register(&select, 0, &first));
+    CHECK(ores_native_select_try_commit(first) == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+    CHECK(ores_native_select_arbiter_rearm(&select, 701, 1));
+
+    OresNativeSelectToken current = {0};
+    CHECK(ores_native_select_register(&select, 0, &current));
+
+    /* A delayed cancellation/finalizer from generation 700 has no authority
+     * over generation 701 and must not detach its live registration. */
+    CHECK(!ores_native_select_seal(&select, 700));
+    CHECK(ores_native_select_token_registered(current));
+    CHECK(ores_native_select_try_commit(current) == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+}
+
 static void stale_select_generation_fails_closed(void) {
     OresNativeSelectArbiter select = {0};
     CHECK(ores_native_select_arbiter_init(&select, 200, 2));
@@ -890,7 +911,7 @@ static void stale_select_generation_fails_closed(void) {
     /* OPEN generations cannot be silently reset. Finalization must first
      * make the prior generation terminal, then rearm owns the reset gate. */
     CHECK(!ores_native_select_arbiter_rearm(&select, 201, 2));
-    CHECK(ores_native_select_seal(&select));
+    CHECK(ores_native_select_seal(&select, 200));
     CHECK(ores_native_select_arbiter_rearm(&select, 201, 2));
     OresNativeSelectToken current = {0};
     CHECK(ores_native_select_register(&select, 0, &current));
@@ -917,7 +938,8 @@ int main(void) {
     concurrent_rearm_and_registration_use_atomic_arm_bound();
     physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
+    stale_seal_cannot_cancel_rearmed_generation();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 atomic_arm_bound=1 physical_rearm_fence=1 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 common_wake_cancel=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 atomic_arm_bound=1 physical_rearm_fence=1 stale_seal_fence=1 stale_generation=1");
     return 0;
 }
