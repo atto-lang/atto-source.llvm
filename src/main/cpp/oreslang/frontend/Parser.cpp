@@ -646,7 +646,7 @@ private:
                word == "fnc" || word == "routine" || word == "interface" ||
                word == "contract" || word == "trait" || word == "struct" ||
                word == "type" || word == "const" || word == "val" ||
-               word == "let" || word == "model";
+               word == "let";
     }
 
     SourceExportKind source_export_kind() {
@@ -672,7 +672,6 @@ private:
             else
                 return SourceExportKind::Untyped;
         }
-        else if (word == "model") kind = SourceExportKind::Model;
         else if (word == "string" || word == "String" || word == "int" ||
                  word == "bool" || word == "void") {
             fail("[EXPORT_UNKNOWN_DECLARATION_KIND] typed export prefixes are declaration families, not runtime value types");
@@ -812,7 +811,6 @@ private:
             case SourceExportKind::Val: return "val";
             case SourceExportKind::Let: return "let";
             case SourceExportKind::Symbol: return "symbol";
-            case SourceExportKind::Model: return "model";
         }
         return "unknown";
     }
@@ -1081,6 +1079,7 @@ private:
             }
             if (family.klass) {
                 for (const auto& field : family.klass->fields) {
+                    if (!field.public_member) continue;
                     if (!field.class_name.empty()) referenced.push_back(field.class_name);
                     if (!field.array_record_class.empty())
                         referenced.push_back(field.array_record_class);
