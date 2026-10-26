@@ -3900,4 +3900,17 @@ if(BUILD_TESTING)
   add_test(NAME native_string_utf8_json_host_contract
     COMMAND oreslang-native-string-host-test)
   set_tests_properties(native_string_utf8_json_host_contract PROPERTIES TIMEOUT 30)
+
+  add_executable(oreslang-native-cstring-host-test
+    tests/native_cstring_test.c
+    src/main/cpp/oreslang/runtime/NativeCString.c
+    src/main/cpp/oreslang/runtime/NativeString.c)
+  target_include_directories(oreslang-native-cstring-host-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(oreslang-native-cstring-host-test PRIVATE c_std_11)
+  target_compile_options(oreslang-native-cstring-host-test PRIVATE
+    $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  add_test(NAME native_string_cstring_explicit_length_contract
+    COMMAND oreslang-native-cstring-host-test)
+  set_tests_properties(native_string_cstring_explicit_length_contract PROPERTIES TIMEOUT 30)
 endif()
