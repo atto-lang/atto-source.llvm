@@ -51,6 +51,24 @@ int main(void) {
     OreslangNativeCString bad_terminator={missing_terminator,2};
     CHECK(oreslang_cstring_to_string(&bad_terminator,&bad_out)==ORESLANG_STRING_INVALID);
 
+    // Reject implausible extents before dereferencing caller-supplied storage.
+    unsigned char tiny[] = {0};
+    OreslangNativeCString absurd_extent = {tiny, UINT64_MAX};
+    CHECK(oreslang_cstring_to_string(&absurd_extent, &bad_out)==ORESLANG_STRING_TOO_LARGE);
+    CHECK(!bad_out.data && bad_out.byte_length==0);
+
+    // Never overwrite an existing owning destination on a second conversion.
+    CHECK(oreslang_cstring_from_string(&plain, &cplain)==ORESLANG_STRING_INVALID);
+    CHECK(cplain.byte_length==sizeof(no_terminator));
+    CHECK(memcmp(cplain.data, no_terminator, sizeof(no_terminator))==0);
+
+    // UTF-8 surrogate encoding is invalid even when the span is fully bounded.
+    const unsigned char surrogate_utf8[]={0xed,0xa0,0x80};
+    OreslangNativeString invalid_source={0};
+    CHECK(oreslang_string_new_utf8(surrogate_utf8,sizeof(surrogate_utf8),&invalid_source)
+          ==ORESLANG_STRING_INVALID_UTF8);
+    CHECK(!invalid_source.data && invalid_source.byte_length==0);
+
     oreslang_string_drop(&empty);
     oreslang_string_drop(&plain);
     oreslang_string_drop(&embedded);
