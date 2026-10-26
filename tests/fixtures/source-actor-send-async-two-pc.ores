@@ -1,0 +1,17 @@
+// Two compile-time detached PCs. PC0 and PC1 await scheduler-owned mailbox
+// admission without retaining the original guest main stack.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  const int retained = 40;
+  await worker.send_async(1);
+  await worker.send_async(2);
+  stop worker;
+  return retained + 3;
+}
