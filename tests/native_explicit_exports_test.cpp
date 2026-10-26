@@ -260,6 +260,36 @@ void semantic_matrix() {
 
     {
         auto program = parse(R"(
+            export[pkg] type Hidden;
+            define type Hidden = int;
+            export[pkg] fnc id;
+            fnc id(Hidden value): Hidden { return value; }
+        )");
+        check(has_binding(program, "Hidden", "Hidden", SourceExportKind::Type, SourceExportScope::Package),
+              "package type export missing");
+        check(has_binding(program, "id", "id", SourceExportKind::Fnc, SourceExportScope::Package),
+              "package API using package type should be admitted");
+    }
+
+    rejects_code([&] {
+        (void)parse(R"(
+            export[file] type Hidden;
+            define type Hidden = int;
+            export[pkg] fnc id;
+            fnc id(Hidden value): Hidden { return value; }
+        )");
+    }, "EXPORT_API_LEAK");
+
+    rejects_code([&] {
+        (void)parse(R"(
+            define type Hidden = int;
+            export fnc id;
+            fnc id(Hidden value): Hidden { return value; }
+        )");
+    }, "EXPORT_API_LEAK");
+
+    {
+        auto program = parse(R"(
             export Count;
             define type Count = int;
         )");
