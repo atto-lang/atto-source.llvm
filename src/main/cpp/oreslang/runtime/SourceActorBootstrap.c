@@ -1,6 +1,18 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
+
+/* Temporary private VM bridge declarations. Keep scheduler identity hidden
+ * from source lowering; these move to NativeOresVM.h once the interface gate
+ * accepts the corresponding public declaration update. */
+int ores_native_vm_configure_wake_callback(
+    OresNativeVM*, enum OresNativeVMDomain, OresNativeActorWakeFn);
+int ores_native_vm_bind_async_send_wake(
+    OresNativeVM*, enum OresNativeVMDomain, OresNativeAsyncSendTicket,
+    OresNativeActorRef, uint64_t, uint64_t, uint64_t, OresNativeWakeTicket*);
+int ores_native_vm_is_current_wake(
+    OresNativeVM*, enum OresNativeVMDomain, OresNativeWakeTicket);
+
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -20,7 +32,6 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 #define SOURCE_ROOT_CONTROL_SEND_SUSPEND UINT64_C(5)
-#define SOURCE_ROOT_CONTROL_SEND_RESUME UINT64_C(6)
 
 typedef struct SourceActor SourceActor;
 typedef struct {
@@ -81,7 +92,6 @@ typedef struct {
 
 typedef struct {
     pthread_cond_t completed;
-    OresNativeActorFuture* resume_future;
     OresSourceActorContinuation continuation;
     SourceSendFuture* send_future;
     SourceActor* actor;
@@ -508,25 +518,50 @@ static void root_send_suspend_turn(void) {
     group_unlock();
 }
 
-static void root_send_resume_turn(void) {
+static void source_send_wake(
+        void* raw, size_t slot, OresNativeWakeTicket ticket,
+        OresNativeWakeOutcome wake_outcome) {
+    ensure(raw == &group && slot == SOURCE_GROUP_ROOT_SLOT);
+    ensure(ores_native_vm_is_current_wake(
+        group.vm, ORES_NATIVE_VM_MAIN, ticket));
+
     SendAwaitFrame* frame;
     OresSourceActorContinuation continuation;
     SourceActor* actor;
     OresNativeSuspensionLink link;
-    int future_status;
     int send_outcome;
 
     group_lock();
     frame = group.pending_send;
     ensure(frame && frame->suspend_recorded && !frame->done);
-    ensure(frame->resume_future != NULL);
-    future_status = ores_native_actor_future_status(frame->resume_future);
-    ensure(future_status == ORES_NATIVE_FUTURE_READY
-        || future_status == ORES_NATIVE_FUTURE_FAILED);
+    ensure(frame->send_future != NULL);
+    ensure(ticket.producer.scheduler_domain == group.root_ref.scheduler_domain
+        && ticket.producer.actor_slot == group.root_ref.actor_slot
+        && ticket.producer.generation == group.root_ref.generation);
+    ensure(ticket.continuation_slot == frame->link.continuation.slot
+        && ticket.continuation_generation == frame->link.continuation.generation
+        && ticket.code_generation == 1
+        && ticket.descriptor_slot == frame->send_future->ticket.slot
+        && ticket.descriptor_generation == frame->send_future->ticket.generation);
+
+    send_outcome = (int)ticket.completion_code;
+    if (wake_outcome == ORES_NATIVE_WAKE_READY)
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    else if (wake_outcome == ORES_NATIVE_WAKE_FAILED)
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TERMINATED);
+    else if (wake_outcome == ORES_NATIVE_WAKE_CANCELLED)
+        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE);
+    else
+        abort();
+
+    /* Scheduler settlement owns the READY transition. There is no host-side
+     * async-send status observer between mailbox admission and logical resume. */
+    ensure(ores_native_continuation_store_notify_ready(
+        group.continuations, frame->link.continuation));
     continuation = frame->continuation;
     actor = frame->actor;
     link = frame->link;
-    send_outcome = frame->outcome;
+    frame->outcome = send_outcome;
     group_unlock();
 
     OresNativeExecutionContext physical = {0};
@@ -547,14 +582,11 @@ static void root_send_resume_turn(void) {
     ensure(same_allocation(logical.allocation, physical.allocation));
 
     int64_t result = 0;
-    if (future_status == ORES_NATIVE_FUTURE_READY) {
-        ensure(send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    if (send_outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED) {
         ensure(!ores_native_store_handle_valid(current_source_execution));
         current_source_execution = resumed;
         result = continuation(actor);
         current_source_execution = (OresNativeExecutionHandle){0, 0};
-    } else {
-        ensure(send_outcome != ORES_SOURCE_SEND_ASYNC_ACCEPTED);
     }
 
     ensure(ores_native_await_trace_resume_finish(group.continuations, link));
@@ -577,7 +609,6 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
         else if (payload == SOURCE_ROOT_CONTROL_DONE_SUSPEND) root_done_suspend_turn();
         else if (payload == SOURCE_ROOT_CONTROL_DONE_RESUME) root_done_resume_turn();
         else if (payload == SOURCE_ROOT_CONTROL_SEND_SUSPEND) root_send_suspend_turn();
-        else if (payload == SOURCE_ROOT_CONTROL_SEND_RESUME) root_send_resume_turn();
         else abort();
         return;
     }
@@ -720,6 +751,8 @@ static void open_group_locked(void) {
     }
     group.vm = ores_native_vm_open(&cfg);
     ensure(group.vm != NULL);
+    ensure(ores_native_vm_configure_wake_callback(
+        group.vm, ORES_NATIVE_VM_MAIN, source_send_wake));
 
     /*
      * The compiler-generated top-level continuation owns one reserved logical
@@ -1048,36 +1081,25 @@ int oreslang_source_actor_await_send_future_continuation_checked(
         ensure(pthread_cond_destroy(&frame.completed) == 0);
         return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
     }
+
     SourceActor* actor = future->actor;
     OresNativeVM* vm = group.vm;
+    const OresNativeActorRef root_ref = group.root_ref;
     const OresNativeAsyncSendTicket ticket = future->ticket;
     frame.actor = actor;
-    frame.resume_future = ores_native_vm_actor_future_open(
-        vm,
-        ORES_NATIVE_VM_MAIN,
-        group.root_ref,
-        SOURCE_ROOT_CONTROL_SEND_RESUME);
-    if (!frame.resume_future) {
-        group_unlock();
-        ensure(pthread_cond_destroy(&frame.completed) == 0);
-        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
-    }
     future->consuming = 1;
     group.pending_send = &frame;
 
-    /*
-     * Capture the root logical continuation before observing send settlement.
-     * Even an already-READY send Future must cross a real suspend/resume pair
-     * so post-await guest code never continues on the original host stack.
-     */
+    /* Capture the logical suspension before binding scheduler settlement.
+     * Once suspend_recorded is visible, even an already-READY send is resumed
+     * on a fresh authenticated root wake turn rather than this host stack. */
     if (!ores_native_vm_publish_control(
             vm,
             ORES_NATIVE_VM_MAIN,
-            group.root_ref,
+            root_ref,
             SOURCE_ROOT_CONTROL_SEND_SUSPEND)) {
         group.pending_send = NULL;
         future->consuming = 0;
-        ores_native_actor_future_destroy(frame.resume_future);
         group_unlock();
         ensure(pthread_cond_destroy(&frame.completed) == 0);
         return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
@@ -1086,35 +1108,46 @@ int oreslang_source_actor_await_send_future_continuation_checked(
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
     group_unlock();
 
-    OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
-    ensure(ores_native_vm_await_async_send(
-        vm, ORES_NATIVE_VM_MAIN, ticket, &outcome));
+    OresNativeWakeTicket wake = {0};
+    if (!ores_native_vm_bind_async_send_wake(
+            vm,
+            ORES_NATIVE_VM_MAIN,
+            ticket,
+            root_ref,
+            frame.link.continuation.slot,
+            frame.link.continuation.generation,
+            1,
+            &wake)) {
+        /* Wake reservation failure does not consume the source Future. Retire
+         * only this abandoned logical suspension and release the observer claim. */
+        group_lock();
+        ensure(group.vm == vm && group.pending_send == &frame
+            && source_send_future_valid_locked(future)
+            && future->actor == actor && future->consuming);
+        ensure(ores_native_continuation_store_cancel(
+            group.continuations, frame.link.continuation));
+        ensure(ores_native_continuation_store_release(
+            group.continuations, frame.link.continuation));
+        group.pending_send = NULL;
+        future->consuming = 0;
+        ensure(ores_native_execution_context_store_live(group.executions) == 0);
+        ensure(ores_native_continuation_store_live(group.continuations) == 0);
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
 
+    /* This compatibility ABI remains synchronous to its trusted outer caller,
+     * but mailbox settlement itself no longer parks or polls that caller:
+     * the scheduler publishes the producer wake directly. */
     group_lock();
-    ensure(group.vm == vm && group.pending_send == &frame
-        && source_send_future_valid_locked(future)
-        && future->actor == actor);
-    frame.outcome = (int)outcome;
-    /* The logical suspension must become READY before the actor Future
-     * publishes its CONTROL resume. Otherwise ready_resume_begin observes a
-     * still-PENDING continuation and aborts despite a settled send. */
-    ensure(ores_native_continuation_store_notify_ready(
-        group.continuations, frame.link.continuation));
-    ensure(ores_native_actor_future_status(frame.resume_future)
-        == ORES_NATIVE_FUTURE_PENDING);
-    ensure(ores_native_actor_future_complete(
-        frame.resume_future,
-        outcome == ORES_NATIVE_SEND_ACCEPTED
-            ? ORES_NATIVE_FUTURE_READY
-            : ORES_NATIVE_FUTURE_FAILED));
-
     while (!frame.done)
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
 
     ensure(group.pending_send == &frame);
     group.pending_send = NULL;
+    const int outcome = frame.outcome;
     const int64_t result = frame.result;
-    ores_native_actor_future_destroy(frame.resume_future);
     ensure(ores_native_continuation_store_release(
         group.continuations, frame.link.continuation));
     ensure(ores_native_execution_context_store_live(group.executions) == 0);
@@ -1137,13 +1170,13 @@ int oreslang_source_actor_await_send_future_continuation_checked(
     ensure(pthread_cond_destroy(&frame.completed) == 0);
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
-        "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS outcome=%d execution_id_persisted=1 fresh_resume=1 root_slot=%u source_token=%llu\n",
-        (int)outcome,
+        "SOURCE_AWAIT_SEND_FUTURE_TRACE_PASS outcome=%d execution_id_persisted=1 fresh_resume=1 scheduler_wake=1 host_settlement_observer=0 root_slot=%u source_token=%llu\n",
+        outcome,
         SOURCE_GROUP_ROOT_SLOT,
         (unsigned long long)source_token);
 #endif
     *result_out = result;
-    return (int)outcome;
+    return outcome;
 }
 
 int64_t oreslang_source_actor_await_send_future(
