@@ -175,6 +175,11 @@ static void on_owned_actor_nio(void* opaque, size_t slot, uint64_t value) {
     check(!ores_native_vm_nio_try_watch_actor(
         probe->vm, probe->domain, wrong,
         probe->fd, EPOLLIN, &watch));
+    wrong = probe->actor;
+    ++wrong.scheduler_domain;
+    check(!ores_native_vm_nio_try_watch_actor(
+        probe->vm, probe->domain, wrong,
+        probe->fd, EPOLLIN, &watch));
     const int accepted = ores_native_vm_nio_try_watch_actor(
         probe->vm, probe->domain, probe->actor,
         probe->fd, EPOLLIN, &watch);
