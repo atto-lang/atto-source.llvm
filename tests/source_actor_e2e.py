@@ -99,6 +99,7 @@ def main():
         ("source-actor-send-async.ores", 1, 1, None),
         ("source-actor-send-async-local.ores", 1, 1, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
+        ("source-actor-send-async-future-local.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -203,6 +204,7 @@ def main():
                 "source-actor-send-async.ores",
                 "source-actor-send-async-local.ores",
                 "source-actor-send-async-future.ores",
+                "source-actor-send-async-future-local.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name in {
@@ -250,11 +252,13 @@ def main():
                         name, "captured local must resolve from runtime-owned detached frame")
                     assert "retained.detached.capture" in guest.stdout, (
                         name, "guest pre-await path must copy captured scalar before detaching")
-            if name == "source-actor-send-async-future.ores":
+            if name in {
+                    "source-actor-send-async-future.ores",
+                    "source-actor-send-async-future-local.ores"}:
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
                 detach_calls = [line for line in guest.stdout.splitlines()
-                                if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
+                                if "call i32 @oreslang_source_actor_detach_send_future_state_checked(" in line]
                 wait_calls = [line for line in guest.stdout.splitlines()
                               if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 send_calls = [line for line in guest.stdout.splitlines()
@@ -273,7 +277,7 @@ def main():
                     name, "immediate stored Future failure must synchronously reclaim actor",
                     fail_cleanup_calls)
                 assert len(detach_calls) == 1, (
-                    name, "expected one detached Future<void> continuation", detach_calls)
+                    name, "expected stored Future<void> to detach through runtime-owned scalar state", detach_calls)
                 assert len(wait_calls) == 1, (
                     name, "expected host entry to await detached terminal result", wait_calls)
                 assert len(send_calls) == 1, (
@@ -287,7 +291,7 @@ def main():
                 start_pos = guest.stdout.find(
                     "call i32 @oreslang_source_actor_send_async_start_checked(")
                 detach_pos = guest.stdout.find(
-                    "call i32 @oreslang_source_actor_detach_send_future_checked(")
+                    "call i32 @oreslang_source_actor_detach_send_future_state_checked(")
                 assert 0 <= start_pos < detach_pos, (
                     name, "send_async Future start must precede detached continuation handoff")
                 continuation = llvm_function_body(
@@ -300,6 +304,14 @@ def main():
                 assert 0 <= send_pos < stop_pos < return_pos, (
                     name, "post-await actor effects must retain lexical order",
                     continuation)
+                assert "detached.state.count.valid" in continuation, (
+                    name, "stored Future continuation must validate state word count")
+                if name == "source-actor-send-async-future-local.ores":
+                    capture_pos = guest.stdout.find("retained.detached.capture")
+                    assert 0 <= start_pos < capture_pos < detach_pos, (
+                        name, "eager Future submission must precede local capture and detach")
+                    assert "retained.detached.slot" in continuation, (
+                        name, "stored Future local must resolve from detached runtime frame")
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -373,7 +385,8 @@ def main():
             if name in {
                     "source-actor-send-async.ores",
                     "source-actor-send-async-local.ores",
-                    "source-actor-send-async-future.ores"}:
+                    "source-actor-send-async-future.ores",
+                    "source-actor-send-async-future-local.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_DETACHED_SEND_FUTURE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
