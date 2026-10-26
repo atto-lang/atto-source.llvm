@@ -115,7 +115,7 @@ fnc api(): int { return 1; }
     denied(R"(
 fnc api(): int { return 1; }
 import module Dep from './dep';
-)", "IMPORT_AFTER_DECLARATION");
+)", "EXPORT_IMPORT_PRELUDE");
 
     {
         auto program = parse_unresolved_program(R"(
@@ -185,29 +185,41 @@ fnc api(Hidden value): int { return value; }
     }
 
     denied("export X\nfnc keep(): int { return 1; }\n", "EXPORT_SEMICOLON_REQUIRED");
-    denied("export {};\nfnc keep(): int { return 1; }\n", "EMPTY_EXPORT_GROUP");
-    denied("export class {};\nfnc keep(): int { return 1; }\n", "EMPTY_EXPORT_GROUP");
-    denied("export actor {,X};\nfnc keep(): int { return 1; }\n", "MALFORMED_EXPORT_LIST");
-    denied("export actor {X,,Y};\nfnc keep(): int { return 1; }\n", "MALFORMED_EXPORT_LIST");
-    denied("export actor {X Y};\nfnc keep(): int { return 1; }\n", "MALFORMED_EXPORT_LIST");
-    denied("export actor {{X}};\nfnc keep(): int { return 1; }\n", "NESTED_EXPORT_GROUP");
-    denied("export *;\nfnc keep(): int { return 1; }\n", "WILDCARD_EXPORT_UNSUPPORTED");
-    denied("export * from './dep';\nfnc keep(): int { return 1; }\n", "REEXPORT_UNSUPPORTED");
-    denied("export from './dep' {X};\nfnc keep(): int { return 1; }\n", "REEXPORT_UNSUPPORTED");
-    denied("export dep.X;\nfnc keep(): int { return 1; }\n", "QUALIFIED_EXPORT_UNSUPPORTED");
-    denied("export dep::X;\nfnc keep(): int { return 1; }\n", "QUALIFIED_EXPORT_UNSUPPORTED");
-    denied("export Foo<int>;\nfnc keep(): int { return 1; }\n", "GENERIC_EXPORT_TARGET_UNSUPPORTED");
-    denied("export foo(int);\nfnc keep(): int { return 1; }\n", "CALLABLE_SIGNATURE_EXPORT_UNSUPPORTED");
-    denied("export {class X, actor Y};\nfnc keep(): int { return 1; }\n", "KIND_PREFIX_IN_GROUP");
-    denied("export actor {actor X};\nfnc keep(): int { return 1; }\n", "KIND_PREFIX_IN_GROUP");
-    denied("export symbol #ready as Ready;\nfnc keep(): int { return 1; }\n", "SYMBOL_BINDING_ALIAS_UNSUPPORTED");
-    denied("export symbol #ready as #ok;\nfnc keep(): int { return 1; }\n", "SYMBOL_IDENTITY_MISMATCH");
-    denied("export symbol ready as #ready;\nfnc keep(): int { return 1; }\n", "SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE");
-    denied("export[pkg][file] X;\nfnc keep(): int { return 1; }\n", "MULTIPLE_EXPORT_SCOPES");
-    denied("export[project] X;\nfnc keep(): int { return 1; }\n", "UNKNOWN_EXPORT_SCOPE");
-    denied("export string ready as 'ready';\nfnc keep(): int { return 1; }\n", "UNKNOWN_EXPORT_DECLARATION_KIND");
-    denied("export const ready as 'ready';\nfnc keep(): int { return 1; }\n", "LITERAL_EXPORT_ALIAS_UNSUPPORTED");
-    denied("export class Foo as \"foo\";\nfnc keep(): int { return 1; }\n", "LITERAL_EXPORT_ALIAS_UNSUPPORTED");
+    denied("export {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
+    denied("export class {};\nfnc keep(): int { return 1; }\n", "EXPORT_EMPTY_GROUP");
+    denied("export actor {,X};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {X,,Y};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {X Y};\nfnc keep(): int { return 1; }\n", "EXPORT_MALFORMED_LIST");
+    denied("export actor {{X}};\nfnc keep(): int { return 1; }\n", "EXPORT_NESTED_GROUP");
+    denied("export *;\nfnc keep(): int { return 1; }\n", "EXPORT_WILDCARD_UNSUPPORTED");
+    denied("export * from './dep';\nfnc keep(): int { return 1; }\n", "EXPORT_REEXPORT_UNSUPPORTED");
+    denied("export from './dep' {X};\nfnc keep(): int { return 1; }\n", "EXPORT_REEXPORT_UNSUPPORTED");
+    denied("export dep.X;\nfnc keep(): int { return 1; }\n", "EXPORT_QUALIFIED_TARGET_UNSUPPORTED");
+    denied("export dep::X;\nfnc keep(): int { return 1; }\n", "EXPORT_QUALIFIED_TARGET_UNSUPPORTED");
+    denied("export Foo<int>;\nfnc keep(): int { return 1; }\n", "EXPORT_GENERIC_TARGET_UNSUPPORTED");
+    denied("export foo(int);\nfnc keep(): int { return 1; }\n", "EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED");
+    denied("export {class X, actor Y};\nfnc keep(): int { return 1; }\n", "EXPORT_KIND_PREFIX_IN_GROUP");
+    denied("export actor {actor X};\nfnc keep(): int { return 1; }\n", "EXPORT_KIND_PREFIX_IN_GROUP");
+    denied("export symbol #ready as Ready;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_BINDING_ALIAS_UNSUPPORTED");
+    denied("export symbol #ready as #ok;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_IDENTITY_MISMATCH");
+    denied("export symbol ready as #ready;\nfnc keep(): int { return 1; }\n", "EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE");
+    denied("export[pkg][file] X;\nfnc keep(): int { return 1; }\n", "EXPORT_MULTIPLE_SCOPES");
+    denied("export[project] X;\nfnc keep(): int { return 1; }\n", "EXPORT_UNKNOWN_SCOPE");
+    denied("export string ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_UNKNOWN_DECLARATION_KIND");
+    denied("export const ready as 'ready';\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+    denied("export class Foo as \"foo\";\nfnc keep(): int { return 1; }\n", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+
+    {
+        const auto program = parse_unresolved_program(R"(
+export symbol as PublicSymbol;
+const int symbol = 1;
+)");
+        check(program.source_exports.size() == 1);
+        check(program.source_exports.front().kind == SourceExportKind::Untyped);
+        check(program.source_exports.front().items.size() == 1);
+        check(program.source_exports.front().items.front().local_name == "symbol");
+        check(program.source_exports.front().items.front().external_name == "PublicSymbol");
+    }
 
     denied(R"(
 export actor Box;
