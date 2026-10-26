@@ -167,9 +167,14 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_async(
  *
  * The coordinator MUST register all arm tokens before invoking any source
  * submission, because an immediately-ready operation may commit synchronously.
+ * On successful handoff, this function consumes commit authority for the send
+ * arm: the caller's copied token can no longer call generic select commit or
+ * detach. Only the scheduler may commit that BOUND arm at the real mailbox
+ * credit boundary, or detach it during cancellation/STOP/setup failure.
+ *
  * RESOURCE_EXHAUSTED while allocating this descriptor is select-setup failure:
- * the token is detached without claiming the winner and the coordinator must
- * seal/cleanup the partially registered selection.
+ * the bound token is detached without claiming the winner and the coordinator
+ * must seal/cleanup the partially registered selection.
  */
 OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     OresNativeActorScheduler* scheduler, OresNativeActorRef target,
