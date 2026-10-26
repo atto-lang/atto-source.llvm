@@ -1,5 +1,6 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
 #include "oreslang/runtime/NativeOresVM.h"
+#include "oreslang/runtime/NativeSelectArbiter.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 #include <pthread.h>
 #include <sched.h>
@@ -1077,6 +1078,114 @@ int oreslang_source_actor_try_send_checked(void* opaque, int64_t payload) {
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(oreslang_source_actor_try_send_checked(opaque, payload)
         == ORES_NATIVE_SEND_ACCEPTED);
+}
+
+int oreslang_source_actor_try_select_send_default_checked(
+        void* opaque, int64_t payload, int* selected_arm) {
+    if (selected_arm) *selected_arm = -1;
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || !selected_arm)
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+
+    group_lock();
+    if (instance->magic != SOURCE_ACTOR_MAGIC || !group.vm
+            || !instance->on_message
+            || instance->ref.actor_slot >= group.next_slot
+            || group.actors[instance->ref.actor_slot] != instance) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    if (atomic_load_explicit(
+            &instance->stop_requested, memory_order_acquire)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_TERMINATED;
+    }
+
+    /*
+     * The arbiter and both tokens are stack-local because try-select never
+     * suspends. No token escapes this call. A fresh nonzero generation still
+     * prevents accidental same-frame aliasing and keeps the runtime path
+     * identical to the asynchronous selectable-send winner protocol.
+     */
+    static _Atomic uint64_t next_try_select_generation = UINT64_C(1);
+    const uint64_t generation = atomic_fetch_add_explicit(
+        &next_try_select_generation, UINT64_C(1), memory_order_acq_rel);
+    if (!generation || generation == UINT64_MAX) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
+
+    OresNativeSelectArbiter select = {0};
+    OresNativeSelectToken send_arm = {0};
+    OresNativeSelectToken default_arm = {0};
+    ensure(ores_native_select_arbiter_init(&select, generation, 2));
+    ensure(ores_native_select_register(&select, 0, &send_arm));
+    ensure(ores_native_select_register(&select, 1, &default_arm));
+
+    OresNativeAsyncSendTicket ticket = {0};
+    const OresNativeSendStatus submit = ores_native_vm_submit_selectable_async(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref,
+        (uint64_t)payload, send_arm, &ticket);
+
+    if (submit == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
+            || submit == ORES_NATIVE_SEND_CANCELLED) {
+        /* Registration/setup did not produce a send event. The explicit
+         * default arm wins the nonblocking selection. */
+        ensure(ores_native_select_try_commit(default_arm)
+            == ORES_NATIVE_SELECT_WON);
+        ensure(ores_native_select_active_tokens(&select) == 0);
+        *selected_arm = 1;
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+    }
+
+    if (ticket.generation == 0) {
+        /* Immediate terminal send events may commit the send arm without a
+         * descriptor. Retire the default token, then preserve the exact
+         * failure instead of pretending default won. */
+        ensure(ores_native_select_try_commit(default_arm)
+            == ORES_NATIVE_SELECT_LOST);
+        ensure(ores_native_select_active_tokens(&select) == 0);
+        group_unlock();
+        return (int)submit;
+    }
+
+    OresNativeAsyncSendState state = ORES_NATIVE_ASYNC_SEND_INVALID;
+    OresNativeSendStatus outcome = ORES_NATIVE_SEND_INVALID_REF;
+    ensure(ores_native_vm_async_send_status(
+        group.vm, ORES_NATIVE_VM_MAIN, ticket, &state, &outcome));
+
+    if (state == ORES_NATIVE_ASYNC_SEND_PENDING) {
+        ensure(ores_native_select_try_commit(default_arm)
+            == ORES_NATIVE_SELECT_WON);
+        ensure(ores_native_vm_cancel_async_send(
+            group.vm, ORES_NATIVE_VM_MAIN, ticket));
+        ensure(ores_native_vm_release_async_send(
+            group.vm, ORES_NATIVE_VM_MAIN, ticket));
+        ensure(ores_native_select_active_tokens(&select) == 0);
+        *selected_arm = 1;
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+    }
+
+    /* Immediate READY or terminal post-registration settlement already owns
+     * the common winner. The default token must lose and the descriptor can be
+     * retired synchronously because try-select has no continuation wake. */
+    ensure(ores_native_select_try_commit(default_arm)
+        == ORES_NATIVE_SELECT_LOST);
+    ensure(ores_native_vm_release_async_send(
+        group.vm, ORES_NATIVE_VM_MAIN, ticket));
+    ensure(ores_native_select_active_tokens(&select) == 0);
+
+    if (state == ORES_NATIVE_ASYNC_SEND_READY
+            && outcome == ORES_NATIVE_SEND_ACCEPTED) {
+        *selected_arm = 0;
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+    }
+
+    group_unlock();
+    return (int)outcome;
 }
 
 int oreslang_source_actor_exact_scheduler_ref(
