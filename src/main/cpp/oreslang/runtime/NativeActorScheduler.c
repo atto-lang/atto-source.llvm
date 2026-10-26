@@ -1684,9 +1684,22 @@ static OresNativeWakePublishStatus publish_select_wake_locked(
         return ORES_NATIVE_WAKE_INVALID;
 
     WakeCredit* w = matching_wake_locked(s, ticket.wake);
-    if (!w || w->state != WAKE_RESERVED || !w->select_bound
+    if (!w || !w->select_bound
             || w->select_arbiter != ticket.arbiter
             || w->select_generation != ticket.selection_generation)
+        return ORES_NATIVE_WAKE_INVALID;
+
+    /*
+     * Publication is one-shot but idempotent for the exact committed winner.
+     * A duplicate source/coordinator observer while the wake is already READY
+     * or EXECUTING must not enqueue a second continuation or turn a benign
+     * duplicate into a scheduler abort.
+     */
+    if (w->state == WAKE_READY || w->state == WAKE_EXECUTING)
+        return w->ticket.completion_code == winning_arm + UINT64_C(1)
+            ? ORES_NATIVE_WAKE_PUBLISHED
+            : ORES_NATIVE_WAKE_INVALID;
+    if (w->state != WAKE_RESERVED)
         return ORES_NATIVE_WAKE_INVALID;
 
     ActorLane* producer = &s->actors[ticket.wake.producer.actor_slot];
