@@ -228,6 +228,27 @@ int oreslang_source_actor_test_detached_finalizer_claimed(void) {
     return claimed;
 }
 
+int oreslang_source_actor_test_detached_state_cleared(void) {
+    int cleared = 1;
+    group_lock();
+    SendAwaitFrame* frame = &group.detached_send;
+    cleared = group.pending_send != frame
+        && frame->continuation == NULL
+        && frame->state_continuation == NULL
+        && frame->detached_state_count == 0
+        && frame->send_future == NULL
+        && frame->actor == NULL
+        && !frame->detached
+        && !frame->finalizer_claimed
+        && !frame->wake_bound
+        && !frame->done;
+    for (size_t i = 0;
+            cleared && i < ORES_SOURCE_DETACHED_SCALAR_WORDS; ++i)
+        cleared = frame->detached_state[i] == 0;
+    group_unlock();
+    return cleared;
+}
+
 int oreslang_source_actor_test_join_waiting_on_futures(void* opaque) {
     return opaque != NULL
         && atomic_load_explicit(
