@@ -97,6 +97,7 @@ def main():
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-send-async.ores", 1, 1, None),
+        ("source-actor-send-async-local.ores", 1, 1, None),
         ("source-actor-send-async-future.ores", 1, 2, None),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
@@ -200,14 +201,17 @@ def main():
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
                 "source-actor-send-async.ores",
+                "source-actor-send-async-local.ores",
                 "source-actor-send-async-future.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
-            if name == "source-actor-send-async.ores":
+            if name in {
+                    "source-actor-send-async.ores",
+                    "source-actor-send-async-local.ores"}:
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
                 detach_calls = [line for line in guest.stdout.splitlines()
-                                if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
+                                if "call i32 @oreslang_source_actor_detach_send_future_state_checked(" in line]
                 wait_calls = [line for line in guest.stdout.splitlines()
                               if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 fail_cleanup_calls = [line for line in guest.stdout.splitlines()
@@ -222,7 +226,7 @@ def main():
                     name, "immediate direct send_async failure must synchronously reclaim actor",
                     fail_cleanup_calls)
                 assert len(detach_calls) == 1, (
-                    name, "expected direct send_async to detach the guest continuation", detach_calls)
+                    name, "expected direct send_async to detach through runtime-owned scalar state", detach_calls)
                 assert len(wait_calls) == 1, (
                     name, "expected host entry to wait only on detached terminal result", wait_calls)
                 assert ".send_async_continuation" in guest.stdout, (
@@ -239,6 +243,13 @@ def main():
                 assert 0 <= stop_pos < return_pos, (
                     name, "STOP admission must precede final return in resumed state",
                     continuation)
+                assert "detached.state.count.valid" in continuation, (
+                    name, "detached continuation must validate runtime state word count")
+                if name == "source-actor-send-async-local.ores":
+                    assert "retained.detached.slot" in continuation, (
+                        name, "captured local must resolve from runtime-owned detached frame")
+                    assert "retained.detached.capture" in guest.stdout, (
+                        name, "guest pre-await path must copy captured scalar before detaching")
             if name == "source-actor-send-async-future.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
                                if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
@@ -361,6 +372,7 @@ def main():
                 assert "execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
             if name in {
                     "source-actor-send-async.ores",
+                    "source-actor-send-async-local.ores",
                     "source-actor-send-async-future.ores"}:
                 trace_lines = [line for line in executed.stderr.splitlines()
                                if "SOURCE_DETACHED_SEND_FUTURE_PASS" in line]
