@@ -1,0 +1,10 @@
+// The selected default arm may mutate a visible scalar and continue afterward.
+pub fnc main(): int {
+  let mut int score = 1;
+  do select over
+    default: {
+      score = 41;
+    }
+  end
+  return score + 1;
+}
