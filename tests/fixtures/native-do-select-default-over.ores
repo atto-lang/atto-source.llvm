@@ -1,0 +1,9 @@
+// First executable native procedural select slice: one always-ready default arm.
+pub fnc main(): int {
+  do select over
+    default: {
+      return 42;
+    }
+  end
+  return 0;
+}
