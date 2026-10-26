@@ -2,10 +2,20 @@
 #include "oreslang/runtime/DopLayout.hpp"
 
 #include <array>
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+
+// Assert macros disappear under NDEBUG; these native ABI tests must not.
+#define CHECK(expression) do { \
+    if (!(expression)) { \
+        std::fprintf(stderr, "managed_ref contract failed: %s at line %d\n", \
+                     #expression, __LINE__); \
+        return EXIT_FAILURE; \
+    } \
+} while (false)
 
 namespace {
 
@@ -30,44 +40,44 @@ int main() {
 
     auto first = CompressedActorRef::encode(base, arena.size(), base);
     auto third = CompressedActorRef::encode(base, arena.size(), base + 16);
-    assert(first && third);
-    assert(first->storage() == 1);
-    assert(third->storage() == 3);
-    assert(first->decode(base, arena.size()).value() == base);
-    assert(third->decode(base, arena.size()).value() == base + 16);
+    CHECK(first && third);
+    CHECK(first->storage() == 1);
+    CHECK(third->storage() == 3);
+    CHECK(first->decode(base, arena.size()).value() == base);
+    CHECK(third->decode(base, arena.size()).value() == base + 16);
 
     auto null_ref = CompressedActorRef::encode(base, arena.size(), 0);
-    assert(null_ref && null_ref->is_null());
-    assert(null_ref->decode(base, arena.size()).has_value());
-    assert(null_ref->decode(base, arena.size()).value() == 0);
+    CHECK(null_ref && null_ref->is_null());
+    CHECK(null_ref->decode(base, arena.size()).has_value());
+    CHECK(null_ref->decode(base, arena.size()).value() == 0);
 
-    assert(!CompressedActorRef::encode(base, arena.size(), base + 3));
-    assert(!CompressedActorRef::encode(base, arena.size(), base + arena.size()));
-    assert(!third->decode(base, 8));
+    CHECK(!CompressedActorRef::encode(base, arena.size(), base + 3));
+    CHECK(!CompressedActorRef::encode(base, arena.size(), base + arena.size()));
+    CHECK(!third->decode(base, 8));
 
     auto native = NativeActorManagedRef::encode(base, arena.size(), base + 24);
-    assert(native);
-    assert(native->storage() == static_cast<std::uint64_t>(base + 24));
-    assert(native->decode(base, arena.size()).value() == base + 24);
-    assert(!native->decode(base + 32, arena.size() - 32));
+    CHECK(native);
+    CHECK(native->storage() == static_cast<std::uint64_t>(base + 24));
+    CHECK(native->decode(base, arena.size()).value() == base + 24);
+    CHECK(!native->decode(base + 32, arena.size() - 32));
 
     auto entity = DenseIndex32<EntityTag>::from_index(41);
     auto component = DenseIndex32<ComponentTag>::from_index(41);
-    assert(entity && component);
-    assert(entity->index().value() == 41);
-    assert(component->index().value() == 41);
+    CHECK(entity && component);
+    CHECK(entity->index().value() == 41);
+    CHECK(component->index().value() == 41);
     static_assert(sizeof(DenseIndex32<EntityTag>) == 4);
     static_assert(sizeof(DenseIndex32<ComponentTag>) == 4);
-    assert(!DenseIndex32<EntityTag>::from_index(
+    CHECK(!DenseIndex32<EntityTag>::from_index(
         static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())));
 
     // DOD contract: compact refs/indices can be laid out as 4-byte scalar
     // columns or AoSoA lanes without changing their logical source-level type.
     oreslang::dop::Plan soa(oreslang::dop::Layout::SoA, 1024, 3, 4, 16, 1);
     oreslang::dop::Plan aosoa(oreslang::dop::Layout::AoSoA, 1024, 3, 4, 16, 8);
-    assert(soa.byte_offset(1, 0) == 4);
-    assert(aosoa.byte_offset(1, 0) == 4);
-    assert(aosoa.byte_offset(0, 1) == 32);
+    CHECK(soa.byte_offset(1, 0) == 4);
+    CHECK(aosoa.byte_offset(1, 0) == 4);
+    CHECK(aosoa.byte_offset(0, 1) == 32);
 
     static_assert(CompressedActorRef::max_addressable_span ==
                   UINT64_C(34359738360)); // 32 GiB - 8 at 8-byte alignment
@@ -83,42 +93,42 @@ int main() {
             CompressedActorRef::max_offset);
         auto last = CompressedActorRef::encode(
             synthetic_base, span, synthetic_base + last_offset);
-        assert(last && last->storage() == UINT32_MAX);
-        assert(last->decode(synthetic_base, span) == synthetic_base + last_offset);
+        CHECK(last && last->storage() == UINT32_MAX);
+        CHECK(last->decode(synthetic_base, span) == synthetic_base + last_offset);
 
         const auto high_bit_offset = static_cast<std::uintptr_t>(UINT64_C(1) << 34);
         auto high = CompressedActorRef::encode(
             synthetic_base, span, synthetic_base + high_bit_offset);
-        assert(high && high->storage() > static_cast<std::uint32_t>(INT32_MAX));
-        assert(high->decode(synthetic_base, span) ==
+        CHECK(high && high->storage() > static_cast<std::uint32_t>(INT32_MAX));
+        CHECK(high->decode(synthetic_base, span) ==
                synthetic_base + high_bit_offset);
 
         // Compression must not partially accept a region whose declared
         // extent cannot be encoded. The allocator must select native64 first.
-        assert(!CompressedActorRef::encode(synthetic_base, span + 8, synthetic_base));
-        assert(!first->decode(synthetic_base, span + 8));
+        CHECK(!CompressedActorRef::encode(synthetic_base, span + 8, synthetic_base));
+        CHECK(!first->decode(synthetic_base, span + 8));
     }
 
     // Reject malformed regions crossing the machine-address boundary even
     // when the individual candidate address is initially within the span.
     const auto wrapped_base =
         std::numeric_limits<std::uintptr_t>::max() & ~std::uintptr_t{7};
-    assert(!CompressedActorRef::encode(wrapped_base, 16, wrapped_base));
-    assert(!first->decode(wrapped_base, 16));
-    assert(!NativeActorManagedRef::encode(wrapped_base, 16, wrapped_base));
-    assert(!native->decode(wrapped_base, 16));
+    CHECK(!CompressedActorRef::encode(wrapped_base, 16, wrapped_base));
+    CHECK(!first->decode(wrapped_base, 16));
+    CHECK(!NativeActorManagedRef::encode(wrapped_base, 16, wrapped_base));
+    CHECK(!native->decode(wrapped_base, 16));
 
     // Exact last address of the machine domain is allowed for an 8-byte span.
     const auto end_base =
         std::numeric_limits<std::uintptr_t>::max() - std::uintptr_t{7};
     auto terminal = CompressedActorRef::encode(end_base, 8, end_base);
-    assert(terminal && terminal->decode(end_base, 8) == end_base);
+    CHECK(terminal && terminal->decode(end_base, 8) == end_base);
 
     // Stable physical-reference ABI corpus shared with Java/Graal:
     // ActorCompressed32Reference.encode(offset) must produce the same
     // unsigned wire words. This checks 100k deterministic XorShift64
     // offsets and an FNV64 digest without allocating a 32-GiB arena.
-    // Unlike assert(), these checks MUST remain active in Release/NDEBUG.
+    // Unlike CHECK(), these checks MUST remain active in Release/NDEBUG.
 #if UINTPTR_MAX > UINT32_MAX
     constexpr std::uintptr_t parity_base = UINT64_C(0x100000000);
     const auto parity_span = static_cast<std::size_t>(
