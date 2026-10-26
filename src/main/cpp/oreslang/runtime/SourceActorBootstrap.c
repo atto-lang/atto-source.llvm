@@ -81,6 +81,9 @@ typedef struct {
 typedef struct {
     pthread_cond_t completed;
     OresSourceActorContinuation continuation;
+    OresSourceActorStateContinuation state_continuation;
+    uint64_t detached_state_count;
+    int64_t detached_state[ORES_SOURCE_DETACHED_SCALAR_WORDS];
     SourceSendFuture* send_future;
     SourceActor* actor;
     OresNativeSuspensionLink link;
@@ -398,7 +401,9 @@ static void root_resume_turn(void) {
     if (future_status == ORES_NATIVE_FUTURE_READY) {
         ensure(!ores_native_store_handle_valid(current_source_execution));
         current_source_execution = resumed;
-        result = continuation(actor);
+        result = state_continuation
+            ? state_continuation(actor, detached_state, detached_state_count)
+            : continuation(actor);
         current_source_execution = (OresNativeExecutionHandle){0, 0};
         outcome = ORES_SOURCE_ACTOR_STARTUP_READY;
     }
@@ -570,6 +575,9 @@ static void source_send_wake(
 
     SendAwaitFrame* frame;
     OresSourceActorContinuation continuation;
+    OresSourceActorStateContinuation state_continuation;
+    const int64_t* detached_state;
+    uint64_t detached_state_count;
     SourceActor* actor;
     OresNativeSuspensionLink link;
     int send_outcome;
@@ -612,6 +620,11 @@ static void source_send_wake(
     ensure(ores_native_continuation_store_notify_ready(
         group.continuations, frame->link.continuation));
     continuation = frame->continuation;
+    state_continuation = frame->state_continuation;
+    detached_state = frame->detached_state;
+    detached_state_count = frame->detached_state_count;
+    ensure((continuation != NULL) != (state_continuation != NULL));
+    ensure(detached_state_count <= ORES_SOURCE_DETACHED_SCALAR_WORDS);
     actor = frame->actor;
     link = frame->link;
     frame->outcome = send_outcome;
