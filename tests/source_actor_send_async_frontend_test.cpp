@@ -173,5 +173,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=5 negative=23 detached_scalar_capture=1 stored_scalar_capture=1 multi_pc=2 frame_words=16 ownership_handles_rejected=1\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=5 negative=22 detached_scalar_capture=1 stored_scalar_capture=1 multi_pc=2 frame_words=16 ownership_handles_rejected=1\n";
 }
