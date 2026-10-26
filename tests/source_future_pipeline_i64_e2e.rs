@@ -102,13 +102,8 @@ fn main() {
     link_and_run(&clang, &root, &dir.0, "consumed", &output.stdout);
 
     let borrowed = consumed.replace("rt take source()", "source()");
-    let output = compile(&compiler, &dir.0, "borrowed.ores", &borrowed);
-    assert!(output.status.success(),
-        "borrowed Future source compile failed: {}",
-        String::from_utf8_lossy(&output.stderr));
-    let ir = String::from_utf8_lossy(&output.stdout);
-    assert!(ir.contains(".future.pending.borrowed.producer"));
-    link_and_run(&clang, &root, &dir.0, "borrowed", &output.stdout);
+    rejected(&compiler, &dir.0, "borrowed.ores", &borrowed,
+        "pipeline v1 execution requires an explicit rt take root");
 
     rejected(&compiler, &dir.0, "direct-async.ores",
         r#"async fnc source(): int { return 21; }
