@@ -9,36 +9,46 @@ using oreslang::runtime::NativeSelectArbiter;
 using oreslang::runtime::NativeSelectableI64Channel;
 
 template <class Channel, class Registration>
-static auto bind_read(Channel& channel,
-                      Registration& registration,
-                      std::int64_t& result,
-                      int& callbacks) {
+static auto bind_read(
+        Channel& channel,
+        Registration& registration,
+        std::int64_t& result,
+        int& callbacks,
+        typename Channel::ReadOutcome* outcome = nullptr) {
     return channel.subscribe_readable(
         [&](const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
-            (void)registration.try_win_if([&] {
+            typename Channel::ReadResult committed;
+            const bool won = registration.try_win_if([&] {
                 return channel.try_commit_read(
-                    subscription, result, notifications);
+                    subscription, committed, notifications);
             });
             notifications.dispatch();
+            if (!won) return;
+            if (outcome) *outcome = committed.outcome;
+            if (committed.has_value()) result = committed.value;
         });
 }
 
 template <class Channel, class Registration>
-static auto bind_write(Channel& channel,
-                       Registration& registration,
-                       std::int64_t value,
-                       int& callbacks) {
+static auto bind_write(
+        Channel& channel,
+        Registration& registration,
+        std::int64_t value,
+        int& callbacks,
+        typename Channel::WriteOutcome* outcome = nullptr) {
     return channel.subscribe_writable(
         [&](const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
-            (void)registration.try_win_if([&] {
+            auto committed = Channel::WriteOutcome::NotReady;
+            const bool won = registration.try_win_if([&] {
                 return channel.try_commit_write(
-                    subscription, value, notifications);
+                    subscription, value, committed, notifications);
             });
             notifications.dispatch();
+            if (won && outcome) *outcome = committed;
         });
 }
 
@@ -225,6 +235,94 @@ static void stale_post_commit_notification_cannot_consume_for_loser() {
     assert(value.has_value() && *value == 99);
 }
 
+static void close_wakes_pending_read_as_eof() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    NativeSelectArbiter<1> select;
+    auto read = select.register_case(0);
+    std::int64_t value = 123;
+    int callbacks = 0;
+    auto outcome = Channel::ReadOutcome::NotReady;
+
+    auto wait = bind_read(channel, read, value, callbacks, &outcome);
+    read.arm([wait] { (void)wait.close(); });
+    assert(channel.pending_readers() == 1);
+    assert(!select.winner().has_value());
+
+    assert(channel.close());
+    assert(channel.is_closed());
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(callbacks == 1);
+    assert(outcome == Channel::ReadOutcome::Eof);
+    assert(value == 123);
+    assert(channel.pending_readers() == 0);
+    assert(!channel.close());
+}
+
+static void closed_channel_drains_buffer_before_eof() {
+    using Channel = NativeSelectableI64Channel<2, 4>;
+    Channel channel;
+    assert(channel.try_write(41));
+    assert(channel.close());
+    assert(!channel.try_write(42));
+
+    NativeSelectArbiter<1> first_select;
+    auto first = first_select.register_case(0);
+    std::int64_t first_value = 0;
+    int first_callbacks = 0;
+    auto first_outcome = Channel::ReadOutcome::NotReady;
+    auto first_wait = bind_read(
+        channel, first, first_value, first_callbacks, &first_outcome);
+    first.arm([first_wait] { (void)first_wait.close(); });
+
+    assert(first_select.winner().has_value());
+    assert(first_outcome == Channel::ReadOutcome::Value);
+    assert(first_value == 41);
+    assert(channel.size() == 0);
+
+    NativeSelectArbiter<1> eof_select;
+    auto eof = eof_select.register_case(0);
+    std::int64_t eof_value = 77;
+    int eof_callbacks = 0;
+    auto eof_outcome = Channel::ReadOutcome::NotReady;
+    auto eof_wait = bind_read(
+        channel, eof, eof_value, eof_callbacks, &eof_outcome);
+    eof.arm([eof_wait] { (void)eof_wait.close(); });
+
+    assert(eof_select.winner().has_value());
+    assert(eof_outcome == Channel::ReadOutcome::Eof);
+    assert(eof_value == 77);
+    assert(eof_callbacks == 1);
+}
+
+static void close_wakes_pending_write_as_closed_without_publication() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    assert(channel.try_write(7));
+
+    NativeSelectArbiter<1> select;
+    auto write = select.register_case(0);
+    int callbacks = 0;
+    auto outcome = Channel::WriteOutcome::NotReady;
+    auto wait = bind_write(channel, write, 8, callbacks, &outcome);
+    write.arm([wait] { (void)wait.close(); });
+
+    assert(!select.winner().has_value());
+    assert(channel.pending_writers() == 1);
+    assert(channel.close());
+
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(callbacks == 1);
+    assert(outcome == Channel::WriteOutcome::Closed);
+    assert(channel.pending_writers() == 0);
+    assert(channel.size() == 1);
+    assert(!channel.try_write(9));
+
+    auto existing = channel.try_read();
+    assert(existing.has_value() && *existing == 7);
+    assert(channel.size() == 0);
+}
+
 static void immediate_callback_failure_does_not_leak_waiter() {
     using Channel = NativeSelectableI64Channel<1, 2>;
     Channel channel;
@@ -275,6 +373,9 @@ int main() {
     freeing_capacity_wakes_pending_write_case();
     cancellation_detaches_channel_waiter();
     stale_post_commit_notification_cannot_consume_for_loser();
+    close_wakes_pending_read_as_eof();
+    closed_channel_drains_buffer_before_eof();
+    close_wakes_pending_write_as_closed_without_publication();
     immediate_callback_failure_does_not_leak_waiter();
     asynchronous_notification_failure_is_recorded_after_commit();
     return 0;
