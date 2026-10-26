@@ -22,11 +22,17 @@ static_assert(sizeof(PackedPosition) == PackedPosition::encoded_size);
 static_assert(alignof(PackedPosition) == 1);
 static_assert(std::is_trivially_copyable_v<PackedPosition>);
 static_assert(std::is_standard_layout_v<PackedPosition>);
+template<class T>
+concept ExposesRawSpan = requires(T& loan) { loan.span(); };
+static_assert(!ExposesRawSpan<RecordStore::Loan<0, false>>);
+static_assert(!ExposesRawSpan<Store::Loan<0, false>>);
+static_assert(!ExposesRawSpan<Store::Loan<0, true>>);
 static_assert(std::is_same_v<
-        decltype(std::declval<RecordStore::Loan<0, false>>().span()),
-        std::span<const PackedPosition>>);
-static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, false>>().span()), std::span<const float>>);
-static_assert(std::is_same_v<decltype(std::declval<Store::Loan<0, true>>().span()), std::span<float>>);
+        decltype(std::declval<RecordStore::Loan<0, false>>().get(std::size_t{})),
+        PackedPosition>);
+static_assert(std::is_same_v<
+        decltype(std::declval<Store::Loan<0, false>>().get(std::size_t{})),
+        float>);
 static_assert(!std::is_copy_constructible_v<Store::Loan<0, true>>);
 static_assert(!std::is_copy_constructible_v<Store>);
 static_assert(!std::is_aggregate_v<Store::Handle>);
@@ -60,9 +66,9 @@ int main() {
         auto r = a.borrow_read<0>();
         auto r2 = a.borrow_read<0>();
         auto w = a.borrow_write<1>();
-        check(r.span().size() == 3 && r.span()[1] == 2.5f);
-        w.span()[1] = 999;
-        check(r2.span()[0] == 1.5f);
+        check(r.size() == 3 && r.get(1) == 2.5f);
+        w.set(1, 999);
+        check(r2.get(0) == 1.5f);
         expect<std::logic_error>([&] { (void)a.borrow_write<0>(); });
         expect<std::logic_error>([&] { (void)a.borrow_read<1>(); });
         expect<std::logic_error>([&] { (void)a.get_row(h1); });
@@ -75,7 +81,7 @@ int main() {
     check(a.get<1>(h1) == 999);
     check(a.get<2>(h0) && !a.get<2>(h1));
     { auto bools = a.borrow_read<2>();
-      check(bools.span().size() == 3 && bools.span()[0] == 1 && bools.span()[1] == 0); }
+      check(bools.size() == 3 && bools.get(0) == 1 && bools.get(1) == 0); }
     a.erase_swap(h1);
     check(a.size() == 2 && a.get<0>(h2) == 3.5f && a.get<1>(h2) == 300);
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
@@ -87,12 +93,12 @@ int main() {
     std::thread t1([&] {
         auto w = a.borrow_write<0>();
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-        for (auto& x : w.span()) x += 1.0f;
+        for (std::size_t i = 0; i < w.size(); ++i) w.set(i, w.get(i) + 1.0f);
     });
     std::thread t2([&] {
         auto w = a.borrow_write<1>();
         start.store(true, std::memory_order_release);
-        for (auto& x : w.span()) x += 1;
+        for (std::size_t i = 0; i < w.size(); ++i) w.set(i, w.get(i) + 1);
     });
     t1.join(); t2.join();
     check(a.get<0>(h0) == 2.5f && a.get<1>(h0) == 101);
@@ -130,9 +136,9 @@ int main() {
         check(records.get<0>(h) == position && records.get<1>(h) == 5.0);
         {
             auto read = records.borrow_read<0>();
-            check(read.span().size() == 2);
-            check(read.span()[1].get<0>() == false);
-            check(read.span()[1].get<1>() == 6.0);
+            check(read.size() == 2);
+            check(read.get(1).get<0>() == false);
+            check(read.get(1).get<1>() == 6.0);
         }
         const auto replacement = PackedPosition::pack(false, -0.0, 9.0);
         records.set<0>(h, replacement);
@@ -154,8 +160,8 @@ int main() {
               std::bit_cast<std::uint32_t>(-0.0f));
         {
             auto writable = ieee.borrow_write<0>();
-            writable.span()[0] = std::numeric_limits<float>::quiet_NaN();
-            check(std::isnan(writable.span()[0]));
+            writable.set(0, std::numeric_limits<float>::quiet_NaN());
+            check(std::isnan(writable.get(0)));
             expect<std::logic_error>([&] { ieee.erase_swap(zero); });
         }
         check(std::isnan(ieee.get<0>(zero)));
@@ -189,7 +195,7 @@ int main() {
         owner->push(7.5f, 7, true);
         carried.emplace(owner->borrow_read<0>());
         owner.reset();
-        expect<std::logic_error>([&] { (void)carried->span(); });
+        expect<std::logic_error>([&] { (void)carried->size(); });
     }
     carried.reset();
     // Owner IDs are shared across distinct template instantiations.

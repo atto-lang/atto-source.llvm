@@ -163,7 +163,6 @@ public:
     class Loan {
         static_assert(I < field_count, "invalid inverted column index");
         using Value = Cell<std::tuple_element_t<I, std::tuple<Fields...>>>;
-        using SpanValue = std::conditional_t<Write, Value, const Value>;
         std::shared_ptr<State> state_;
         explicit Loan(std::shared_ptr<State> state) : state_(std::move(state)) {}
         friend class InvertedColumns;
@@ -173,16 +172,34 @@ public:
         Loan(Loan&& other) noexcept : state_(std::move(other.state_)) {}
         Loan& operator=(Loan&&) = delete;
         ~Loan() { release(); }
-        std::span<SpanValue> span() const {
+
+        std::size_t size() const {
             if (!state_) throw std::logic_error("released inverted column loan");
-            // A loan retains backing memory but cannot issue a *new* span after
-            // its owning store has been destroyed. Already-issued raw C++ spans
-            // cannot be revoked: the source borrow checker must prevent escape.
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            ensure_open(*state_);
+            return std::get<I>(state_->columns).size();
+        }
+
+        Value get(std::size_t index) const {
+            if (!state_) throw std::logic_error("released inverted column loan");
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            ensure_open(*state_);
+            const auto& column = std::get<I>(state_->columns);
+            if (index >= column.size())
+                throw std::out_of_range("inverted column loan index out of range");
+            return column[index];
+        }
+
+        void set(std::size_t index, Value value) requires (Write) {
+            if (!state_) throw std::logic_error("released inverted column loan");
             std::lock_guard<std::mutex> lock(state_->mutex);
             ensure_open(*state_);
             auto& column = std::get<I>(state_->columns);
-            return {column.data(), column.size()};
+            if (index >= column.size())
+                throw std::out_of_range("inverted column loan index out of range");
+            column[index] = value;
         }
+
         void release() noexcept {
             if (!state_) return;
             auto hold = std::move(state_);
@@ -200,8 +217,9 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain backing state until their release, so
-        // destruction cannot free memory under a borrower.
+        // Outstanding loans retain backing state until their release. Their
+        // checked accessors reject use after owner destruction; no raw pointer,
+        // span, array reference, or mutable backing view escapes a loan.
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->closed = true;
     }

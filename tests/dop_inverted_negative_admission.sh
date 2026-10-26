@@ -28,10 +28,10 @@ reject "heap-owning std::vector field" \
   'int main() { oreslang::dop::InvertedColumns<std::vector<float>> invalid; (void)invalid.size(); }' \
   'phase-one columns only support i32/i64/f32/f64/bool or FixedRecord fields'
 reject "mutable packed bool projection" \
-  'int main() { oreslang::dop::InvertedColumns<bool> a; auto w = a.borrow_write<0>(); (void)w.span(); }' \
+  'int main() { oreslang::dop::InvertedColumns<bool> a; (void)a.borrow_write<0>(); }' \
   'bool/record byte lanes require canonical writes via set'
 reject "mutable fixed-record projection" \
-  'int main() { using R = oreslang::dop::FixedRecord<std::int32_t>; oreslang::dop::InvertedColumns<R> a; auto w = a.borrow_write<0>(); (void)w.span(); }' \
+  'int main() { using R = oreslang::dop::FixedRecord<std::int32_t>; oreslang::dop::InvertedColumns<R> a; (void)a.borrow_write<0>(); }' \
   'bool/record byte lanes require canonical writes via set'
 reject "nested fixed record member" \
   'int main() { using Inner = oreslang::dop::FixedRecord<std::int32_t>; using Outer = oreslang::dop::FixedRecord<Inner>; (void)Outer::encoded_size; }' \
