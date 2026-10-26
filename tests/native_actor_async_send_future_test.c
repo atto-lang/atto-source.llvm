@@ -619,6 +619,32 @@ static void bounded_wake_escrow_rejects_ninth_bind(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void wake_activation_is_bootstrap_only(void) {
+    BoundWakeState pristine = {0};
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open(1, 1, 1, handler, &pristine);
+    CHECK(scheduler != NULL);
+    pristine.scheduler = scheduler;
+    CHECK(ores_native_actor_scheduler_configure_wake_callback(
+        scheduler, bound_wake_callback));
+    CHECK(!ores_native_actor_scheduler_configure_wake_callback(
+        scheduler, bound_wake_callback));
+    OresNativeActorRef actor =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    CHECK(actor.scheduler_domain);
+    close_one(scheduler, actor);
+
+    BoundWakeState spawned = {0};
+    scheduler = ores_native_actor_scheduler_open(1, 1, 1, handler, &spawned);
+    CHECK(scheduler != NULL);
+    spawned.scheduler = scheduler;
+    actor = ores_native_actor_scheduler_spawn(scheduler, 0);
+    CHECK(actor.scheduler_domain);
+    CHECK(!ores_native_actor_scheduler_configure_wake_callback(
+        scheduler, bound_wake_callback));
+    close_one(scheduler, actor);
+}
+
 int main(void) {
     immediate_resource_failure_does_not_mint_future();
     immediate_future_is_ready_before_await();
@@ -633,6 +659,7 @@ int main(void) {
     pending_stop_publishes_exact_failed_wake();
     duplicate_send_wake_bind_fails_closed();
     bounded_wake_escrow_rejects_ninth_bind();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8");
+    wake_activation_is_bootstrap_only();
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
     return 0;
 }
