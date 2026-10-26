@@ -210,5 +210,36 @@ int main() {
         p.actors.front().on_message.actor_state_loan.reset();
     });
 
+    // Compiler-built state expressions must use the same canonical scalar
+    // shape as parser output. Alternate AST metadata cannot accompany an
+    // otherwise admitted state projection and be ignored by lowering.
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result->arguments.push_back(integer(7));
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result->condition = integer(1);
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result->resolved_class = "R";
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result->sum_type = "Option";
+    });
+    rejects([](Program& p) {
+        p.actors.front().on_message.actor_state_loan->result->integer = 1;
+    });
+    rejects([](Program& p) {
+        auto& method = p.actors.front().on_message;
+        method.actor_state_loan->mode = ActorStateLoan::Mode::Write;
+        method.declared_effects.bits =
+            static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+        method.actor_state_loan->result = variable("n");
+        ActorFieldWrite write;
+        write.field = "count";
+        write.expression = integer(1);
+        write.expression->argument_names.push_back("unexpected");
+        method.actor_state_loan->writes.push_back(std::move(write));
+    });
+
     return 0;
 }
