@@ -1684,7 +1684,8 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-native-async-send-future-test PRIVATE c_std_11)
     target_compile_definitions(oreslang-native-async-send-future-test PRIVATE
-        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1)
+        ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1
+        ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION=1)
     target_compile_options(oreslang-native-async-send-future-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
     target_link_libraries(oreslang-native-async-send-future-test PRIVATE Threads::Threads)
