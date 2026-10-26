@@ -158,9 +158,12 @@ int ores_native_actor_scheduler_async_send_status(
 /* Bind one scheduler-owned producer wake to this exact async-send descriptor.
  * Binding and terminal-state observation share the scheduler mutex: PENDING
  * keeps the reserved wake parked; READY/FAILED/CANCELLED publishes it
- * immediately. READY remains valid if the target stopped after admission.
- * completion_code in the callback ticket is the exact OresNativeSendStatus.
- * One descriptor accepts at most one wake. */
+ * immediately. READY => ACCEPTED; FAILED => TERMINATED or RESOURCE_EXHAUSTED;
+ * CANCELLED => TRANSPORT_UNAVAILABLE. Any new terminal pairing must be added
+ * explicitly to the scheduler contract rather than flowing through silently.
+ * READY remains valid if the target stopped after admission. completion_code
+ * in the callback ticket is the exact OresNativeSendStatus. One descriptor
+ * accepts at most one wake. */
 int ores_native_actor_scheduler_bind_async_send_wake(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
     OresNativeActorRef producer, uint64_t continuation_slot,
@@ -172,7 +175,10 @@ int ores_native_actor_scheduler_await_async_send(
     OresNativeSendStatus* outcome_out);
 int ores_native_actor_scheduler_cancel_async_send(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
-/* Release the Future descriptor after READY/FAILED/CANCELLED observation. */
+/* Release the Future descriptor after READY/FAILED/CANCELLED observation.
+ * If its bound wake callback is currently executing, release claims retirement
+ * exactly once but physical descriptor invalidation is deferred until callback
+ * return. RESERVED/TRANSFERRED/READY wakes reject release. */
 int ores_native_actor_scheduler_release_async_send(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket);
 
