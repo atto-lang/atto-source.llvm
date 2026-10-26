@@ -750,6 +750,14 @@ static void source_send_wake(
             && frame->next_state_count <= ORES_SOURCE_DETACHED_SCALAR_WORDS
             && ores_native_store_handle_valid(
                 frame->next_link.continuation));
+
+        /* The next continuation owns a retained parent reference. Drop the
+         * completed PC's direct frame-owned reference before overwriting
+         * frame->link; ancestry remains live through the child and is retired
+         * transitively when the final child is released. */
+        ensure(ores_native_continuation_store_release(
+            group.continuations, link.continuation));
+
         ensure(frame->completed_send_count
             < ORES_SOURCE_DETACHED_MAX_PCS - 1);
         frame->completed_send_futures[
