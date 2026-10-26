@@ -1256,13 +1256,20 @@ int64_t oreslang_source_actor_await_send_future(
     return result;
 }
 
-int oreslang_source_actor_detach_send_future_checked(
+static int detach_send_future_impl(
         void* opaque_future,
         OresSourceActorContinuation continuation,
-        uint64_t source_token) {
+        OresSourceActorStateContinuation state_continuation,
+        uint64_t source_token,
+        const int64_t* state,
+        uint64_t state_count) {
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
-    if (!future || !continuation)
+    if (!future || ((continuation != NULL) == (state_continuation != NULL)))
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS
+            || (state_count != 0 && state == NULL)
+            || (state_continuation == NULL && state_count != 0))
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
     if (ores_native_actor_scheduler_is_carrier_thread())
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
 
@@ -1282,12 +1289,16 @@ int oreslang_source_actor_detach_send_future_checked(
     SendAwaitFrame* frame = &group.detached_send;
     *frame = (SendAwaitFrame){
         .continuation = continuation,
+        .state_continuation = state_continuation,
+        .detached_state_count = state_count,
         .send_future = future,
         .actor = future->actor,
         .source_token = source_token,
         .detached = 1,
         .outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF
     };
+    for (uint64_t i = 0; i < state_count; ++i)
+        frame->detached_state[i] = state[i];
     ensure(pthread_cond_init(&frame->completed, NULL) == 0);
 
     future->consuming = 1;
@@ -1311,6 +1322,24 @@ int oreslang_source_actor_detach_send_future_checked(
     }
     group_unlock();
     return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+}
+
+int oreslang_source_actor_detach_send_future_checked(
+        void* opaque_future,
+        OresSourceActorContinuation continuation,
+        uint64_t source_token) {
+    return detach_send_future_impl(
+        opaque_future, continuation, NULL, source_token, NULL, 0);
+}
+
+int oreslang_source_actor_detach_send_future_state_checked(
+        void* opaque_future,
+        OresSourceActorStateContinuation continuation,
+        uint64_t source_token,
+        const int64_t* state,
+        uint64_t state_count) {
+    return detach_send_future_impl(
+        opaque_future, NULL, continuation, source_token, state, state_count);
 }
 
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
