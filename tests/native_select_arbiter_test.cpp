@@ -165,11 +165,40 @@ static void registration_validation_fails_closed() {
     assert(terminal_registration);
 }
 
+static void throwing_revoker_does_not_skip_other_losers() {
+    NativeSelectArbiter<3> select;
+    auto first = select.register_case(0);
+    auto second = select.register_case(1);
+    auto third = select.register_case(2);
+    int second_revoke = 0;
+    int third_revoke = 0;
+
+    first.arm([] {});
+    second.arm([&] {
+        ++second_revoke;
+        throw std::runtime_error("revoker failure");
+    });
+    third.arm([&] { ++third_revoke; });
+
+    bool observed = false;
+    try {
+        (void)first.try_win();
+    } catch (const std::runtime_error&) {
+        observed = true;
+    }
+    assert(observed);
+    assert(second_revoke == 1);
+    assert(third_revoke == 1);
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(select.unarmed_loser_count() == 0);
+}
+
 static void concurrent_ready_race_has_exactly_one_winner() {
     constexpr std::size_t count = 16;
     NativeSelectArbiter<count> select;
     std::array<NativeSelectArbiter<count>::Registration, count> registrations;
     std::array<std::atomic<int>, count> revoked{};
+    for (auto& value : revoked) value.store(0);
     std::atomic<bool> start{false};
     std::atomic<int> winner_count{0};
 
@@ -214,6 +243,7 @@ int main() {
     task_revocation_cancels_select_without_reentrant_deadlock();
     arbiter_destruction_revokes_live_registration();
     registration_validation_fails_closed();
+    throwing_revoker_does_not_skip_other_losers();
     concurrent_ready_race_has_exactly_one_winner();
     return 0;
 }
