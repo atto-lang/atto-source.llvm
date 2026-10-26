@@ -289,6 +289,22 @@ void ores_actor_arena_compact_store_i64(
     ores_actor_arena_compact_write(a, turn, ref,
                                    (size_t)byte_offset, &value, sizeof(value));
 }
+/* Actor-private graph fields have one canonical little-endian physical
+ * representation across LLVM and Java/Graal, independent of host endianness.
+ * These helpers operate only on verified 4-byte field spans under arena lock.
+ * Scalar host-call ABI values (e.g. i64) are not affected. */
+static uint32_t load_le_u32(const unsigned char* p) {
+    return (uint32_t) p[0]
+        | ((uint32_t) p[1] << 8)
+        | ((uint32_t) p[2] << 16)
+        | ((uint32_t) p[3] << 24);
+}
+static void store_le_u32(unsigned char* p, uint32_t value) {
+    p[0] = (unsigned char) value;
+    p[1] = (unsigned char) (value >> 8);
+    p[2] = (unsigned char) (value >> 16);
+    p[3] = (unsigned char) (value >> 24);
+}
 /* A compressed graph field is always an i32, never a host pointer.
  * Validate the source and referenced target under one arena lock so an
  * invalid or stale intra-object edge cannot be followed. Bare i32 bits are
@@ -310,9 +326,8 @@ uint32_t ores_actor_arena_compact_load_ref_i32(
         a, (OresArenaCompactHandle) {domain, source_bits}, &source_index);
     const size_t off = ref_field_offset(field_offset);
     require_span(source->length, off, sizeof(uint32_t));
-    uint32_t target_bits = 0;
-    memcpy(&target_bits, a->slab + source_index * a->slot_bytes + off,
-           sizeof(target_bits));
+    const uint32_t target_bits = load_le_u32(
+        a->slab + source_index * a->slot_bytes + off);
     if (target_bits) {
         size_t target_index = 0;
         (void) require_compact(
@@ -337,8 +352,7 @@ void ores_actor_arena_compact_store_ref_i32(
         (void) require_compact(
             a, (OresArenaCompactHandle) {domain, target_bits}, &target_index);
     }
-    memcpy(a->slab + source_index * a->slot_bytes + off,
-           &target_bits, sizeof(target_bits));
+    store_le_u32(a->slab + source_index * a->slot_bytes + off, target_bits);
     leave_lock(a);
 }
 OresArenaLoan ores_actor_arena_borrow(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {
