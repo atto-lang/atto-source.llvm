@@ -662,17 +662,17 @@ void validate_i64_ownership(const Program& program) {
         for (const auto& pipeline : function.future_pipelines) {
             if (pipeline.plans.empty() ||
                     pipeline.plans.front().input_ownership !=
-                        pipeline_root_ownership(pipeline.root_consumed))
+                        types::pipeline_root_ownership(pipeline.root_consumed))
                 throw std::runtime_error(
                     "ownership violation: Future pipeline root ownership proof "
                     "does not match source rt take shape");
             for (std::size_t i = 1; i < pipeline.plans.size(); ++i)
                 if (pipeline.plans[i].input_ownership !=
-                        PipelineInputOwnership::OwnedPipelineValue)
+                        types::PipelineInputOwnership::OwnedPipelineValue)
                     throw std::runtime_error(
                         "ownership violation: Future pipeline internal edge "
                         "lost pipeline-owned authority");
-            validate_future_pipeline_chain(pipeline.plans);
+            types::validate_future_pipeline_chain(pipeline.plans);
         }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
@@ -720,7 +720,7 @@ void validate_i64_ownership(const Program& program) {
                 if (future == function.future_pipelines.end())
                     throw std::runtime_error(
                         "ownership violation: Future<int> await lost pipeline provenance");
-                validate_future_pipeline_chain(future->plans);
+                types::validate_future_pipeline_chain(future->plans);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
