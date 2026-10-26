@@ -129,6 +129,8 @@ def main():
         "source-actor-static-method-reject.ores": "static method is invalid",
         "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
+        "source-actor-send-move-then-call-reject.ores":
+            "use of explicitly moved int 'count'",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
