@@ -208,20 +208,24 @@ static inline int ores_native_select_register(
         uint64_t arm,
         OresNativeSelectToken* out) {
     if (out) *out = (OresNativeSelectToken){0};
-    if (!arbiter || !out || arm >= atomic_load_explicit(&arbiter->arm_count, memory_order_acquire))
+    if (!arbiter || !out)
         return 0;
 
     /*
-     * Snapshot the open generation before claiming the arm. Once the arm is
-     * REGISTERING it is counted in active_tokens immediately, so seal->rearm
-     * cannot reset generation/arm state underneath an in-flight registration.
+     * Acquire OPEN first. Rearm publishes generation + arm_count + reset arm
+     * state before its release-store of winner=OPEN. Reading arm_count before
+     * this acquire can observe the prior generation's bound and admit an arm
+     * which does not exist in the newly opened generation.
      */
     if (atomic_load_explicit(
             &arbiter->winner, memory_order_acquire) != 0)
         return 0;
     const uint64_t selection_generation = atomic_load_explicit(
         &arbiter->generation, memory_order_acquire);
-    if (!selection_generation || selection_generation == UINT64_MAX)
+    const size_t selection_arm_count = atomic_load_explicit(
+        &arbiter->arm_count, memory_order_acquire);
+    if (!selection_generation || selection_generation == UINT64_MAX
+            || arm >= selection_arm_count)
         return 0;
 
     unsigned expected = ORES_NATIVE_SELECT_ARM_EMPTY;
@@ -246,7 +250,9 @@ static inline int ores_native_select_register(
             &arbiter->winner, memory_order_acquire) != 0
             || atomic_load_explicit(
                 &arbiter->generation, memory_order_acquire)
-                != selection_generation) {
+                != selection_generation
+            || arm >= atomic_load_explicit(
+                &arbiter->arm_count, memory_order_acquire)) {
         atomic_store_explicit(
             &arbiter->arms[arm].state,
             ORES_NATIVE_SELECT_ARM_DETACHED,
@@ -547,8 +553,14 @@ static inline int ores_native_select_detach(OresNativeSelectToken token) {
     return 1;
 }
 
-static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
-    if (!arbiter) return 0;
+static inline int ores_native_select_seal(
+        OresNativeSelectArbiter* arbiter,
+        uint64_t generation) {
+    if (!arbiter || !generation || generation == UINT64_MAX
+            || atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire) != generation)
+        return 0;
+
     uint_fast64_t expected = 0;
     const int sealed_before_winner = atomic_compare_exchange_strong_explicit(
         &arbiter->winner,
@@ -556,9 +568,27 @@ static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
         (uint_fast64_t)ORES_NATIVE_SELECT_WINNER_SEALED,
         memory_order_acq_rel,
         memory_order_acquire);
+
+    /*
+     * If another winner was already terminal, a concurrent owner may rearm.
+     * Never let a delayed seal from generation N detach registrations in N+1.
+     * Active tokens fence rearm while there are actual losers to retire.
+     */
+    if (atomic_load_explicit(
+            &arbiter->generation, memory_order_acquire) != generation)
+        return 0;
+    if (!sealed_before_winner
+            && atomic_load_explicit(
+                &arbiter->active_tokens, memory_order_acquire) == 0)
+        return 0;
+
     const size_t arm_count = atomic_load_explicit(
         &arbiter->arm_count, memory_order_acquire);
     for (size_t i = 0; i < arm_count; ++i) {
+        if (atomic_load_explicit(
+                &arbiter->generation, memory_order_acquire) != generation)
+            return 0;
+
         unsigned state = ORES_NATIVE_SELECT_ARM_REGISTERED;
         if (atomic_compare_exchange_strong_explicit(
                 &arbiter->arms[i].state,
