@@ -944,6 +944,41 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_future_pipeline_ownership_contract
         COMMAND oreslang-future-pipeline-ownership-contract-test)
+
+    # First source-executable Future<int> value-pipe slice. The Future is
+    # compiler-owned and already-ready; pending scheduler continuations remain
+    # deliberately fail-closed. These are source -> ownership -> LLVM -> native
+    # execution tests, not host-only contract probes.
+    oreslang_contract_test(native_future_pipe_ready_ir
+        future-pipe-ready-run.ores --ir "call i64 @source")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_future_pipe_ready_runtime
+            future-pipe-ready-run.ores --run 44 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_future_pipe_ready_async_stage_runtime
+            future-pipe-ready-async-stage-run.ores --run 44 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_future_pipe_ready_scalar_to_async_runtime
+            future-pipe-ready-scalar-to-async-run.ores --run 44 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_future_pipe_ready_take_runtime
+            future-pipe-ready-take-run.ores --run 22 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_future_pipe_ready_use_after_take_rejected
+        future-pipe-ready-use-after-take-reject.ores
+        --diagnostic "use of explicitly moved int 'upstream'")
+    oreslang_contract_test(native_future_pipe_ready_double_take_rejected
+        future-pipe-ready-double-take-reject.ores
+        --diagnostic "use of explicitly moved int 'upstream'")
+    oreslang_contract_test(native_future_pipe_ready_direct_future_arg_rejected
+        future-pipe-ready-direct-arg-reject.ores
+        --diagnostic "native Future<int> cannot be passed as an ordinary scalar argument")
+    oreslang_contract_test(native_future_pipe_ready_scalar_binding_rejected
+        future-pipe-ready-int-binding-reject.ores
+        --diagnostic "native Future<int> value requires an explicit Future<int> binding or await")
+    oreslang_contract_test(native_future_pipe_ready_await_scalar_rejected
+        future-pipe-ready-await-scalar-reject.ores
+        --diagnostic "native await requires Future<int>")
+    oreslang_contract_test(native_future_pipe_ready_take_lifted_rejected
+        future-pipe-ready-take-lifted-reject.ores
+        --diagnostic "native rt take of an already-lifted Future pipeline is not supported")
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
