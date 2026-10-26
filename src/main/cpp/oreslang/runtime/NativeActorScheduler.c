@@ -5,6 +5,7 @@
 #include "oreslang/runtime/NativeExecutionAuthority.h"
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
+#include "oreslang/runtime/NativeSelectArbiter.h"
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -40,6 +41,8 @@ typedef struct {
     OresNativeSendStatus outcome;
     OresNativeWakeTicket wake;
     unsigned wake_bound;
+    OresNativeSelectToken select_token;
+    unsigned select_bound;
     /* A terminal descriptor cannot be physically retired while its bound
      * wake callback still owns WAKE_EXECUTING. The external release call may
      * claim one-shot retirement; the carrier completes it after callback exit. */
