@@ -112,6 +112,11 @@ void* oreslang_source_actor_send_async_start(
     void* actor, int64_t payload);
 /* Host-only terminal observer retained for low-level runtime tests. */
 int oreslang_source_actor_await_send_future_checked(void* future);
+/* Trusted-host cleanup for a started Future whose compiler handoff failed.
+ * Pending admission is cancelled if possible; otherwise terminal settlement
+ * is observed. In both cases the descriptor/wrapper is consumed exactly once
+ * and the exact final send status is returned. Never call from a carrier. */
+int oreslang_source_actor_discard_send_future_checked(void* future);
 /*
  * Compiler-facing logical await. The guest continuation is suspended on the
  * root actor and the exact scheduler async-send descriptor is bound to a
