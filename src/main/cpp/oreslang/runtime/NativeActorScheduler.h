@@ -54,6 +54,17 @@ typedef struct {
      * not wake identity, and may change from zero to a completion code. */
     uint64_t completion_code;
 } OresNativeWakeTicket;
+
+/* One physical continuation wake shared by every source arm in one select
+ * generation. It is not an arm token and is never serialized into guest data.
+ * The generation-scoped physical loan prevents arbiter reuse until this wake
+ * is cancelled or its callback has physically returned. */
+typedef struct {
+    OresNativeWakeTicket wake;
+    OresNativeSelectArbiter* arbiter;
+    uint64_t selection_generation;
+} OresNativeSelectWakeTicket;
+
 typedef enum {
     ORES_NATIVE_WAKE_INVALID = 0,
     ORES_NATIVE_WAKE_PUBLISHED = 1,
@@ -180,6 +191,15 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     OresNativeActorScheduler* scheduler, OresNativeActorRef target,
     uint64_t payload, OresNativeSelectToken select_token,
     OresNativeAsyncSendTicket* out);
+/* Same admission, with one pre-reserved common select-generation wake.
+ * If this send later commits the winner, the scheduler publishes that common
+ * wake exactly once. If this send loses, it never consumes/cancels the common
+ * wake because another source owns the winner publication. */
+OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async_with_wake(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef target,
+    uint64_t payload, OresNativeSelectToken select_token,
+    OresNativeSelectWakeTicket select_wake,
+    OresNativeAsyncSendTicket* out);
 int ores_native_actor_scheduler_async_send_status(
     OresNativeActorScheduler* scheduler, OresNativeAsyncSendTicket ticket,
     OresNativeAsyncSendState* state_out, OresNativeSendStatus* outcome_out);
@@ -286,6 +306,37 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
  * Wake mutation APIs fail closed when invoked on a scheduler created without
  * wake support. No guest/user callback runs in these functions.
  */
+/*
+ * Reserve one common continuation wake for an OPEN select generation.
+ * target identity in the underlying wake is the producer itself because this
+ * wake resumes the selecting actor, not any individual heterogeneous source.
+ * Reservation retains one arbiter physical loan; rearm is forbidden until
+ * cancel or callback retirement releases it.
+ */
+int ores_native_actor_scheduler_reserve_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef producer,
+    OresNativeSelectArbiter* arbiter,
+    uint64_t selection_generation,
+    uint64_t continuation_slot,
+    uint64_t continuation_generation,
+    uint64_t code_generation,
+    OresNativeSelectWakeTicket* out);
+
+/* Publish exactly one common wake after a source has committed the exact
+ * winner token. completion_code carries winner arm + 1; source-specific
+ * payload/status remains in the owning select result storage. */
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectWakeTicket ticket,
+    OresNativeSelectToken winner);
+
+/* Cleanup for a sealed/cancelled selection with no published winner. Succeeds
+ * only while the common wake is still RESERVED. */
+int ores_native_actor_scheduler_cancel_select_wake(
+    OresNativeActorScheduler* scheduler,
+    OresNativeSelectWakeTicket ticket);
+
 int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer,
     OresNativeActorRef target, uint64_t continuation_slot,
