@@ -16,6 +16,10 @@ namespace oreslang {
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
 enum class ScalarType { I64, Bool, String };
 
+/* Compiler half of the fixed detached send continuation ABI. Runtime storage
+ * independently pins the same 16-word bound in SourceActorBootstrap.h. */
+inline constexpr std::size_t kNativeDetachedScalarWords = 16;
+
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
     enum class Kind { Option, Result };
