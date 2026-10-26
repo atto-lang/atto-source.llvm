@@ -21,16 +21,16 @@ proposed carrier as part of this proposal.
   40241181625 and 40241178103 both completed successfully, confirming that the
   proposed destination currently has executable GitHub Actions capacity.
 - Source-free carrier review PR: `sonus-auris/sonus-auris.infra#29`, current head
-  `410a250b6ca6b562d650e8195063fa47e6bf7a7a`, reviewed root tree
-  `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`, based on
+  `54790a7a13c7c25d0ff830f988ef054ec1c34bbd`, reviewed root tree
+  `18ebe1aedcd72b652d8b89b7929586e72bb4652e`, based on
   `980a9e8f2a5d2d87b0b49b8c4d764c1ccddd238e`.
 - Reviewed workflow candidate blob:
-  `8528a2cb43788fc86a4adbffead671c70a8b5710`.
+  `d9208f252960580523ca871cab71166710195802`.
 - Reviewed PR #988 test-plan candidate blob:
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570`.
 - Current trusted-plan runner blob: `3175155f05565cf783533e10aecb08e12f80663d`.
-- Exact-head source-free carrier run `40268961769` at `410a250b6ca6b562d650e8195063fa47e6bf7a7a` completed successfully across verifier, isolation, tokenless GraalVM/Maven, native CMake/CTest, and Rust offline probes.
-- Receipt-bound synthetic source-bearing run `40269232700` completed successfully at synthetic carrier commit `fb463aa08c4435014f3402ebcebf2258538805e7`, proving exact authorization, tokenless pre-source toolchain setup, exact-tree provenance, gitless read-only sandbox preparation, and deprivileged network-isolated execution. The synthetic source tree was `fd0d58d34b5ce77095496b5a85fe252a1b72ec78`; one-use refs were revoked after evidence capture.
+- Exact-head source-free carrier run `40269697326` at `54790a7a13c7c25d0ff830f988ef054ec1c34bbd` completed successfully across verifier, isolation, tokenless GraalVM/Maven, native CMake/CTest, and Rust offline probes.
+- Receipt-bound synthetic source-bearing run `40269900050` completed successfully at synthetic carrier commit `1802c5b23ac27530d1cda13af5e2a990ba603103`, proving exact authorization, tokenless pre-source toolchain setup, exact-tree provenance, gitless read-only sandbox preparation, and deprivileged network-isolated execution. The synthetic source tree was `6245d97a4e1930164d6baf1339079c88893d1e42`; one-use refs were revoked after evidence capture.
 - The source-bearing workflow has no `contents: write` or `actions: write` authority, and all three pinned GraalVM setup steps explicitly receive an empty GitHub token with update checks disabled.
 - Historical source-free baseline run `40253715185` completed successfully at older
   carrier head `c8bd315f6fd69c22dfd1e3f582ef8a0a53f9e9b3`: pinned checkout,
@@ -48,9 +48,9 @@ proposed carrier as part of this proposal.
   contract with repository ID `1271706990`; after carrier PR #29 is independently
   approved and merged, pin the **resulting carrier `main` commit SHA** as `base_sha`
   and independently verify that its root tree equals the reviewed PR-head tree
-  `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`; do not use the PR-head commit itself
+  `18ebe1aedcd72b652d8b89b7929586e72bb4652e`; do not use the PR-head commit itself
   as `base_sha` unless it is literally the resulting `main` commit. Pin workflow blob
-  `8528a2cb43788fc86a4adbffead671c70a8b5710` and test-plan blob
+  `d9208f252960580523ca871cab71166710195802` and test-plan blob
   `7bcc58972d329d5f02bc853fa1d908d3d24cc570` restricted to PR `988`.
   This proposal is not effective authorization until independently reviewed
   and merged under source-repository policy.
@@ -172,17 +172,34 @@ These controls prove branch naming is insufficient authority and mid-run revocat
 
 The final current candidate was exercised with harmless synthetic source after removing third-party carrier-token access and all source-bearing workflow write authority:
 
-- carrier PR #29 head: `410a250b6ca6b562d650e8195063fa47e6bf7a7a`
-- carrier root tree: `793d688f02f6a213ac5ccce2ba1a9b72a3ac34c0`
-- workflow blob: `8528a2cb43788fc86a4adbffead671c70a8b5710`
+- carrier PR #29 head: `54790a7a13c7c25d0ff830f988ef054ec1c34bbd`
+- carrier root tree: `18ebe1aedcd72b652d8b89b7929586e72bb4652e`
+- workflow blob: `d9208f252960580523ca871cab71166710195802`
 - runner blob: `3175155f05565cf783533e10aecb08e12f80663d`
 - LLVM #988 production plan blob: `7bcc58972d329d5f02bc853fa1d908d3d24cc570`
-- exact-head source-free run: `40268961769` — success
-- synthetic source-bearing run: `40269232700` — success
-- synthetic carrier commit: `fb463aa08c4435014f3402ebcebf2258538805e7`
-- synthetic source tree: `fd0d58d34b5ce77095496b5a85fe252a1b72ec78`
+- exact-head source-free run: `40269697326` — success
+- synthetic source-bearing run: `40269900050` — success
+- synthetic carrier commit: `1802c5b23ac27530d1cda13af5e2a990ba603103`
+- synthetic source tree: `6245d97a4e1930164d6baf1339079c88893d1e42`
 - evidence markers: `SOURCE_DISPATCH_AUTH_PASS`, `CARRIER_PROVENANCE=PASS`, `CARRIER_AUTHORIZATION_RECHECK_PASS`, `GITLESS_SANDBOX_PREP_PASS`, `SYNTHETIC_SOURCE_BEARING_PASS`, and `TEST_PLAN_PASS commands=1 source=synthetic/private pr=7`.
 
 The first run against the redesigned PID namespace failed only because the old synthetic command asserted that it, rather than the trusted plan runner, was PID 1. The test was corrected to require the command's parent PID to be 1; production LLVM #988 plan bytes were not changed. The corrected run passed end to end.
 
 This remains carrier-mechanics evidence only. No LLVM #988 private source has been transferred or executed.
+
+
+### Current post-guest revocation proof
+
+The current workflow now revalidates the exact dispatcher authorization ref after guest execution, with strict duplicate-key-rejecting JSON parsing and exact ref/type/SHA binding at every lifecycle check.
+
+- exact carrier head: `54790a7a13c7c25d0ff830f988ef054ec1c34bbd`
+- exact carrier root tree: `18ebe1aedcd72b652d8b89b7929586e72bb4652e`
+- workflow blob: `d9208f252960580523ca871cab71166710195802`
+- exact-head source-free run: `40269697326` — success
+- current-workflow positive source-bearing run: `40269900050` attempt 2 — success, including `CARRIER_AUTHORIZATION_FINAL_PASS`
+- long-window revocation run: `40270407891` — expected failure
+- revocation carrier commit: `7ab7df8c5f32dddecb52272805e5895bd28de73a`
+
+For run `40270407891`, initial authorization, exact-tree provenance, pre-guest recheck, gitless sandbox preparation, and the guest command all succeeded. The authorization ref was revoked after pre-guest admission while the 90-second guest command was running. The guest emitted `SYNTHETIC_LONG_REVOCATION_EXEC_PASS` and `TEST_PLAN_PASS`; the post-guest step then rejected the run with `dispatcher authorization revoked or changed during guest execution`. This proves a revoked authorization cannot produce a green qualification even after source execution itself passes.
+
+The temporary synthetic refs were revoked after evidence capture. No LLVM private source was transferred or executed.
