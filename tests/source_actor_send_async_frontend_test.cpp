@@ -110,6 +110,14 @@ int main() {
                     "const Future<void> pending = worker.send_async(1); "
                     "await pending; stop worker; return retained;"),
             "native Future<void> suspension cannot capture scalar/class locals");
+
+    std::string overbound;
+    for (int i = 0; i < 17; ++i)
+        overbound += "const int captured" + std::to_string(i)
+            + " = " + std::to_string(i) + "; ";
+    overbound += "await worker.send_async(1); stop worker; return 43;";
+    rejects(program(overbound),
+            "direct send_async await captures only up to 16 Copy int/bool locals");
     rejects(R"(define actor Worker as {
       let total: int = 0;
       pub fnc on_message(int n): int { await self.send_async(n); return n; }
@@ -125,5 +133,5 @@ int main() {
         rejects(program(std::string(boundary) + " stop worker; return 43;"),
                 "native async/channel/select boundary unsupported");
 
-    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=3 negative=19 detached_scalar_capture=1\n";
+    std::cout << "SOURCE_SEND_ASYNC_FRONTEND_PASS positive=3 negative=20 detached_scalar_capture=1 frame_words=16\n";
 }
