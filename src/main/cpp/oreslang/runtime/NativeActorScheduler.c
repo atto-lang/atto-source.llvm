@@ -1158,7 +1158,9 @@ int ores_native_actor_scheduler_cancel_async_send(
 
 int ores_native_actor_scheduler_release_async_send(
         OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket) {
-    if (!s) return 0;
+    /* Physical descriptor retirement may wait for an executing wake callback.
+     * A carrier must never park here, including a foreign scheduler carrier. */
+    if (!s || executing != NULL) return 0;
     lock(s);
     AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
     int ok = credit
@@ -1171,9 +1173,12 @@ int ores_native_actor_scheduler_release_async_send(
         if (!bound_wake) {
             retire_async_send_credit_locked(s, ticket, credit);
         } else if (bound_wake->state == WAKE_EXECUTING) {
-            /* Claim release exactly once but keep descriptor identity alive
-             * until the scheduler regains control after the callback returns. */
+            /* Claim release exactly once, then wait for the carrier to return
+             * from the callback and retire this exact generation. cond_wait
+             * drops the scheduler mutex, so the carrier can make progress. */
             credit->release_pending = 1;
+            while (matching_async_send_locked(s, ticket) != NULL)
+                if (pthread_cond_wait(&s->credit, &s->lock) != 0) abort();
         } else {
             /* RESERVED/TRANSFERRED/READY still has a future observer that may
              * read descriptor identity or completion_code. */
@@ -1187,6 +1192,18 @@ int ores_native_actor_scheduler_release_async_send(
 int ores_native_actor_scheduler_is_carrier_thread(void) {
     return executing != NULL;
 }
+
+#ifdef ORESLANG_NATIVE_TEST_EXECUTION_EXHAUSTION
+int ores_native_actor_scheduler_test_async_release_pending(
+        OresNativeActorScheduler* s, OresNativeAsyncSendTicket ticket) {
+    if (!s) return 0;
+    lock(s);
+    AsyncSendCredit* credit = matching_async_send_locked(s, ticket);
+    const int pending = credit && credit->release_pending;
+    unlock(s);
+    return pending;
+}
+#endif
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 size_t ores_native_actor_scheduler_test_waiting_sends(
