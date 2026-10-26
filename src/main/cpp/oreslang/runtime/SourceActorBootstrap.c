@@ -1972,6 +1972,214 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
     return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
 }
 
+int oreslang_source_actor_detach_select_send2_checked(
+        void* opaque0, int64_t payload0,
+        void* opaque1, int64_t payload1,
+        OresSourceSelectSend2Continuation continuation,
+        uint64_t source_token) {
+    SourceActor* actor0 = (SourceActor*)opaque0;
+    SourceActor* actor1 = (SourceActor*)opaque1;
+    if (!actor0 || !actor1 || actor0 == actor1 || !continuation)
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    const size_t slot0 = (size_t)actor0->ref.actor_slot;
+    const size_t slot1 = (size_t)actor1->ref.actor_slot;
+    if (!group.vm
+            || actor0->magic != SOURCE_ACTOR_MAGIC
+            || actor1->magic != SOURCE_ACTOR_MAGIC
+            || slot0 >= group.next_slot || slot1 >= group.next_slot
+            || group.actors[slot0] != actor0
+            || group.actors[slot1] != actor1) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    if (atomic_load_explicit(
+            &actor0->stop_requested, memory_order_acquire)
+            || atomic_load_explicit(
+                &actor1->stop_requested, memory_order_acquire)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_TERMINATED;
+    }
+    if (!group.root_ref.scheduler_domain
+            || group.pending_ready != NULL
+            || group.pending_done != NULL
+            || group.pending_send != NULL
+            || group.pending_select != NULL) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
+
+    SelectAwaitFrame* frame = &group.detached_select;
+    frame->continuation = continuation;
+    frame->actors[0] = actor0;
+    frame->actors[1] = actor1;
+    frame->payloads[0] = payload0;
+    frame->payloads[1] = payload1;
+    frame->selection_generation = 0;
+    frame->tokens[0] = (OresNativeSelectToken){0};
+    frame->tokens[1] = (OresNativeSelectToken){0};
+    frame->common_wake = (OresNativeSelectWakeTicket){0};
+    frame->sends[0] = (OresNativeAsyncSendTicket){0};
+    frame->sends[1] = (OresNativeAsyncSendTicket){0};
+    frame->send_live[0] = frame->send_live[1] = 0;
+    frame->immediate_status[0] = frame->immediate_status[1] =
+        ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    frame->link = (OresNativeSuspensionLink){0};
+    frame->source_token = source_token;
+    frame->suspend_recorded = 0;
+    frame->wake_reserved = 0;
+    frame->setup_complete = 0;
+    frame->finalizer_claimed = 0;
+    frame->done = 0;
+    frame->outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    frame->winner_arm = UINT64_MAX;
+    frame->result = 0;
+    ensure(pthread_cond_init(&frame->completed, NULL) == 0);
+
+    group.pending_select = frame;
+
+    /* Detach is complete before CONTROL publication. A failure to admit the
+     * capture turn remains runtime-owned and is finalized by the outer host. */
+    if (!ores_native_vm_publish_control(
+            group.vm,
+            ORES_NATIVE_VM_MAIN,
+            group.root_ref,
+            SOURCE_ROOT_CONTROL_SELECT_SUSPEND)) {
+        frame->outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        frame->done = 1;
+        ensure(pthread_cond_signal(&frame->completed) == 0);
+    }
+    group_unlock();
+    return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+}
+
+int oreslang_source_actor_wait_detached_select_send2_result(
+        uint64_t* winner_arm_out, int64_t* result_out) {
+    if (winner_arm_out) *winner_arm_out = UINT64_MAX;
+    if (result_out) *result_out = 0;
+    if (!winner_arm_out || !result_out)
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (ores_native_actor_scheduler_is_carrier_thread())
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    SelectAwaitFrame* frame = &group.detached_select;
+    if (group.pending_select != frame
+            || frame->finalizer_claimed
+            || !frame->actors[0] || !frame->actors[1]) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    }
+    frame->finalizer_claimed = 1;
+    while (!frame->done)
+        ensure(pthread_cond_wait(&frame->completed, &group.mutex) == 0);
+
+    SourceActor* actor0 = frame->actors[0];
+    SourceActor* actor1 = frame->actors[1];
+    OresNativeVM* vm = group.vm;
+    const int outcome = frame->outcome;
+    const uint64_t winner_arm = frame->winner_arm;
+    const int64_t result = frame->result;
+    const int suspended = frame->suspend_recorded;
+    const int setup_complete = frame->setup_complete;
+    const int wake_reserved = frame->wake_reserved;
+    const OresNativeSelectWakeTicket common_wake = frame->common_wake;
+    OresNativeAsyncSendTicket sends[2] = {
+        frame->sends[0], frame->sends[1]
+    };
+    int send_live[2] = {
+        frame->send_live[0], frame->send_live[1]
+    };
+    group_unlock();
+
+    /* Descriptors never own the common wake. Cancel any losing still-pending
+     * descriptor, observe terminal state if cancellation lost, then release
+     * every exact descriptor generation from this external host. */
+    for (size_t i = 0; i < 2; ++i) {
+        if (!send_live[i]) continue;
+        OresNativeAsyncSendState state = ORES_NATIVE_ASYNC_SEND_INVALID;
+        OresNativeSendStatus exact = ORES_NATIVE_SEND_INVALID_REF;
+        ensure(ores_native_vm_async_send_status(
+            vm, ORES_NATIVE_VM_MAIN, sends[i], &state, &exact));
+        if (state == ORES_NATIVE_ASYNC_SEND_PENDING) {
+            if (!ores_native_vm_cancel_async_send(
+                    vm, ORES_NATIVE_VM_MAIN, sends[i])) {
+                ensure(ores_native_vm_await_async_send(
+                    vm, ORES_NATIVE_VM_MAIN, sends[i], &exact));
+            }
+        }
+        ensure(ores_native_vm_release_async_send(
+            vm, ORES_NATIVE_VM_MAIN, sends[i]));
+    }
+
+    /* frame->done is set by the source callback before the scheduler epilogue
+     * physically clears its wake credit. This exact barrier is what makes it
+     * safe to reuse/reset the embedded arbiter memory. */
+    if (wake_reserved)
+        ensure(ores_native_vm_wait_select_wake_retired(
+            vm, ORES_NATIVE_VM_MAIN, common_wake));
+
+    group_lock();
+    ensure(group.pending_select == frame);
+    if (suspended) {
+        if (!setup_complete) {
+            /* Root setup failure cancelled the logical continuation but left
+             * its frame-owned reference for this single external finalizer. */
+            ensure(ores_native_select_active_physical_loans(
+                &frame->arbiter) == 0);
+        }
+        ensure(ores_native_continuation_store_release(
+            group.continuations, frame->link.continuation));
+    }
+    ensure(ores_native_select_active_tokens(&frame->arbiter) == 0);
+    ensure(ores_native_select_active_physical_loans(&frame->arbiter) == 0);
+    group.pending_select = NULL;
+
+    frame->continuation = NULL;
+    frame->actors[0] = frame->actors[1] = NULL;
+    frame->common_wake = (OresNativeSelectWakeTicket){0};
+    frame->sends[0] = frame->sends[1] = (OresNativeAsyncSendTicket){0};
+    frame->send_live[0] = frame->send_live[1] = 0;
+    frame->link = (OresNativeSuspensionLink){0};
+    frame->source_token = 0;
+    frame->selection_generation = 0;
+    frame->suspend_recorded = 0;
+    frame->wake_reserved = 0;
+    frame->setup_complete = 0;
+    frame->finalizer_claimed = 0;
+    frame->done = 0;
+    frame->outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    frame->winner_arm = UINT64_MAX;
+    frame->result = 0;
+    group_unlock();
+
+    ensure(pthread_cond_destroy(&frame->completed) == 0);
+
+    /* Guest continuation may have issued nonblocking STOP for either actor.
+     * The finalizer supplies missing stop requests and alone performs joins. */
+    if (!atomic_load_explicit(
+            &actor0->stop_requested, memory_order_acquire))
+        oreslang_source_actor_request_stop(actor0);
+    if (!atomic_load_explicit(
+            &actor1->stop_requested, memory_order_acquire))
+        oreslang_source_actor_request_stop(actor1);
+    oreslang_source_actor_join_done(actor0);
+    oreslang_source_actor_join_done(actor1);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_SELECT_SEND2_PASS outcome=%d winner=%llu "
+        "common_wake=1 physical_retirement=1 final_join=2\n",
+        outcome, (unsigned long long)winner_arm);
+#endif
+    *winner_arm_out = winner_arm;
+    *result_out = result;
+    return outcome;
+}
+
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
     if (result_out) *result_out = 0;
     if (!result_out) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
