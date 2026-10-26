@@ -564,7 +564,7 @@ public:
                 } else fail("expected 'class', 'actor', or built-in MaxActorThreads enum");
             } else if (token_.text == "suspend") {
                 program.cooperative_loops.push_back(cooperative_scalar_loop());
-            } else if (token_.kind == Kind::Identifier && peek_next().text == "!") {
+            } else if (macro_invocation_ahead()) {
                 fail("NATIVE_MACRO_EXPANDER_REQUIRED: macro invocation is compile-time syntax; "
                      "native expansion must complete before LLVM IR and runtime fallback is forbidden");
             } else {
@@ -1016,6 +1016,19 @@ private:
     Token peek_next() const {
         Lexer next_lexer = lexer_;
         return next_lexer.next();
+    }
+
+    bool macro_invocation_ahead() const {
+        if (token_.kind != Kind::Identifier) return false;
+        Lexer probe = lexer_;
+        Token next = probe.next();
+        std::size_t qualifiers = 0;
+        while (next.text == "." && qualifiers++ < 32) {
+            const Token member = probe.next();
+            if (member.kind != Kind::Identifier) return false;
+            next = probe.next();
+        }
+        return next.text == "!";
     }
 
     void built_in_actor_threads_enum() {
