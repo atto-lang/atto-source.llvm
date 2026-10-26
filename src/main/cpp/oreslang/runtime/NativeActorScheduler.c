@@ -791,6 +791,8 @@ static void retire_async_send_credit_locked(
     credit->payload = 0;
     credit->wake = (OresNativeWakeTicket){0};
     credit->wake_bound = 0;
+    credit->select_token = (OresNativeSelectToken){0};
+    credit->select_bound = 0;
     credit->release_pending = 0;
     if (pthread_cond_broadcast(&s->credit) != 0) abort();
 }
