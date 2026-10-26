@@ -181,6 +181,8 @@ def main():
             "send_async Future target stopped before await",
         "source-actor-send-async-too-many-locals-reject.ores":
             "direct send_async await captures only up to 16 Copy int/bool locals",
+        "source-actor-send-async-three-pc-reject.ores":
+            "native source supports at most two direct send_async await PCs",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -459,6 +461,7 @@ def main():
             if name in {
                     "source-actor-send-async.ores",
                     "source-actor-send-async-local.ores",
+                    "source-actor-send-async-bool-local.ores",
                     "source-actor-send-async-two-pc.ores",
                     "source-actor-send-async-future.ores",
                     "source-actor-send-async-future-local.ores"}:
