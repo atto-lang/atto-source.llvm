@@ -58,9 +58,19 @@ private:
         std::array<Slot, Capacity> slots{};
         Terminal terminal = Terminal::Pending;
         std::size_t winner = Capacity;
+        std::exception_ptr cleanup_failure;
     };
 
+    static void record_cleanup_failure(
+            const std::shared_ptr<State>& state,
+            std::exception_ptr failure) {
+        if (!failure) return;
+        std::lock_guard<std::mutex> guard(state->mutex);
+        if (!state->cleanup_failure) state->cleanup_failure = std::move(failure);
+    }
+
     static void invoke_all(
+            const std::shared_ptr<State>& state,
             std::array<std::function<void()>, Capacity>& callbacks,
             std::size_t callback_count) {
         std::exception_ptr first_failure;
@@ -71,7 +81,7 @@ private:
                 if (!first_failure) first_failure = std::current_exception();
             }
         }
-        if (first_failure) std::rethrow_exception(first_failure);
+        record_cleanup_failure(state, std::move(first_failure));
     }
 
     static bool cancel_state(const std::shared_ptr<State>& state) {
@@ -95,7 +105,7 @@ private:
                 }
             }
         }
-        invoke_all(callbacks, callback_count);
+        invoke_all(state, callbacks, callback_count);
         return true;
     }
 
@@ -138,7 +148,7 @@ private:
                 }
             }
         }
-        invoke_all(callbacks, callback_count);
+        invoke_all(state, callbacks, callback_count);
         return true;
     }
 
@@ -187,7 +197,12 @@ public:
                         throw std::logic_error("select registration was not admitted");
                 }
             }
-            immediate();
+            try {
+                immediate();
+            } catch (...) {
+                NativeSelectArbiter::record_cleanup_failure(
+                    state, std::current_exception());
+            }
         }
 
         bool try_win() const {
@@ -248,8 +263,8 @@ public:
         try {
             (void)cancel_state(state_);
         } catch (...) {
-            // Destruction is a last-resort revocation boundary. Explicit
-            // cancel() remains the observable path for revoker failures.
+            // Mutex/runtime failures are unrecoverable here. User revoker
+            // exceptions are captured in cleanup_failure instead.
         }
     }
 
@@ -283,6 +298,16 @@ public:
     bool is_cancelled() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->terminal == Terminal::Cancelled;
+    }
+
+    bool has_cleanup_failure() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return bool(state_->cleanup_failure);
+    }
+
+    std::exception_ptr cleanup_failure() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->cleanup_failure;
     }
 
     /**
