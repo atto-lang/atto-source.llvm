@@ -1336,8 +1336,10 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async_with_wa
         uint64_t winner = UINT64_MAX;
         if ((status == ORES_NATIVE_SEND_INVALID_REF
                     || status == ORES_NATIVE_SEND_TERMINATED)
-                && ores_native_select_winner(
-                    select_token.arbiter, &winner)
+                && ores_native_select_winner_generation(
+                    select_token.arbiter,
+                    select_token.selection_generation,
+                    &winner)
                 && winner == select_token.arm) {
             const OresNativeWakePublishStatus published =
                 ores_native_actor_scheduler_publish_select_wake(
@@ -1374,7 +1376,10 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async_with_wa
     if (credit->state == ORES_NATIVE_ASYNC_SEND_READY
             || credit->state == ORES_NATIVE_ASYNC_SEND_FAILED) {
         uint64_t winner = UINT64_MAX;
-        if (ores_native_select_winner(select_token.arbiter, &winner)
+        if (ores_native_select_winner_generation(
+                select_token.arbiter,
+                select_token.selection_generation,
+                &winner)
                 && winner == select_token.arm) {
             const OresNativeWakePublishStatus published =
                 publish_select_wake_locked(
@@ -1681,7 +1686,10 @@ static OresNativeWakePublishStatus publish_select_wake_locked(
         return ORES_NATIVE_WAKE_INVALID;
 
     uint64_t winning_arm = UINT64_MAX;
-    if (!ores_native_select_winner(ticket.arbiter, &winning_arm)
+    if (!ores_native_select_winner_generation(
+            ticket.arbiter,
+            ticket.selection_generation,
+            &winning_arm)
             || winning_arm != winner.arm)
         return ORES_NATIVE_WAKE_INVALID;
 
