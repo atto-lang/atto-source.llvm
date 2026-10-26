@@ -276,9 +276,12 @@ static void release_wake_locked(OresNativeActorScheduler* s,
         abort();
     --s->reserved_wakes;
     --lane->wake_live;
-    release_select_wake_loan_locked(credit);
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
+    /* Drop the generation loan only after the wake identity is physically
+     * retired. Arbiter rearm is lock-free and may begin immediately once this
+     * counter reaches zero. */
+    release_select_wake_loan_locked(credit);
     maybe_finish_stopped_locked(s, i);
 }
 static WakeCredit* matching_wake_locked(
@@ -490,11 +493,13 @@ static void* carrier(void* raw) {
                 }
             }
 
-            release_select_wake_loan_locked(active_wake);
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
             --lane->wake_live;
             ++s->wakes_completed;
+            /* Callback stack and wake identity are now retired. Only now may
+             * a new select generation reuse the arbiter. */
+            release_select_wake_loan_locked(active_wake);
             if (deferred_release)
                 retire_async_send_credit_locked(
                     s, deferred_ticket, deferred_release);
