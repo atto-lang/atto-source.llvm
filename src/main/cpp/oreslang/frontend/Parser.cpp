@@ -659,7 +659,8 @@ private:
                 fail("[EXPORT_KIND_MISMATCH] Symbol literal does not match typed export kind");
         } else {
             if (kind == SourceExportKind::Symbol) {
-                if (token_.kind == Kind::Identifier && peek_next().text == "as")
+                if (token_.kind == Kind::Identifier &&
+                        peek_next().text == "as" && peek_second().text == "#")
                     fail("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
                 fail("[EXPORT_SYMBOL_LITERAL_REQUIRED] Symbol exports name nominal #symbol identities");
             }
@@ -811,10 +812,7 @@ private:
             const ActorDecl* actor = nullptr;
             const TypeOnlyDecl* type_only = nullptr;
             const ModuleContract* contract = nullptr;
-
-            std::string id() const {
-                return owner + "::" + source_export_kind_name(kind) + "::" + name;
-            }
+            std::string local_symbol_id;
         };
 
         const std::string declaration_owner =
@@ -826,7 +824,10 @@ private:
                 if (family.owner == owner && family.name == name && family.kind == kind)
                     return family;
             families.push_back(Family{std::move(owner), std::move(name), kind});
-            return families.back();
+            auto& added = families.back();
+            added.local_symbol_id =
+                added.owner + "::" + source_export_kind_name(kind) + "::" + added.name;
+            return added;
         };
 
         if (!program.module.empty())
@@ -873,7 +874,8 @@ private:
 
         std::unordered_map<std::string, std::size_t> external;
         auto add_binding = [&](SourceExportBinding binding) {
-            const std::string key = binding.owner_namespace + "\0" + binding.external_name;
+            const std::string key =
+                binding.owner_namespace + '\0' + binding.external_name;
             auto existing = external.find(key);
             if (existing != external.end()) {
                 const auto& prior = program.source_export_bindings[existing->second];
@@ -909,7 +911,7 @@ private:
                     0);
             add_binding(SourceExportBinding{
                 family.owner,
-                family.id(),
+                family.local_symbol_id,
                 family.kind,
                 family.name,
                 family.name,
@@ -980,7 +982,7 @@ private:
                     item.external_name.empty() ? item.local_name : item.external_name;
                 add_binding(SourceExportBinding{
                     declaration.owner_namespace,
-                    family.id(),
+                    family.local_symbol_id,
                     family.kind,
                     family.name,
                     external_name,
@@ -1014,7 +1016,7 @@ private:
         };
 
         for (const auto& family : families) {
-            auto api = max_scope.find(family.id());
+            auto api = max_scope.find(family.local_symbol_id);
             if (api == max_scope.end()) continue;
             std::vector<std::string> referenced;
 
@@ -1059,8 +1061,8 @@ private:
                 const Family* referenced_family =
                     local_type_family(family.owner, name);
                 if (!referenced_family) continue;
-                const int visible = max_scope.count(referenced_family->id())
-                    ? max_scope.at(referenced_family->id()) : 0;
+                const int visible = max_scope.count(referenced_family->local_symbol_id)
+                    ? max_scope.at(referenced_family->local_symbol_id) : 0;
                 if (visible < api->second)
                     source_export_error(
                         "EXPORT_API_LEAK",
@@ -1481,6 +1483,12 @@ private:
 
     Token peek_next() const {
         Lexer next_lexer = lexer_;
+        return next_lexer.next();
+    }
+
+    Token peek_second() const {
+        Lexer next_lexer = lexer_;
+        (void)next_lexer.next();
         return next_lexer.next();
     }
 
