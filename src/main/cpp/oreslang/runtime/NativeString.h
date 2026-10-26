@@ -17,11 +17,13 @@ typedef enum OreslangStringStatus {
     ORESLANG_STRING_INVALID_UTF8 = 2,
     ORESLANG_STRING_TOO_LARGE = 3,
     ORESLANG_STRING_NO_MEMORY = 4,
-    ORESLANG_STRING_INVALID_JSON = 5
+    ORESLANG_STRING_INVALID_JSON = 5,
+    ORESLANG_STRING_EMBEDDED_NUL = 6
 } OreslangStringStatus;
 #define ORESLANG_STRING_MAX_BYTES UINT64_C(16777216)
 // Strings may contain NUL; byte_length is authoritative, not strlen.
 // Input borrows must stay alive until the operation returns.
+OreslangStringStatus oreslang_string_validate(const OreslangNativeString*);
 OreslangStringStatus oreslang_string_new_utf8(const unsigned char*, uint64_t, OreslangNativeString*);
 OreslangStringStatus oreslang_string_clone(const OreslangNativeString*, OreslangNativeString*);
 OreslangStringStatus oreslang_string_concat(const OreslangNativeString*, const OreslangNativeString*, OreslangNativeString*);
