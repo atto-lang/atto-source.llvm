@@ -246,16 +246,30 @@ int oreslang_source_actor_test_detached_state_cleared(void) {
         && frame->detached_state_count == 0
         && frame->send_future == NULL
         && frame->actor == NULL
+        && frame->link.execution_id.runtime_domain == 0
+        && frame->link.execution_id.execution == 0
+        && !ores_native_store_handle_valid(frame->link.continuation)
+        && !ores_native_store_handle_valid(frame->link.parent)
+        && frame->source_token == 0
+        && frame->pc == 0
+        && !frame->suspend_recorded
         && !frame->detached
         && !frame->finalizer_claimed
         && !frame->wake_bound
         && !frame->done
+        && frame->outcome == 0
+        && frame->result == 0
         && !frame->rearm_requested
         && !frame->rearm_terminal
+        && frame->rearm_outcome == 0
         && frame->next_send_future == NULL
         && frame->next_state_continuation == NULL
         && frame->next_source_token == 0
         && frame->next_state_count == 0
+        && frame->next_link.execution_id.runtime_domain == 0
+        && frame->next_link.execution_id.execution == 0
+        && !ores_native_store_handle_valid(frame->next_link.continuation)
+        && !ores_native_store_handle_valid(frame->next_link.parent)
         && frame->completed_send_count == 0
         && frame->abandoned_send_future == NULL;
     for (size_t i = 0;
