@@ -1,7 +1,12 @@
 # SelectPlan / DynamicSelectPlan: native parity gate
 
-**Status:** not implemented in the LLVM backend. This document is the
-required behavior contract, not an assertion of native feature support.
+**Status:** full typed/static select is not implemented in the LLVM backend.
+The native frontend now admits only the first procedural source slice:
+blocking `do select` with exactly one `default` arm, using either
+`{ ... }` or `over ... end`. Every channel/Future arm, value-producing
+`select`, `nb select`, `do nb select`, policy, plan and dynamic-plan form
+remains fail-closed. The rest of this document is the required behavior
+contract, not an assertion of broader native feature support.
 
 The Java reference backend defines:
 
@@ -169,13 +174,19 @@ runtime contract only:
 - `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
   handle.
 
-This is **not** source-level select support. Generic `Channel<T>`/Future
-registration, typed arm bindings, ownership/borrow checking, blocking
-suspension, continuation scheduling, policy lowering
-(`first`/`fair`/`random`), and actor generation fencing are still required.
-Until those layers are wired and tested, source `select`, including both
-`{ ... }` and `over ... end`, must continue to fail closed at the native
-frontend boundary.
+This arbiter is **not** by itself source-level select support. Generic
+`Channel<T>` registration, typed arm bindings, blocking suspension,
+continuation scheduling and policy lowering (`first`/`fair`/`random`) are
+still required for real multi-arm source selection. A later runtime slice now
+also provides one-shot i64 Future readiness and actor-generation fencing, but
+those capabilities are not yet wired into source arms.
+
+The only admitted frontend form is the degenerate procedural case whose sole
+`default` arm is immediately eligible: blocking `do select` with exactly one
+`default`, in braces or `over ... end`. It lowers as a real structured
+statement so lexical scope, ownership checking, mutation and callable return
+reuse the normal CFG/cleanup machinery. Any read/write/await arm or any other
+select mode continues to fail closed.
 
 ## Selectable bounded i64 channel substrate
 
@@ -203,8 +214,13 @@ The runtime contract is:
 Channel close/EOF is now part of this slice: close wakes pending readers and
 writers, buffered values drain before EOF, an empty closed channel commits EOF,
 and a selected write against a closed channel commits a terminal closed outcome
-without publication. Unbounded/dynamic channels, typed values beyond native i64,
-fairness/random policy, suspension, actor continuation delivery and source
-syntax remain outside this slice. The frontend must continue to reject source
-static select until those contracts are implemented.
+without publication. The stacked runtime also supplies revocable one-shot i64
+Future readiness and an actor-generation lease that fences the full bounded
+select commit against stale continuations.
+
+Unbounded/dynamic channels, typed values beyond native i64, fairness/random
+policy, suspension and actor continuation delivery remain outside this slice.
+The frontend therefore still rejects all channel/Future select arms and all
+nonblocking/value-producing forms; only the default-only blocking procedural
+`do select` slice described above is admitted.
 
