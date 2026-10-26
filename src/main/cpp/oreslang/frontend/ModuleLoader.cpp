@@ -138,7 +138,9 @@ private:
             if (binding.scope != SourceExportScope::Public) continue;
             switch (binding.local_kind) {
                 case SourceExportKind::Fnc:
-                case SourceExportKind::Routine:
+                    // Java/Graal import fnc is a function-value binding.
+                    // A routine is direct-call-only in its local source
+                    // namespace and cannot be reified as an imported fnc.
                     unit->function_source_exports.emplace(
                         binding.external_name, binding.local_name);
                     break;
