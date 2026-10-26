@@ -1,0 +1,9 @@
+// Nonblocking value select still requires Future<T> continuation lowering.
+pub fnc main(): int {
+  nb select over
+    default: {
+      return 1;
+    }
+  end
+  return 0;
+}
