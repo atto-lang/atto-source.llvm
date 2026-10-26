@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    let int v = await missing;
+    return v;
+}
