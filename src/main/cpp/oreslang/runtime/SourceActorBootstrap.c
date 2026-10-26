@@ -1471,6 +1471,93 @@ int oreslang_source_actor_detach_send_future_state_checked(
         opaque_future, NULL, continuation, source_token, state, state_count);
 }
 
+int oreslang_source_actor_rearm_detached_send_state_checked(
+        void* opaque_actor,
+        int64_t payload,
+        OresSourceActorStateContinuation continuation,
+        uint64_t source_token,
+        const int64_t* state,
+        uint64_t state_count) {
+    SourceActor* actor = (SourceActor*)opaque_actor;
+    if (!actor || !continuation
+            || state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS
+            || (state_count != 0 && state == NULL))
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+    if (!ores_native_actor_scheduler_is_carrier_thread()
+            || !ores_native_store_handle_valid(current_source_execution))
+        return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
+
+    group_lock();
+    SendAwaitFrame* frame = group.pending_send;
+    if (frame != &group.detached_send || !frame->detached || frame->done
+            || frame->finalizer_claimed || frame->rearm_requested
+            || frame->actor != actor
+            || actor->magic != SOURCE_ACTOR_MAGIC
+            || frame->pc + 1u >= ORES_SOURCE_DETACHED_MAX_PCS
+            || !ores_native_store_handle_valid(frame->link.continuation)) {
+        group_unlock();
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
+    const OresNativeContinuationHandle parent = frame->link.continuation;
+    group_unlock();
+
+    void* next_raw = NULL;
+    const int submit_status =
+        oreslang_source_actor_send_async_start_checked(
+            actor, payload, &next_raw);
+    if (submit_status != ORES_SOURCE_SEND_ASYNC_ACCEPTED) {
+        group_lock();
+        ensure(group.pending_send == frame && !frame->done
+            && !frame->rearm_requested && frame->actor == actor);
+        frame->rearm_requested = 1;
+        frame->rearm_terminal = 1;
+        frame->rearm_outcome = submit_status;
+        group_unlock();
+        return submit_status;
+    }
+
+    SourceSendFuture* next = (SourceSendFuture*)next_raw;
+    OresNativeSuspensionLink next_link = {0};
+
+    group_lock();
+    ensure(group.pending_send == frame && !frame->done
+        && !frame->rearm_requested && frame->actor == actor);
+    ensure(source_send_future_valid_locked(next)
+        && !next->consuming && next->actor == actor);
+    next->consuming = 1;
+
+    const int suspended = ores_native_await_trace_suspend(
+        group.executions,
+        group.continuations,
+        current_source_execution,
+        parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT,
+        1,
+        source_token,
+        &next_link);
+    if (!suspended) {
+        frame->rearm_requested = 1;
+        frame->rearm_terminal = 1;
+        frame->rearm_outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+        group_unlock();
+        abandon_consuming_send_future_unbound(next, actor);
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
+
+    frame->next_send_future = next;
+    frame->next_state_continuation = continuation;
+    frame->next_source_token = source_token;
+    frame->next_state_count = state_count;
+    for (uint64_t i = 0; i < state_count; ++i)
+        frame->next_state[i] = state[i];
+    frame->next_link = next_link;
+    frame->rearm_requested = 1;
+    frame->rearm_terminal = 0;
+    frame->rearm_outcome = ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+    group_unlock();
+    return ORES_SOURCE_SEND_ASYNC_ACCEPTED;
+}
+
 int oreslang_source_actor_wait_detached_send_result(int64_t* result_out) {
     if (result_out) *result_out = 0;
     if (!result_out) return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
