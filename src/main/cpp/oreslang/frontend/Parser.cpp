@@ -3027,13 +3027,12 @@ private:
                 field->kind = Expression::Kind::ArrayCall;
                 if (!accept(")")) {
                     do {
+                        // Until methods have a checked formal-name binding plan,
+                        // labels must never silently become positional arguments.
                         if (named_argument_ahead()) {
-                            std::string label = identifier();
-                            require(":");
-                            field->argument_names.push_back(std::move(label));
-                        } else {
-                            field->argument_names.emplace_back();
+                            fail("native named method arguments are not yet supported");
                         }
+                        field->argument_names.emplace_back();
                         field->arguments.push_back(expression());
                     } while (accept(","));
                     require(")");
@@ -3324,6 +3323,9 @@ private:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::ArrayCall:
+                if (std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                        [](const std::string& label) { return !label.empty(); }))
+                    throw std::runtime_error("native named method arguments are not yet supported");
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
@@ -3508,6 +3510,9 @@ private:
                 return ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
+                if (std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                        [](const std::string& label) { return !label.empty(); }))
+                    throw std::runtime_error("native named method arguments are not yet supported");
                 std::string receiver;
                 if (expr.left) receiver = native_place_key(*expr.left);
                 const auto element_slot = variables.find(receiver + ".$element");
