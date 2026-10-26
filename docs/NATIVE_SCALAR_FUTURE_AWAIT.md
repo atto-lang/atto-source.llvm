@@ -78,10 +78,11 @@ an unpinned actor-owned borrow or to execute a callback on the producer thread.
 The `native_scalar_future_single_winner_control` CTest also asserts that live
 frames block physical DONE, terminal/drop paths release their actor resource
 loan, and open-vs-finalize has exactly one CAS-backed admission winner. It
-covers stale generation, foreign owner, duplicate numeric Future-ID capability isolation,
-post-detach creation rejection, physical-resource admission sealing,
-open-vs-finalize races, exactly-once completion, fail/cancel race, CONTROL
-backpressure, revocation before execution, and no inline resume.
+covers stale generation, foreign owner, duplicate numeric Future-ID capability
+isolation, post-detach creation rejection, physical-resource admission sealing,
+open-vs-finalize races, last-reference destruction racing both finalization and
+group close, exceptional Resume exit, exactly-once completion, fail/cancel
+race, CONTROL backpressure, revocation before execution, and no inline resume.
 The acceptance path to guest parity still requires:
 
 1. Typed source `Future<T>` and `async` admission with distinct guest ABIs.

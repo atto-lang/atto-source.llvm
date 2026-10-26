@@ -156,6 +156,46 @@ int main() {
     check(running->phase() == NativeScalarFutureAwait::Phase::completed,
           "running callback did not complete");
 
+    // Exceptional callback exit is still terminal and must release the actor
+    // resource loan before propagating the exception to the CONTROL runner.
+    {
+        NativeActorGroup throwing_group(9740, 1);
+        auto throwing_owner = throwing_group.adopt(9740, 1, 1, [] {});
+        check(throwing_group.mark_ready(throwing_owner),
+              "throwing owner not ready");
+        auto throwing_finalizer =
+            throwing_group.runtime_finalizer(throwing_owner);
+        auto throwing = NativeScalarFutureAwait::open(throwing_owner, 9740);
+        check(throwing_owner.outstanding_resource_loans() == 1,
+              "throwing Future did not retain resource loan");
+        check(throwing->complete(throwing->id(), 31),
+              "throwing Future did not settle");
+        check(throwing->try_schedule(
+                  throwing->id(), throwing_group, throwing_owner,
+                  [&](const NativeScalarFutureAwait::Result& outcome) {
+                      check(outcome.success && outcome.value == 31,
+                            "throwing callback result corrupt");
+                      throw std::runtime_error("expected resume failure");
+                  }),
+              "throwing CONTROL not queued");
+        bool propagated = false;
+        try {
+            (void)throwing_group.run_control_turn(throwing_owner);
+        } catch (const std::runtime_error&) {
+            propagated = true;
+        }
+        check(propagated, "throwing callback exception did not propagate");
+        check(throwing->phase() == NativeScalarFutureAwait::Phase::completed,
+              "throwing callback did not become completed");
+        check(throwing_owner.outstanding_resource_loans() == 0,
+              "throwing callback leaked resource loan");
+        throwing_group.close();
+        check(throwing_finalizer.ready_for_resource_reclamation(),
+              "throwing callback blocked reclamation");
+        check(throwing_finalizer.finalized(),
+              "throwing callback actor did not finalize");
+    }
+
     // Scheduling and cancellation may race while CONTROL admission occurs.
     // Neither path may hang a carrier or resurrect a cancelled Future.
     for (int iteration = 0; iteration < 512; ++iteration) {
@@ -501,6 +541,103 @@ int main() {
               "destroyed Future still blocked reclamation");
         check(drop_finalizer.finalized(),
               "detached owner did not finalize after frame drop");
+    }
+
+    // Last-reference destruction races physical finalization. Alternate
+    // PENDING and READY frames so both states exercise the same loan handoff.
+    // If finalization loses while the frame is live, the retry must succeed
+    // after destruction; if it wins, destruction necessarily released first.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        NativeActorGroup destroy_finalize_group(15600 + iteration, 1);
+        auto destroy_finalize_owner = destroy_finalize_group.adopt(
+            15600 + iteration, 1, 1, [] {});
+        check(destroy_finalize_group.mark_ready(destroy_finalize_owner),
+              "destroy/finalize owner not ready");
+        auto destroy_finalize_finalizer =
+            destroy_finalize_group.runtime_finalizer(destroy_finalize_owner);
+        auto destroy_finalize_future = NativeScalarFutureAwait::open(
+            destroy_finalize_owner, 7600 + iteration);
+        if (iteration & 1)
+            check(destroy_finalize_future->complete(
+                      destroy_finalize_future->id(), iteration),
+                  "destroy/finalize READY setup failed");
+
+        std::atomic<int> start_destroy_finalize{0};
+        bool finalized_first_try = false;
+        std::thread destroyer(
+            [frame = std::move(destroy_finalize_future),
+             &start_destroy_finalize]() mutable {
+                while (!start_destroy_finalize.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                frame.reset();
+            });
+        std::thread finalizer_thread([&] {
+            while (!start_destroy_finalize.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            finalized_first_try =
+                destroy_finalize_group.finalized(destroy_finalize_owner);
+        });
+
+        start_destroy_finalize.store(1, std::memory_order_release);
+        destroyer.join();
+        finalizer_thread.join();
+
+        check(destroy_finalize_owner.outstanding_resource_loans() == 0,
+              "destroy/finalize race leaked resource loan");
+        if (!finalized_first_try)
+            check(destroy_finalize_group.finalized(destroy_finalize_owner),
+                  "destroy/finalize retry did not finalize actor");
+        check(destroy_finalize_owner.resource_admission_closed(),
+              "destroy/finalize race did not seal resource admission");
+        check(destroy_finalize_owner.delivery_closed(),
+              "destroy/finalize race did not publish delivery barrier");
+    }
+
+    // Last-reference destruction may also race whole-group close, which
+    // publishes detachment without sealing the resource counter. After both
+    // operations quiesce, reclamation must be immediately legal and exactly
+    // one finalization acknowledgment must succeed.
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        NativeActorGroup destroy_close_group(15900 + iteration, 1);
+        auto destroy_close_owner = destroy_close_group.adopt(
+            15900 + iteration, 1, 1, [] {});
+        check(destroy_close_group.mark_ready(destroy_close_owner),
+              "destroy/close owner not ready");
+        auto destroy_close_finalizer =
+            destroy_close_group.runtime_finalizer(destroy_close_owner);
+        auto destroy_close_future = NativeScalarFutureAwait::open(
+            destroy_close_owner, 7900 + iteration);
+        if (iteration & 1)
+            check(destroy_close_future->complete(
+                      destroy_close_future->id(), iteration),
+                  "destroy/close READY setup failed");
+
+        std::atomic<int> start_destroy_close{0};
+        std::thread destroyer(
+            [frame = std::move(destroy_close_future),
+             &start_destroy_close]() mutable {
+                while (!start_destroy_close.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                frame.reset();
+            });
+        std::thread closer([&] {
+            while (!start_destroy_close.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            destroy_close_group.close();
+        });
+
+        start_destroy_close.store(1, std::memory_order_release);
+        destroyer.join();
+        closer.join();
+
+        check(destroy_close_owner.delivery_closed(),
+              "destroy/close race did not publish delivery barrier");
+        check(destroy_close_owner.outstanding_resource_loans() == 0,
+              "destroy/close race leaked resource loan");
+        check(destroy_close_finalizer.ready_for_resource_reclamation(),
+              "destroy/close race blocked physical reclamation");
+        check(destroy_close_finalizer.finalized(),
+              "destroy/close race actor did not finalize");
     }
 
     // Group close may drop an already-reserved CONTROL callback. The Future
