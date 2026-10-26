@@ -1575,7 +1575,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
                 if (builder.GetInsertBlock()->getTerminator()) break;
-                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return) {
+                if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex ||
+                        action.kind == Statement::Kind::Conditional ||
+                        action.kind == Statement::Kind::SelectDefault ||
+                        action.kind == Statement::Kind::Return) {
                     lower_control(action); continue;
                 }
                 if (action.kind != Statement::Kind::ScopedLocal) {
@@ -1600,6 +1603,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 for (auto it = active_scopes.rbegin(); it != active_scopes.rend(); ++it)
                     native_lifetime_end(builder, it->address, it->bytes);
                 builder.CreateBr(structured_cleanup); return;
+            }
+            if (stmt.kind == Statement::Kind::SelectDefault) {
+                // A default-only blocking procedural select has exactly one
+                // immediately eligible arm. Preserve its lexical scope and
+                // callable-return semantics through the normal arm lowering.
+                lower_arm(stmt.then_statements);
+                return;
             }
             if (stmt.kind == Statement::Kind::ForIndex) {
                 auto* initial = lower(*stmt.branch_local->initializer, builder, i64, storage, field_storage, declarations, &region_moves);
@@ -1693,7 +1703,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 continue;
             }
             if (stmt.kind == Statement::Kind::ForEach || stmt.kind == Statement::Kind::ForIndex ||
-                    stmt.kind == Statement::Kind::Conditional) {
+                    stmt.kind == Statement::Kind::Conditional ||
+                    stmt.kind == Statement::Kind::SelectDefault) {
                 lower_control(stmt); continue;
             }
             lower_effect(stmt);
