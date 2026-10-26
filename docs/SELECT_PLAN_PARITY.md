@@ -76,6 +76,45 @@ These requirements are not implemented by this documentation change.
 The current LLVM bootstrap must keep rejecting unsupported select syntax
 rather than emitting IR with unsound ownership assumptions.
 
+## October 26 — first scheduler-native selectable send substrate
+
+The native runtime now has a **host/runtime-only** first slice for a mailbox
+send candidate. This does not enable any guest `select` syntax yet.
+
+The slice deliberately reuses the scheduler's existing bounded
+`send_async` descriptor pool and target-local FIFO credit arbitration.
+A generation-fenced `OresNativeSelectArbiter` owns one common winner cell;
+the send descriptor retains only one opaque select token. When target mailbox
+credit becomes available, the scheduler:
+
+1. preflights execution-id and worker capacity while holding its existing
+   admission mutex;
+2. atomically commits the shared select winner;
+3. enqueues the mailbox payload **only if that send arm won**.
+
+A losing or sealed send arm becomes CANCELLED without message publication.
+STOP/resource failure is also a terminal select event: it may win the common
+selection and preserve the exact failure, or becomes CANCELLED if another arm
+already won. Stale selection/arm generations fail closed. The select arbiter
+is fixed-capacity and performs no allocation or guest callback during commit.
+
+This is intentionally **not** implemented by wrapping a normal READY
+`send_async` Future after the fact. Ordinary READY already means irrevocable
+mailbox admission, which is too late for a losing select arm to roll back.
+
+Current non-claims remain important:
+- the source parser/type checker still rejects native static/dynamic select;
+- there is not yet a common source continuation wake bound to a select
+  generation;
+- Channel/Future/stream arms are not yet integrated with this arbiter;
+- FAIR/priority/random source policies are not yet implemented;
+- object mailbox payloads remain outside the current scalar source slice.
+
+The next vertical step is a common generation-fenced select continuation that
+all registered sources can notify after arbitration, followed by one static
+compiled `.ores` fixture. Until then, existing fail-closed source fixtures
+must remain unchanged.
+
 ## Native implementation acceptance requirements
 
 1. Typed channel cases (read/write/default), copy/ownership rules, and
