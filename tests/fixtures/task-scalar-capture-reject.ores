@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    let int x = 41;
+    let Task<int> w = task { return x; };
+    let int v = await w;
+    return v;
+}
