@@ -12,7 +12,7 @@ int main() {
 
     OresNativeExecutionContext root{};
     root.id = {77, 101};
-    root.allocation = {ORES_ALLOCATION_DOMAIN_ACTOR, 77, 0, 9};
+    root.allocation = {ORES_ALLOCATION_DOMAIN_ACTOR, 77, 17, 9};
     OresNativeExecutionHandle execution{};
     CHECK(ores_native_execution_context_store_insert(executions, &root, &execution));
 
@@ -22,7 +22,7 @@ int main() {
         ORES_CONTINUATION_BOUNDARY_AWAIT, 7, 1001, &continuation));
 
     const NativeSourceCleanupTicket ticket{
-        77, 9, ores_native_store_handle_pack(continuation)
+        17, 9, ores_native_store_handle_pack(continuation)
     };
     NativeSourceCleanupGate gate(ticket);
     NativeSourceCleanupBinding binding(store, continuation, ticket, 7, 1001);
@@ -36,11 +36,37 @@ int main() {
     CHECK(!NativeSourceCleanupBinding(store, continuation, ticket, 8, 1001).claimed());
     CHECK(!NativeSourceCleanupBinding(store, continuation, ticket, 7, 1002).claimed());
     CHECK(!NativeSourceCleanupBinding(store, continuation,
-        NativeSourceCleanupTicket{88, 9, ticket.continuation_id}, 7, 1001).claimed());
+        NativeSourceCleanupTicket{18, 9, ticket.continuation_id}, 7, 1001).claimed());
     CHECK(!NativeSourceCleanupBinding(store, continuation,
-        NativeSourceCleanupTicket{77, 10, ticket.continuation_id}, 7, 1001).claimed());
+        NativeSourceCleanupTicket{17, 10, ticket.continuation_id}, 7, 1001).claimed());
     CHECK(!NativeSourceCleanupBinding(store, continuation,
-        NativeSourceCleanupTicket{77, 9, ticket.continuation_id + 1}, 7, 1001).claimed());
+        NativeSourceCleanupTicket{17, 9, ticket.continuation_id + 1}, 7, 1001).claimed());
+
+    // The actor id is the allocation owner/slot, not the scheduler runtime
+    // domain. A real scheduler context has distinct values (77 vs 17).
+    CHECK(binding.claimed());
+
+    // Adversarial alias: if a scheduler domain happens to equal another
+    // actor's numeric id, that coincidence must not authorize cleanup for
+    // the actor actually owning the continuation.
+    OresNativeExecutionContext wrongOwner{};
+    wrongOwner.id = {17, 201};
+    wrongOwner.allocation = {ORES_ALLOCATION_DOMAIN_ACTOR, 17, 18, 9};
+    OresNativeExecutionHandle wrongExecution{};
+    CHECK(ores_native_execution_context_store_insert(
+        executions, &wrongOwner, &wrongExecution));
+    OresNativeContinuationHandle wrongContinuation{};
+    CHECK(ores_native_continuation_store_publish(
+        store, wrongExecution, OresNativeContinuationHandle{},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 7, 3001, &wrongContinuation));
+    OresNativeContinuationRecord wrongClaimed{};
+    CHECK(ores_native_continuation_store_try_claim_resume(
+        store, wrongContinuation, &wrongClaimed));
+    const NativeSourceCleanupTicket forgedOwner{
+        17, 9, ores_native_store_handle_pack(wrongContinuation)
+    };
+    CHECK(!NativeSourceCleanupBinding(
+        store, wrongContinuation, forgedOwner, 7, 3001).claimed());
 
     auto* other = ores_native_continuation_store_open(2, executions);
     CHECK(other != nullptr);
@@ -65,7 +91,7 @@ int main() {
         store, execution, OresNativeContinuationHandle{},
         ORES_CONTINUATION_BOUNDARY_AWAIT, 7, 1002, &normalContinuation));
     const NativeSourceCleanupTicket normalTicket{
-        77, 9, ores_native_store_handle_pack(normalContinuation)
+        17, 9, ores_native_store_handle_pack(normalContinuation)
     };
     NativeSourceCleanupGate normalGate(normalTicket);
     NativeSourceCleanupBinding normalBinding(
@@ -84,6 +110,12 @@ int main() {
         store, normalContinuation));
     CHECK(!normalBinding.claimed());
     CHECK(ores_native_continuation_store_release(store, normalContinuation));
+
+    CHECK(ores_native_continuation_store_finish_resume(
+        store, wrongContinuation));
+    CHECK(ores_native_continuation_store_release(store, wrongContinuation));
+    CHECK(ores_native_execution_context_store_release(
+        executions, wrongExecution));
 
     CHECK(ores_native_continuation_store_release(store, continuation));
     CHECK(!binding.claimed()); // Freed/stale handle cannot revive.
