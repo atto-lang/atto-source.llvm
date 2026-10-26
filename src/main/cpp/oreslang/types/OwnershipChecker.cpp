@@ -37,6 +37,10 @@ struct LocalOwnership {
     std::unordered_set<std::string> class_array_fields;
     std::unordered_set<std::string> final_fields;
     std::unordered_set<std::string> public_fields;
+    // Structural width subtyping is based only on declaration-public direct
+    // scalar fields, independent of private method privilege at the call site.
+    std::unordered_set<std::string> structural_public_fields;
+    std::unordered_map<std::string, ScalarType> structural_field_types;
     // Primitive i64 class fields can be moved and later restored by a write.
     std::unordered_set<std::string> moved_fields;
 };
@@ -239,7 +243,28 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
         // parameter's ownership mode. A later argument must observe earlier
         // mutable/shared loans even if its formal slot is numerically lower.
         const Parameter& parameter = parameters[formal];
-        if (parameter.mode == Mode::Value) {
+        if (!parameter.structural_contract.empty()) {
+            if (parameter.mode != Mode::Value)
+                reject(argument, "ownership violation: structural parameter must remain an implicit readonly projection");
+            if (argument.kind != Expression::Kind::Variable)
+                reject(argument, "ownership violation: structural projection requires a named synchronous value");
+            auto source_it = locals.find(argument.name);
+            if (source_it == locals.end() || source_it->second.class_name.empty())
+                reject(argument, "ownership violation: structural argument requires a class or structural view");
+            const auto& source = source_it->second;
+            if (source.moved || source.exclusive_loan)
+                reject(argument, "ownership violation: structural projection requires a live readable source");
+            for (const auto& required : parameter.structural_fields) {
+                if (!source.structural_public_fields.count(required.name))
+                    reject(argument, "STRUCTURAL_MISSING_PUBLIC_FIELD: required field '" + required.name + "' is absent or private");
+                const auto actual = source.structural_field_types.find(required.name);
+                if (actual == source.structural_field_types.end() ||
+                        actual->second != required.scalar_type)
+                    reject(argument, "STRUCTURAL_FIELD_TYPE_MISMATCH: field '" + required.name + "' has incompatible scalar type");
+                if (source.moved_fields.count(required.name))
+                    reject(argument, "ownership violation: structural projection reads a moved field '" + required.name + "'");
+            }
+        } else if (parameter.mode == Mode::Value) {
             if (!parameter.class_name.empty())
                 reject(argument, "ownership violation: by-value class parameters require move/drop lowering");
             check_value(argument, locals, functions);
@@ -543,18 +568,30 @@ void validate_i64_ownership(const Program& program) {
     std::unordered_map<std::string, std::unordered_set<std::string>> class_fields;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_arrays;
     std::unordered_map<std::string, std::unordered_set<std::string>> class_finals;
+    std::unordered_map<std::string, std::unordered_set<std::string>> class_structural_public_fields;
+    std::unordered_map<std::string, std::unordered_map<std::string, ScalarType>> class_structural_field_types;
     const NativeClassLayouts layouts(program);
     for (const auto& cls : program.classes) {
         std::unordered_set<std::string> fields, arrays, finals;
+        std::unordered_set<std::string> structural_public;
+        std::unordered_map<std::string, ScalarType> structural_types;
         for (const auto& leaf : layouts.at(cls.name).leaves) {
             fields.insert(leaf.path);
             if (leaf.field->int_array) arrays.insert(leaf.path);
             if (leaf.field->final_field) finals.insert(leaf.path);
         }
         for (const auto& child : layouts.at(cls.name).subobjects) { fields.insert(child.first); finals.insert(child.first); }
+        for (const auto& field : cls.fields) {
+            if (field.public_member && field.class_name.empty() && !field.int_array) {
+                structural_public.insert(field.name);
+                structural_types.emplace(field.name, field.scalar_type);
+            }
+        }
         class_fields.emplace(cls.name, std::move(fields));
         class_arrays.emplace(cls.name, std::move(arrays));
         class_finals.emplace(cls.name, std::move(finals));
+        class_structural_public_fields.emplace(cls.name, std::move(structural_public));
+        class_structural_field_types.emplace(cls.name, std::move(structural_types));
     }
     // The compiler's actor-owned temporary path is narrower than general
     // expression lowering. Check source name resolution and purity *before*
@@ -649,13 +686,25 @@ void validate_i64_ownership(const Program& program) {
             // Parameter bindings are val slots even for exclusive loans.
             // Referent capability does not grant identifier reassignment.
             entry.class_name = param.class_name;
-            if (!param.class_name.empty()) {
+            if (!param.structural_contract.empty()) {
+                entry.mode = Mode::Borrow;
+                entry.mutable_owner = false;
+                entry.class_name = "$structural$" + param.structural_contract;
+                for (const auto& field : param.structural_fields) {
+                    entry.class_fields.insert(field.name);
+                    entry.public_fields.insert(field.name);
+                    entry.structural_public_fields.insert(field.name);
+                    entry.structural_field_types.emplace(field.name, field.scalar_type);
+                }
+            } else if (!param.class_name.empty()) {
                 entry.mutable_paths = layouts.mutable_paths(param.class_name);
                 entry.subobjects = layouts.at(param.class_name).subobjects;
                 entry.class_fields = class_fields.at(param.class_name);
                 entry.class_array_fields = class_arrays.at(param.class_name);
                 entry.final_fields = class_finals.at(param.class_name);
                 entry.public_fields = layouts.accessible(param.class_name, function.method_owner);
+                entry.structural_public_fields = class_structural_public_fields.at(param.class_name);
+                entry.structural_field_types = class_structural_field_types.at(param.class_name);
             }
             locals.emplace(param.name, std::move(entry));
         }
@@ -688,6 +737,28 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_array_fields = class_arrays.at(binding.class_name);
                 entry.final_fields = class_finals.at(binding.class_name);
                 entry.public_fields = layouts.accessible(binding.class_name, function.method_owner);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
+                entry.structural_public_fields = class_structural_public_fields.at(binding.class_name);
+                entry.structural_field_types = class_structural_field_types.at(binding.class_name);
             } else if (binding.new_class) {
                 // Pure syntax alone is insufficient: experimental owned-int
                 // operands carry fallible region reads. Do not let one unwind
@@ -793,6 +864,8 @@ void validate_i64_ownership(const Program& program) {
                 entry.class_array_fields = source.class_array_fields;
                 entry.final_fields = source.final_fields;
                 entry.public_fields = source.public_fields;
+                entry.structural_public_fields = source.structural_public_fields;
+                entry.structural_field_types = source.structural_field_types;
                 source.moved = true;
             } else {
                 check_value(*binding.initializer, locals, functions);
