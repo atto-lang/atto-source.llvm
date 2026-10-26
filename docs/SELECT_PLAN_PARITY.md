@@ -132,6 +132,17 @@ This is intentionally **not** implemented by wrapping a normal READY
 `send_async` Future after the fact. Ordinary READY already means irrevocable
 mailbox admission, which is too late for a losing select arm to roll back.
 
+Additional stale-generation hardening is normative for this substrate:
+
+- the generation-scoped `arm_count` is atomic metadata and is published before
+  the OPEN release-store; registration acquires OPEN before reading the bound,
+  then rechecks generation/bound after taking its active-token fence;
+- seal requires the caller's exact selection generation. A delayed cancellation
+  or finalizer from generation N cannot detach registrations in N+1;
+- async scheduler callbacks observe the winner through a generation-fenced
+  query using the generation carried by their descriptor/common-wake capability.
+  A stale completion cannot attribute a later generation's winner to itself.
+
 Current non-claims remain important:
 - the source parser/type checker still rejects native static/dynamic select;
 - the common wake is runtime substrate only; compiler-generated select
