@@ -53,13 +53,10 @@ fn main() {
         .canonicalize().expect("source root");
     let dir = Temp::new();
 
-    let positive = r#"pub fnc main(): int {
-    let Task<int> w = task { return 41; };
-    let int v = await w;
-    return v + 1;
-}
-"#;
-    let output = compile(&compiler, &dir.0, "task.ores", positive);
+    let positive = fs::read_to_string(
+        root.join("tests/fixtures/source-task-i64-await.ores"))
+        .expect("read canonical Task fixture");
+    let output = compile(&compiler, &dir.0, "task.ores", &positive);
     assert!(output.status.success(),
         "task source compile failed: {}", String::from_utf8_lossy(&output.stderr));
     assert!(output.stdout.starts_with(b"; ModuleID"),
