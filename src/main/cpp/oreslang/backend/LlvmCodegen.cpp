@@ -872,7 +872,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
         sourceSendAsyncStartChecked, sourceDiscardSendFuture,
-        sourceDetachSendFutureState, sourceWaitDetachedSendResult,
+        sourceDetachSendFutureState, sourceRearmDetachedSendState,
+        sourceWaitDetachedSendResult,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -913,6 +914,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(
                 llvm::Type::getInt32Ty(context),
                 {native_ptr, native_ptr, i64, native_ptr, i64}, false));
+        sourceRearmDetachedSendState = module.getOrInsertFunction(
+            "oreslang_source_actor_rearm_detached_send_state_checked",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context),
+                {native_ptr, i64, native_ptr, i64, native_ptr, i64}, false));
         sourceWaitDetachedSendResult = module.getOrInsertFunction(
             "oreslang_source_actor_wait_detached_send_result",
             llvm::FunctionType::get(
