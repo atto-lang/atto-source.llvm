@@ -1,11 +1,15 @@
+#include "oreslang/runtime/NativeActorGenerationFence.hpp"
 #include "oreslang/runtime/NativeSelectArbiter.hpp"
+#include "oreslang/runtime/NativeSelectableFutureI64.hpp"
 #include "oreslang/runtime/NativeSelectableI64Channel.hpp"
 
 #include <cassert>
 #include <cstdint>
 #include <stdexcept>
 
+using oreslang::runtime::NativeActorGenerationFence;
 using oreslang::runtime::NativeSelectArbiter;
+using oreslang::runtime::NativeSelectableFutureI64;
 using oreslang::runtime::NativeSelectableI64Channel;
 
 template <class Channel, class Registration>
@@ -364,6 +368,143 @@ static void asynchronous_notification_failure_is_recorded_after_commit() {
     assert(channel.pending_readers() == 0);
 }
 
+
+static void selectable_future_value_and_cancel_are_terminal_readiness() {
+    using Future = NativeSelectableFutureI64<4>;
+
+    Future value_future;
+    NativeSelectArbiter<1> value_select;
+    auto value_case = value_select.register_case(0);
+    Future::Outcome value_outcome;
+    int value_callbacks = 0;
+
+    auto value_wait = value_future.subscribe_ready(
+        [&](const Future::Subscription& subscription) {
+            ++value_callbacks;
+            (void)value_case.try_win_if([&] {
+                return value_future.try_commit(subscription, value_outcome);
+            });
+        });
+    value_case.arm([value_wait] { (void)value_wait.close(); });
+
+    assert(!value_select.winner().has_value());
+    assert(value_future.resolve(42));
+    assert(!value_future.resolve(43));
+    assert(value_select.winner().has_value() &&
+           *value_select.winner() == 0);
+    assert(value_callbacks == 1);
+    assert(value_outcome.kind == Future::OutcomeKind::Value);
+    assert(value_outcome.value == 42);
+
+    Future cancelled_future;
+    NativeSelectArbiter<1> cancelled_select;
+    auto cancelled_case = cancelled_select.register_case(0);
+    Future::Outcome cancelled_outcome;
+
+    auto cancelled_wait = cancelled_future.subscribe_ready(
+        [&](const Future::Subscription& subscription) {
+            (void)cancelled_case.try_win_if([&] {
+                return cancelled_future.try_commit(
+                    subscription, cancelled_outcome);
+            });
+        });
+    cancelled_case.arm(
+        [cancelled_wait] { (void)cancelled_wait.close(); });
+
+    assert(cancelled_future.cancel());
+    assert(cancelled_select.winner().has_value() &&
+           *cancelled_select.winner() == 0);
+    assert(cancelled_outcome.kind == Future::OutcomeKind::Cancelled);
+}
+
+static void stale_actor_generation_cannot_consume_channel_value() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    NativeActorGenerationFence fence;
+    const auto lease = fence.capture();
+
+    NativeSelectArbiter<1> select;
+    auto read = select.register_case(0);
+    Channel::ReadResult result;
+    int callbacks = 0;
+
+    auto wait = channel.subscribe_readable(
+        [&](const Channel::Subscription& subscription) {
+            ++callbacks;
+            Channel::NotificationBatch notifications;
+            (void)read.try_win_if([&] {
+                return lease.try_with_current([&] {
+                    return channel.try_commit_read(
+                        subscription, result, notifications);
+                });
+            });
+            notifications.dispatch();
+        });
+    read.arm([wait] { (void)wait.close(); });
+
+    assert(fence.advance_generation() == 2);
+    assert(!lease.current());
+    assert(channel.try_write(9));
+    assert(callbacks == 1);
+    assert(!select.winner().has_value());
+    assert(result.status == Channel::ReadStatus::WouldBlock);
+
+    const auto untouched = channel.try_read_result();
+    assert(untouched.status == Channel::ReadStatus::Value);
+    assert(untouched.value == 9);
+    assert(select.cancel());
+    assert(channel.pending_readers() == 0);
+}
+
+static void current_actor_generation_may_commit_selected_read() {
+    using Channel = NativeSelectableI64Channel<1, 4>;
+    Channel channel;
+    NativeActorGenerationFence fence;
+    const auto lease = fence.capture();
+
+    NativeSelectArbiter<1> select;
+    auto read = select.register_case(0);
+    Channel::ReadResult result;
+
+    auto wait = channel.subscribe_readable(
+        [&](const Channel::Subscription& subscription) {
+            Channel::NotificationBatch notifications;
+            (void)read.try_win_if([&] {
+                return lease.try_with_current([&] {
+                    return channel.try_commit_read(
+                        subscription, result, notifications);
+                });
+            });
+            notifications.dispatch();
+        });
+    read.arm([wait] { (void)wait.close(); });
+
+    assert(lease.current());
+    assert(channel.try_write(11));
+    assert(select.winner().has_value() && *select.winner() == 0);
+    assert(result.status == Channel::ReadStatus::Value);
+    assert(result.value == 11);
+}
+
+static void generation_fence_rejects_reentrant_advance() {
+    NativeActorGenerationFence fence;
+    const auto lease = fence.capture();
+
+    bool observed = false;
+    try {
+        (void)lease.try_with_current([&] {
+            (void)fence.advance_generation();
+            return true;
+        });
+    } catch (const std::logic_error&) {
+        observed = true;
+    }
+
+    assert(observed);
+    assert(fence.current_generation() == 1);
+    assert(lease.current());
+}
+
 int main() {
     first_ready_read_wins_and_loser_does_not_consume();
     losing_write_never_publishes();
@@ -376,5 +517,9 @@ int main() {
     close_wakes_pending_write_as_closed_without_publication();
     immediate_callback_failure_does_not_leak_waiter();
     asynchronous_notification_failure_is_recorded_after_commit();
+    selectable_future_value_and_cancel_are_terminal_readiness();
+    stale_actor_generation_cannot_consume_channel_value();
+    current_actor_generation_may_commit_selected_read();
+    generation_fence_rejects_reentrant_advance();
     return 0;
 }
