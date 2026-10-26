@@ -384,6 +384,67 @@ bool native_constructor_scalar_tree(const Expression& expr,
     return false;
 }
 
+std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
+    auto result = make_expression(source.kind, source.offset);
+    result->integer = source.integer;
+    result->boolean = source.boolean;
+    result->resolved_type = source.resolved_type;
+    result->resolved_class = source.resolved_class;
+    result->name = source.name;
+    result->argument_names = source.argument_names;
+    result->type_arguments = source.type_arguments;
+    result->type_arguments_present = source.type_arguments_present;
+    result->sum_type = source.sum_type;
+    auto clone = [](const std::unique_ptr<Expression>& value) {
+        return value ? clone_native_expression(*value) : nullptr;
+    };
+    result->left = clone(source.left);
+    result->right = clone(source.right);
+    result->condition = clone(source.condition);
+    result->condition_lhs = clone(source.condition_lhs);
+    result->condition_rhs = clone(source.condition_rhs);
+    result->when_true = clone(source.when_true);
+    result->when_false = clone(source.when_false);
+    for (const auto& argument : source.arguments)
+        result->arguments.push_back(clone_native_expression(*argument));
+    return result;
+}
+
+std::string native_dispatch_constant_key(const Expression& expr) {
+    if (expr.kind == Expression::Kind::Integer)
+        return "int:" + std::to_string(expr.integer);
+    if (expr.kind == Expression::Kind::Boolean)
+        return std::string("bool:") + (expr.boolean ? "true" : "false");
+    if (expr.kind == Expression::Kind::String)
+        return "string:" + expr.name;
+    if (expr.kind == Expression::Kind::Negate && expr.left &&
+            expr.left->kind == Expression::Kind::Integer)
+        return "int:" + std::to_string(-expr.left->integer);
+    return {};
+}
+
+std::unique_ptr<Expression> native_dispatch_equal(
+        const Expression& subject, const Expression& constant) {
+    auto condition = make_expression(Expression::Kind::Equal, constant.offset);
+    // Keep the compile-time literal on the left. The native string codegen
+    // dispatches equality through ores_string_equal based on the left
+    // operand's resolved scalar type; validation annotates String literals.
+    condition->left = clone_native_expression(constant);
+    condition->right = clone_native_expression(subject);
+    return condition;
+}
+
+std::unique_ptr<Expression> native_dispatch_or(
+        std::unique_ptr<Expression> left,
+        std::unique_ptr<Expression> right,
+        std::size_t offset) {
+    if (!left) return right;
+    auto condition = make_expression(Expression::Kind::LogicalOr, offset);
+    condition->left = std::move(left);
+    condition->right = std::move(right);
+    return condition;
+}
+
 // A runtime callable's code/signature must never be forged as a nominal
 // object or actor identity in the constrained native frontend.
 bool callable_nominal_name(std::string_view name) {
@@ -2010,6 +2071,7 @@ private:
         // They may change owned scalar state only when both predecessors
         // agree at the join; checked below by the ownership verifier.
         std::function<std::vector<Statement>(bool, bool)> branch_arm;
+        std::function<Statement()> dispatch_statement;
         std::function<Statement()> foreach_statement;
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
@@ -2106,6 +2168,13 @@ private:
                     }
                     fail("unsupported native runtime operation in conditional arm");
                 }
+                if (token_.text == "do" && !finally_scope) {
+                    const std::string next = peek_next().text;
+                    if (next == "match" || next == "switch") {
+                        actions.push_back(dispatch_statement());
+                        continue;
+                    }
+                }
                 Statement statement;
                 statement.offset = token_.offset;
                 if (token_.text == "if" && !finally_scope) {
@@ -2160,6 +2229,119 @@ private:
                 actions.push_back(std::move(statement));
             }
             return actions;
+        };
+        dispatch_statement = [&]() {
+            const auto offset = token_.offset;
+            require("do");
+            const bool is_match = accept("match");
+            if (!is_match) require("switch");
+
+            auto subject = expression();
+            if (!native_pure_scalar_tree(*subject))
+                fail("native procedural dispatch subject must be a replay-safe scalar expression");
+            if (is_match) require("over");
+
+            struct Arm {
+                std::unique_ptr<Expression> condition;
+                std::vector<Statement> body;
+            };
+            std::vector<Arm> arms;
+            std::vector<Statement> fallback;
+            bool has_fallback = false;
+            std::unordered_set<std::string> seen;
+
+            while (token_.text != "end") {
+                if (arms.size() >= 32)
+                    fail("native procedural dispatch arm limit exceeded (32)");
+
+                if (is_match) {
+                    require("on");
+                    if (accept("_")) {
+                        if (has_fallback)
+                            fail("native do match can contain only one wildcard arm");
+                        require("->"); require("{");
+                        fallback = branch_arm(false, false); require("}");
+                        has_fallback = true;
+                        if (token_.text != "end")
+                            fail("native do match wildcard arm must be last");
+                        continue;
+                    }
+                    auto constant = expression();
+                    const std::string key = native_dispatch_constant_key(*constant);
+                    if (key.empty())
+                        fail("native scalar do match supports literal patterns or '_'");
+                    if (!seen.insert(key).second)
+                        fail("duplicate native do match pattern");
+                    if (token_.text == "as" || token_.text == "when")
+                        fail("native scalar do match binding/guard patterns require dedicated pattern lowering");
+                    require("->"); require("{");
+                    Arm arm;
+                    arm.condition = native_dispatch_equal(*subject, *constant);
+                    arm.body = branch_arm(false, false); require("}");
+                    arms.push_back(std::move(arm));
+                    continue;
+                }
+
+                if (accept("case")) {
+                    if (has_fallback)
+                        fail("native do switch case cannot appear after default");
+                    std::unique_ptr<Expression> condition;
+                    do {
+                        auto constant = expression();
+                        const std::string key = native_dispatch_constant_key(*constant);
+                        if (key.empty())
+                            fail("native do switch case must be a scalar compile-time constant");
+                        if (!seen.insert(key).second)
+                            fail("duplicate native do switch case");
+                        condition = native_dispatch_or(
+                            std::move(condition),
+                            native_dispatch_equal(*subject, *constant),
+                            constant->offset);
+                    } while (accept(","));
+                    require("->"); require("{");
+                    Arm arm;
+                    arm.condition = std::move(condition);
+                    arm.body = branch_arm(false, false); require("}");
+                    arms.push_back(std::move(arm));
+                    continue;
+                }
+                if (accept("default")) {
+                    if (has_fallback)
+                        fail("native do switch can contain only one default arm");
+                    require("->"); require("{");
+                    fallback = branch_arm(false, false); require("}");
+                    has_fallback = true;
+                    continue;
+                }
+                fail("expected dispatch arm or 'end' in native procedural dispatch");
+            }
+            require("end");
+
+            if (arms.empty()) {
+                if (!has_fallback)
+                    fail("native procedural dispatch requires at least one arm");
+                Statement unconditional;
+                unconditional.kind = Statement::Kind::Conditional;
+                unconditional.offset = offset;
+                unconditional.condition = make_expression(
+                    Expression::Kind::Boolean, offset);
+                unconditional.condition->boolean = true;
+                unconditional.then_statements = std::move(fallback);
+                return unconditional;
+            }
+
+            std::vector<Statement> tail = std::move(fallback);
+            for (auto it = arms.rbegin(); it != arms.rend(); ++it) {
+                Statement conditional;
+                conditional.kind = Statement::Kind::Conditional;
+                conditional.offset = offset;
+                conditional.condition = std::move(it->condition);
+                conditional.then_statements = std::move(it->body);
+                conditional.else_statements = std::move(tail);
+                tail.clear();
+                tail.push_back(std::move(conditional));
+            }
+            return std::move(tail.front());
         };
         bool return_guards_started = false;
         bool terminal_try_finally = false;
@@ -2311,6 +2493,15 @@ private:
             // throwing calls, nested effects or suspension can be skipped.
             if (terminal_try_finally && token_.text != "if")
                 fail("native terminal try supports only return guards and final return");
+            if (token_.text == "do") {
+                const std::string next = peek_next().text;
+                if (next == "match" || next == "switch") {
+                    if (return_guards_started)
+                        fail("native procedural dispatch cannot follow return guards");
+                    value.statements.push_back(dispatch_statement());
+                    continue;
+                }
+            }
             if (token_.text == "if") {
                 const auto offset = token_.offset;
                 require("if");
@@ -2833,8 +3024,190 @@ private:
         return primary();
     }
 
+    std::unique_ptr<Expression> dispatch_value_arm(std::string_view construct) {
+        require("{");
+        const bool compatibility_return = accept("return");
+        auto value = expression();
+        require(";");
+        if (token_.text != "}") {
+            fail(std::string(construct) +
+                 " value arm requires exactly one result expression");
+        }
+        require("}");
+        (void)compatibility_return; // Historical return-expression arm-result spelling.
+        return value;
+    }
+
+    void consume_optional_value_match_result_type() {
+        if (!accept("<")) return;
+        if (!accept("int") && !accept("bool") &&
+                !accept("string") && !accept("String"))
+            fail("native value match result annotation supports int, bool or String");
+        require(">");
+    }
+
+    std::unique_ptr<Expression> value_switch_expression() {
+        const auto offset = token_.offset;
+        require("switch");
+        auto subject = expression();
+        if (!native_pure_scalar_tree(*subject))
+            fail("native value switch subject must be a replay-safe scalar expression");
+
+        struct Arm {
+            std::unique_ptr<Expression> condition;
+            std::unique_ptr<Expression> value;
+        };
+        std::vector<Arm> arms;
+        std::unique_ptr<Expression> fallback;
+        std::unordered_set<std::string> seen;
+
+        while (token_.text != "end") {
+            if (arms.size() >= 32)
+                fail("native value switch arm limit exceeded (32)");
+            if (accept("case")) {
+                if (fallback)
+                    fail("native value switch case cannot appear after default");
+                std::unique_ptr<Expression> condition;
+                do {
+                    auto constant = expression();
+                    const std::string key = native_dispatch_constant_key(*constant);
+                    if (key.empty())
+                        fail("native value switch case must be a scalar compile-time constant");
+                    if (!seen.insert(key).second)
+                        fail("duplicate native value switch case");
+                    condition = native_dispatch_or(
+                        std::move(condition),
+                        native_dispatch_equal(*subject, *constant),
+                        constant->offset);
+                } while (accept(","));
+                require("->");
+                arms.push_back({
+                    std::move(condition),
+                    dispatch_value_arm("native value switch")
+                });
+                continue;
+            }
+            if (accept("default")) {
+                if (fallback)
+                    fail("native value switch can contain only one default arm");
+                require("->");
+                fallback = dispatch_value_arm("native value switch");
+                continue;
+            }
+            fail("expected 'case', 'default', or 'end' in native value switch");
+        }
+        require("end");
+        if (!fallback)
+            fail("native value switch requires a default arm");
+
+        auto result = std::move(fallback);
+        for (auto it = arms.rbegin(); it != arms.rend(); ++it) {
+            auto conditional = make_expression(
+                Expression::Kind::Conditional, offset);
+            conditional->condition = std::move(it->condition);
+            conditional->when_true = std::move(it->value);
+            conditional->when_false = std::move(result);
+            result = std::move(conditional);
+        }
+        return result;
+    }
+
+    std::unique_ptr<Expression> value_match_expression() {
+        const auto offset = token_.offset;
+        require("match");
+        consume_optional_value_match_result_type();
+        auto subject = expression();
+        if (!native_pure_scalar_tree(*subject))
+            fail("native value match subject must be a replay-safe scalar expression");
+        require("over");
+
+        struct Arm {
+            std::unique_ptr<Expression> condition;
+            std::unique_ptr<Expression> value;
+            std::string key;
+        };
+        std::vector<Arm> arms;
+        std::unique_ptr<Expression> fallback;
+        std::unordered_set<std::string> seen;
+
+        while (token_.text != "end") {
+            if (arms.size() >= 32)
+                fail("native value match arm limit exceeded (32)");
+            require("on");
+            if (accept("_")) {
+                if (fallback)
+                    fail("native value match can contain only one wildcard arm");
+                require("->");
+                fallback = dispatch_value_arm("native value match");
+                if (token_.text != "end")
+                    fail("native value match wildcard arm must be last");
+                continue;
+            }
+            auto constant = expression();
+            const std::string key = native_dispatch_constant_key(*constant);
+            if (key.empty())
+                fail("native scalar value match supports literal patterns or '_'");
+            if (!seen.insert(key).second)
+                fail("duplicate native value match pattern");
+            if (token_.text == "as" || token_.text == "when")
+                fail("native scalar value match binding/guard patterns require dedicated pattern lowering");
+            require("->");
+            arms.push_back({
+                native_dispatch_equal(*subject, *constant),
+                dispatch_value_arm("native value match"),
+                key
+            });
+        }
+        require("end");
+
+        // Bool true/false is statically exhaustive; other scalar matches need
+        // an explicit wildcard so there is always an ARM_RESULT value.
+        if (!fallback) {
+            if (arms.size() == 2 &&
+                    seen.count("bool:true") && seen.count("bool:false")) {
+                auto false_arm = std::find_if(
+                    arms.begin(), arms.end(),
+                    [](const Arm& arm) { return arm.key == "bool:false"; });
+                fallback = std::move(false_arm->value);
+                arms.erase(false_arm);
+            } else {
+                fail("native value match requires wildcard '_' fallback unless bool true/false is exhaustive");
+            }
+        }
+
+        auto result = std::move(fallback);
+        for (auto it = arms.rbegin(); it != arms.rend(); ++it) {
+            auto conditional = make_expression(
+                Expression::Kind::Conditional, offset);
+            conditional->condition = std::move(it->condition);
+            conditional->when_true = std::move(it->value);
+            conditional->when_false = std::move(result);
+            result = std::move(conditional);
+        }
+        return result;
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // nb is a nonblocking channel/select modifier. It is never permission
+        // for suspension inside an otherwise synchronous match/switch.
+        if (token_.text == "nb") {
+            const std::string next = peek_next().text;
+            if (next == "match" || next == "switch")
+                throw std::runtime_error(
+                    "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms at byte " +
+                    std::to_string(token_.offset));
+        }
+        if (token_.text == "match") return value_match_expression();
+        if (token_.text == "switch") return value_switch_expression();
+        if (token_.text == "do") {
+            const std::string next = peek_next().text;
+            if (next == "match" || next == "switch")
+                throw std::runtime_error(
+                    "procedural do match/switch is a statement, not a value expression at byte " +
+                    std::to_string(token_.offset));
+        }
         if (accept("new")) {
             auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
             expr->name = type_identifier();
