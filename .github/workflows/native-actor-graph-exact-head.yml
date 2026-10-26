@@ -1,0 +1,52 @@
+name: Native actor compressed32 graph exact-head gate
+on:
+  pull_request:
+    paths:
+      - .github/workflows/native-actor-graph-exact-head.yml
+      - tests/native_actor_compressed32_graph_test.c
+      - src/main/cpp/oreslang/runtime/ActorArena.c
+      - src/main/cpp/oreslang/runtime/ActorArena.h
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-head-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact actor-graph branch head (no persisted token)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Prove that the checkout is the exact PR head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Compile and run actual C actor graph regression with GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in gcc clang; do
+            for profile in debug release; do
+              flags=(-O0 -g)
+              if [[ "$profile" == release ]]; then flags=(-O2 -DNDEBUG); fi
+              binary="$RUNNER_TEMP/actor-graph-${compiler}-${profile}"
+              "$compiler" -std=c11 -pthread -Wall -Wextra -Wpedantic -Werror "${flags[@]}" -I src/main/cpp tests/native_actor_compressed32_graph_test.c src/main/cpp/oreslang/runtime/ActorArena.c -o "$binary"
+              "$binary"
+            done
+          done
+      - name: Clang ASan UBSan real native actor graph regression
+        shell: bash
+        env:
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/actor-graph-sanitized"
+          clang -std=c11 -pthread -O1 -g -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -I src/main/cpp tests/native_actor_compressed32_graph_test.c src/main/cpp/oreslang/runtime/ActorArena.c -o "$binary"
+          "$binary"
