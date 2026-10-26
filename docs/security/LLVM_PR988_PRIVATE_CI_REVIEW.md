@@ -8,10 +8,10 @@ proposed carrier as part of this proposal.
 ## Candidate, fixed scope
 
 - Source: `ores-truffle-oreslang/oreslang-source.llvm`, **PR #988 only**
-- Exact source commit for first qualification:
-  `7e7ca8e30f05eb2b75f1288eac209437f224c975`
+- Exact source commit for qualification:
+  `c99e634f2601af90c2f477ec987babe2ae07f472`
 - Exact source Git tree:
-  `983d66d7b813b6a9abd40e0649ded65fe40d4cc9`
+  `7d281a4645b257708e1b6e046d1ae9e17a5b3ef4`
 - Proposed destination: **private** `sonus-auris/sonus-auris.infra`
 - Destination immutable GitHub repository ID: `1271706990`
 - Source-free proof: Actions run
@@ -100,7 +100,7 @@ boundaries. The requester of the tests must not self-approve a new carrier.
 ## Freshness and reconciliation
 
 This proposal tracks LLVM #988's current-main two-parent reconciliation at
-`7e7ca8e30f05eb2b75f1288eac209437f224c975`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
+`c99e634f2601af90c2f477ec987babe2ae07f472`. The resulting PR diff contains `Parser.cpp`, the CTest registrations in `CMakeLists.txt`,
 `tests/contract.py` and `tests/test_contract_harness.py` fail-closed
 infrastructure diagnostic checks, two byte-identical canonical parameter
 fixtures, and two new opaque return-position fixtures.
@@ -122,17 +122,19 @@ execution of these new predicates passed 14/14 cases across Python `-O` and
 fixture path redaction, wrapper-prefix spoof rejection, and infrastructure
 spoof rejection). This focused proof is not the complete committed Python
 harness and not a native compiler/CTest pass. Source-hosted exact-head runs at
-`7e7ca8e30f05eb2b75f1288eac209437f224c975` again completed with zero
+`c99e634f2601af90c2f477ec987babe2ae07f472` again completed with zero
 executed steps; treat them as infrastructure-only failures. In particular,
-workflow runs 40250242841 (LLVM conformance contract) and 40250242960
-(LLVM compiler and native execution) each produced a failed job with an empty
-step list.
+workflow runs `40372269598` (LLVM conformance contract; job `121745833577`) and
+`40372269559` (LLVM compiler and native execution; job `121745834951`) each
+produced a failed job with `steps=null`.
 
 The pinned head is a two-parent current-main reconciliation: first parent
-`104863ddfc166854b9e44986a1a71d5fb4ed60f6`, second parent
-`a80fe00c5a68b8232e21cad0b58fd4858fa9ec53`. The reconciled tree preserves
-current `main` and overlays only the reviewed eight-file PR surface; GitHub
-compare reports 16 ahead / 0 behind.
+`7e7ca8e30f05eb2b75f1288eac209437f224c975`, second parent
+`7b705bf7e8c8e24f119f95a910144388e44516b6`. The three intervening `main`
+commits touched only `.github/CODEOWNERS` and `.github/workflows/ci.yml`, which
+are disjoint from #988's eight-file surface. The reconciliation overlays the
+same eight reviewed blob SHAs onto the new `main` tree; GitHub compare reports
+17 ahead / 0 behind.
 
 Native LLVM include/link and wake-test repairs were already present on newer
 `main` and were deliberately not rolled back. Any subsequent PR-head/tree
@@ -252,3 +254,18 @@ Executed evidence:
 - Synthetic artifact integration run `40369770317`: success. Good round-trip emitted `DEPENDENCY_CACHE_VERIFY_PASS files=2 bytes=11` and `CACHE_ARTIFACT_ROUNDTRIP_PASS`; a cache mutated after sealing was rejected with `DEPENDENCY_CACHE_DENIED: dependency-cache bytes differ from sealed manifest` and `CACHE_ARTIFACT_TAMPER_DENIED_PASS`.
 
 This alternate-org evidence contains no LLVM private source. The production source-bearing workflow at the current head still lacks a stepful run because the current carrier org stopped admitting runners; predecessor source-bearing evidence must remain classified as historical.
+
+
+## Independent alternate-org corroboration
+
+Because the current carrier org stopped admitting runners, the exact current carrier tree
+`bb514698ef757e2c7184cb79c2b80b90591ddb5c` was also recreated as a content-addressed
+subtree in private `canonical-cloud-test/legacy-mirror-guard-e2e`. Every mirrored blob SHA
+matched the source and the recreated subtree SHA matched exactly.
+
+Fallback run `40370992905`, job `121741366347`, completed successfully and emitted
+`EXACT_CARRIER_TREE_PASS bb514698ef757e2c7184cb79c2b80b90591ddb5c`.
+The exact subtree then passed the carrier regression suites, reviewed-plan validation,
+dependency-cache seal/verify plus deliberate tamper rejection, and a deprivileged isolated
+guest-boundary probe. The temporary fallback branch was moved back to its original main
+commit after evidence capture. This proof contains no LLVM private source.
