@@ -252,7 +252,7 @@ static inline int ores_native_select_detach(OresNativeSelectToken token) {
 
 static inline int ores_native_select_seal(OresNativeSelectArbiter* arbiter) {
     if (!arbiter) return 0;
-    uint64_t expected = 0;
+    uint_fast64_t expected = 0;
     const int sealed_before_winner = atomic_compare_exchange_strong_explicit(
         &arbiter->winner,
         &expected,
