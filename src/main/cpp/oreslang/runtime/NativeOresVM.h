@@ -136,6 +136,26 @@ int ores_native_vm_bind_async_send_wake(
     OresNativeAsyncSendTicket ticket, OresNativeActorRef producer,
     uint64_t continuation_slot, uint64_t continuation_generation,
     uint64_t code_generation, OresNativeWakeTicket* out);
+/* Common select-generation continuation bridge. These wrappers preserve
+ * scheduler encapsulation: source lowering never receives a raw scheduler. */
+int ores_native_vm_reserve_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef producer, OresNativeSelectArbiter* arbiter,
+    uint64_t selection_generation, uint64_t continuation_slot,
+    uint64_t continuation_generation, uint64_t code_generation,
+    OresNativeSelectWakeTicket* out);
+OresNativeSendStatus ores_native_vm_submit_selectable_async_with_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeActorRef target, uint64_t payload,
+    OresNativeSelectToken select_token,
+    OresNativeSelectWakeTicket select_wake,
+    OresNativeAsyncSendTicket* out);
+OresNativeWakePublishStatus ores_native_vm_publish_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket, OresNativeSelectToken winner);
+int ores_native_vm_cancel_select_wake(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket);
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out);
