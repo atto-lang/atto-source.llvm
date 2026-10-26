@@ -1029,20 +1029,28 @@ int oreslang_source_actor_await_send_future_continuation_checked(
         ensure(pthread_cond_destroy(&frame.completed) == 0);
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
     }
+    if (!group.root_ref.scheduler_domain
+            || group.pending_ready != NULL
+            || group.pending_done != NULL
+            || group.pending_send != NULL) {
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
     SourceActor* actor = future->actor;
     OresNativeVM* vm = group.vm;
     const OresNativeAsyncSendTicket ticket = future->ticket;
     frame.actor = actor;
-    ensure(group.root_ref.scheduler_domain
-        && group.pending_ready == NULL
-        && group.pending_done == NULL
-        && group.pending_send == NULL);
     frame.resume_future = ores_native_vm_actor_future_open(
         vm,
         ORES_NATIVE_VM_MAIN,
         group.root_ref,
         SOURCE_ROOT_CONTROL_SEND_RESUME);
-    ensure(frame.resume_future != NULL);
+    if (!frame.resume_future) {
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
     future->consuming = 1;
     group.pending_send = &frame;
 
@@ -1051,11 +1059,18 @@ int oreslang_source_actor_await_send_future_continuation_checked(
      * Even an already-READY send Future must cross a real suspend/resume pair
      * so post-await guest code never continues on the original host stack.
      */
-    ensure(ores_native_vm_publish_control(
-        vm,
-        ORES_NATIVE_VM_MAIN,
-        group.root_ref,
-        SOURCE_ROOT_CONTROL_SEND_SUSPEND));
+    if (!ores_native_vm_publish_control(
+            vm,
+            ORES_NATIVE_VM_MAIN,
+            group.root_ref,
+            SOURCE_ROOT_CONTROL_SEND_SUSPEND)) {
+        group.pending_send = NULL;
+        future->consuming = 0;
+        ores_native_actor_future_destroy(frame.resume_future);
+        group_unlock();
+        ensure(pthread_cond_destroy(&frame.completed) == 0);
+        return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    }
     while (!frame.suspend_recorded)
         ensure(pthread_cond_wait(&frame.completed, &group.mutex) == 0);
     group_unlock();
