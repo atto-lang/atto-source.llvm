@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "oreslang/runtime/DopFixedRecord.hpp"
+
 namespace oreslang::dop {
 
 template<class... Fields>
@@ -49,13 +51,15 @@ private:
 template<class... Fields>
 class InvertedColumns {
     static_assert(sizeof...(Fields) != 0, "an inverted class needs at least one field");
-    static_assert(((std::is_arithmetic_v<Fields> || std::is_enum_v<Fields>) && ...),
-                  "phase-one columns only support pointer-free arithmetic and enum fields");
+    static_assert(((std::is_arithmetic_v<Fields> || std::is_enum_v<Fields>
+                    || detail::is_fixed_record_v<Fields>) && ...),
+                  "phase-one columns only support pointer-free arithmetic, enum, or FixedRecord fields");
     static_assert((std::is_trivially_copyable_v<Fields> && ...),
                   "phase-one columns require trivial field copies");
-    static_assert(((sizeof(Fields) == 1 || sizeof(Fields) == 2 ||
-                    sizeof(Fields) == 4 || sizeof(Fields) == 8) && ...),
-                  "phase-one column cells must have a fixed 1/2/4/8 byte width");
+    static_assert(((detail::is_fixed_record_v<Fields>
+                    || sizeof(Fields) == 1 || sizeof(Fields) == 2
+                    || sizeof(Fields) == 4 || sizeof(Fields) == 8) && ...),
+                  "scalar column cells must have a fixed 1/2/4/8 byte width");
     static constexpr std::size_t field_count = sizeof...(Fields);
     // vector<bool> is bit-packed and has no data() span; represent bool
     // as canonical 0/1 bytes in the initial SoA ABI instead.
@@ -311,8 +315,9 @@ public:
     template<std::size_t I>
     Loan<I, true> borrow_write() {
         static_assert(I < field_count);
-        static_assert(!std::is_same_v<std::tuple_element_t<I, std::tuple<Fields...>>, bool>,
-                      "bool byte lanes require canonical writes via set; mutable spans are disallowed");
+        using Field = std::tuple_element_t<I, std::tuple<Fields...>>;
+        static_assert(!std::is_same_v<Field, bool> && !detail::is_fixed_record_v<Field>,
+                      "bool/record byte lanes require canonical writes via set; mutable spans are disallowed");
         std::lock_guard<std::mutex> lock(state_->mutex);
         ensure_open(*state_);
         if (state_->writers[I] || state_->readers[I])
