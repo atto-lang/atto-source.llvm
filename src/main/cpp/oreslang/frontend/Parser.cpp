@@ -2088,6 +2088,8 @@ private:
                 binding.initializer = expression();
             }
             require(";");
+            if (scalar_task_results.count(binding.name))
+                fail("local binding shadows native Task<int> '" + binding.name + "'");
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
             value.locals.push_back(std::move(binding));
         }
