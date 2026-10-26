@@ -667,7 +667,7 @@ static void detached_scalar_state_accepts_exact_bound(void) {
         detached_max_state_resume_probe,
         UINT64_C(0x5ef7),
         NULL,
-        1) == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+        1) == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
     CHECK(!oreslang_source_actor_test_future_consuming(future));
 
     CHECK(oreslang_source_actor_detach_send_future_state_checked(
