@@ -153,6 +153,15 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         auto future = NativeScalarFutureAwait::open(actor, 1);
         CHECK(future->complete(future->id(), 41));
 
+        // A live READY Future owns a resource loan, so finalization cannot
+        // reach terminal settlement while this frame remains live.
+        CHECK(actor.outstanding_resource_loans() == 1);
+        CHECK(!group.finalized(actor));
+        CHECK(!actor.resource_admission_closed());
+        CHECK(!actor.delivery_closed());
+        CHECK(future->cancel(future->id()));
+        CHECK(actor.outstanding_resource_loans() == 0);
+
         const std::string expected_failure(512, 'x');
         std::string injected_failure = expected_failure;
         bool threw = false;
@@ -191,18 +200,6 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         CHECK(group.run_user_turn(actor, [&] { ++direct_user_turn; })
               == NativeActorGroup::UserTurn::retired);
         CHECK(direct_user_turn == 0);
-
-        // Terminal resource admission is authoritative even if DONE
-        // settlement failed before delivery_closed() could be published.
-        // A pre-existing READY Future must not enqueue fresh CONTROL work in
-        // this retry-only finalization window.
-        int resumed = 0;
-        CHECK(!future->try_schedule(
-            future->id(), group, actor,
-            [&](const auto&) { ++resumed; }));
-        CHECK(future->phase() == NativeScalarFutureAwait::Phase::cancelled);
-        CHECK(!group.has_pending_control(actor));
-        CHECK(resumed == 0);
 
         // Retry with no error: the first sealed outcome must remain sticky.
         CHECK(group.finalized(actor));
