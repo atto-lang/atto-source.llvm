@@ -327,6 +327,82 @@ static void scalar_future_open_allocation_failures_release_one_loan() {
     CHECK(injected_failures >= 3);
 }
 
+static void close_after_admission_is_allocation_free_and_settles_readiness() {
+    NativeActorGroup group(194000, 2);
+    int stop_a = 0;
+    int stop_b = 0;
+    auto a = group.adopt(194000, 801, 1, [&] { ++stop_a; });
+    auto b = group.adopt(194000, 802, 1, [&] { ++stop_b; });
+    auto finalizer_a = group.runtime_finalizer(a);
+    auto finalizer_b = group.runtime_finalizer(b);
+
+    int ready_a = 0;
+    int ready_b = 0;
+    bool bad_ready = false;
+    a.when_ready([&](const auto& result) {
+        if (result.ready || result.error != "ActorGroup closed before ready")
+            bad_ready = true;
+        ++ready_a;
+    });
+    b.when_ready([&](const auto& result) {
+        if (result.ready || result.error != "ActorGroup closed before ready")
+            bad_ready = true;
+        ++ready_b;
+    });
+
+    // Any allocation after this point would throw inside noexcept close() and
+    // terminate the process. A passing test therefore proves close performs no
+    // heap allocation after admission/detachment while settling STARTING refs.
+    fail_after_allocations.store(0, std::memory_order_release);
+    group.close();
+    fail_after_allocations.store(-1, std::memory_order_release);
+
+    CHECK(group.closed());
+    CHECK(group.worker_count() == 0);
+    CHECK(!bad_ready);
+    CHECK(ready_a == 1);
+    CHECK(ready_b == 1);
+    CHECK(stop_a == 1);
+    CHECK(stop_b == 1);
+    CHECK(a.delivery_closed());
+    CHECK(b.delivery_closed());
+    CHECK(finalizer_a.ready_for_actor_turn_quiescence());
+    CHECK(finalizer_b.ready_for_actor_turn_quiescence());
+
+    bool ready_a_failed = false;
+    bool ready_b_failed = false;
+    try { a.get_ready().get(); }
+    catch (const std::runtime_error& e) {
+        ready_a_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    try { b.get_ready().get(); }
+    catch (const std::runtime_error& e) {
+        ready_b_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    CHECK(ready_a_failed);
+    CHECK(ready_b_failed);
+
+    CHECK(finalizer_a.finalized());
+    CHECK(finalizer_b.finalized());
+
+    bool done_a_failed = false;
+    bool done_b_failed = false;
+    try { a.get_done().get(); }
+    catch (const std::runtime_error& e) {
+        done_a_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    try { b.get_done().get(); }
+    catch (const std::runtime_error& e) {
+        done_b_failed =
+            std::string(e.what()) == "ActorGroup closed before ready";
+    }
+    CHECK(done_a_failed);
+    CHECK(done_b_failed);
+}
+
 static void stop_workers_allocation_failure_keeps_waiters_retryable() {
     std::uint32_t injected_failures = 0;
     std::uint32_t successful_attempts = 0;
@@ -516,6 +592,7 @@ int main() {
     settlement_failure_keeps_terminal_resource_seal_retryable();
     failed_startup_finalization_cannot_resurrect_ready();
     scalar_future_open_allocation_failures_release_one_loan();
+    close_after_admission_is_allocation_free_and_settles_readiness();
     stop_workers_allocation_failure_keeps_waiters_retryable();
     successful_done_cannot_be_rewritten_by_late_failure();
     concurrent_finalization_publishes_exact_winner();

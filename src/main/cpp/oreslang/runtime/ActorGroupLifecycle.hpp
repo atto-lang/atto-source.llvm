@@ -170,6 +170,14 @@ private:
         // into success or a different error.
         bool terminal_failure_committed = false;
         std::string terminal_failure;
+        // close() is noexcept and runs after the worker table is detached.
+        // Pre-stage its canonical startup failure while actor admission is
+        // still fallible, so close can settle STARTING readiness without any
+        // heap allocation or partially published waiter state.
+        std::string close_before_ready_error{"ActorGroup closed before ready"};
+        std::exception_ptr close_before_ready_failure =
+            std::make_exception_ptr(
+                std::runtime_error(close_before_ready_error));
         std::promise<void> ready_promise;
         std::promise<void> done_promise;
         std::shared_future<void> ready_future = ready_promise.get_future().share();
@@ -606,15 +614,11 @@ public:
                 worker.ref.ticket_->control_dropped.store(true, std::memory_order_release);
             }
             if (worker.phase == Phase::starting) {
-                try {
-                    ActorReadyResult rejected{false, "ActorGroup closed before ready"};
-                    auto callbacks = settle_ticket(worker.ref, std::move(rejected));
-                    notify(callbacks, worker.ref.ticket_->result);
-                } catch (...) {
-                    // Keep processing all detached workers. A true OOM can
-                    // still prevent notifying an awaiter; it must never
-                    // prevent the group from requesting actor shutdown.
-                }
+                // No allocation is permitted here: close() is noexcept and the
+                // group is already detached. The ticket pre-staged its canonical
+                // close-before-READY error/exception during fallible adoption.
+                auto callbacks = settle_closed_before_ready(worker.ref);
+                notify(callbacks, worker.ref.ticket_->result);
             }
             if (worker.phase != Phase::stopping)
                 dispatch_stop(worker.ref, worker.stop_request);
@@ -742,6 +746,21 @@ private:
         // This copy may allocate; that is intentional. If it throws, the
         // canonical failure is already durable on the generation ticket.
         return ref.ticket_->terminal_failure;
+    }
+
+    static std::vector<NativeActorRef::ReadyContinuation>
+    settle_closed_before_ready(const NativeActorRef& ref) noexcept {
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (ref.ticket_->settled) return {};
+        ref.ticket_->result.ready = false;
+        ref.ticket_->result.error.swap(
+            ref.ticket_->close_before_ready_error);
+        ref.ticket_->ready_promise.set_exception(
+            ref.ticket_->close_before_ready_failure);
+        ref.ticket_->settled = true;
+        std::vector<NativeActorRef::ReadyContinuation> callbacks;
+        callbacks.swap(ref.ticket_->waiters);
+        return callbacks;
     }
 
     static std::vector<NativeActorRef::ReadyContinuation>
