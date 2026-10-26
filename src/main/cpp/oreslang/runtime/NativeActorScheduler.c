@@ -32,6 +32,9 @@ typedef struct {
     OresNativeWakeOutcome outcome;
     WakeState state;
     uint64_t generation; /* never recycled at UINT64_MAX */
+    OresNativeSelectArbiter* select_arbiter;
+    uint64_t select_generation;
+    unsigned select_bound;
 } WakeCredit;
 typedef struct {
     uint64_t generation; /* descriptor generation, never recycled at UINT64_MAX */
@@ -92,6 +95,7 @@ struct OresNativeActorScheduler {
     size_t next_actor, outstanding, runnable_lanes;
     uint64_t domain;
     uint64_t next_execution;
+    uint64_t next_select_generation;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
@@ -262,6 +266,9 @@ static void release_wake_locked(OresNativeActorScheduler* s,
     --lane->wake_live;
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
+    credit->select_arbiter = NULL;
+    credit->select_generation = 0;
+    credit->select_bound = 0;
     maybe_finish_stopped_locked(s, i);
 }
 static WakeCredit* matching_wake_locked(
@@ -273,6 +280,10 @@ static void retire_async_send_credit_locked(
         AsyncSendCredit* credit);
 static void settle_async_send_wake_locked(
         OresNativeActorScheduler* s, AsyncSendCredit* credit);
+static OresNativeWakePublishStatus publish_select_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectToken token,
+        OresNativeWakeOutcome outcome);
 static void service_async_sends_locked(
         OresNativeActorScheduler* s, size_t actor_index);
 static void fail_pending_async_sends_locked(
@@ -471,6 +482,9 @@ static void* carrier(void* raw) {
 
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
+            active_wake->select_arbiter = NULL;
+            active_wake->select_generation = 0;
+            active_wake->select_bound = 0;
             --lane->wake_live;
             ++s->wakes_completed;
             if (deferred_release)
@@ -515,6 +529,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
     s->next_execution = 1;
+    s->next_select_generation = 1;
     s->per_actor_capacity = capacity;
     s->worker_count = workers;
     s->callback = callback;
@@ -849,6 +864,16 @@ static void fail_pending_async_sends_locked(
             continue;
         settle_selectable_failure_locked(credit, outcome);
         credit->sequence = 0;
+        if (credit->select_bound
+                && credit->state == ORES_NATIVE_ASYNC_SEND_FAILED
+                && credit->select_token.notify_scheduler_domain) {
+            const OresNativeWakePublishStatus wake_status =
+                publish_select_wake_locked(
+                    s, credit->select_token, ORES_NATIVE_WAKE_FAILED);
+            if (wake_status != ORES_NATIVE_WAKE_PUBLISHED
+                    && wake_status != ORES_NATIVE_WAKE_PRODUCER_RETIRED)
+                abort();
+        }
         settle_async_send_wake_locked(s, credit);
         ++failed;
         if (s->rejected != UINT64_MAX) ++s->rejected;
@@ -915,6 +940,15 @@ static void service_async_sends_locked(
         credit->sequence = 0;
         if (!lane->async_pending) abort();
         --lane->async_pending;
+        if (credit->select_bound
+                && credit->select_token.notify_scheduler_domain) {
+            const OresNativeWakePublishStatus wake_status =
+                publish_select_wake_locked(
+                    s, credit->select_token, ORES_NATIVE_WAKE_READY);
+            if (wake_status != ORES_NATIVE_WAKE_PUBLISHED
+                    && wake_status != ORES_NATIVE_WAKE_PRODUCER_RETIRED)
+                abort();
+        }
         settle_async_send_wake_locked(s, credit);
     }
 
@@ -1194,23 +1228,15 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     /*
      * Descriptor/sequence exhaustion means this select arm could not be
      * registered. It is not an operation-completion event and must not win the
-     * common selection.
-     *
-     * Recheck the generation before reporting setup failure: another arm may
-     * have committed after our scheduler-lock precheck. In that race this arm
-     * is simply a loser, not a RESOURCE_EXHAUSTED failure for the completed
-     * selection.
+     * common selection. Detach this arm and let the coordinator fail/cleanup
+     * the partial select setup.
      */
     if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
             || lane->next_async_sequence == 0) {
-        const int still_open =
-            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return still_open
-            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
-            : ORES_NATIVE_SEND_CANCELLED;
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
     }
     size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
@@ -1222,14 +1248,10 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
         }
     }
     if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
-        const int still_open =
-            ores_native_select_token_registered(select_token);
         (void)ores_native_select_detach(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
-        return still_open
-            ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
-            : ORES_NATIVE_SEND_CANCELLED;
+        return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
     }
 
     AsyncSendCredit* credit = &lane->async_sends[slot];
@@ -1440,6 +1462,75 @@ static WakeCredit* matching_wake_locked(
     return w;
 }
 
+static WakeCredit* matching_select_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectToken token) {
+    if (!s || !token.notify_scheduler_domain
+            || token.notify_scheduler_domain != s->domain
+            || token.notify_producer_slot >= s->actor_count
+            || token.notify_wake_slot >= ORES_NATIVE_WAKE_CREDITS_PER_ACTOR)
+        return NULL;
+
+    ActorLane* producer = &s->actors[token.notify_producer_slot];
+    if (!producer->spawned
+            || producer->generation != token.notify_producer_generation
+            || !producer->wakes)
+        return NULL;
+
+    WakeCredit* wake = &producer->wakes[token.notify_wake_slot];
+    if (wake->state == WAKE_EMPTY
+            || wake->generation != token.notify_wake_generation
+            || !wake->select_bound
+            || wake->select_arbiter != token.arbiter
+            || wake->select_generation != token.selection_generation
+            || wake->ticket.producer.scheduler_domain != s->domain
+            || wake->ticket.producer.actor_slot != token.notify_producer_slot
+            || wake->ticket.producer.generation
+                != token.notify_producer_generation
+            || wake->ticket.descriptor_slot != UINT64_MAX
+            || wake->ticket.descriptor_generation
+                != token.selection_generation)
+        return NULL;
+    return wake;
+}
+
+static OresNativeWakePublishStatus publish_select_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectToken token,
+        OresNativeWakeOutcome outcome) {
+    if (outcome != ORES_NATIVE_WAKE_READY
+            && outcome != ORES_NATIVE_WAKE_CANCELLED
+            && outcome != ORES_NATIVE_WAKE_FAILED)
+        return ORES_NATIVE_WAKE_INVALID;
+    if (!ores_native_select_token_won(token))
+        return ORES_NATIVE_WAKE_INVALID;
+
+    WakeCredit* wake = matching_select_wake_locked(s, token);
+    if (!wake || wake->state != WAKE_RESERVED)
+        return ORES_NATIVE_WAKE_INVALID;
+
+    ActorLane* producer = &s->actors[token.notify_producer_slot];
+    if (s->retired || producer->retired) {
+        release_wake_locked(
+            s, (size_t)token.notify_producer_slot, wake);
+        return ORES_NATIVE_WAKE_PRODUCER_RETIRED;
+    }
+
+    if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
+    const int new_lane = !producer->active && !lane_has_work(producer);
+    --s->reserved_wakes;
+    wake->ticket.completion_code = token.arm + UINT64_C(1);
+    wake->outcome = outcome;
+    wake->state = WAKE_READY;
+    ++producer->wake_ready;
+    if (new_lane) ++s->runnable_lanes;
+    ++s->reserved_executions;
+    ++s->accepted;
+    ++s->outstanding;
+    pthread_cond_signal(&s->ready);
+    return ORES_NATIVE_WAKE_PUBLISHED;
+}
+
 static OresNativeWakeOutcome async_send_terminal_wake_outcome(
         const AsyncSendCredit* credit) {
     if (!credit) abort();
@@ -1528,6 +1619,9 @@ static int reserve_wake_locked_impl(
 
     ++w->generation;
     const size_t slot = (size_t)(w - lane->wakes);
+    w->select_arbiter = NULL;
+    w->select_generation = 0;
+    w->select_bound = 0;
     w->ticket = (OresNativeWakeTicket){
         .producer = producer, .target = target,
         .slot = slot, .slot_generation = w->generation,
@@ -1561,6 +1655,171 @@ int ores_native_actor_scheduler_reserve_wake(
         code_generation, UINT64_MAX, descriptor_generation, 1, out);
     unlock(s);
     return ok;
+}
+
+static int select_generation_has_live_wake_locked(
+        OresNativeActorScheduler* s,
+        OresNativeSelectArbiter* arbiter,
+        uint64_t selection_generation) {
+    if (!s || !arbiter || !selection_generation) return 1;
+    for (size_t actor = 0; actor < s->actor_count; ++actor) {
+        ActorLane* lane = &s->actors[actor];
+        if (!lane->wakes) continue;
+        for (size_t slot = 0;
+                slot < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++slot) {
+            WakeCredit* wake = &lane->wakes[slot];
+            if (wake->state != WAKE_EMPTY
+                    && wake->select_bound
+                    && wake->select_arbiter == arbiter
+                    && wake->select_generation == selection_generation)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static int reserve_select_wake_locked_impl(
+        OresNativeActorScheduler* s,
+        OresNativeSelectArbiter* arbiter,
+        size_t arm_count,
+        OresNativeActorRef producer,
+        uint64_t continuation_slot,
+        uint64_t continuation_generation,
+        uint64_t code_generation,
+        int rearm,
+        OresNativeWakeTicket* out) {
+    if (!s || !arbiter || !out || !arm_count
+            || arm_count > ORES_NATIVE_SELECT_MAX_ARMS
+            || !continuation_slot || !continuation_generation
+            || !code_generation)
+        return 0;
+
+    const uint64_t generation = s->next_select_generation;
+    if (!generation || generation == UINT64_MAX)
+        return 0;
+
+    if (rearm) {
+        const uint64_t previous_generation = atomic_load_explicit(
+            &arbiter->generation, memory_order_acquire);
+        if (!previous_generation
+                || select_generation_has_live_wake_locked(
+                    s, arbiter, previous_generation))
+            return 0;
+    }
+
+    OresNativeWakeTicket wake = {0};
+    if (!reserve_wake_locked_impl(
+            s, producer, producer,
+            continuation_slot, continuation_generation, code_generation,
+            UINT64_MAX, generation, 1, &wake))
+        return 0;
+
+    const int arbiter_ok = rearm
+        ? ores_native_select_arbiter_rearm(arbiter, generation, arm_count)
+        : ores_native_select_arbiter_init(arbiter, generation, arm_count);
+    if (!arbiter_ok) {
+        WakeCredit* credit = matching_wake_locked(s, wake);
+        if (!credit || credit->state != WAKE_RESERVED) abort();
+        release_wake_locked(
+            s, (size_t)wake.producer.actor_slot, credit);
+        return 0;
+    }
+
+    WakeCredit* select_wake = matching_wake_locked(s, wake);
+    if (!select_wake || select_wake->state != WAKE_RESERVED)
+        abort();
+    select_wake->select_arbiter = arbiter;
+    select_wake->select_generation = generation;
+    select_wake->select_bound = 1;
+
+    s->next_select_generation =
+        generation == UINT64_MAX - UINT64_C(1)
+            ? UINT64_MAX
+            : generation + UINT64_C(1);
+    *out = wake;
+    return 1;
+}
+
+int ores_native_actor_scheduler_reserve_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectArbiter* arbiter,
+        size_t arm_count,
+        OresNativeActorRef producer,
+        uint64_t continuation_slot,
+        uint64_t continuation_generation,
+        uint64_t code_generation,
+        OresNativeWakeTicket* out) {
+    if (out) *out = (OresNativeWakeTicket){0};
+    if (!s || !out) return 0;
+    lock(s);
+    const int ok = reserve_select_wake_locked_impl(
+        s, arbiter, arm_count, producer,
+        continuation_slot, continuation_generation, code_generation,
+        0, out);
+    unlock(s);
+    return ok;
+}
+
+int ores_native_actor_scheduler_rearm_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectArbiter* arbiter,
+        size_t arm_count,
+        OresNativeActorRef producer,
+        uint64_t continuation_slot,
+        uint64_t continuation_generation,
+        uint64_t code_generation,
+        OresNativeWakeTicket* out) {
+    if (out) *out = (OresNativeWakeTicket){0};
+    if (!s || !out) return 0;
+    lock(s);
+    const int ok = reserve_select_wake_locked_impl(
+        s, arbiter, arm_count, producer,
+        continuation_slot, continuation_generation, code_generation,
+        1, out);
+    unlock(s);
+    return ok;
+}
+
+int ores_native_actor_scheduler_attach_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectToken* token,
+        OresNativeWakeTicket wake) {
+    if (!s || !token) return 0;
+    lock(s);
+    WakeCredit* credit = matching_wake_locked(s, wake);
+    const int ok = credit
+        && credit->state == WAKE_RESERVED
+        && credit->select_bound
+        && credit->select_arbiter == token->arbiter
+        && credit->select_generation == token->selection_generation
+        && wake.descriptor_slot == UINT64_MAX
+        && wake.descriptor_generation == token->selection_generation
+        && wake.producer.scheduler_domain == s->domain
+        && wake.target.scheduler_domain == wake.producer.scheduler_domain
+        && wake.target.actor_slot == wake.producer.actor_slot
+        && wake.target.generation == wake.producer.generation
+        && ores_native_select_token_registered(*token);
+    if (ok) {
+        token->notify_scheduler_domain = s->domain;
+        token->notify_producer_slot = wake.producer.actor_slot;
+        token->notify_producer_generation = wake.producer.generation;
+        token->notify_wake_slot = wake.slot;
+        token->notify_wake_generation = wake.slot_generation;
+    }
+    unlock(s);
+    return ok;
+}
+
+OresNativeWakePublishStatus ores_native_actor_scheduler_publish_select_wake(
+        OresNativeActorScheduler* s,
+        OresNativeSelectToken token,
+        OresNativeWakeOutcome outcome) {
+    if (!s) return ORES_NATIVE_WAKE_INVALID;
+    lock(s);
+    const OresNativeWakePublishStatus status =
+        publish_select_wake_locked(s, token, outcome);
+    unlock(s);
+    return status;
 }
 
 int ores_native_actor_scheduler_bind_async_send_wake(
