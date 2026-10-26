@@ -935,8 +935,9 @@ if(BUILD_TESTING)
         COMMAND oreslang-ownership-auto-traits-dop-test)
     # Java/Graal #2048 parity proof for per-edge Future-pipeline ownership.
     # The consumed Future<int> source slice below is intentionally narrower;
-    # general Future payloads, borrowed roots and async-stage lowering remain
-    # fail-closed until their runtime/ownership proofs are executable.
+    # general Future payloads and borrowed roots remain fail-closed. Pure,
+    # capture-free async unary stages are flattened inside the scheduler-owned
+    # pipeline task; suspending/effectful async stages remain unavailable.
     add_executable(oreslang-future-pipeline-ownership-contract-test
         tests/future_pipeline_ownership_contract_test.cpp)
     target_include_directories(oreslang-future-pipeline-ownership-contract-test PRIVATE
@@ -2020,6 +2021,7 @@ if(BUILD_TESTING)
         DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_future_pipeline_i64_e2e.rs"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-future-pipeline-i64.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-future-pipeline-async-stage-i64.ores"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
         VERBATIM)
