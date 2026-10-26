@@ -4962,6 +4962,134 @@ private:
     std::size_t conditional_depth_ = 0;
 };
 
+void resolve_future_pipeline_contracts(Program& program) {
+    auto exact = [&](const std::string& name, std::size_t arity) -> Function& {
+        Function* found = nullptr;
+        for (auto& candidate : program.functions) {
+            if (candidate.name != name || candidate.parameters.size() != arity)
+                continue;
+            if (found)
+                throw std::runtime_error(
+                    "Future pipeline callable is ambiguous by name/arity '" +
+                    name + "'");
+            found = &candidate;
+        }
+        if (!found)
+            throw std::runtime_error(
+                "Future pipeline references unknown callable '" + name + "'");
+        return *found;
+    };
+
+    auto scalar_type = [] {
+        types::AutoType type;
+        type.kind = types::AutoTypeKind::Scalar;
+        return type;
+    };
+
+    for (auto& producer : program.functions) {
+        if (!producer.async_source_i64) continue;
+        if (!producer.parameters.empty() || producer.returns_void ||
+                producer.return_type != ScalarType::I64 ||
+                !producer.return_class.empty() || !producer.return_sum.empty() ||
+                !producer.generic_parameters.empty() ||
+                producer.has_declared_effects || !producer.locals.empty() ||
+                !producer.statements.empty() || !producer.early_returns.empty() ||
+                !producer.actor_spawns.empty() || !producer.actor_actions.empty() ||
+                !producer.actor_field_writes.empty() ||
+                !producer.source_tasks.empty() ||
+                !producer.future_pipelines.empty() ||
+                !producer.ready_await_actor.empty() ||
+                !producer.done_await_actor.empty() ||
+                producer.scalar_while || producer.caught_throw_value ||
+                !producer.result ||
+                !native_capture_free_task_tree(*producer.result))
+            throw std::runtime_error(
+                "native async Future<int> producer v1 must be capture-free, "
+                "zero-argument, pure and return one int expression");
+    }
+
+    for (auto& owner : program.functions) {
+        for (auto& pipeline : owner.future_pipelines) {
+            Function& producer = exact(pipeline.producer_function, 0);
+            if (!producer.async_source_i64)
+                throw std::runtime_error(
+                    "Future<int> pipeline root must be an exact async fnc producer");
+
+            pipeline.plans.clear();
+            pipeline.plans.reserve(pipeline.stages.size());
+            FunctionEffects prior = producer.declared_effects;
+            for (std::size_t i = 0; i < pipeline.stages.size(); ++i) {
+                Function& stage = exact(pipeline.stages[i], 1);
+                const Parameter& parameter = stage.parameters.front();
+                if (stage.async_source_i64 ||
+                        parameter.mode != Parameter::Mode::Value ||
+                        parameter.scalar_type != ScalarType::I64 ||
+                        !parameter.class_name.empty() ||
+                        !parameter.generic_type.empty() ||
+                        !parameter.sum_type.empty() ||
+                        stage.returns_void ||
+                        stage.return_type != ScalarType::I64 ||
+                        !stage.return_class.empty() || !stage.return_sum.empty() ||
+                        !stage.generic_parameters.empty() ||
+                        stage.has_declared_effects ||
+                        !stage.locals.empty() || !stage.statements.empty() ||
+                        !stage.early_returns.empty() ||
+                        !stage.actor_spawns.empty() ||
+                        !stage.actor_actions.empty() ||
+                        !stage.actor_field_writes.empty() ||
+                        !stage.source_tasks.empty() ||
+                        !stage.future_pipelines.empty() ||
+                        !stage.ready_await_actor.empty() ||
+                        !stage.done_await_actor.empty() ||
+                        stage.scalar_while || stage.caught_throw_value ||
+                        !stage.result ||
+                        !native_pure_scalar_tree(*stage.result))
+                    throw std::runtime_error(
+                        "native Future<int> pipeline stage v1 requires one pure "
+                        "sync int -> int function with no captures/effects");
+
+                types::FuturePipelinePlan plan;
+                plan.declaration_identity =
+                    static_cast<std::uint64_t>(stage.offset) + 1u;
+                plan.pipeline_node_identity =
+                    (static_cast<std::uint64_t>(pipeline.offset) + 1u) * 257u +
+                    static_cast<std::uint64_t>(i) + 1u;
+                plan.input_type = scalar_type();
+                plan.output_type = scalar_type();
+                plan.prior_effects = prior;
+                plan.stage_effects = stage.declared_effects;
+                plan.cumulative_effects =
+                    prior.united(stage.declared_effects);
+                plan.effect_provenance =
+                    types::PipelineEffectProvenance::CompleteStatic;
+                plan.input_ownership = i == 0
+                    ? types::pipeline_root_ownership(pipeline.root_consumed)
+                    : types::pipeline_internal_ownership();
+                plan.root_stage = i == 0;
+                types::validate_executable_future_pipeline_plan(plan);
+                prior = plan.cumulative_effects;
+                pipeline.plans.push_back(std::move(plan));
+            }
+            types::validate_future_pipeline_chain(pipeline.plans);
+
+            std::vector<types::FuturePipelineOwnershipAdmission> admissions;
+            admissions.reserve(pipeline.plans.size());
+            for (const auto& plan : pipeline.plans) {
+                types::FuturePipelineOwnershipAdmission admission;
+                admission.declaration_identity = plan.declaration_identity;
+                admission.pipeline_node_identity = plan.pipeline_node_identity;
+                admission.input_ownership = plan.input_ownership;
+                admission.admitted = true;
+                admissions.push_back(admission);
+            }
+            if (!types::publish_future_pipeline_chain(
+                    pipeline.plans, admissions).has_value())
+                throw std::runtime_error(
+                    "Future pipeline ownership proof publication failed closed");
+        }
+    }
+}
+
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
@@ -4981,6 +5109,7 @@ void resolve_and_validate_program(Program& program) {
         throw std::runtime_error("native imports require filesystem module resolution");
     resolve_native_methods(program);
     resolve_native_sums(program);
+    resolve_future_pipeline_contracts(program);
     Parser::validate_complete(program);
     validate_i64_ownership(program);
     validate_native_scalar_types(program);
