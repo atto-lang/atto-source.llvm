@@ -16,7 +16,7 @@ static auto bind_read(
         int& callbacks,
         typename Channel::ReadOutcome* outcome = nullptr) {
     return channel.subscribe_readable(
-        [&](const typename Channel::Subscription& subscription) {
+        [&, outcome](const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
             typename Channel::ReadResult committed;
@@ -39,7 +39,7 @@ static auto bind_write(
         int& callbacks,
         typename Channel::WriteOutcome* outcome = nullptr) {
     return channel.subscribe_writable(
-        [&, value](const typename Channel::Subscription& subscription) {
+        [&, value, outcome](const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
             auto committed = Channel::WriteOutcome::NotReady;
