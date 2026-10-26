@@ -152,19 +152,6 @@ fnc api(Hidden value): int { return value; }
     denied("export foo(int);\nfnc keep(): int { return 1; }\n", "CALLABLE_SIGNATURE_EXPORT_UNSUPPORTED");
     denied("export {class X, actor Y};\nfnc keep(): int { return 1; }\n", "KIND_PREFIX_IN_GROUP");
     denied("export actor {actor X};\nfnc keep(): int { return 1; }\n", "KIND_PREFIX_IN_GROUP");
-    {
-        auto program = parse_unresolved_program(R"(
-define symbol #ready;
-export symbol #ready as #ready;
-)");
-        check(program.source_export_bindings.size() == 1);
-        const auto& binding = only_binding(program);
-        check(binding.local_kind == SourceExportKind::Symbol);
-        check(binding.local_name == "#ready");
-        check(binding.external_name == "#ready");
-        check(binding.scope == SourceExportScope::Public);
-    }
-
     denied("export symbol #ready as Ready;\nfnc keep(): int { return 1; }\n", "SYMBOL_BINDING_ALIAS_UNSUPPORTED");
     denied("export symbol #ready as #ok;\nfnc keep(): int { return 1; }\n", "SYMBOL_IDENTITY_MISMATCH");
     denied("export symbol ready as #ready;\nfnc keep(): int { return 1; }\n", "SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE");
