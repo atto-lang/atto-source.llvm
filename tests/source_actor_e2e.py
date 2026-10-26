@@ -201,13 +201,17 @@ def main():
                 assert "oreslang_source_actor_send" in guest.stdout, name
             if name == "source-actor-send-async.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
-                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                               if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
                 detach_calls = [line for line in guest.stdout.splitlines()
                                 if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
                 wait_calls = [line for line in guest.stdout.splitlines()
                               if "call i32 @oreslang_source_actor_wait_detached_send_result(" in line]
                 assert len(start_calls) == 1, (
-                    name, "expected direct send_async to submit one scheduler Future", start_calls)
+                    name, "expected direct send_async to checked-submit one scheduler Future", start_calls)
+                assert "call ptr @oreslang_source_actor_send_async_start(" not in guest.stdout, (
+                    name, "aborting unchecked send_async start ABI still emitted")
+                assert "direct.send_async.start.failed" in guest.stdout, (
+                    name, "missing immediate send_async failure cleanup branch")
                 assert len(detach_calls) == 1, (
                     name, "expected direct send_async to detach the guest continuation", detach_calls)
                 assert len(wait_calls) == 1, (
@@ -228,7 +232,7 @@ def main():
                     continuation)
             if name == "source-actor-send-async-future.ores":
                 start_calls = [line for line in guest.stdout.splitlines()
-                               if "call ptr @oreslang_source_actor_send_async_start(" in line]
+                               if "call i32 @oreslang_source_actor_send_async_start_checked(" in line]
                 detach_calls = [line for line in guest.stdout.splitlines()
                                 if "call i32 @oreslang_source_actor_detach_send_future_checked(" in line]
                 wait_calls = [line for line in guest.stdout.splitlines()
@@ -238,7 +242,11 @@ def main():
                 request_stop_calls = [line for line in guest.stdout.splitlines()
                                       if "call void @oreslang_source_actor_request_stop(" in line]
                 assert len(start_calls) == 1, (
-                    name, "expected one eager send_async Future submission", start_calls)
+                    name, "expected one eager checked send_async Future submission", start_calls)
+                assert "call ptr @oreslang_source_actor_send_async_start(" not in guest.stdout, (
+                    name, "aborting unchecked send_async start ABI still emitted")
+                assert ".start.failed" in guest.stdout, (
+                    name, "missing stored Future immediate-failure cleanup branch")
                 assert len(detach_calls) == 1, (
                     name, "expected one detached Future<void> continuation", detach_calls)
                 assert len(wait_calls) == 1, (
