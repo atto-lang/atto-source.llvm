@@ -152,3 +152,28 @@ payloads and checked move-only ownership; fail closed otherwise.
 **Evidence status:** this is a forward contract, not a native
 implementation or new native test result. No current-head JDK25/GraalVM or
 native differential evidence accompanies this documentation update.
+
+## Native static-select arbitration substrate
+
+The native runtime now has a host-side `NativeSelectArbiter<N>` substrate for the
+linearization point needed by future static-select lowering. It proves a narrow
+runtime contract only:
+
+- exactly one registered case can win;
+- armed losing registrations are revoked exactly once;
+- cancellation revokes every armed registration exactly once;
+- a completion/cancellation that wins before an external registration returns
+  its revoker is remembered, and `arm()` immediately revokes that late loser;
+- loser revocation callbacks run outside the arbiter mutex and all revokers are
+  drained even if one callback throws;
+- `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
+  handle.
+
+This is **not** source-level select support. `Channel<T>`/Future registration,
+typed arm bindings, ownership/borrow checking, blocking suspension,
+continuation scheduling, channel-close semantics, policy lowering
+(`first`/`fair`/`random`), and actor generation fencing are still required.
+Until those layers are wired and tested, source `select`, including both
+`{ ... }` and `over ... end`, must continue to fail closed at the native
+frontend boundary.
+
