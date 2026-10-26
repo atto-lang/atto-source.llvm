@@ -178,6 +178,8 @@ def main():
             "Future<void> send_async token must be awaited exactly once",
         "source-actor-send-async-future-stop-before-await-reject.ores":
             "send_async Future target stopped before await",
+        "source-actor-send-async-too-many-locals-reject.ores":
+            "direct send_async await captures only up to 16 Copy int/bool locals",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
