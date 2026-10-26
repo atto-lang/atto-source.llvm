@@ -156,6 +156,9 @@ OresNativeWakePublishStatus ores_native_vm_publish_select_wake(
 int ores_native_vm_cancel_select_wake(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeSelectWakeTicket ticket);
+int ores_native_vm_wait_select_wake_retired(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    OresNativeSelectWakeTicket ticket);
 int ores_native_vm_await_async_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeAsyncSendTicket ticket, OresNativeSendStatus* outcome_out);
