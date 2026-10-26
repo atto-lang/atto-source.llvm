@@ -2036,12 +2036,34 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 detach_status,
                 "future.detach.send");
         } else if (direct_send_await_action_index != fn.actor_actions.size()) {
-            const auto& awaited_action =
-                fn.actor_actions.at(direct_send_await_action_index);
-            const auto& awaited_send =
-                fn.actor_sends.at(awaited_action.index);
+            const std::size_t first_await_index =
+                direct_send_await_action_indices.front();
+            const auto& first_await_action =
+                fn.actor_actions.at(first_await_index);
+            const auto& first_await_send =
+                fn.actor_sends.at(first_await_action.index);
+            const bool two_pc = direct_send_await_action_indices.size() == 2;
+            const std::size_t second_await_index = two_pc
+                ? direct_send_await_action_indices[1]
+                : fn.actor_actions.size();
 
-            for (std::size_t i = 0; i < direct_send_await_action_index; ++i) {
+            if (two_pc) {
+                const auto& second_action =
+                    fn.actor_actions.at(second_await_index);
+                const auto& second_send =
+                    fn.actor_sends.at(second_action.index);
+                if (!second_send.await_admission
+                        || second_send.reference != first_await_send.reference)
+                    throw std::runtime_error(
+                        "detached direct await PCs require one ActorRef");
+                for (const auto& local : fn.locals) {
+                    if (local.offset > first_await_send.offset)
+                        throw std::runtime_error(
+                            "detached multi-PC locals must be initialized before PC0 await");
+                }
+            }
+
+            for (std::size_t i = 0; i < first_await_index; ++i) {
                 const auto& action = fn.actor_actions[i];
                 if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
@@ -2056,8 +2078,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 }
             }
 
-            llvm::Value* awaited_payload = lower(
-                *awaited_send.payload,
+            llvm::Value* first_payload = lower(
+                *first_await_send.payload,
                 builder,
                 i64,
                 storage,
@@ -2065,8 +2087,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 declarations,
                 &region_moves);
             llvm::Value* direct_future = start_send_future_checked(
-                actorRefs.at(awaited_send.reference),
-                awaited_payload,
+                actorRefs.at(first_await_send.reference),
+                first_payload,
                 "direct.send_async");
 
             if (fn.locals.size() > kNativeDetachedScalarWords)
@@ -2086,91 +2108,189 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 static_cast<std::uint64_t>(fn.locals.size());
             auto* continuation_type = llvm::FunctionType::get(
                 i64, {native_ptr, native_ptr, i64}, false);
-            auto* resume = llvm::Function::Create(
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+
+            auto emit_state_prologue = [&](
+                    llvm::Function* resume,
+                    llvm::IRBuilder<>& resumed,
+                    const std::string& actor_name,
+                    llvm::Value*& resumed_actor,
+                    llvm::Value*& resumed_state,
+                    llvm::Value*& resumed_state_count,
+                    std::unordered_map<std::string, llvm::Value*>& resumed_storage) {
+                auto argument = resume->arg_begin();
+                resumed_actor = &*argument++;
+                resumed_state = &*argument++;
+                resumed_state_count = &*argument;
+                resumed_actor->setName(actor_name);
+                resumed_state->setName("$detached.state");
+                resumed_state_count->setName("$detached.state.count");
+
+                auto* state_valid =
+                    llvm::BasicBlock::Create(context, "state.valid", resume);
+                auto* state_invalid =
+                    llvm::BasicBlock::Create(context, "state.invalid", resume);
+                llvm::Value* state_shape = resumed.CreateICmpEQ(
+                    resumed_state_count,
+                    llvm::ConstantInt::get(i64, detached_words),
+                    "detached.state.count.valid");
+                if (detached_words != 0) {
+                    state_shape = resumed.CreateAnd(
+                        state_shape,
+                        resumed.CreateIsNotNull(
+                            resumed_state, "detached.state.ptr.valid"),
+                        "detached.state.shape.valid");
+                }
+                resumed.CreateCondBr(state_shape, state_valid, state_invalid);
+                resumed.SetInsertPoint(state_invalid);
+                resumed.CreateCall(native_trap(module));
+                resumed.CreateUnreachable();
+                resumed.SetInsertPoint(state_valid);
+
+                for (std::size_t i = 0; i < fn.locals.size(); ++i) {
+                    llvm::Value* slot = resumed.CreateGEP(
+                        i64,
+                        resumed_state,
+                        llvm::ConstantInt::get(i64, i),
+                        fn.locals[i].name + ".detached.slot");
+                    resumed_storage.emplace(fn.locals[i].name, slot);
+                }
+            };
+
+            auto emit_resumed_actions = [&](
+                    llvm::IRBuilder<>& resumed,
+                    llvm::Value* resumed_actor,
+                    const std::unordered_map<std::string, llvm::Value*>& resumed_storage,
+                    std::size_t begin,
+                    std::size_t finish) {
+                for (std::size_t i = begin; i < finish; ++i) {
+                    const auto& action = fn.actor_actions[i];
+                    if (action.kind == ActorAction::Kind::Send) {
+                        const auto& send = fn.actor_sends.at(action.index);
+                        if (send.reference != first_await_send.reference)
+                            throw std::runtime_error(
+                                "direct send_async PC references unexpected ActorRef");
+                        if (send.await_admission)
+                            throw std::runtime_error(
+                                "direct send_async PC range contains unhandled await");
+                        llvm::Value* payload = lower(
+                            *send.payload,
+                            resumed,
+                            i64,
+                            resumed_storage,
+                            no_fields,
+                            declarations,
+                            nullptr);
+                        resumed.CreateCall(sourceSend, {resumed_actor, payload});
+                    } else {
+                        const auto& stopped = fn.actor_stops.at(action.index);
+                        if (stopped != first_await_send.reference)
+                            throw std::runtime_error(
+                                "direct send_async PC stops unexpected ActorRef");
+                        resumed.CreateCall(sourceRequestStop, {resumed_actor});
+                    }
+                }
+            };
+
+            llvm::Function* final_resume = llvm::Function::Create(
                 continuation_type,
                 llvm::Function::InternalLinkage,
-                function->getName().str() + ".send_async_continuation",
+                function->getName().str()
+                    + (two_pc
+                        ? ".send_async_continuation.pc2"
+                        : ".send_async_continuation"),
                 module);
-            auto* admitted =
-                llvm::BasicBlock::Create(context, "admitted", resume);
-            llvm::IRBuilder<> resumed(admitted);
-            auto argument = resume->arg_begin();
-            auto* resumed_actor = &*argument++;
-            auto* resumed_state = &*argument++;
-            auto* resumed_state_count = &*argument;
-            resumed_actor->setName(awaited_send.reference);
-            resumed_state->setName("$detached.state");
-            resumed_state_count->setName("$detached.state.count");
-
-            auto* state_valid =
-                llvm::BasicBlock::Create(context, "state.valid", resume);
-            auto* state_invalid =
-                llvm::BasicBlock::Create(context, "state.invalid", resume);
-            llvm::Value* detached_state_valid = resumed.CreateICmpEQ(
-                resumed_state_count,
-                llvm::ConstantInt::get(i64, detached_words),
-                "detached.state.count.valid");
-            if (detached_words != 0) {
-                detached_state_valid = resumed.CreateAnd(
-                    detached_state_valid,
-                    resumed.CreateIsNotNull(
-                        resumed_state, "detached.state.ptr.valid"),
-                    "detached.state.shape.valid");
-            }
-            resumed.CreateCondBr(
-                detached_state_valid,
-                state_valid,
-                state_invalid);
-            resumed.SetInsertPoint(state_invalid);
-            resumed.CreateCall(native_trap(module));
-            resumed.CreateUnreachable();
-            resumed.SetInsertPoint(state_valid);
-
-            std::unordered_map<std::string, llvm::Value*> resumed_storage;
-            const std::unordered_map<std::string, llvm::Value*> no_fields;
-            for (std::size_t i = 0; i < fn.locals.size(); ++i) {
-                llvm::Value* slot = resumed.CreateGEP(
-                    i64,
-                    resumed_state,
-                    llvm::ConstantInt::get(i64, i),
-                    fn.locals[i].name + ".detached.slot");
-                resumed_storage.emplace(fn.locals[i].name, slot);
-            }
-
-            for (std::size_t i = direct_send_await_action_index + 1;
-                    i < fn.actor_actions.size(); ++i) {
-                const auto& action = fn.actor_actions[i];
-                if (action.kind == ActorAction::Kind::Send) {
-                    const auto& send = fn.actor_sends.at(action.index);
-                    if (send.reference != awaited_send.reference)
-                        throw std::runtime_error(
-                            "direct send_async continuation references unexpected ActorRef");
-                    llvm::Value* payload = lower(
-                        *send.payload,
-                        resumed,
-                        i64,
-                        resumed_storage,
-                        no_fields,
-                        declarations,
-                        nullptr);
-                    resumed.CreateCall(sourceSend, {resumed_actor, payload});
-                } else {
-                    const auto& stopped = fn.actor_stops.at(action.index);
-                    if (stopped != awaited_send.reference)
-                        throw std::runtime_error(
-                            "direct send_async continuation stops unexpected ActorRef");
-                    resumed.CreateCall(sourceRequestStop, {resumed_actor});
-                }
-            }
-            llvm::Value* continuation_result = lower(
+            llvm::IRBuilder<> final_builder(
+                llvm::BasicBlock::Create(context, "admitted", final_resume));
+            llvm::Value* final_actor = nullptr;
+            llvm::Value* final_state = nullptr;
+            llvm::Value* final_state_count = nullptr;
+            std::unordered_map<std::string, llvm::Value*> final_storage;
+            emit_state_prologue(
+                final_resume,
+                final_builder,
+                first_await_send.reference,
+                final_actor,
+                final_state,
+                final_state_count,
+                final_storage);
+            emit_resumed_actions(
+                final_builder,
+                final_actor,
+                final_storage,
+                (two_pc ? second_await_index : first_await_index) + 1,
+                fn.actor_actions.size());
+            llvm::Value* final_result = lower(
                 *fn.result,
-                resumed,
+                final_builder,
                 i64,
-                resumed_storage,
+                final_storage,
                 no_fields,
                 declarations,
                 nullptr);
-            resumed.CreateRet(continuation_result);
+            final_builder.CreateRet(final_result);
+
+            llvm::Function* first_resume = final_resume;
+            if (two_pc) {
+                const auto& second_action =
+                    fn.actor_actions.at(second_await_index);
+                const auto& second_send =
+                    fn.actor_sends.at(second_action.index);
+
+                first_resume = llvm::Function::Create(
+                    continuation_type,
+                    llvm::Function::InternalLinkage,
+                    function->getName().str() + ".send_async_continuation.pc1",
+                    module);
+                llvm::IRBuilder<> pc1(
+                    llvm::BasicBlock::Create(context, "admitted", first_resume));
+                llvm::Value* pc1_actor = nullptr;
+                llvm::Value* pc1_state = nullptr;
+                llvm::Value* pc1_state_count = nullptr;
+                std::unordered_map<std::string, llvm::Value*> pc1_storage;
+                emit_state_prologue(
+                    first_resume,
+                    pc1,
+                    first_await_send.reference,
+                    pc1_actor,
+                    pc1_state,
+                    pc1_state_count,
+                    pc1_storage);
+                emit_resumed_actions(
+                    pc1,
+                    pc1_actor,
+                    pc1_storage,
+                    first_await_index + 1,
+                    second_await_index);
+
+                llvm::Value* second_payload = lower(
+                    *second_send.payload,
+                    pc1,
+                    i64,
+                    pc1_storage,
+                    no_fields,
+                    declarations,
+                    nullptr);
+                llvm::Value* pc2_ptr =
+                    pc1.CreatePointerCast(final_resume, native_ptr);
+                llvm::Value* rearm_status = pc1.CreateCall(
+                    sourceRearmDetachedSendState,
+                    {
+                        pc1_actor,
+                        second_payload,
+                        pc2_ptr,
+                        llvm::ConstantInt::get(
+                            llvm::cast<llvm::IntegerType>(i64),
+                            static_cast<std::uint64_t>(second_send.offset)),
+                        pc1_state,
+                        pc1_state_count
+                    },
+                    "future.rearm.direct.send.status");
+                pc1.CreateRet(pc1.CreateZExt(
+                    rearm_status,
+                    i64,
+                    "future.rearm.direct.send.status.i64"));
+            }
 
             llvm::Value* detached_state = llvm::ConstantPointerNull::get(
                 llvm::cast<llvm::PointerType>(native_ptr));
@@ -2203,7 +2323,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             }
 
             llvm::Value* continuation_ptr =
-                builder.CreatePointerCast(resume, native_ptr);
+                builder.CreatePointerCast(first_resume, native_ptr);
             llvm::Value* detach_status = builder.CreateCall(
                 sourceDetachSendFutureState,
                 {
@@ -2211,14 +2331,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                     continuation_ptr,
                     llvm::ConstantInt::get(
                         llvm::cast<llvm::IntegerType>(i64),
-                        static_cast<std::uint64_t>(awaited_send.offset)),
+                        static_cast<std::uint64_t>(first_await_send.offset)),
                     detached_state,
                     llvm::ConstantInt::get(i64, detached_words)
                 },
                 "future.detach.direct.send.status");
             awaited_result = finish_detach_checked(
                 direct_future,
-                actorRefs.at(awaited_send.reference),
+                actorRefs.at(first_await_send.reference),
                 detach_status,
                 "future.detach.direct.send");
         } else if (!fn.ready_await_actor.empty()) {
