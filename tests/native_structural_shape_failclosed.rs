@@ -66,7 +66,11 @@ pub fnc main(): int {
 
 fn run_native(clang: &Path, tmp: &Path, ir: &[u8]) {
     let ll = tmp.join("structural.ll");
-    let exe = tmp.join("structural-native");
+    let exe = tmp.join(if cfg!(windows) {
+        "structural-native.exe"
+    } else {
+        "structural-native"
+    });
     fs::write(&ll, ir).expect("write structural LLVM IR");
     let build = Command::new(clang)
         .arg(&ll).arg("-o").arg(&exe)
