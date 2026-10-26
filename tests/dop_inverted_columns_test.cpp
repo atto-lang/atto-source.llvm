@@ -50,6 +50,17 @@ int main() {
     auto h1 = a.push(2.5f, 200, false);
     auto h2 = a.push(3.5f, 300, true);
     check(a.size() == 3 && a.get<0>(h2) == 3.5f && a.get<1>(h1) == 200);
+    expect<std::out_of_range>([&] { (void)a.index(-1); });
+    expect<std::out_of_range>([&] {
+        (void)a.index(static_cast<std::int64_t>(
+            std::numeric_limits<std::int32_t>::max()) + 1);
+    });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::min()); });
+    expect<std::out_of_range>([&] { (void)a.index(std::numeric_limits<std::int64_t>::max()); });
+    const auto by_index_0 = a.index(0);
+    const auto saved_middle = a.index(1);
+    check(by_index_0.slot() == h0.slot() && by_index_0.generation() == h0.generation());
+    check(saved_middle.slot() == h1.slot() && saved_middle.generation() == h1.generation());
     a.reserve(16);
     // Deterministic oversized reservation must fail without changing any
     // live row/handle identity or the lengths of individual columns.
@@ -84,9 +95,14 @@ int main() {
       check(bools.size() == 3 && bools.get(0) == 1 && bools.get(1) == 0); }
     a.erase_swap(h1);
     check(a.size() == 2 && a.get<0>(h2) == 3.5f && a.get<1>(h2) == 300);
+    check(a.index(1).slot() == h2.slot());
+    expect<std::out_of_range>([&] { (void)a.get<0>(saved_middle); });
     expect<std::out_of_range>([&] { (void)a.get<0>(h1); });
     auto reused = a.push(4.5f, 400, false);
     check(reused.slot() == h1.slot() && reused.generation() != h1.generation());
+    check(a.index(2).slot() == reused.slot());
+    expect<std::out_of_range>([&] { (void)a.get<0>(saved_middle); });
+    expect<std::out_of_range>([&] { (void)a.index(3); });
     expect<std::out_of_range>([&] { a.set<0>(h1, 1.0f); });
     // Disjoint columns can be mutated concurrently without touching layout or identities.
     std::atomic<bool> start{false};
