@@ -1836,17 +1836,21 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
          * path blocks an actor carrier.
          */
         llvm::Value* awaited_result = nullptr;
-        std::size_t direct_send_await_action_index = fn.actor_actions.size();
+        std::vector<std::size_t> direct_send_await_action_indices;
         for (std::size_t i = 0; i < fn.actor_actions.size(); ++i) {
             const auto& action = fn.actor_actions[i];
             if (action.kind != ActorAction::Kind::Send) continue;
             const auto& send = fn.actor_sends.at(action.index);
             if (!send.await_admission) continue;
-            if (direct_send_await_action_index != fn.actor_actions.size())
-                throw std::runtime_error(
-                    "native source supports only one direct send_async await boundary");
-            direct_send_await_action_index = i;
+            direct_send_await_action_indices.push_back(i);
         }
+        if (direct_send_await_action_indices.size() > 2)
+            throw std::runtime_error(
+                "native source supports at most two direct send_async await PCs");
+        const std::size_t direct_send_await_action_index =
+            direct_send_await_action_indices.empty()
+                ? fn.actor_actions.size()
+                : direct_send_await_action_indices.front();
 
         if (!fn.send_future_name.empty()) {
             if (!send_future_ref || !fn.send_future_await_offset
