@@ -3951,3 +3951,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+
+# Future<i64> readiness and continuation-generation fencing are runtime
+# primitives only; compiler source select lowering remains fail closed.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-selectable-i64-future-test
+        tests/native_selectable_i64_future_test.cpp)
+    target_include_directories(oreslang-native-selectable-i64-future-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-i64-future-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-selectable-i64-future-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-selectable-i64-future-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_selectable_i64_future_generation_fence
+        COMMAND oreslang-native-selectable-i64-future-test)
+    set_tests_properties(native_selectable_i64_future_generation_fence
+        PROPERTIES TIMEOUT 30)
+endif()
