@@ -17,6 +17,9 @@ proposed carrier as part of this proposal.
 - Source-free proof: Actions run
   [40225924937](https://github.com/sonus-auris/sonus-auris.infra/actions/runs/40225924937)
   executed real runner steps and passed.
+- Fresh carrier-capacity confirmation on October 25: private-repo Actions runs
+  40241181625 and 40241178103 both completed successfully, confirming that the
+  proposed destination currently has executable GitHub Actions capacity.
 - The previously successful common-source authority mirror is **not** proof
   that exporting LLVM source is authorized.
 
