@@ -2,6 +2,14 @@ fnc helper(): string {
   return "ready cleanup";
 }
 
+define class CleanupRecord as
+  pub final int token: 1;
+end
+
+fnc record_helper() -> CleanupRecord {
+  return new CleanupRecord();
+}
+
 define actor Worker as {
   let total: int = 0;
   pub fnc on_message(int n): int {
