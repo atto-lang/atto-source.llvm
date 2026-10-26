@@ -661,6 +661,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
+    const bool detached_send_main = native_main && (
+        !main_it->send_future_name.empty()
+        || std::any_of(
+            main_it->actor_sends.begin(), main_it->actor_sends.end(),
+            [](const ActorSend& send) { return send.await_admission; }));
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
@@ -867,6 +872,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceSendAsyncAwait,
         sourceSendAsyncStart, sourceAwaitSendFuture,
+        sourceDetachSendFuture, sourceWaitDetachedSendResult,
         sourceStop, sourceRequestStop, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -899,6 +905,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         sourceAwaitSendFuture = module.getOrInsertFunction(
             "oreslang_source_actor_await_send_future",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
+        sourceDetachSendFuture = module.getOrInsertFunction(
+            "oreslang_source_actor_detach_send_future_checked",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context),
+                {native_ptr, native_ptr, i64}, false));
+        sourceWaitDetachedSendResult = module.getOrInsertFunction(
+            "oreslang_source_actor_wait_detached_send_result",
+            llvm::FunctionType::get(
+                llvm::Type::getInt32Ty(context), {loan_ptr}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
@@ -1822,12 +1837,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 no_fields,
                 declarations,
                 nullptr);
+            for (std::size_t i = fn.send_future_await_action_index;
+                    i < fn.actor_actions.size(); ++i) {
+                const auto& action = fn.actor_actions[i];
+                if (action.kind != ActorAction::Kind::Stop) continue;
+                const auto& stopped = fn.actor_stops.at(action.index);
+                if (stopped != fn.send_future_actor)
+                    throw std::runtime_error(
+                        "send_async Future continuation stops unexpected ActorRef");
+                /* STOP admission is nonblocking and belongs to the resumed
+                 * state machine. Physical join stays in outer-host finalization. */
+                resumed.CreateCall(sourceRequestStop, {resumed_actor});
+            }
             resumed.CreateRet(continuation_result);
 
             llvm::Value* continuation_ptr =
                 builder.CreatePointerCast(resume, native_ptr);
-            awaited_result = builder.CreateCall(
-                sourceAwaitSendFuture,
+            llvm::Value* detach_status = builder.CreateCall(
+                sourceDetachSendFuture,
                 {
                     send_future_ref,
                     continuation_ptr,
@@ -1835,16 +1862,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         llvm::cast<llvm::IntegerType>(i64),
                         static_cast<std::uint64_t>(fn.send_future_await_offset))
                 },
-                "future.await.send.result");
-
-            for (std::size_t i = fn.send_future_await_action_index;
-                    i < fn.actor_actions.size(); ++i) {
-                const auto& action = fn.actor_actions[i];
-                if (action.kind == ActorAction::Kind::Stop)
-                    builder.CreateCall(
-                        sourceStop,
-                        {actorRefs.at(fn.actor_stops.at(action.index))});
-            }
+                "future.detach.send.status");
+            awaited_result = builder.CreateZExt(
+                detach_status, i64, "future.detach.send.status.i64");
         } else if (direct_send_await_action_index != fn.actor_actions.size()) {
             const auto& awaited_action =
                 fn.actor_actions.at(direct_send_await_action_index);
@@ -1920,12 +1940,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 no_fields,
                 declarations,
                 nullptr);
+            for (std::size_t i = direct_send_await_action_index + 1;
+                    i < fn.actor_actions.size(); ++i) {
+                const auto& action = fn.actor_actions[i];
+                if (action.kind != ActorAction::Kind::Stop) continue;
+                const auto& stopped = fn.actor_stops.at(action.index);
+                if (stopped != awaited_send.reference)
+                    throw std::runtime_error(
+                        "direct send_async continuation stops unexpected ActorRef");
+                resumed.CreateCall(sourceRequestStop, {resumed_actor});
+            }
             resumed.CreateRet(continuation_result);
 
             llvm::Value* continuation_ptr =
                 builder.CreatePointerCast(resume, native_ptr);
-            awaited_result = builder.CreateCall(
-                sourceAwaitSendFuture,
+            llvm::Value* detach_status = builder.CreateCall(
+                sourceDetachSendFuture,
                 {
                     direct_future,
                     continuation_ptr,
@@ -1933,15 +1963,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         llvm::cast<llvm::IntegerType>(i64),
                         static_cast<std::uint64_t>(awaited_send.offset))
                 },
-                "future.await.direct.send.result");
-
-            for (std::size_t i = direct_send_await_action_index + 1;
-                    i < fn.actor_actions.size(); ++i) {
-                const auto& action = fn.actor_actions[i];
-                if (action.kind == ActorAction::Kind::Stop)
-                    builder.CreateCall(sourceStop,
-                        {actorRefs.at(fn.actor_stops.at(action.index))});
-            }
+                "future.detach.direct.send.status");
+            awaited_result = builder.CreateZExt(
+                detach_status, i64, "future.detach.direct.send.status.i64");
         } else if (!fn.ready_await_actor.empty()) {
             auto* continuation_type =
                 llvm::FunctionType::get(i64, {native_ptr}, false);
@@ -2718,6 +2742,52 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        if (detached_send_main) {
+            /*
+             * The private guest-main ABI now returns only detached-start status.
+             * The OS entry stack owns no suspended guest locals: it waits for
+             * terminal function completion through the runtime-owned frame.
+             */
+            auto* wait_block = llvm::BasicBlock::Create(
+                context, "detached.main.wait", host_main);
+            auto* start_failed = llvm::BasicBlock::Create(
+                context, "detached.main.start.failed", host_main);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    result, llvm::ConstantInt::get(i64, 0),
+                    "detached.main.started"),
+                wait_block,
+                start_failed);
+            builder.SetInsertPoint(start_failed);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+
+            builder.SetInsertPoint(wait_block);
+            llvm::Value* detached_result =
+                builder.CreateAlloca(i64, nullptr, "detached.main.result.slot");
+            builder.CreateStore(llvm::ConstantInt::get(i64, 0), detached_result);
+            llvm::Value* outcome =
+                builder.CreateCall(
+                    sourceWaitDetachedSendResult,
+                    {detached_result},
+                    "detached.main.outcome");
+            auto* completed = llvm::BasicBlock::Create(
+                context, "detached.main.completed", host_main);
+            auto* failed = llvm::BasicBlock::Create(
+                context, "detached.main.failed", host_main);
+            builder.CreateCondBr(
+                builder.CreateICmpEQ(
+                    outcome,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt32Ty(context), 0),
+                    "detached.main.accepted"),
+                completed,
+                failed);
+            builder.SetInsertPoint(failed);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(completed);
+            result = builder.CreateLoad(
+                i64, detached_result, "detached.main.result");
+        }
         llvm::Value* records_ok = record_runtime
             ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
