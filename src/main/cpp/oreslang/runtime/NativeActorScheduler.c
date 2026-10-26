@@ -873,6 +873,14 @@ static void fail_pending_async_sends_locked(
             continue;
         settle_selectable_failure_locked(credit, outcome);
         credit->sequence = 0;
+        if (credit->select_wake_bound
+                && credit->state == ORES_NATIVE_ASYNC_SEND_FAILED) {
+            const OresNativeWakePublishStatus published =
+                publish_select_wake_locked(
+                    s, credit->select_wake, credit->select_token);
+            if (published == ORES_NATIVE_WAKE_INVALID)
+                abort();
+        }
         settle_async_send_wake_locked(s, credit);
         ++failed;
         if (s->rejected != UINT64_MAX) ++s->rejected;
@@ -939,6 +947,13 @@ static void service_async_sends_locked(
         credit->sequence = 0;
         if (!lane->async_pending) abort();
         --lane->async_pending;
+        if (credit->select_wake_bound) {
+            const OresNativeWakePublishStatus published =
+                publish_select_wake_locked(
+                    s, credit->select_wake, credit->select_token);
+            if (published == ORES_NATIVE_WAKE_INVALID)
+                abort();
+        }
         settle_async_send_wake_locked(s, credit);
     }
 
@@ -1265,6 +1280,8 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     credit->wake_bound = 0;
     credit->select_token = select_token;
     credit->select_bound = 1;
+    credit->select_wake = (OresNativeSelectWakeTicket){0};
+    credit->select_wake_bound = 0;
     credit->release_pending = 0;
     credit->state = ORES_NATIVE_ASYNC_SEND_PENDING;
     credit->outcome = ORES_NATIVE_SEND_MAILBOX_FULL;
@@ -1286,6 +1303,83 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     if (pthread_cond_broadcast(&s->credit) != 0) abort();
     unlock(s);
     return ORES_NATIVE_SEND_ACCEPTED;
+}
+
+OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async_with_wake(
+        OresNativeActorScheduler* s, OresNativeActorRef target,
+        uint64_t payload, OresNativeSelectToken select_token,
+        OresNativeSelectWakeTicket select_wake,
+        OresNativeAsyncSendTicket* out) {
+    if (!s || !out || !select_token.arbiter
+            || select_wake.arbiter != select_token.arbiter
+            || select_wake.selection_generation
+                != select_token.selection_generation)
+        return ORES_NATIVE_SEND_INVALID_REF;
+
+    const OresNativeSendStatus status =
+        ores_native_actor_scheduler_submit_selectable_async(
+            s, target, payload, select_token, out);
+
+    /*
+     * Immediate INVALID_REF/TERMINATED is a terminal selectable event and may
+     * have committed this arm without minting a descriptor. Publish the common
+     * generation wake directly in that case.
+     */
+    if (status != ORES_NATIVE_SEND_ACCEPTED) {
+        uint64_t winner = UINT64_MAX;
+        if ((status == ORES_NATIVE_SEND_INVALID_REF
+                    || status == ORES_NATIVE_SEND_TERMINATED)
+                && ores_native_select_winner(
+                    select_token.arbiter, &winner)
+                && winner == select_token.arm) {
+            const OresNativeWakePublishStatus published =
+                ores_native_actor_scheduler_publish_select_wake(
+                    s, select_wake, select_token);
+            if (published == ORES_NATIVE_WAKE_INVALID)
+                return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+        }
+        return status;
+    }
+
+    /*
+     * No external observer can know the newly minted ticket before this call
+     * returns, so descriptor identity cannot be released during this bind.
+     * Target credit/STOP may settle it concurrently; terminal winners publish
+     * the common wake here, while still-PENDING descriptors retain the wake
+     * for service_async_sends_locked().
+     */
+    lock(s);
+    AsyncSendCredit* credit = matching_async_send_locked(s, *out);
+    if (!credit || !credit->select_bound
+            || credit->select_token.arbiter != select_token.arbiter
+            || credit->select_token.selection_generation
+                != select_token.selection_generation
+            || credit->select_token.arm_generation
+                != select_token.arm_generation
+            || credit->select_token.arm != select_token.arm) {
+        unlock(s);
+        return ORES_NATIVE_SEND_INVALID_REF;
+    }
+
+    credit->select_wake = select_wake;
+    credit->select_wake_bound = 1;
+
+    if (credit->state == ORES_NATIVE_ASYNC_SEND_READY
+            || credit->state == ORES_NATIVE_ASYNC_SEND_FAILED) {
+        uint64_t winner = UINT64_MAX;
+        if (ores_native_select_winner(select_token.arbiter, &winner)
+                && winner == select_token.arm) {
+            const OresNativeWakePublishStatus published =
+                publish_select_wake_locked(
+                    s, select_wake, select_token);
+            if (published == ORES_NATIVE_WAKE_INVALID) {
+                unlock(s);
+                return ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
+            }
+        }
+    }
+    unlock(s);
+    return status;
 }
 
 int ores_native_actor_scheduler_async_send_status(
