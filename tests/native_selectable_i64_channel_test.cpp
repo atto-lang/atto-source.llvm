@@ -39,7 +39,7 @@ static auto bind_write(
         int& callbacks,
         typename Channel::WriteOutcome* outcome = nullptr) {
     return channel.subscribe_writable(
-        [&](const typename Channel::Subscription& subscription) {
+        [&, value](const typename Channel::Subscription& subscription) {
             ++callbacks;
             typename Channel::NotificationBatch notifications;
             auto committed = Channel::WriteOutcome::NotReady;
