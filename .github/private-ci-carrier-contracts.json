@@ -9,11 +9,30 @@
       "test_plans": {
         "ci/test-plans/llvm-pr669.json": {
           "blob_sha": "e20cd3b2a4d0c7224988b430d3209b6660486e65",
-          "allowed_prs": [669]
+          "allowed_prs": [
+            669
+          ]
         },
         "ci/test-plans/llvm-pr674.json": {
           "blob_sha": "7e68d0853d21e131a5870cc006dbf6691ace4878",
-          "allowed_prs": [674]
+          "allowed_prs": [
+            674
+          ]
+        }
+      }
+    },
+    "ores-otel-test/next-loggers-runtime-conformance": {
+      "repository_id": 1328290859,
+      "base_sha": "06c34a7194b2a52899ad402c9677daa3a2b6fea4",
+      "review_pr": 13,
+      "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
+      "workflow_blob_sha": "a3b70b07d3366316741e41c54773939ec2967f49",
+      "test_plans": {
+        "ci/test-plans/llvm-pr931.json": {
+          "blob_sha": "4febb9e06ae8892dea2c364c54ec7497ba91e539",
+          "allowed_prs": [
+            931
+          ]
         }
       }
     }

@@ -2,3 +2,5 @@
 # No repositories are approved by default.
 # Changes must be reviewed by maintainers and security owners on a protected branch.
 # Format: one exact owner/repo per uncommented line, no whitespace or wildcards.
+# HOLD candidate only: ores-otel-test/next-loggers-runtime-conformance
+# Keep commented until carrier PR #13 is independently approved and merged, its final main SHA is repinned here, source main protection is enforced, and P0 incident gates are complete.
