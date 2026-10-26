@@ -352,7 +352,7 @@ struct TypeConstraintDescriptor {
 enum class SourceExportScope { File, Package, Public };
 enum class SourceExportKind {
     Untyped, Module, Actor, Class, Fnc, Routine, Interface, Contract,
-    Trait, Type, Const, Val, Let, Symbol, Model
+    Trait, Struct, Type, Const, Val, Let, Symbol, Model
 };
 
 struct SourceExportItem {
