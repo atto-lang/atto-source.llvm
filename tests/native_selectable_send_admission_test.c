@@ -501,6 +501,13 @@ static void common_select_wake_fences_rearm_until_callback_exit(void) {
     CHECK(ores_native_select_active_tokens(&select) == 0);
     CHECK(ores_native_select_active_physical_loans(&select) == 1);
     CHECK(!ores_native_select_arbiter_rearm(&select, 601, 2));
+
+    /* Exact duplicate publication while the winning wake is already
+     * EXECUTING is idempotent: it neither queues a second callback nor fails
+     * the scheduler's winner path. */
+    CHECK(ores_native_actor_scheduler_publish_select_wake(
+        scheduler, common_wake, send_arm)
+        == ORES_NATIVE_WAKE_PUBLISHED);
     CHECK(atomic_load_explicit(
         &state.wake_count, memory_order_acquire) == 1);
 
@@ -805,6 +812,6 @@ int main(void) {
     physical_select_loan_fences_generation_rearm();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 common_wake=1 common_wake_idempotent=1 scheduler_token_handoff=1 sealed_no_publish=1 stale_bound_rearm=1 concurrent_winner=512 physical_rearm_fence=1 stale_generation=1");
     return 0;
 }
