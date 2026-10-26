@@ -945,6 +945,14 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_future_pipeline_ownership_contract
         COMMAND oreslang-future-pipeline-ownership-contract-test)
+    add_executable(oreslang-future-pipeline-authority-fingerprint-test
+        tests/future_pipeline_authority_fingerprint_test.cpp)
+    target_include_directories(oreslang-future-pipeline-authority-fingerprint-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-future-pipeline-authority-fingerprint-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_future_pipeline_post_ownership_rewrite_guard
+        COMMAND oreslang-future-pipeline-authority-fingerprint-test)
     add_executable(oreslang-quantum-circuit-test tests/quantum_circuit_lowering_test.cpp)
     target_include_directories(oreslang-quantum-circuit-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-quantum-circuit-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
