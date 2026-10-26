@@ -1694,6 +1694,23 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_async_send_future_fifo_and_lifecycle
         PROPERTIES TIMEOUT 90)
 
+    # First heterogeneous-select substrate for mailbox send. It reuses the
+    # scheduler's async-send descriptor and commits the common winner before
+    # enqueue, so losing arms never publish a message.
+    add_executable(oreslang-native-selectable-send-test
+        tests/native_selectable_send_admission_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-selectable-send-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-send-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-selectable-send-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-selectable-send-test PRIVATE Threads::Threads)
+    add_test(NAME native_selectable_send_winner_and_stop_linearization
+        COMMAND oreslang-native-selectable-send-test)
+    set_tests_properties(native_selectable_send_winner_and_stop_linearization
+        PROPERTIES TIMEOUT 90)
+
     # Frozen payload + exact target resource loan + transferred real envelope.
     # Host runtime only; source send_async lowering remains separately gated.
     add_executable(oreslang-native-async-envelope-ownership-test
