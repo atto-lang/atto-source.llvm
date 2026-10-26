@@ -23,6 +23,14 @@ class InvertedColumns;
 
 namespace detail {
 
+template<class T>
+inline constexpr bool inverted_scalar_field_v =
+        std::is_same_v<std::remove_cv_t<T>, std::int32_t>
+        || std::is_same_v<std::remove_cv_t<T>, std::int64_t>
+        || std::is_same_v<std::remove_cv_t<T>, float>
+        || std::is_same_v<std::remove_cv_t<T>, double>
+        || std::is_same_v<std::remove_cv_t<T>, bool>;
+
 /**
  * One process-wide owner sequence shared by every inverted-column field pack.
  * The counter is not host-mutable: only InvertedColumns can allocate IDs.
@@ -51,15 +59,11 @@ private:
 template<class... Fields>
 class InvertedColumns {
     static_assert(sizeof...(Fields) != 0, "an inverted class needs at least one field");
-    static_assert(((std::is_arithmetic_v<Fields> || std::is_enum_v<Fields>
+    static_assert(((detail::inverted_scalar_field_v<Fields>
                     || detail::is_fixed_record_v<Fields>) && ...),
-                  "phase-one columns only support pointer-free arithmetic, enum, or FixedRecord fields");
+                  "phase-one columns only support i32/i64/f32/f64/bool or FixedRecord fields");
     static_assert((std::is_trivially_copyable_v<Fields> && ...),
                   "phase-one columns require trivial field copies");
-    static_assert(((detail::is_fixed_record_v<Fields>
-                    || sizeof(Fields) == 1 || sizeof(Fields) == 2
-                    || sizeof(Fields) == 4 || sizeof(Fields) == 8) && ...),
-                  "scalar column cells must have a fixed 1/2/4/8 byte width");
     static constexpr std::size_t field_count = sizeof...(Fields);
     // vector<bool> is bit-packed and has no data() span; represent bool
     // as canonical 0/1 bytes in the initial SoA ABI instead.
