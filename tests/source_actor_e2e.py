@@ -39,7 +39,7 @@ def expected_prefix_last(name, actor_index, processed):
 
 def llvm_function_body(ir, marker):
     definition = re.search(
-        r"^define\\s+[^\\n{]*" + re.escape(marker) + r"[^\\n{]*\\{",
+        r"^define\s+[^\n{]*" + re.escape(marker) + r"[^\n{]*\{",
         ir,
         re.MULTILINE,
     )
