@@ -1,5 +1,9 @@
 async fnc source(): int {
-    return 21;
+    return 20;
+}
+
+fnc plus_one(int value): int {
+    return value + 1;
 }
 
 fnc twice(int value): int {
@@ -7,7 +11,7 @@ fnc twice(int value): int {
 }
 
 pub fnc main(): int {
-    let Future<int> pending = rt take source() |> twice();
+    let Future<int> pending = rt take source() |> plus_one() |> twice();
     let int result = await pending;
     return result;
 }
