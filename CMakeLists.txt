@@ -3934,3 +3934,20 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
 endif()
 
+# Stacked on the native select arbiter: bounded i64 channel readiness
+# subscriptions and atomic read/write commit. Still host/runtime-only; source
+# Channel<T>/select parsing remains fail-closed until compiler lowering exists.
+if(BUILD_TESTING)
+    add_executable(oreslang-native-selectable-i64-channel-test
+        tests/native_selectable_i64_channel_test.cpp)
+    target_include_directories(oreslang-native-selectable-i64-channel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-i64-channel-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-selectable-i64-channel-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_selectable_i64_channel_commit_and_rollback
+        COMMAND oreslang-native-selectable-i64-channel-test)
+    set_tests_properties(native_selectable_i64_channel_commit_and_rollback
+        PROPERTIES TIMEOUT 30)
+endif()
+
