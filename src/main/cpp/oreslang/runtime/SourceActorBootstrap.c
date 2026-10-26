@@ -767,7 +767,8 @@ static void root_select_suspend_turn(void) {
                 (void)ores_native_vm_cancel_async_send(
                     group.vm, ORES_NATIVE_VM_MAIN, frame->sends[i]);
         }
-        (void)ores_native_select_seal(&frame->arbiter);
+        (void)ores_native_select_seal(
+            &frame->arbiter, frame->selection_generation);
         if (frame->wake_reserved) {
             ensure(ores_native_vm_cancel_select_wake(
                 group.vm, ORES_NATIVE_VM_MAIN, frame->common_wake));
