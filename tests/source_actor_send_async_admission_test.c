@@ -542,6 +542,69 @@ static void detached_future_releases_guest_stack_before_admission(void) {
         "fresh_root_turn=1 final_join=1\n");
 }
 
+typedef struct {
+    atomic_int started;
+    int status;
+    int64_t result;
+} DetachedWaitThread;
+
+static void* wait_detached_result_thread(void* raw) {
+    DetachedWaitThread* state = (DetachedWaitThread*)raw;
+    atomic_store_explicit(&state->started, 1, memory_order_release);
+    state->status =
+        oreslang_source_actor_wait_detached_send_result(&state->result);
+    return NULL;
+}
+
+static void detached_result_finalizer_is_single_consumer(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 917, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+    atomic_store_explicit(
+        &detached_send_resume_seen, 0, memory_order_release);
+
+    CHECK(oreslang_source_actor_detach_send_future_checked(
+        future,
+        detached_send_resume_probe,
+        UINT64_C(0x5ef5)) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+
+    DetachedWaitThread first = {.status = -1, .result = -1};
+    atomic_init(&first.started, 0);
+    pthread_t first_waiter;
+    CHECK(pthread_create(
+        &first_waiter, NULL, wait_detached_result_thread, &first) == 0);
+    while (!atomic_load_explicit(&first.started, memory_order_acquire))
+        sched_yield();
+    while (!oreslang_source_actor_test_detached_finalizer_claimed())
+        sched_yield();
+
+    int64_t duplicate_result = -1;
+    CHECK(oreslang_source_actor_wait_detached_send_result(&duplicate_result)
+        == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+    CHECK(duplicate_result == 0);
+    CHECK(oreslang_source_actor_test_future_consuming(future));
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    CHECK(pthread_join(first_waiter, NULL) == 0);
+    CHECK(first.status == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(first.result == 4321);
+    CHECK(atomic_load_explicit(
+        &detached_send_resume_seen, memory_order_acquire) == 1);
+
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_DETACHED_FINALIZER_PASS single_consumer=1 duplicate_rejected=1 final_join=1\n");
+}
+
 static atomic_int teardown_resume_entered;
 static atomic_int release_teardown_resume;
 
@@ -935,6 +998,7 @@ int main(void) {
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
     detached_future_releases_guest_stack_before_admission();
+    detached_result_finalizer_is_single_consumer();
     live_future_fences_actor_teardown_through_wake_exit();
     failed_stored_future_resumes_only_for_trace_cleanup();
     detached_pending_stop_skips_guest_and_joins();
