@@ -177,6 +177,23 @@ struct ActorSend {
     // can yet materialize a general storable Future<void> value.
     bool await_admission = false;
 };
+
+/* First executable native source-select slice: exactly two selectable
+ * ActorRef.send_async(i64) arms in trusted zero-argument main. Payloads/results
+ * are Copy scalar trees; each arm explicitly stops both actor refs before its
+ * terminal scalar return. General Selectable<T>/Channel/stream lowering stays
+ * fail-closed. */
+struct NativeSelectSendArm {
+    std::string actor;
+    std::unique_ptr<Expression> payload;
+    std::vector<std::string> stops;
+    std::unique_ptr<Expression> result;
+    std::size_t offset = 0;
+};
+struct NativeSelectSend2 {
+    std::vector<NativeSelectSendArm> arms;
+    std::size_t offset = 0;
+};
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
@@ -292,6 +309,7 @@ struct Function {
     std::size_t send_future_await_offset = 0;
     std::size_t send_future_await_action_index = 0;
     std::vector<NativeAwaitSite> await_sites;
+    std::unique_ptr<NativeSelectSend2> select_send2;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<ActorAction> actor_actions; // source order of send/stop
