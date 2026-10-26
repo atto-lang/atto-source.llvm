@@ -761,7 +761,6 @@ group_done:;
                  !program.actors.empty() || !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
-        resolve_source_exports(program);
         program.sum_types = std::move(sum_types_);
         return program;
     }
