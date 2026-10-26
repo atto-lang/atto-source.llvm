@@ -51,4 +51,11 @@ This does **not** yet implement the general Java/Graal Future pipeline contract.
 
 The direct `rt take source()` spelling in this first slice records consuming root shape but does not pretend that a named Future binding has passed the ordinary lexical move checker. That parity step must land before named consuming roots are admitted.
 
-The scheduler-backed source path is implementation-complete on this branch but is not yet execution-verified at the current head: source-org Actions jobs terminate before steps, and the connector safety gate blocked completing an exact private compiler mirror in the alternate runner. The previously executed contract-only evidence remains valid for the unchanged proof contract; end-to-end `.ores -> LLVM -> linked native` evidence is still required before this source slice can be called verified.
+This narrow source path is execution-verified on the private exact-blob carrier without cross-org checkout credentials. The carrier verifies every mirrored source blob by Git SHA before building the real `oreslang-llvmc`, compiling the canonical `.ores` fixture, linking its emitted LLVM IR with `SourceTaskRuntime` and `NativeActorScheduler`, and executing the native result. The verified path returns 42 and passes both ordinary and ASan/UBSan linked-native execution.
+
+The execution audit also found and fixed two bugs that host-only contract tests did not expose:
+
+- Future-await result locals deliberately have no scalar initializer because codegen supplies the awaited value. Scalar type validation previously dereferenced that null initializer; it now recognizes both Task and Future await-result bindings explicitly and fails closed on malformed async-result locals.
+- `SourceTaskRuntime` previously released its global runtime lock after validating a Task pointer but before acquiring the Task mutex. Concurrent shutdown could reclaim the Task in that gap. Awaiters now take an in-flight lease under the runtime lock, shutdown closes new admission and waits for those leases to quiesce before destroying Task synchronization state, and the regression suite races duplicate await against shutdown repeatedly under sanitizers.
+
+Source-org Actions failures that terminate before runner steps remain infrastructure failures, not compiler evidence.
