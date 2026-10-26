@@ -5163,8 +5163,11 @@ void resolve_and_validate_program(Program& program) {
     resolve_native_sums(program);
     resolve_future_pipeline_contracts(program);
     Parser::validate_complete(program);
-    validate_i64_ownership(program);
     validate_native_scalar_types(program);
+    // Ownership is deliberately last: successful completion publishes the
+    // lowering authority consumed by Future-pipeline codegen. No later
+    // compiler validation may fail while leaving that authority live.
+    validate_i64_ownership(program);
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
