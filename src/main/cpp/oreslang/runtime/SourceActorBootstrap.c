@@ -1507,10 +1507,11 @@ static int detach_send_future_impl(
     SourceSendFuture* future = (SourceSendFuture*)opaque_future;
     if (!future || ((continuation != NULL) == (state_continuation != NULL)))
         return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
-    if (state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS
-            || (state_count != 0 && state == NULL)
-            || (state_continuation == NULL && state_count != 0))
+    if (state_count > ORES_SOURCE_DETACHED_SCALAR_WORDS)
         return ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+    if ((state_count != 0 && state == NULL)
+            || (state_continuation == NULL && state_count != 0))
+        return ORES_SOURCE_SEND_ASYNC_INVALID_REF;
     if (ores_native_actor_scheduler_is_carrier_thread())
         return ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK;
 
