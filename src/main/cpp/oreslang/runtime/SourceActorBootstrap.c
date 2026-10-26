@@ -1095,6 +1095,11 @@ int oreslang_source_actor_await_send_future_continuation_checked(
         && source_send_future_valid_locked(future)
         && future->actor == actor);
     frame.outcome = (int)outcome;
+    /* The logical suspension must become READY before the actor Future
+     * publishes its CONTROL resume. Otherwise ready_resume_begin observes a
+     * still-PENDING continuation and aborts despite a settled send. */
+    ensure(ores_native_continuation_store_notify_ready(
+        group.continuations, frame.link.continuation));
     ensure(ores_native_actor_future_status(frame.resume_future)
         == ORES_NATIVE_FUTURE_PENDING);
     ensure(ores_native_actor_future_complete(
