@@ -725,6 +725,16 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Source-level compiler admission, not a host-only borrow model:
+    # invalid programs must exit before emitting any LLVM IR. A positive
+    # scalar shared-loan control detects unconditional compiler rejection.
+    add_test(NAME native_compile_time_borrow_escape_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_borrow_admission.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_compile_time_borrow_escape_admission
+        PROPERTIES TIMEOUT 90)
+
     add_test(NAME native_shared_borrow_contract
         COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-native-borrow-alias-matrix"
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_CLANG}"

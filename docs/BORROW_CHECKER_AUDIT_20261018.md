@@ -33,3 +33,18 @@ and sanitizer cases. The common 18-case corpus SHA-256 is
 `cc42b9bd3c4ff27033eecb526aae25e29bf8d176915ff0fd9e6abe33167f9cbe`.
 This audit's new changes have local evidence; earlier fallback CI results apply
 only to their recorded source commits, not automatically to this head.
+
+
+## 2026-10-26 static escape regression gate (draft)
+
+`native_compile_time_borrow_escape_admission` registers the existing native
+source harness in CTest, adds by-value call/constructor loan rejection cases,
+and adds a negative generator feature gate. It requires each rejected source
+file to produce nonzero compiler status, no stdout/LLVM IR, and a diagnostic.
+It also requires a valid synchronous shared scalar loan to emit LLVM IR,
+preventing an unconditional-rejection mock compiler from passing.
+
+This is **not** evidence that native generator lifetime checking is
+implemented: generators are deliberately unsupported by the native
+frontend. Nor does this gate prove Java/Graal parity or runtime zero overhead.
+Exact-head CMake/CTest execution and sanitizer runs are required before merge.
