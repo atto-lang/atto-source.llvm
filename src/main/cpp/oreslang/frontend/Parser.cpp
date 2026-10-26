@@ -244,7 +244,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -372,6 +372,7 @@ struct NativeCallSignature {
     std::vector<bool> parameter_is_scalar;
     ScalarType return_type = ScalarType::I64;
     bool returns_void = false;
+    bool async_source_i64 = false;
 };
 using NativeSignatures = std::unordered_map<
     std::string, std::unordered_map<std::size_t, NativeCallSignature>>;
@@ -1568,6 +1569,8 @@ private:
                 extension_receiver_alias_, extension_method_name_);
         } else {
             value.exported = owner.empty() ? accept("pub") : visible;
+        const bool source_async = owner.empty() && accept("async");
+        value.async_source_i64 = source_async;
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -1591,7 +1594,12 @@ private:
             token_.text == "generator" || token_.text == "isoactor") {
             fail("native actor/async declaration requires actor frames, suspension-aware borrow checking and LLVM lowering");
         }
-        if (owner.empty() && !accept("fnc") && !accept("routine")) fail("expected fnc or routine");
+        if (source_async) {
+            if (!accept("fnc"))
+                fail("native first async Future<int> producer requires async fnc");
+        } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
+            fail("expected fnc or routine");
+        }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
@@ -1826,6 +1834,62 @@ private:
             value.source_tasks.push_back(std::move(task));
             return true;
         };
+        auto source_future_pipeline_local = [&]() {
+            if (!((token_.text == "let" || token_.text == "val" ||
+                    token_.text == "const") && peek_next().text == "Future"))
+                return false;
+            Lexer look = lexer_;
+            const auto future = look.next();
+            const auto open = look.next();
+            const auto payload = look.next();
+            if (future.text != "Future" || open.text != "<" ||
+                    payload.text != "int")
+                return false;
+            if (!owner.empty() || value.name != "main" ||
+                    !value.parameters.empty())
+                fail("native Future<int> pipeline v1 requires zero-argument top-level main");
+            if (!value.future_pipelines.empty() || !value.source_tasks.empty())
+                fail("native Future<int> pipeline v1 supports exactly one live Future");
+            if (!value.locals.empty() || !value.actor_spawns.empty() ||
+                    !value.ready_future_name.empty())
+                fail("native Future<int> pipeline v1 must be the first lexical binding");
+
+            SourceFuturePipelineI64Binding pipeline;
+            pipeline.offset = token_.offset;
+            advance();
+            require("Future");
+            require("<");
+            require("int");
+            require(">");
+            pipeline.name = identifier();
+            require("=");
+
+            if (accept("rt")) {
+                require("take");
+                pipeline.root_consumed = true;
+                if (token_.text == "(")
+                    fail("taking an already-lifted pipeline is not yet supported");
+            }
+
+            pipeline.producer_function = identifier();
+            require("(");
+            require(")");
+            if (token_.text != "|>")
+                fail("native Future<int> pipeline v1 requires at least one |> stage");
+            while (accept("|>")) {
+                if (pipeline.stages.size() >= 128)
+                    fail("Future pipeline exceeds 128 stages");
+                pipeline.stages.push_back(identifier());
+                if (accept("(")) {
+                    if (token_.text != ")")
+                        fail("native Future<int> pipeline stage requires no extra arguments");
+                    require(")");
+                }
+            }
+            require(";");
+            value.future_pipelines.push_back(std::move(pipeline));
+            return true;
+        };
         auto ready_future_local = [&]() {
             if (!((token_.text == "const" || token_.text == "val") &&
                     peek_next().text == "Future")) return false;
@@ -1859,6 +1923,7 @@ private:
             // No scalar/object borrow crosses this suspension, and general
             // Future<T> / async lowering must remain fail-closed.
             if (source_task_local()) continue;
+            if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
             LocalBinding binding;
             binding.offset = token_.offset;
@@ -1873,25 +1938,39 @@ private:
                 binding.name = identifier();
                 require("=");
                 if (accept("await")) {
-                    if (binding.scalar_type != ScalarType::I64 ||
-                            value.source_tasks.empty())
-                        fail("native Task<int> await requires an int result binding");
+                    if (binding.scalar_type != ScalarType::I64)
+                        fail("native scalar await requires an int result binding");
                     if (!value.locals.empty())
-                        fail("native Task<int> v1 await must immediately consume the first Task");
-                    const std::string task_name = identifier();
+                        fail("native first async slice requires await to immediately consume its Future/Task");
+                    const std::string awaited_name = identifier();
                     auto task = std::find_if(
                         value.source_tasks.begin(), value.source_tasks.end(),
                         [&](const SourceTaskI64Binding& item) {
-                            return item.name == task_name;
+                            return item.name == awaited_name;
                         });
-                    if (task == value.source_tasks.end())
-                        fail("await requires the live source Task<int> binding");
-                    if (binding.name == task_name)
-                        fail("Task<int> await result cannot shadow its Task binding");
-                    if (task->awaited)
-                        fail("source Task<int> must be awaited exactly once");
-                    task->awaited = true;
-                    binding.task_await_name = task_name;
+                    if (task != value.source_tasks.end()) {
+                        if (binding.name == awaited_name)
+                            fail("Task<int> await result cannot shadow its Task binding");
+                        if (task->awaited)
+                            fail("source Task<int> must be awaited exactly once");
+                        task->awaited = true;
+                        binding.task_await_name = awaited_name;
+                    } else {
+                        auto pipeline = std::find_if(
+                            value.future_pipelines.begin(),
+                            value.future_pipelines.end(),
+                            [&](const SourceFuturePipelineI64Binding& item) {
+                                return item.name == awaited_name;
+                            });
+                        if (pipeline == value.future_pipelines.end())
+                            fail("await requires the live source Future<int> pipeline binding");
+                        if (binding.name == awaited_name)
+                            fail("Future<int> await result cannot shadow its Future binding");
+                        if (pipeline->awaited)
+                            fail("source Future<int> pipeline must be awaited exactly once");
+                        pipeline->awaited = true;
+                        binding.future_await_name = awaited_name;
+                    }
                 } else {
                     binding.initializer = expression();
                 }
@@ -3633,6 +3712,10 @@ private:
                     throw std::runtime_error("unknown function or wrong call arity '" +
                         expr.name + "' at byte " + std::to_string(expr.offset));
                 const auto& signature = family->second.at(expr.arguments.size());
+                if (signature.async_source_i64)
+                    throw std::runtime_error(
+                        "async source call requires checked Future<int> pipeline lowering at byte " +
+                        std::to_string(expr.offset));
                 std::vector<bool> bound(signature.parameters.size(), false);
                 std::size_t positional = 0;
                 bool named_seen = false;
@@ -3910,6 +3993,7 @@ private:
             }
             signature.return_type = fn.return_type;
             signature.returns_void = fn.returns_void;
+            signature.async_source_i64 = fn.async_source_i64;
             if (!functions[fn.name].emplace(fn.parameters.size(), std::move(signature)).second)
                 throw std::runtime_error("function '" + fn.name + "' already has arity "
                     + std::to_string(fn.parameters.size()) +
@@ -4192,6 +4276,16 @@ private:
                     if (!task_exists)
                         throw std::runtime_error(
                             "native Task<int> await lost producer provenance");
+                } else if (!binding.future_await_name.empty()) {
+                    const bool future_exists = std::any_of(
+                        fn.future_pipelines.begin(), fn.future_pipelines.end(),
+                        [&](const SourceFuturePipelineI64Binding& pipeline) {
+                            return pipeline.name == binding.future_await_name &&
+                                pipeline.awaited;
+                        });
+                    if (!future_exists)
+                        throw std::runtime_error(
+                            "native Future<int> await lost pipeline provenance");
                 } else {
                     validate_expression(*binding.initializer, params, functions);
                 }
