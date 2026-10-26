@@ -681,6 +681,97 @@ static void source_send_wake(
 
     group_lock();
     ensure(frame == group.pending_send && !frame->done);
+
+    if (frame->rearm_requested) {
+        if (frame->rearm_terminal) {
+            /*
+             * The next PC failed before a descriptor/wake pair could become
+             * authoritative. Preserve that exact failure for the outer host;
+             * the current descriptor remains the frame's final cleanup owner.
+             */
+            frame->result = 0;
+            frame->outcome = frame->rearm_outcome;
+            frame->done = 1;
+            ensure(pthread_cond_signal(&frame->completed) == 0);
+            group_unlock();
+            return;
+        }
+
+        SourceSendFuture* previous = frame->send_future;
+        SourceSendFuture* next = frame->next_send_future;
+        SourceActor* rearm_actor = frame->actor;
+        ensure(previous && next && previous != next);
+        ensure(source_send_future_valid_locked(previous)
+            && previous->consuming && previous->actor == rearm_actor);
+        ensure(source_send_future_valid_locked(next)
+            && next->consuming && next->actor == rearm_actor);
+        ensure(frame->next_state_continuation != NULL
+            && frame->next_state_count <= ORES_SOURCE_DETACHED_SCALAR_WORDS
+            && ores_native_store_handle_valid(
+                frame->next_link.continuation));
+        group_unlock();
+
+        /*
+         * The old descriptor is terminal and its wake is executing now. Drop
+         * that Future before exposing the next PC in the shared frame.
+         */
+        retire_consuming_send_future_terminal(previous, rearm_actor);
+
+        group_lock();
+        ensure(frame == group.pending_send && !frame->done
+            && frame->rearm_requested && !frame->rearm_terminal);
+        ensure(frame->next_send_future == next
+            && source_send_future_valid_locked(next)
+            && next->consuming && next->actor == rearm_actor);
+
+        frame->send_future = next;
+        frame->continuation = NULL;
+        frame->state_continuation = frame->next_state_continuation;
+        frame->detached_state_count = frame->next_state_count;
+        for (uint64_t i = 0; i < frame->next_state_count; ++i)
+            frame->detached_state[i] = frame->next_state[i];
+        frame->source_token = frame->next_source_token;
+        frame->link = frame->next_link;
+        ++frame->pc;
+        ensure(frame->pc < ORES_SOURCE_DETACHED_MAX_PCS);
+        frame->suspend_recorded = 1;
+        frame->wake_bound = 0;
+        frame->outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+
+        frame->rearm_requested = 0;
+        frame->rearm_terminal = 0;
+        frame->rearm_outcome = ORES_SOURCE_SEND_ASYNC_INVALID_REF;
+        frame->next_send_future = NULL;
+        frame->next_state_continuation = NULL;
+        frame->next_source_token = 0;
+        frame->next_state_count = 0;
+        frame->next_link = (OresNativeSuspensionLink){0};
+
+        OresNativeWakeTicket next_wake = {0};
+        if (ores_native_vm_bind_async_send_wake(
+                group.vm,
+                ORES_NATIVE_VM_MAIN,
+                frame->send_future->ticket,
+                group.root_ref,
+                frame->link.continuation.slot,
+                frame->link.continuation.generation,
+                1,
+                &next_wake)) {
+            frame->wake_bound = 1;
+        } else {
+            /*
+             * The next logical suspension exists but no scheduler wake was
+             * reserved. Outer-host finalization cancels/releases both the
+             * descriptor and this still-PENDING continuation exactly once.
+             */
+            frame->outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+            frame->done = 1;
+            ensure(pthread_cond_signal(&frame->completed) == 0);
+        }
+        group_unlock();
+        return;
+    }
+
     frame->result = result;
     frame->done = 1;
     ensure(pthread_cond_signal(&frame->completed) == 0);
@@ -1490,7 +1581,7 @@ int oreslang_source_actor_rearm_detached_send_state_checked(
     group_lock();
     SendAwaitFrame* frame = group.pending_send;
     if (frame != &group.detached_send || !frame->detached || frame->done
-            || frame->finalizer_claimed || frame->rearm_requested
+            || frame->rearm_requested
             || frame->actor != actor
             || actor->magic != SOURCE_ACTOR_MAGIC
             || frame->pc + 1u >= ORES_SOURCE_DETACHED_MAX_PCS
