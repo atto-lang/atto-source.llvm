@@ -46,6 +46,25 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Explicit source exports are language metadata, not native linker exports.
+    # This target exercises the production native parser/resolver directly.
+    add_executable(oreslang-native-explicit-exports-test
+        tests/native_explicit_exports_test.cpp
+        src/main/cpp/oreslang/frontend/Parser.cpp
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-explicit-exports-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-explicit-exports-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-explicit-exports-test PRIVATE ${ORE_LLVM_LIBS})
+    add_test(NAME native_explicit_export_parser_binding_contract
+        COMMAND oreslang-native-explicit-exports-test)
+    set_tests_properties(native_explicit_export_parser_binding_contract
+        PROPERTIES TIMEOUT 30)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
