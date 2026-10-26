@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <stdexcept>
 
 namespace oreslang::runtime {
@@ -28,18 +27,14 @@ public:
         if (!native.scheduler_domain || !native.generation)
             throw std::logic_error("scheduled actor spawn rejected");
         try {
-            auto ref = group.adopt(
+            return group.adopt(
                     group.runtime_id(), routing_label, native.generation,
                     [scheduler, native] {
                         (void)ores_native_actor_scheduler_stop(
                                 scheduler, native);
-                    });
-            {
-                std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
-                ref.ticket_->scheduler = scheduler;
-                ref.ticket_->scheduler_actor = native;
-            }
-            return ref;
+                    },
+                    scheduler,
+                    native);
         } catch (...) {
             (void)ores_native_actor_scheduler_stop(scheduler, native);
             throw;
