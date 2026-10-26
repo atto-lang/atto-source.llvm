@@ -164,6 +164,12 @@ private:
         std::vector<ReadyContinuation> waiters;
         std::vector<DoneContinuation> done_waiters;
         ActorDoneResult done_result;
+        // Once physical finalization seals resource admission, the first
+        // requested terminal failure is immutable across retry. Settlement
+        // allocation failure must never let a later retry rewrite failure
+        // into success or a different error.
+        bool terminal_failure_committed = false;
+        std::string terminal_failure;
         std::promise<void> ready_promise;
         std::promise<void> done_promise;
         std::shared_future<void> ready_future = ready_promise.get_future().share();
@@ -469,6 +475,10 @@ public:
                     return false;
             }
             try {
+                // The first terminal outcome becomes immutable at the same
+                // sealed-resource boundary. A later retry may omit or change
+                // its argument, but cannot rewrite the original outcome.
+                failure = commit_terminal_failure(ref, std::move(failure));
                 // Close may settle readiness after detaching the worker table,
                 // outside the group lock. The ticket mutex decides the winner.
                 ActorReadyResult rejected{false,
@@ -682,6 +692,9 @@ private:
                     return false;
             }
             try {
+                // Preserve the first terminal outcome even if promise/error
+                // staging allocates and this finalization attempt must retry.
+                failure = commit_terminal_failure(ref, std::move(failure));
                 ActorReadyResult rejected{false,
                     failure.empty() ? "actor terminated before ready" : failure};
                 callbacks = settle_ticket(ref, std::move(rejected));
@@ -704,6 +717,20 @@ private:
         notify(callbacks, ref.ticket_->result);
         notify_done(done_callbacks, ref.ticket_->done_result);
         return true;
+    }
+
+    static std::string commit_terminal_failure(
+            const NativeActorRef& ref, std::string failure) {
+        std::lock_guard<std::mutex> guard(ref.ticket_->mutex);
+        if (!ref.ticket_->terminal_failure_committed) {
+            // swap is non-allocating for std::string and therefore commits
+            // the caller's already-owned bytes before any retryable staging.
+            ref.ticket_->terminal_failure.swap(failure);
+            ref.ticket_->terminal_failure_committed = true;
+        }
+        // This copy may allocate; that is intentional. If it throws, the
+        // canonical failure is already durable on the generation ticket.
+        return ref.ticket_->terminal_failure;
     }
 
     static std::vector<NativeActorRef::ReadyContinuation> settle_ticket(

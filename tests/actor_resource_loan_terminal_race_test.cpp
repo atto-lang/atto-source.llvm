@@ -153,7 +153,8 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         auto future = NativeScalarFutureAwait::open(actor, 1);
         CHECK(future->complete(future->id(), 41));
 
-        std::string injected_failure(512, 'x');
+        const std::string expected_failure(512, 'x');
+        std::string injected_failure = expected_failure;
         bool threw = false;
         fail_after_allocations.store(0, std::memory_order_release);
         try {
@@ -203,12 +204,14 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         CHECK(!group.has_pending_control(actor));
         CHECK(resumed == 0);
 
-        std::string retry_failure(512, 'y');
-        CHECK(group.finalized(actor, std::move(retry_failure)));
-        bool done_failed = false;
+        // Retry with no error: the first sealed outcome must remain sticky.
+        CHECK(group.finalized(actor));
+        bool done_failed_exactly = false;
         try { actor.get_done().get(); }
-        catch (const std::runtime_error&) { done_failed = true; }
-        CHECK(done_failed);
+        catch (const std::runtime_error& e) {
+            done_failed_exactly = std::string(e.what()) == expected_failure;
+        }
+        CHECK(done_failed_exactly);
     }
 
     {
@@ -218,7 +221,8 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         auto finalizer = group.runtime_finalizer(actor);
         group.close();
 
-        std::string injected_failure(512, 'z');
+        const std::string expected_failure(512, 'z');
+        std::string injected_failure = expected_failure;
         bool threw = false;
         fail_after_allocations.store(0, std::memory_order_release);
         try {
@@ -235,12 +239,13 @@ static void settlement_failure_keeps_terminal_resource_seal_retryable() {
         CHECK(loan_rejected);
         CHECK(actor.outstanding_resource_loans() == 0);
 
-        std::string retry_failure(512, 'q');
-        CHECK(finalizer.finalized(std::move(retry_failure)));
-        bool done_failed = false;
+        CHECK(finalizer.finalized());
+        bool done_failed_exactly = false;
         try { actor.get_done().get(); }
-        catch (const std::runtime_error&) { done_failed = true; }
-        CHECK(done_failed);
+        catch (const std::runtime_error& e) {
+            done_failed_exactly = std::string(e.what()) == expected_failure;
+        }
+        CHECK(done_failed_exactly);
     }
 }
 
@@ -248,7 +253,8 @@ static void failed_startup_finalization_cannot_resurrect_ready() {
     NativeActorGroup group(191006, 1);
     auto actor = group.adopt(191006, 203, 1, [] {});
 
-    std::string injected_failure(512, 's');
+    const std::string expected_failure(512, 's');
+    std::string injected_failure = expected_failure;
     bool threw = false;
     fail_after_allocations.store(0, std::memory_order_release);
     try {
@@ -266,18 +272,21 @@ static void failed_startup_finalization_cannot_resurrect_ready() {
     // waiting for its serialized retry.
     CHECK(!group.mark_ready(actor));
 
-    std::string retry_failure(512, 't');
-    CHECK(group.finalized(actor, std::move(retry_failure)));
+    CHECK(group.finalized(actor));
 
-    bool ready_failed = false;
+    bool ready_failed_exactly = false;
     try { actor.get_ready().get(); }
-    catch (const std::runtime_error&) { ready_failed = true; }
-    CHECK(ready_failed);
+    catch (const std::runtime_error& e) {
+        ready_failed_exactly = std::string(e.what()) == expected_failure;
+    }
+    CHECK(ready_failed_exactly);
 
-    bool done_failed = false;
+    bool done_failed_exactly = false;
     try { actor.get_done().get(); }
-    catch (const std::runtime_error&) { done_failed = true; }
-    CHECK(done_failed);
+    catch (const std::runtime_error& e) {
+        done_failed_exactly = std::string(e.what()) == expected_failure;
+    }
+    CHECK(done_failed_exactly);
 }
 
 static void every_finalization_allocation_failure_is_retryable() {
@@ -295,7 +304,8 @@ static void every_finalization_allocation_failure_is_retryable() {
             300 + static_cast<std::uint64_t>(fail_index), 1, [] {});
         CHECK(group.mark_ready(actor));
 
-        std::string failure(512, 'f');
+        const std::string expected_failure(512, 'f');
+        std::string failure = expected_failure;
         bool injected = false;
         bool finalized = false;
         fail_after_allocations.store(fail_index, std::memory_order_release);
@@ -314,17 +324,18 @@ static void every_finalization_allocation_failure_is_retryable() {
             CHECK(loan_rejected);
             CHECK(actor.outstanding_resource_loans() == 0);
 
-            std::string retry_failure(512, 'r');
-            CHECK(group.finalized(actor, std::move(retry_failure)));
+            CHECK(group.finalized(actor));
         } else {
             CHECK(finalized);
             saw_success_after_window = true;
         }
 
-        bool done_failed = false;
+        bool done_failed_exactly = false;
         try { actor.get_done().get(); }
-        catch (const std::runtime_error&) { done_failed = true; }
-        CHECK(done_failed);
+        catch (const std::runtime_error& e) {
+            done_failed_exactly = std::string(e.what()) == expected_failure;
+        }
+        CHECK(done_failed_exactly);
 
         if (saw_injected_failure && saw_success_after_window) break;
     }
