@@ -32,12 +32,12 @@ CASES = {
     ),
     # Constructor by-value field initialization is an ownership transfer.
     "borrow-to-owned-constructor": (
-        "define class Box as\n  pub val int value;\nend\npub fnc main(int v): int { val Box box = new Box(rt borrow v); return box.value; }\n",
+        "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(int v): int { let Box box = new Box(rt borrow v); return box.read(); }\n",
         "borrow",
     ),
     # The native generator frontend does not implement lexical loans yet.
     "generator-yield-loan-unsupported": (
-        "fnc gen* values(): Iterator<int> { let int x = 1; yield rt borrow x; return; }\n",
+        "generator fnc values(): int { let int x = 1; yield rt borrow x; return; }\n",
         "native actor/async declaration requires",
     ),
 }
