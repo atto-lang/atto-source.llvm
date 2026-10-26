@@ -582,9 +582,14 @@ public:
                     worker.phase = Phase::stopping;
             }
         }
+        // Physical shutdown progress must not depend on subscriber behavior.
+        // Dispatch the idempotent stop requests before invoking readiness
+        // callbacks: a host callback may block indefinitely, and concurrent
+        // close() deliberately does not re-dispatch a worker already marked
+        // stopping.
+        request_stops(stops);
         for (auto& rejection : rejections)
             notify(rejection.callbacks, rejection.ref.ticket_->result);
-        request_stops(stops);
     }
 
     /**

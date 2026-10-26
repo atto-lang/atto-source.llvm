@@ -480,6 +480,56 @@ static void stop_workers_allocation_failure_keeps_waiters_retryable() {
     CHECK(successful_attempts > 0);
 }
 
+static void stop_workers_dispatches_before_blocking_ready_callback() {
+    NativeActorGroup group(194100, 1);
+    std::atomic<int> stops{0};
+    std::atomic<int> callback_started{0};
+    std::atomic<int> callback_release{0};
+    std::atomic<int> bad_result{0};
+
+    auto actor = group.adopt(194100, 901, 1, [&] {
+        stops.fetch_add(1, std::memory_order_acq_rel);
+    });
+    auto finalizer = group.runtime_finalizer(actor);
+
+    actor.when_ready([&](const auto& result) {
+        if (result.ready || result.error != "worker stopped before ready")
+            bad_result.store(1, std::memory_order_release);
+        callback_started.store(1, std::memory_order_release);
+        while (!callback_release.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    });
+
+    std::thread stopper([&] { group.stop_workers(); });
+    while (!callback_started.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    // Capture progress while the subscriber is deliberately blocked. close()
+    // races this window and must not be the mechanism that rescues shutdown:
+    // the stop request must already have been dispatched by stop_workers().
+    const int stops_before_close = stops.load(std::memory_order_acquire);
+    group.close();
+    const int stops_after_close = stops.load(std::memory_order_acquire);
+
+    callback_release.store(1, std::memory_order_release);
+    stopper.join();
+
+    CHECK(!bad_result.load(std::memory_order_acquire));
+    CHECK(stops_before_close == 1);
+    CHECK(stops_after_close == 1);
+    CHECK(stops.load(std::memory_order_acquire) == 1);
+    CHECK(actor.delivery_closed());
+    CHECK(finalizer.ready_for_actor_turn_quiescence());
+    CHECK(finalizer.finalized());
+
+    bool done_failed = false;
+    try { actor.get_done().get(); }
+    catch (const std::runtime_error& e) {
+        done_failed = std::string(e.what()) == "worker stopped before ready";
+    }
+    CHECK(done_failed);
+}
+
 static void successful_done_cannot_be_rewritten_by_late_failure() {
     NativeActorGroup group(191007, 1);
     auto actor = group.adopt(191007, 204, 1, [] {});
@@ -594,6 +644,7 @@ int main() {
     scalar_future_open_allocation_failures_release_one_loan();
     close_after_admission_is_allocation_free_and_settles_readiness();
     stop_workers_allocation_failure_keeps_waiters_retryable();
+    stop_workers_dispatches_before_blocking_ready_callback();
     successful_done_cannot_be_rewritten_by_late_failure();
     concurrent_finalization_publishes_exact_winner();
     every_finalization_allocation_failure_is_retryable();
