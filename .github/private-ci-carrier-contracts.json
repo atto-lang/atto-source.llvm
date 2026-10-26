@@ -23,13 +23,13 @@
     },
     "ores-otel-test/next-loggers-runtime-conformance": {
       "repository_id": 1328290859,
-      "base_sha": "18a260a712a7fe35609e65d40a6c5ad39f154e11",
+      "base_sha": "ffc69e89f62dcfad562ecadc9c2cb3ae6bc8e116",
       "review_pr": 13,
       "workflow_path": ".github/workflows/oreslang-exact-tree-carrier.yml",
       "workflow_blob_sha": "a3b70b07d3366316741e41c54773939ec2967f49",
       "test_plans": {
         "ci/test-plans/llvm-pr931.json": {
-          "blob_sha": "3aaae1de6c6d36acadc1fae06ef5da846ae9743d",
+          "blob_sha": "91ac46d6c9992fd2d14181d50be3c7cdcd996f25",
           "allowed_prs": [
             931
           ]
