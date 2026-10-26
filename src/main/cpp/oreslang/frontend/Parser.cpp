@@ -335,6 +335,31 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     return false;
 }
 
+bool native_task_no_capture_scalar_tree(const Expression& expr,
+                                             std::size_t depth = 1) {
+    require_expression_depth(depth, expr.offset);
+    using K = Expression::Kind;
+    if (expr.kind == K::Integer || expr.kind == K::Boolean) return true;
+    if (expr.kind == K::Negate || expr.kind == K::LogicalNot)
+        return expr.left &&
+            native_task_no_capture_scalar_tree(*expr.left, depth + 1);
+    if (expr.kind == K::Add || expr.kind == K::Subtract ||
+            expr.kind == K::Multiply || expr.kind == K::Equal ||
+            expr.kind == K::NotEqual || expr.kind == K::Less ||
+            expr.kind == K::LessEqual || expr.kind == K::Greater ||
+            expr.kind == K::GreaterEqual || expr.kind == K::LogicalAnd ||
+            expr.kind == K::LogicalOr || expr.kind == K::LogicalXor)
+        return expr.left && expr.right &&
+            native_task_no_capture_scalar_tree(*expr.left, depth + 1) &&
+            native_task_no_capture_scalar_tree(*expr.right, depth + 1);
+    if (expr.kind == K::Conditional)
+        return expr.condition && expr.when_true && expr.when_false &&
+            native_task_no_capture_scalar_tree(*expr.condition, depth + 1) &&
+            native_task_no_capture_scalar_tree(*expr.when_true, depth + 1) &&
+            native_task_no_capture_scalar_tree(*expr.when_false, depth + 1);
+    return false;
+}
+
 struct NativeCallSignature {
     std::vector<std::string> parameters;
     std::vector<GenericParameter> generics;
@@ -1791,7 +1816,54 @@ private:
             require(";");
             return true;
         };
+        std::unordered_map<std::string, std::string> scalar_task_results;
+        std::unordered_set<std::string> scalar_task_awaited;
+        auto source_local_exists = [&](const std::string& name) {
+            return scalar_task_results.count(name) ||
+                std::any_of(value.locals.begin(), value.locals.end(),
+                    [&](const LocalBinding& local) { return local.name == name; });
+        };
+        auto scalar_task_local = [&]() {
+            if (!(token_.text == "let" && peek_next().text == "Task"))
+                return false;
+            const std::size_t task_offset = token_.offset;
+            require("let");
+            require("Task");
+            require("<");
+            if (!accept("int"))
+                fail("native first Task slice supports Task<int> only");
+            require(">");
+            const std::string task_name = identifier();
+            if (source_local_exists(task_name))
+                fail("duplicate native Task/local binding '" + task_name + "'");
+            require("=");
+            require("task");
+            require("{");
+            require("return");
+            if (token_.text == "task")
+                fail("nested Task requires scheduler-owned continuation lowering");
+            auto task_result = expression();
+            if (!native_task_no_capture_scalar_tree(*task_result))
+                fail("native first Task slice forbids captures, calls, fields and ownership-bearing values");
+            require(";");
+            if (token_.text != "}")
+                fail("native first Task slice requires exactly one scalar return");
+            require("}");
+            require(";");
+
+            const std::string hidden =
+                "$task.ready." + task_name + ".result";
+            LocalBinding result;
+            result.name = hidden;
+            result.scalar_type = ScalarType::I64;
+            result.initializer = std::move(task_result);
+            result.offset = task_offset;
+            value.locals.push_back(std::move(result));
+            scalar_task_results.emplace(task_name, hidden);
+            return true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+            if (scalar_task_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -1807,7 +1879,21 @@ private:
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                 if (binding.scalar_type == ScalarType::I64) require("int");
-                binding.name = identifier(); require("="); binding.initializer = expression();
+                binding.name = identifier();
+                require("=");
+                if (accept("await")) {
+                    const std::string task_name = identifier();
+                    const auto task = scalar_task_results.find(task_name);
+                    if (task == scalar_task_results.end())
+                        fail("native await requires a previously submitted no-capture Task<int>");
+                    if (!scalar_task_awaited.insert(task_name).second)
+                        fail("native first Task slice permits exactly one await per Task<int>");
+                    auto ready = make_expression(Expression::Kind::Variable, binding.offset);
+                    ready->name = task->second;
+                    binding.initializer = std::move(ready);
+                } else {
+                    binding.initializer = expression();
+                }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
                 const auto mode = token_.text; advance(); binding.assignable = mode == "let"; binding.owner_mutable = mode == "val" || mode == "let"; if (mode == "let") accept("mut");
@@ -2835,6 +2921,8 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.text == "task")
+            fail("native Task expression requires let Task<int> binding in the no-capture first slice");
         if (accept("new")) {
             auto expr = make_expression(Expression::Kind::RecordConstruct, offset);
             expr->name = type_identifier();
