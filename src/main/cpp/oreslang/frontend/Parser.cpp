@@ -1762,6 +1762,81 @@ private:
             return value;
         }
         require("{");
+        if (token_.text == "val" && peek_next().text == "Channel") {
+            if (!experimental_static_i64_select_)
+                fail("native Channel<int>/select requires --experimental-static-i64-select");
+            if (!owner.empty() || value.name != "main" ||
+                    !value.parameters.empty() || value.returns_void ||
+                    value.return_type != ScalarType::I64 ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    value.has_declared_effects)
+                fail("experimental static i64 select requires standalone main(): int");
+
+            StaticI64SelectPlan plan;
+            plan.offset = token_.offset;
+            require("val");
+            require("Channel");
+            require("<");
+            require("int");
+            require(">");
+            plan.channel = identifier();
+            require("=");
+            require("Channel");
+            require(".");
+            require("new");
+            require("<");
+            require("int");
+            require(">");
+            require("(");
+            if (integer_literal() != 1)
+                fail("experimental static i64 select requires Channel<int> capacity 1");
+            require(")");
+            require(";");
+
+            require("writech");
+            if (identifier() != plan.channel)
+                fail("experimental static i64 select write must target its private channel");
+            require(",");
+            if (token_.kind != Kind::Integer)
+                fail("experimental static i64 select write requires i64 literal");
+            plan.write_value = integer_literal();
+            require(";");
+
+            require("do");
+            require("select");
+            require("first");
+            require("over");
+            require("when");
+            require("readch");
+            if (identifier() != plan.channel)
+                fail("experimental static i64 select read must target its private channel");
+            require(":");
+            require("val");
+            plan.binding = identifier();
+            if (plan.binding == plan.channel)
+                fail("experimental static i64 select binding cannot shadow channel");
+            require("{");
+            require("return");
+            if (identifier() != plan.binding)
+                fail("experimental static i64 select arm must return its bound value");
+            require(";");
+            require("}");
+            require("end");
+
+            require("return");
+            if (token_.kind != Kind::Integer)
+                fail("experimental static i64 select fallback requires i64 literal");
+            plan.fallback_value = integer_literal();
+            require(";");
+            require("}");
+
+            value.result = std::make_unique<Expression>();
+            value.result->kind = Expression::Kind::Integer;
+            value.result->offset = plan.offset;
+            value.result->integer = plan.fallback_value;
+            value.static_i64_select = std::move(plan);
+            return value;
+        }
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
