@@ -2001,6 +2001,34 @@ if(BUILD_TESTING)
     set_tests_properties(native_source_task_i64_compiled_execution
         PROPERTIES TIMEOUT 180)
 
+    set(ORE_SOURCE_FUTURE_PIPELINE_E2E
+        "${CMAKE_CURRENT_BINARY_DIR}/oreslang-source-future-pipeline-i64-e2e")
+    add_custom_command(
+        OUTPUT "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -O -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_future_pipeline_i64_e2e.rs"
+            -o "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_future_pipeline_i64_e2e.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-future-pipeline-i64.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceTaskRuntime.h"
+        VERBATIM)
+    add_custom_target(oreslang-source-future-pipeline-i64-e2e-build ALL
+        DEPENDS "${ORE_SOURCE_FUTURE_PIPELINE_E2E}")
+    if(ORE_CLANG)
+        add_test(NAME native_source_future_pipeline_i64_compiled_execution
+            COMMAND "${ORE_SOURCE_FUTURE_PIPELINE_E2E}"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+    else()
+        add_test(NAME native_source_future_pipeline_i64_compiled_execution
+            COMMAND "${CMAKE_COMMAND}" -E false)
+    endif()
+    set_tests_properties(native_source_future_pipeline_i64_compiled_execution
+        PROPERTIES TIMEOUT 180)
+
     add_test(NAME native_reserved_java_keywords
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
