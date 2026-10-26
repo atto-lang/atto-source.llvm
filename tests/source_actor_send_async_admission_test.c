@@ -724,7 +724,30 @@ static int64_t detached_rearm_first_probe(
         detached_rearm_second_probe,
         UINT64_C(0x5ef9),
         next_state,
+        ORES_SOURCE_DETACHED_SCALAR_WORDS + 1)
+        == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
+    CHECK(oreslang_source_actor_rearm_detached_send_state_checked(
+        actor,
+        921,
+        detached_rearm_second_probe,
+        UINT64_C(0x5ef9),
+        NULL,
+        1) == ORES_SOURCE_SEND_ASYNC_INVALID_REF);
+
+    CHECK(oreslang_source_actor_rearm_detached_send_state_checked(
+        actor,
+        921,
+        detached_rearm_second_probe,
+        UINT64_C(0x5ef9),
+        next_state,
         1) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(oreslang_source_actor_rearm_detached_send_state_checked(
+        actor,
+        922,
+        detached_rearm_second_probe,
+        UINT64_C(0x5efa),
+        next_state,
+        1) == ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED);
     /* Rearm owns a copy. Mutating this callback-local buffer after the call
      * must not change the next PC's runtime-owned state. */
     next_state[0] = 999;
@@ -769,7 +792,7 @@ static void detached_two_pc_rearm_defers_descriptor_cleanup_to_host(void) {
     CHECK(oreslang_source_actor_test_detached_state_cleared());
 
     fprintf(stderr,
-        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
+        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 overbound_rejected=1 null_state_rejected=1 duplicate_rearm_rejected=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
 }
 
 typedef struct {
