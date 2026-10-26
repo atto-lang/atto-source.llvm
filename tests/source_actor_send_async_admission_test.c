@@ -704,6 +704,24 @@ static int64_t detached_rearm_second_probe(
     CHECK(ores_native_actor_scheduler_is_carrier_thread());
     CHECK(state != NULL && state_count == 1);
     CHECK(state[0] == 42);
+
+    OresNativeExecutionTraceFrame executions[4] = {0};
+    OresNativeContinuationTraceFrame continuations[4] = {0};
+    OresNativeLogicalTraceResult trace = {0};
+    CHECK(oreslang_source_actor_snapshot_current_trace(
+        executions, 4, continuations, 4, &trace));
+    CHECK(!trace.corrupt
+        && !trace.execution_truncated
+        && !trace.continuation_truncated);
+    CHECK(trace.execution_count == 3);
+    CHECK(trace.continuation_count == 2);
+    CHECK(continuations[0].record.boundary
+        == ORES_CONTINUATION_BOUNDARY_AWAIT);
+    CHECK(continuations[1].record.boundary
+        == ORES_CONTINUATION_BOUNDARY_AWAIT);
+    CHECK(continuations[0].record.source_token == UINT64_C(0x5ef9));
+    CHECK(continuations[1].record.source_token == UINT64_C(0x5ef8));
+
     atomic_store_explicit(
         &detached_rearm_second_seen, 1, memory_order_release);
     oreslang_source_actor_request_stop(actor);
@@ -792,7 +810,7 @@ static void detached_two_pc_rearm_defers_descriptor_cleanup_to_host(void) {
     CHECK(oreslang_source_actor_test_detached_state_cleared());
 
     fprintf(stderr,
-        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 overbound_rejected=1 null_state_rejected=1 duplicate_rearm_rejected=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
+        "SOURCE_SEND_ASYNC_DETACHED_REARM_PASS pcs=2 next_state_copied=1 trace_executions=3 trace_continuations=2 overbound_rejected=1 null_state_rejected=1 duplicate_rearm_rejected=1 host_descriptor_cleanup=1 state_zeroed=1 final_join=1\n");
 }
 
 typedef struct {
