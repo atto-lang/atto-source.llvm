@@ -383,10 +383,21 @@ struct SourceExportBinding {
     std::size_t offset = 0;
 };
 
+// Symbols/atoms are nominal compile-time identities. This declaration catalog
+// participates in source export/import resolution but never creates a native
+// global, scalar surrogate, reflection object, or linker-visible ABI symbol.
+struct SourceSymbolDecl {
+    std::string name; // canonical spelling includes '#'
+    std::string module_name; // empty for root; captured at declaration site
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<SourceExportDecl> source_exports;
     std::vector<SourceExportBinding> source_export_bindings;
+    std::vector<SourceSymbolDecl> source_symbols;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string namespace_name;
     std::string module;
