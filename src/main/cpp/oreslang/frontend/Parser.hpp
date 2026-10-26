@@ -266,7 +266,11 @@ struct Function {
     std::vector<Statement> statements;
     std::vector<GuardedReturn> early_returns;
     std::vector<ActorSpawnBinding> actor_spawns;
-    /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
+    /*
+     * Legacy compatibility witnesses for currently specialized lowerings.
+     * await_sites is the authoritative suspension/PC catalog; validation
+     * requires these fields to agree exactly until migration is complete.
+     */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
     std::string done_await_actor;
@@ -404,9 +408,10 @@ struct Program {
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
 // bounded multi-field i64 classes and trusted actor send/stop.
 // Actors remain incompatible with wasm32. Admitted async source slices are
-// restricted to trusted zero-argument main: lifecycle get_ready/get_done and
-// direct `await ActorRef.send_async(i64)` and one linear
-// `Future<void> f = ActorRef.send_async(i64); await f;` admission token.
+// restricted to trusted zero-argument main: one lifecycle get_ready/get_done
+// boundary, one linear stored send Future boundary, or up to two sequential
+// direct `await ActorRef.send_async(i64)` PCs on one actor. Every admitted
+// suspension is recorded in Function::await_sites before validation/codegen.
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false);
 
