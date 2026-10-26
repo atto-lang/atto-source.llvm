@@ -35,8 +35,20 @@ Ownership admission must match both identities **and** the planned input ownersh
 
 Publication is atomic across the staged chain, matching the Java/Graal `CheckedFuturePipe` boundary: if any edge fails ownership admission, no earlier prefix receives executable authorization. Identity mismatches are hard errors rather than partial publication.
 
-## Current LLVM boundary
+## Current LLVM executable slice
 
-As of this contract landing, the native parser still deliberately rejects general `async` declarations and generic `Future<T>` source values because the required continuation representation/lowering is not implemented. That fail-closed behavior stays in place.
+The branch now contains a deliberately narrow first source path built on the existing scheduler-backed scalar Task runtime:
 
-The next implementation slice is to connect this contract to a native Future continuation representation and parser/type/ownership nodes, then prove real `.ores` source -> LLVM -> linked execution. Until that exists, host-only contract tests are semantic hardening, not general Future-pipeline parity.
+- one private, zero-argument `async fnc` returning a capture-free pure `int` expression;
+- one `Future<int>` pipeline in synchronous zero-argument `main`;
+- an **explicit consuming root**: `rt take source() |> stage()`;
+- one or more pure synchronous unary `int -> int` stages;
+- exactly one immediate `await` of the resulting Future;
+- the producer plus stages execute on the native scheduler carrier and trusted host `main` observes the final result;
+- executable lowering requires the post-ownership `ownership_admitted` mark. Type/shape staging alone is not codegen authority.
+
+This does **not** yet implement the general Java/Graal Future pipeline contract. In particular, borrowed-root execution, named Future bindings with canonical use-after-`rt take` / repeated-take tracking, pipeline cancellation, async stages, one-level Future flattening, nested `await`, captures/loans, exceptional effects, generic payloads, and actor affinity remain fail-closed.
+
+The direct `rt take source()` spelling in this first slice records consuming root shape but does not pretend that a named Future binding has passed the ordinary lexical move checker. That parity step must land before named consuming roots are admitted.
+
+The scheduler-backed source path is implementation-complete on this branch but is not yet execution-verified at the current head: source-org Actions jobs terminate before steps, and the connector safety gate blocked completing an exact private compiler mirror in the alternate runner. The previously executed contract-only evidence remains valid for the unchanged proof contract; end-to-end `.ores -> LLVM -> linked native` evidence is still required before this source slice can be called verified.
