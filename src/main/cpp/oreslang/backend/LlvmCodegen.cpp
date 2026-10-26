@@ -1981,12 +1981,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         detached_state,
                         llvm::ConstantInt::get(i64, i),
                         fn.locals[i].name + ".detached.capture");
-                    builder.CreateStore(
-                        builder.CreateLoad(
+                    llvm::Value* captured = builder.CreateLoad(
+                        i64,
+                        storage.at(fn.locals[i].name),
+                        fn.locals[i].name + ".detached.value");
+                    if (fn.locals[i].scalar_type == ScalarType::Bool) {
+                        captured = builder.CreateZExt(
+                            builder.CreateICmpNE(
+                                captured,
+                                llvm::ConstantInt::get(i64, 0),
+                                fn.locals[i].name + ".detached.bool.i1"),
                             i64,
-                            storage.at(fn.locals[i].name),
-                            fn.locals[i].name + ".detached.value"),
-                        destination);
+                            fn.locals[i].name + ".detached.bool");
+                    }
+                    builder.CreateStore(captured, destination);
                 }
             }
 
@@ -2151,12 +2159,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         detached_state,
                         llvm::ConstantInt::get(i64, i),
                         fn.locals[i].name + ".detached.capture");
-                    builder.CreateStore(
-                        builder.CreateLoad(
+                    llvm::Value* captured = builder.CreateLoad(
+                        i64,
+                        storage.at(fn.locals[i].name),
+                        fn.locals[i].name + ".detached.value");
+                    if (fn.locals[i].scalar_type == ScalarType::Bool) {
+                        captured = builder.CreateZExt(
+                            builder.CreateICmpNE(
+                                captured,
+                                llvm::ConstantInt::get(i64, 0),
+                                fn.locals[i].name + ".detached.bool.i1"),
                             i64,
-                            storage.at(fn.locals[i].name),
-                            fn.locals[i].name + ".detached.value"),
-                        destination);
+                            fn.locals[i].name + ".detached.bool");
+                    }
+                    builder.CreateStore(captured, destination);
                 }
             }
 
