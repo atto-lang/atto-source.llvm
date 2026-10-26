@@ -48,14 +48,15 @@ last-reference destruction. A close racing after successful frame creation
 still uses the generation-fenced detach reconciliation path; unlike physical
 finalization, group close does not need to seal the resource counter.
 `try_schedule()` treats either
-`delivery_closed()` or the earlier terminal `resource_admission_closed()`
-seal as authoritative. This matters if finalization seals resource admission
-but terminal promise settlement throws: the actor is retry-only and a
-pre-existing READY Future must not enqueue fresh CONTROL work before
-`delivery_closed()` is eventually published. Scheduling a terminal owner
-therefore cancels the frame instead of leaving a retryable Future behind. If a
-terminal fence is observed during CONTROL admission, a still-SCHEDULED frame is
-likewise cancelled before scheduling reports success.
+`delivery_closed()` or `resource_admission_closed()` as authoritative.
+With the resource-loan contract, a correctly live PENDING, READY, or SCHEDULED
+frame prevents physical finalization from publishing the terminal resource seal
+until that frame releases its loan; the seal therefore cannot legitimately
+overtake such a frame. The resource-seal check remains fail-closed
+defense-in-depth, while `delivery_closed()` is the ordinary close/detach race
+signal. If either terminal fence is observed during CONTROL admission, a
+still-SCHEDULED frame is cancelled before scheduling reports success whenever
+the phase still permits cancellation.
 The supervisor's `cancel_if_owner_detached()` hook remains required for a
 close that happens after a successful scheduling call has already returned,
 and it also covers the transient SETTLING race. `control_delivery_lost()`

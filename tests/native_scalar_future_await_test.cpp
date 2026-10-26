@@ -290,9 +290,9 @@ int main() {
     }
     check(group.finalized(owner) && group.finalized(foreign), "group not quiescent");
 
-    // Per-actor physical finalization also removes an incarnation from the
-    // delivery table while the group remains open. Publish the same closed
-    // barrier used by group close so orphaned scalar Futures become terminal.
+    // Live scalar Futures are physical actor resources. Per-actor finalization
+    // must refuse to seal/DONE while they hold loans; after terminalization,
+    // the retry removes the incarnation and publishes the delivery barrier.
     NativeActorGroup finalized_group(9790, 2);
     auto finalized_owner = finalized_group.adopt(9790, 1, 1, [] {});
     auto live_sibling = finalized_group.adopt(9790, 2, 1, [] {});
@@ -353,10 +353,10 @@ int main() {
     check(finalized_group.finalized(live_sibling),
           "live sibling did not finalize");
 
-    // Future admission races physical finalization. If open linearizes first,
-    // later finalization is ordinary lifecycle and explicit detach
-    // reconciliation must terminalize the frame. If finalization seals
-    // resources first, open must fail closed before publishing the frame.
+    // Future admission races physical finalization. The frame-loan CAS and
+    // finalizer zero->terminal CAS must have exactly one winner. If open wins,
+    // finalization retries only after the frame terminalizes; if finalization
+    // wins, open fails closed before publishing a frame.
     for (int iteration = 0; iteration < 256; ++iteration) {
         NativeActorGroup open_race_group(14000 + iteration, 1);
         auto open_race_owner = open_race_group.adopt(
