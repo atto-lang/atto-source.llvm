@@ -82,6 +82,44 @@ end
         (void)load(dir / "main.ores");
     }
 
+    // A source alias is callable through its external name only. Its local
+    // spelling must not become a public or native symbol by accident.
+    {
+        const fs::path dir = temp / "function-alias";
+        write_text(dir / "lib.ores", R"(
+export module Lib;
+define module Lib as
+  export fnc internal_answer as answer;
+  fnc internal_answer(): int { return 42; }
+end
+)");
+        write_text(dir / "main.ores",
+                   "import module Lib from './lib'; "
+                   "pub fnc main():int{return Lib.answer();}");
+        (void)load(dir / "main.ores");
+
+        write_text(dir / "main.ores",
+                   "import module Lib from './lib'; "
+                   "pub fnc main():int{return Lib.internal_answer();}");
+        must_fail("imported function is private or unknown",
+                  [&] { (void)load(dir / "main.ores"); });
+    }
+
+    // File/package source visibility is not cross-file PUBLIC import
+    // authority until physical file and package identities are supported.
+    for (const auto& scope : {"file", "pkg"}) {
+        const fs::path dir = temp / (std::string("function-") + scope);
+        write_text(dir / "lib.ores",
+                   "export module Lib; define module Lib as "
+                   "export[" + std::string(scope) + "] fnc internal_answer as answer; "
+                   "fnc internal_answer():int{return 42;} end");
+        write_text(dir / "main.ores",
+                   "import module Lib from './lib'; "
+                   "pub fnc main():int{return Lib.answer();}");
+        must_fail("imported function is private or unknown",
+                  [&] { (void)load(dir / "main.ores"); });
+    }
+
     {
         const fs::path dir = temp / "private-module";
         write_text(dir / "lib.ores", R"(
