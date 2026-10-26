@@ -216,9 +216,7 @@ private:
                     imported.local_name, std::make_pair(selected, cls->second));
             } else {
                 const auto module = target.module_source_exports.find(imported.selected_module);
-                const bool legacy_module_name =
-                    target.program.module == imported.selected_module;
-                if (module == target.module_source_exports.end() && !legacy_module_name)
+                if (module == target.module_source_exports.end())
                     fail(current, "imported file does not export selected module '" + imported.selected_module + "'");
             }
             if (!imported.selected_class) current.dependencies.emplace(imported.local_name, selected);
