@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <limits>
 #include <optional>
@@ -129,6 +130,23 @@ int main() {
             const std::array<std::uint8_t, 1> short_payload{0};
             (void)PackedPosition::from_bytes(short_payload);
         });
+
+        // FixedRecord is intentionally trivially copyable for packed storage,
+        // so host memcpy can manufacture an object whose private bytes were
+        // never validated. Every typed store write boundary must revalidate it.
+        PackedPosition forged{};
+        auto forged_bytes = expected;
+        forged_bytes[0] = 2;
+        std::memcpy(&forged, forged_bytes.data(), forged_bytes.size());
+        expect<std::invalid_argument>([&] { forged.validate_canonical(); });
+        {
+            RecordStore guarded;
+            expect<std::invalid_argument>([&] { (void)guarded.push(forged, 1.0); });
+            const auto valid = guarded.push(position, 1.0);
+            expect<std::invalid_argument>([&] { guarded.set<0>(valid, forged); });
+            expect<std::invalid_argument>([&] { guarded.set_row(valid, forged, 2.0); });
+            check(guarded.get<0>(valid) == position && guarded.get<1>(valid) == 1.0);
+        }
 
         RecordStore records;
         const auto h = records.push(position, 5.0);
