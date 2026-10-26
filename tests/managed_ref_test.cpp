@@ -114,5 +114,33 @@ int main() {
     auto terminal = CompressedActorRef::encode(end_base, 8, end_base);
     assert(terminal && terminal->decode(end_base, 8) == end_base);
 
+    // Stable physical-reference ABI corpus shared with Java/Graal:
+    // ActorCompressed32Reference.encode(offset) must produce the same
+    // unsigned wire words. This checks 100k deterministic XorShift64
+    // offsets and an FNV64 digest without allocating a 32-GiB arena.
+    // Unlike assert(), these checks MUST remain active in Release/NDEBUG.
+#if UINTPTR_MAX > UINT32_MAX
+    constexpr std::uintptr_t parity_base = UINT64_C(0x100000000);
+    const auto parity_span = static_cast<std::size_t>(
+        CompressedActorRef::max_addressable_span);
+    std::uint64_t parity_rng = UINT64_C(0x6a09e667f3bcc909);
+    std::uint64_t parity_digest = UINT64_C(0xcbf29ce484222325);
+    for (std::uint32_t n = 0; n < 100000; ++n) {
+        parity_rng ^= parity_rng << 13;
+        parity_rng ^= parity_rng >> 7;
+        parity_rng ^= parity_rng << 17;
+        const auto offset = (parity_rng % UINT64_C(0xffffffff)) * 8;
+        auto compact = CompressedActorRef::encode(
+            parity_base, parity_span, parity_base + offset);
+        if (!compact) return 10;
+        auto round_trip = compact->decode(parity_base, parity_span);
+        if (!round_trip || *round_trip != parity_base + offset) return 11;
+        parity_digest = (parity_digest ^ compact->storage())
+            * UINT64_C(1099511628211);
+    }
+    // Expected digest computed independently with Java actor offset encoding.
+    if (parity_digest != UINT64_C(0x46402ba55da7cde5)) return 12;
+#endif
+
     return 0;
 }
