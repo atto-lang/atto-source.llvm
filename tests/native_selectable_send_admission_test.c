@@ -270,6 +270,92 @@ static void immediate_credit_uses_same_winner_protocol(void) {
     close_target(scheduler, target);
 }
 
+static void registration_exhaustion_does_not_win_selection(void) {
+    State state = {0};
+    atomic_store(&state.block, 1);
+    OresNativeActorRef target = {0};
+    OresNativeActorScheduler* scheduler = open_target(&state, &target);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, target, 60)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state);
+
+    OresNativeAsyncSendTicket pending[ORES_NATIVE_ASYNC_SENDS_PER_ACTOR];
+    for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
+        pending[i] = (OresNativeAsyncSendTicket){0};
+        CHECK(ores_native_actor_scheduler_submit_async(
+            scheduler, target, UINT64_C(1000) + i, &pending[i])
+            == ORES_NATIVE_SEND_ACCEPTED);
+        expect_send_state(
+            scheduler, pending[i],
+            ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
+    }
+
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 107, 2));
+    OresNativeSelectToken send_arm = {0}, other_arm = {0};
+    CHECK(ores_native_select_register(&select, 0, &send_arm));
+    CHECK(ores_native_select_register(&select, 1, &other_arm));
+
+    OresNativeAsyncSendTicket refused = {0};
+    CHECK(ores_native_actor_scheduler_submit_selectable_async(
+        scheduler, target, 61, send_arm, &refused)
+        == ORES_NATIVE_SEND_RESOURCE_EXHAUSTED);
+    CHECK(refused.generation == 0);
+    CHECK(ores_native_select_active_tokens(&select) == 1);
+    uint64_t winner = UINT64_MAX;
+    CHECK(!ores_native_select_winner(&select, &winner));
+
+    CHECK(ores_native_select_try_commit(other_arm) == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+    CHECK(ores_native_select_winner(&select, &winner));
+    CHECK(winner == 1);
+
+    for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
+        CHECK(ores_native_actor_scheduler_cancel_async_send(
+            scheduler, pending[i]));
+        CHECK(ores_native_actor_scheduler_release_async_send(
+            scheduler, pending[i]));
+    }
+
+    atomic_store_explicit(&state.block, 0, memory_order_release);
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(atomic_load_explicit(
+        &state.observed_count, memory_order_acquire) == 1);
+    CHECK(state.observed[0] == 60);
+    close_target(scheduler, target);
+}
+
+static void immediate_terminated_target_is_terminal_select_event(void) {
+    State state = {0};
+    OresNativeActorRef target = {0};
+    OresNativeActorScheduler* scheduler = open_target(&state, &target);
+
+    CHECK(ores_native_actor_scheduler_stop_sealed(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 108, 2));
+    OresNativeSelectToken send_arm = {0}, other_arm = {0};
+    CHECK(ores_native_select_register(&select, 0, &send_arm));
+    CHECK(ores_native_select_register(&select, 1, &other_arm));
+
+    OresNativeAsyncSendTicket none = {0};
+    CHECK(ores_native_actor_scheduler_submit_selectable_async(
+        scheduler, target, 62, send_arm, &none)
+        == ORES_NATIVE_SEND_TERMINATED);
+    CHECK(none.generation == 0);
+
+    uint64_t winner = UINT64_MAX;
+    CHECK(ores_native_select_winner(&select, &winner));
+    CHECK(winner == 0);
+    CHECK(ores_native_select_try_commit(other_arm) == ORES_NATIVE_SELECT_LOST);
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void sealed_selection_never_publishes_pending_send(void) {
     State state = {0};
     atomic_store(&state.block, 1);
@@ -392,9 +478,11 @@ int main(void) {
     stop_failure_can_win_selection_without_payload_publication();
     prior_other_winner_turns_stop_failure_into_loser_cancel();
     immediate_credit_uses_same_winner_protocol();
+    registration_exhaustion_does_not_win_selection();
+    immediate_terminated_target_is_terminal_select_event();
     sealed_selection_never_publishes_pending_send();
     concurrent_arms_have_exactly_one_winner();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 sealed_no_publish=1 concurrent_winner=512 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 immediate_terminated=1 sealed_no_publish=1 concurrent_winner=512 stale_generation=1");
     return 0;
 }
