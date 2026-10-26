@@ -258,7 +258,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("()[]{},:;+-*/%=.<>@?!#").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -415,37 +415,25 @@ public:
 
     Program parse() {
         Program program;
-        while (token_.text == "import") {
-            advance();
-            if (token_.text == "contract")
-                fail("native contract imports require a validated cross-unit linker");
-            ModuleImport imported;
-            imported.offset = token_.offset;
-            imported.selected_class = accept("class");
-            if (!imported.selected_class) require("module");
-            imported.selected_module = identifier();
-            imported.local_name = accept("as") ? identifier() : imported.selected_module;
-            if (!module_names_.insert(imported.local_name).second)
-                fail("duplicate imported module binding '" + imported.local_name + "'");
-            require("from");
-            if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
-            imported.path = std::string(token_.text);
-            if (imported.path.empty() || imported.path.size() > 4096)
-                fail("native import path must contain 1..4096 bytes");
-            for (unsigned char ch : imported.path)
-                if (ch < 32 || ch == 127 || ch == '\\')
-                    fail("native import path escapes/control characters unsupported");
-            advance();
-            require(";");
-            program.imports.push_back(std::move(imported));
+        while (token_.text == "import" || token_.text == "export") {
+            if (token_.text == "export") {
+                source_export_declaration(program, "$root");
+                continue;
+            }
+            module_import(program);
         }
         if (accept("namespace")) {
             program.namespace_name = identifier();
             require(";");
         }
+        while (token_.text == "import" || token_.text == "export") {
+            if (token_.text == "export") {
+                source_export_declaration(program, "$root");
+                continue;
+            }
+            module_import(program);
+        }
         bool wrapped_module = false;
-        if (token_.text == "import")
-            fail("native contract imports require a validated cross-unit linker");
         while (token_.text == "define" || token_.text == "declare" ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
@@ -507,8 +495,13 @@ public:
         }
         while (token_.kind != Kind::End
                 && !(wrapped_module && token_.text == "end")) {
+            if (token_.text == "export") {
+                source_export_declaration(
+                    program, wrapped_module ? program.module : "$root");
+                continue;
+            }
             if (token_.text == "import")
-                fail("native contract imports require a validated cross-unit linker");
+                fail("[EXPORT_IMPORT_PRELUDE] imports must precede real declarations; export metadata does not close the import prelude");
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
                 continue;
@@ -564,6 +557,7 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
+        resolve_source_exports(program);
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
