@@ -819,8 +819,10 @@ static void source_select_wake(
 
     winner_arm = ticket.completion_code - UINT64_C(1);
     uint64_t recorded_winner = UINT64_MAX;
-    ensure(ores_native_select_winner(
-        &frame->arbiter, &recorded_winner));
+    ensure(ores_native_select_winner_generation(
+        &frame->arbiter,
+        frame->selection_generation,
+        &recorded_winner));
     ensure(recorded_winner == winner_arm);
 
     outcome = frame->immediate_status[winner_arm];
