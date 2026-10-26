@@ -120,6 +120,24 @@ end
                   [&] { (void)load(dir / "main.ores"); });
     }
 
+    // Source routines are direct-call-only. An explicit export binding
+    // cannot convert one into an imported first-class fnc/value.
+    {
+        const fs::path dir = temp / "routine-source-import";
+        write_text(dir / "lib.ores", R"(
+export module Lib;
+define module Lib as
+  export routine calculate as answer;
+  routine calculate(): int { return 42; }
+end
+)");
+        write_text(dir / "main.ores",
+                   "import module Lib from './lib'; "
+                   "pub fnc main():int{return Lib.answer();}");
+        must_fail("imported function is private or unknown",
+                  [&] { (void)load(dir / "main.ores"); });
+    }
+
     {
         const fs::path dir = temp / "private-module";
         write_text(dir / "lib.ores", R"(
