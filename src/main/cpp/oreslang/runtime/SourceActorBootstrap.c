@@ -86,6 +86,8 @@ typedef struct {
     OresNativeSuspensionLink link;
     uint64_t source_token;
     int suspend_recorded;
+    int detached;
+    int wake_bound;
     int done;
     int outcome;
     int64_t result;
@@ -101,6 +103,9 @@ typedef struct {
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
     SendAwaitFrame* pending_send;
+    /* One bounded compiler-main continuation frame. The parser currently
+     * admits only one async boundary and one source actor across suspension. */
+    SendAwaitFrame detached_send;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     size_t next_slot;
     size_t live;
@@ -510,6 +515,37 @@ static void root_send_suspend_turn(void) {
         group.executions, origin));
 
     frame->suspend_recorded = 1;
+
+    if (frame->detached) {
+        /* A detached guest has already returned, so the root turn itself owns
+         * descriptor-to-continuation binding. This removes the last setup wait
+         * from the suspended guest/host call stack. The scheduler callback is
+         * never inline and cannot acquire group.mutex until this turn unlocks. */
+        ensure(frame == &group.detached_send);
+        ensure(frame->send_future != NULL
+            && frame->send_future->live
+            && frame->send_future->consuming
+            && frame->send_future->actor == frame->actor);
+        OresNativeWakeTicket wake = {0};
+        if (ores_native_vm_bind_async_send_wake(
+                group.vm,
+                ORES_NATIVE_VM_MAIN,
+                frame->send_future->ticket,
+                group.root_ref,
+                frame->link.continuation.slot,
+                frame->link.continuation.generation,
+                1,
+                &wake)) {
+            frame->wake_bound = 1;
+        } else {
+            /* Preserve bounded fail-closed behavior without resurrecting the
+             * detached guest stack. Outer-host finalization cancels/releases
+             * the unbound descriptor and pending logical continuation. */
+            frame->outcome = ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED;
+            frame->done = 1;
+        }
+    }
+
     ensure(pthread_cond_signal(&frame->completed) == 0);
     group_unlock();
 }
