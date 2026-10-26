@@ -23,10 +23,19 @@ static int round_trip(void) {
     CHECK(a_root == 1 && a_leaf == 9);
     ores_actor_arena_compact_store_i64(a, at.domain, at.epoch, a_leaf, 8, UINT64_C(0xabcdef1234567890));
     ores_actor_arena_compact_store_ref_i32(a, at.domain, at.epoch, a_root, 4, a_leaf);
+    /* Field bytes are canonical little-endian, even on a big-endian host.
+     * The host-facing scalar ABI and opaque actor descriptors are separate. */
+    unsigned char field_bytes[sizeof(uint32_t)] = {0, 0, 0, 0};
+    ores_actor_arena_read(a, at, ah, 4, field_bytes, sizeof(field_bytes));
+    for (unsigned i = 0; i < sizeof(field_bytes); ++i)
+        CHECK(field_bytes[i] == (unsigned char) (a_leaf >> (8u * i)));
     CHECK(ores_actor_arena_compact_load_ref_i32(a, at.domain, at.epoch, a_root, 4) == a_leaf);
     uint32_t followed = ores_actor_arena_compact_load_ref_i32(a, at.domain, at.epoch, a_root, 4);
     CHECK(ores_actor_arena_compact_load_i64(a, at.domain, at.epoch, followed, 8) == UINT64_C(0xabcdef1234567890));
     ores_actor_arena_compact_store_ref_i32(a, at.domain, at.epoch, a_root, 4, 0);
+    ores_actor_arena_read(a, at, ah, 4, field_bytes, sizeof(field_bytes));
+    for (unsigned i = 0; i < sizeof(field_bytes); ++i)
+        CHECK(field_bytes[i] == 0);
     CHECK(ores_actor_arena_compact_load_ref_i32(a, at.domain, at.epoch, a_root, 4) == 0);
     ores_actor_arena_compact_store_ref_i32(a, at.domain, at.epoch, a_root, 4, a_leaf);
     ores_actor_arena_leave(a, at);
