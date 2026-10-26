@@ -164,6 +164,57 @@ static void capacity_release_admits_waiter(void) {
         "SOURCE_SEND_ASYNC_CAPACITY_PASS queued=%zu exact_ref=1\n", queued);
 }
 
+typedef struct {
+    void* future;
+    atomic_int started;
+    int outcome;
+} FutureObserverThread;
+
+static void* observe_pending_future(void* raw) {
+    FutureObserverThread* state = (FutureObserverThread*)raw;
+    atomic_store_explicit(&state->started, 1, memory_order_release);
+    state->outcome =
+        oreslang_source_actor_await_send_future_checked(state->future);
+    return NULL;
+}
+
+static void pending_future_await_excludes_concurrent_cancel(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 920, &future) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(future != NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    FutureObserverThread state = {.future = future, .outcome = -1};
+    atomic_init(&state.started, 0);
+    pthread_t observer;
+    CHECK(pthread_create(&observer, NULL, observe_pending_future, &state)
+        == 0);
+    /* The test-only mutex snapshot ensures the Future has one live observer
+     * before cancellation races it. Unlike sleeps, this is deterministic. */
+    while (!oreslang_source_actor_test_future_consuming(future))
+        sched_yield();
+    CHECK(atomic_load_explicit(&state.started, memory_order_acquire));
+    CHECK(!oreslang_source_actor_cancel_send_future(future));
+    /* No double-release or premature descriptor invalidation is allowed.
+     * The waiting host remains the unique owner until admission resolves. */
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 1);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    CHECK(pthread_join(observer, NULL) == 0);
+    CHECK(state.outcome == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_AWAIT_CANCEL_RACE_PASS owner=1 cancel_rejected=1\n");
+}
+
 static void stored_future_starts_before_await_and_progresses(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -482,6 +533,7 @@ int main(void) {
 
     capacity_release_admits_waiter();
     stored_future_starts_before_await_and_progresses();
+    pending_future_await_excludes_concurrent_cancel();
     stale_source_future_pointer_never_aliases_new_future();
     stored_future_await_resumes_fresh_root_continuation();
     failed_stored_future_resumes_only_for_trace_cleanup();
