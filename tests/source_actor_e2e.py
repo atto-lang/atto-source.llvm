@@ -130,6 +130,12 @@ def main():
         "source-actor-static-method-reject.ores": "static method is invalid",
         "source-actor-typed-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-spawn-missing-stop.ores": "actor reference must be stopped",
+        "source-actor-try-select-send-default-bool-reject.ores":
+            "native try-select actor message payload",
+        "source-actor-try-select-send-default-post-effect-reject.ores":
+            "native try-select must be followed immediately by actor stop",
+        "source-actor-try-select-send-default-call-reject.ores":
+            "native try-select branches require nonempty scalar assignments only",
         "source-actor-send-move-then-call-reject.ores":
             "use of explicitly moved int 'count'",
         "source-actor-typed-ref-mismatch.ores": "ActorRef<T> type mismatch",
