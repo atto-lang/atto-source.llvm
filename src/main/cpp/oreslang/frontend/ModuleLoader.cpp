@@ -276,12 +276,14 @@ private:
         const auto dependency = unit.dependencies.find(name.substr(0, dot));
         if (dependency == unit.dependencies.end()) fail(unit, "unknown module in class type");
         const auto& target = *units[dependency->second];
-        auto member = target.class_exports.find(name.substr(dot + 1));
-        if (member == target.class_exports.end() || !member->second)
+        const std::string external_name = name.substr(dot + 1);
+        const auto member = target.class_source_exports.find(external_name);
+        if (member == target.class_source_exports.end())
             fail(unit, "unknown or private imported class type '" + name + "'");
-        if (constructing && !target.constructor_exports.at(member->first))
+        const std::string& local_name = member->second;
+        if (constructing && !target.constructor_exports.at(local_name))
             fail(unit, "private imported constructor is not accessible");
-        return target.prefix + member->first;
+        return target.prefix + local_name;
     }
     void local(const Unit& unit, LocalBinding& binding) {
         binding_name(unit, binding.name);
