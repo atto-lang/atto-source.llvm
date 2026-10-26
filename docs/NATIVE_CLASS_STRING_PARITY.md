@@ -21,7 +21,11 @@ JIT or tracing garbage collector. Its exit status is zero and stdout is exactly
 ## Implementation and lifetime
 
 Strings are immutable UTF-8 sequences with explicit lengths, including embedded
-NULs. Checked scalar types keep string handles distinct from guest integers.
+NULs. This follows the shared `oreslang-common-source/docs/STRING_ABI_V1.md`
+contract: ordinary String extent is never discovered with `strlen`.
+`NativeCString` is a separate explicit FFI adapter whose payload length
+excludes its trailing NUL and whose conversion rejects embedded NUL instead of
+truncating the source value. Checked scalar types keep string handles distinct from guest integers.
 Literal bytes remain static; concatenations own native buffers. A thread-local
 root invocation region owns the descriptor table and concatenation buffers.
 Its OS entry wrapper creates the region before guest execution, drains console
