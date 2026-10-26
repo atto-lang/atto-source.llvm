@@ -305,18 +305,35 @@ int main() {
               "settle/detach race actor did not finalize");
     }
 
-    // Three terminal contenders race. Exactly one wins and no duplicate
-    // resumption is accepted, regardless of scheduling order.
+    // complete/fail compete for the single settlement transition, while
+    // cancellation is intentionally allowed to revoke a READY result before
+    // scheduling. Therefore cancellation may succeed after one settlement;
+    // what must never happen is two producer settlements or resurrection after
+    // a cancellation that won before settlement.
     for (std::uint64_t n = 1; n <= 256; ++n) {
         auto raced = NativeScalarFutureAwait::open(owner, 100 + n);
         const auto ticket = raced->id();
-        std::atomic<int> wins{0};
-        std::thread a([&] { if (raced->complete(ticket, 5)) ++wins; });
-        std::thread b([&] { if (raced->fail(ticket, 9)) ++wins; });
-        std::thread c([&] { if (raced->cancel(ticket)) ++wins; });
+        std::atomic<int> settlements{0};
+        std::atomic<bool> cancelled{false};
+        std::thread a([&] {
+            if (raced->complete(ticket, 5))
+                settlements.fetch_add(1, std::memory_order_relaxed);
+        });
+        std::thread b([&] {
+            if (raced->fail(ticket, 9))
+                settlements.fetch_add(1, std::memory_order_relaxed);
+        });
+        std::thread c([&] {
+            cancelled.store(raced->cancel(ticket), std::memory_order_relaxed);
+        });
         a.join(); b.join(); c.join();
-        check(wins == 1, "terminal transition did not have one winner");
+
+        const int producer_wins = settlements.load(std::memory_order_relaxed);
+        check(producer_wins <= 1, "multiple settlement producers won");
         if (raced->phase() == NativeScalarFutureAwait::Phase::ready) {
+            check(producer_wins == 1, "READY race had no settlement winner");
+            check(!cancelled.load(std::memory_order_relaxed),
+                  "READY race also reported cancellation");
             int callbacks = 0;
             check(raced->try_schedule(ticket, group, owner,
                 [&](const auto&) { ++callbacks; }), "settled race not scheduled");
@@ -326,6 +343,8 @@ int main() {
         } else {
             check(raced->phase() == NativeScalarFutureAwait::Phase::cancelled,
                   "race ended in invalid state");
+            check(cancelled.load(std::memory_order_relaxed),
+                  "CANCELLED race had no cancellation winner");
         }
     }
     check(group.finalized(owner) && group.finalized(foreign), "group not quiescent");
