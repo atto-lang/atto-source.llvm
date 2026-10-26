@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
+#include "oreslang/runtime/NativeActorScheduler.h"
 #include "oreslang/runtime/NativeLogicalTrace.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -35,6 +36,10 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Deterministic quota-path hook for the isolated send_async runtime test.
+ * Refuses values above the production cohort bound. */
+int oreslang_source_actor_test_set_async_waiters(void* actor, size_t waiters);
+size_t oreslang_source_actor_test_pending_async_sends(void* actor);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
@@ -43,7 +48,77 @@ void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */
+/* Typed host/runtime projection of immediate fail-fast send. The compiler's
+ * existing send() wrapper still aborts on any non-ACCEPTED result. */
+int oreslang_source_actor_try_send_checked(void* actor, int64_t payload);
 void oreslang_source_actor_send(void* actor, int64_t payload);
+
+/*
+ * First source send_async vertical slice.
+ *
+ * The checked form is trusted host/runtime glue for a direct
+ *   await actor.send_async(i64)
+ * from zero-argument main. Submission is a scheduler-owned nonblocking Future;
+ * this compatibility wrapper then waits only to observe that Future's terminal
+ * admission state. No actor carrier may call the observing wait; such a call
+ * returns WOULD_DEADLOCK instead of parking a carrier.
+ *
+ * Values 0..5 deliberately preserve OresNativeSendStatus for future typed
+ * compiler projection. WOULD_DEADLOCK is source-runtime specific.
+ */
+enum {
+    /* Match the Java bounded pending-producer cohort. Scheduler Future
+     * descriptors and source opaque Future wrappers are both bounded here. */
+    ORES_SOURCE_SEND_ASYNC_MAX_WAITERS = 256,
+    ORES_SOURCE_SEND_ASYNC_ACCEPTED = ORES_NATIVE_SEND_ACCEPTED,
+    ORES_SOURCE_SEND_ASYNC_INVALID_REF = ORES_NATIVE_SEND_INVALID_REF,
+    ORES_SOURCE_SEND_ASYNC_TERMINATED = ORES_NATIVE_SEND_TERMINATED,
+    ORES_SOURCE_SEND_ASYNC_MAILBOX_FULL = ORES_NATIVE_SEND_MAILBOX_FULL,
+    ORES_SOURCE_SEND_ASYNC_RESOURCE_EXHAUSTED =
+        ORES_NATIVE_SEND_RESOURCE_EXHAUSTED,
+    ORES_SOURCE_SEND_ASYNC_TRANSPORT_UNAVAILABLE =
+        ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE,
+    ORES_SOURCE_SEND_ASYNC_WOULD_DEADLOCK = 6
+};
+int oreslang_source_actor_await_send_async_checked(
+    void* actor, int64_t payload);
+void oreslang_source_actor_await_send_async(
+    void* actor, int64_t payload);
+
+/*
+ * Linear opaque Future<void> form. Submission starts immediately and returns a
+ * runtime-owned handle backed by the actor's fixed 256-slot wrapper pool plus
+ * the scheduler's generation-fenced async-send descriptor. The compiler must
+ * consume the handle exactly once with await or cancellation.
+ */
+int oreslang_source_actor_send_async_start_checked(
+    void* actor, int64_t payload, void** future_out);
+void* oreslang_source_actor_send_async_start(
+    void* actor, int64_t payload);
+/* Host-only terminal observer retained for low-level runtime tests. */
+int oreslang_source_actor_await_send_future_checked(void* future);
+/*
+ * Compiler-facing logical await. The guest continuation is suspended on the
+ * root actor, the scheduler-owned send Future settles independently, and the
+ * post-await continuation resumes on a fresh root CONTROL turn. The trusted
+ * outer host coordinates the barrier but no actor carrier is parked.
+ */
+int oreslang_source_actor_await_send_future_continuation_checked(
+    void* future,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token,
+    int64_t* result_out);
+int64_t oreslang_source_actor_await_send_future(
+    void* future,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+int oreslang_source_actor_cancel_send_future(void* future);
+
+/* Exact trusted identity projection for runtime integration/tests. This copies
+ * the scheduler-minted generation-fenced ActorRef stored in the opaque source
+ * handle; it never reconstructs identity from an actor id or numeric slot. */
+int oreslang_source_actor_exact_scheduler_ref(
+    void* actor, OresNativeActorRef* out);
 
 /*
  * Compiler/runtime stop phases. request_stop is nonblocking and only asks the
