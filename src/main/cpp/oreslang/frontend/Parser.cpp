@@ -4039,7 +4039,7 @@ private:
                         && local.sum_type.empty()
                         && local.scalar_type != ScalarType::String;
                 };
-                if (fn.locals.size() > 16
+                if (fn.locals.size() > kNativeDetachedScalarWords
                         || !std::all_of(
                             fn.locals.begin(), fn.locals.end(), copy_scalar))
                     throw std::runtime_error(
@@ -4063,7 +4063,7 @@ private:
                         && local.sum_type.empty()
                         && local.scalar_type != ScalarType::String;
                 };
-                if (fn.locals.size() > 16
+                if (fn.locals.size() > kNativeDetachedScalarWords
                         || !std::all_of(
                             fn.locals.begin(), fn.locals.end(), copy_scalar))
                     throw std::runtime_error(
