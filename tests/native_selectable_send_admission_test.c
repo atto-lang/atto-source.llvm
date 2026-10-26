@@ -411,6 +411,51 @@ static void immediate_terminated_target_is_terminal_select_event(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void scheduler_bound_send_token_cannot_commit_early(void) {
+    State state = {0};
+    atomic_store(&state.block, 1);
+    OresNativeActorRef target = {0};
+    OresNativeActorScheduler* scheduler = open_target(&state, &target);
+
+    CHECK(ores_native_actor_scheduler_try_send(scheduler, target, 60)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    wait_entered(&state);
+
+    OresNativeSelectArbiter select = {0};
+    CHECK(ores_native_select_arbiter_init(&select, 107, 2));
+    OresNativeSelectToken send_arm = {0}, other_arm = {0};
+    CHECK(ores_native_select_register(&select, 0, &send_arm));
+    CHECK(ores_native_select_register(&select, 1, &other_arm));
+
+    OresNativeAsyncSendTicket send = {0};
+    CHECK(ores_native_actor_scheduler_submit_selectable_async(
+        scheduler, target, 61, send_arm, &send)
+        == ORES_NATIVE_SEND_ACCEPTED);
+    expect_send_state(
+        scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_PENDING, ORES_NATIVE_SEND_MAILBOX_FULL);
+
+    /*
+     * submit_selectable_async transferred arm authority into the scheduler.
+     * A coordinator retaining a copied token cannot claim the send winner
+     * before real mailbox credit exists.
+     */
+    CHECK(ores_native_select_try_commit(send_arm)
+        == ORES_NATIVE_SELECT_INVALID);
+    CHECK(ores_native_select_try_commit(other_arm)
+        == ORES_NATIVE_SELECT_WON);
+    CHECK(ores_native_actor_scheduler_cancel_async_send(scheduler, send));
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
+    CHECK(ores_native_select_active_tokens(&select) == 0);
+
+    atomic_store_explicit(&state.block, 0, memory_order_release);
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(atomic_load_explicit(
+        &state.observed_count, memory_order_acquire) == 1);
+    CHECK(state.observed[0] == 60);
+    close_target(scheduler, target);
+}
+
 static void sealed_selection_never_publishes_pending_send(void) {
     State state = {0};
     atomic_store(&state.block, 1);
@@ -556,10 +601,11 @@ int main(void) {
     registration_exhaustion_does_not_win_selection();
     winner_race_beats_registration_exhaustion();
     immediate_terminated_target_is_terminal_select_event();
+    scheduler_bound_send_token_cannot_commit_early();
     sealed_selection_never_publishes_pending_send();
     concurrent_arms_have_exactly_one_winner();
     rearm_generation_is_strictly_monotonic();
     stale_select_generation_fails_closed();
-    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 sealed_no_publish=1 concurrent_winner=512 stale_generation=1");
+    puts("NATIVE_SELECTABLE_SEND_PASS loser_no_publish=1 credit_commit=1 stop_terminal=1 stop_after_other=1 immediate=1 registration_exhaustion_not_winner=1 exhaustion_after_winner=cancelled monotonic_generation=1 immediate_terminated=1 scheduler_token_handoff=1 sealed_no_publish=1 concurrent_winner=512 stale_generation=1");
     return 0;
 }
