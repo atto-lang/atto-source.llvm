@@ -1183,6 +1183,43 @@ static void discard_started_future_consumes_pending_and_ready(void) {
         "SOURCE_SEND_ASYNC_DISCARD_RACE_PASS ready=accepted pending=cancelled consumed=1\n");
 }
 
+static void try_select_send_wins_with_immediate_credit(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    int selected = -1;
+    CHECK(oreslang_source_actor_try_select_send_default_checked(
+        actor, 950, &selected) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(selected == 0);
+
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_TRY_SELECT_SEND_DEFAULT_PASS send_winner=1 default_winner=0\n");
+}
+
+static void try_select_default_cancels_pending_send(void) {
+    reset_blocker();
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, blocking_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+    (void)saturate_real_mailbox(actor);
+
+    int selected = -1;
+    CHECK(oreslang_source_actor_try_select_send_default_checked(
+        actor, 951, &selected) == ORES_SOURCE_SEND_ASYNC_ACCEPTED);
+    CHECK(selected == 1);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    atomic_store_explicit(&release_first, 1, memory_order_release);
+    oreslang_source_actor_stop(actor);
+    fprintf(stderr,
+        "SOURCE_TRY_SELECT_SEND_DEFAULT_PASS send_winner=0 default_winner=1 "
+        "loser_descriptor_retired=1\n");
+}
+
 static void stored_future_cancel_wins_only_while_pending(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -1431,6 +1468,8 @@ int main(void) {
     failed_stored_future_resumes_only_for_trace_cleanup();
     detached_pending_stop_skips_guest_and_joins();
     discard_started_future_consumes_pending_and_ready();
+    try_select_send_wins_with_immediate_credit();
+    try_select_default_cancels_pending_send();
     stored_future_cancel_wins_only_while_pending();
     post_stop_send_async_is_rejected_before_allocation();
     stop_wakes_full_waiter_as_terminated();
