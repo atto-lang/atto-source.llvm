@@ -643,9 +643,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
-            if (!fn.source_tasks.empty())
+            if (!fn.source_tasks.empty() || !fn.future_pipelines.empty())
                 throw std::runtime_error(
-                    "wasm32 source Task<int> scheduler runtime is not implemented");
+                    "wasm32 source Task/Future scheduler runtime is not implemented");
             for (const auto& local : fn.locals) {
                 // Preserve the native heap-owned diagnostic independently
                 // of array-backed ownership rejection.
@@ -729,7 +729,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
                 [](const Function& f) {
                     return !f.ready_await_actor.empty() || f.caught_throw_value ||
-                        f.scalar_while || !f.source_tasks.empty();
+                        f.scalar_while || !f.source_tasks.empty() ||
+                        !f.future_pipelines.empty();
                 }))
             throw std::runtime_error(string_runtime
                 ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
@@ -791,7 +792,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // program actually contains a gated experimental heap-owned local.
     const bool has_source_tasks = std::any_of(
         source.functions.begin(), source.functions.end(),
-        [](const Function& fn) { return !fn.source_tasks.empty(); });
+        [](const Function& fn) {
+            return !fn.source_tasks.empty() || !fn.future_pipelines.empty();
+        });
     llvm::FunctionCallee taskStart, taskAwait, taskShutdown;
     if (has_source_tasks) {
         taskStart = module.getOrInsertFunction(
@@ -1252,6 +1255,39 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                         task.name + ".task.producer.abi")},
                     task.name + ".task.handle"));
         }
+        for (const auto& pipeline : fn.future_pipelines) {
+            if (!has_source_tasks || pipeline.plans.empty() ||
+                    pipeline.stages.empty())
+                throw std::runtime_error(
+                    "source Future<int> pipeline lacks checked lowering plan");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".future." + pipeline.name +
+                    (pipeline.root_consumed ? ".consumed.producer"
+                                            : ".borrowed.producer"),
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(context, "entry", producer));
+            llvm::Value* produced = producer_builder.CreateCall(
+                declarations.at(native_function_slot(
+                    pipeline.producer_function, 0)));
+            for (const auto& stage_name : pipeline.stages) {
+                produced = producer_builder.CreateCall(
+                    declarations.at(native_function_slot(stage_name, 1)),
+                    {produced},
+                    pipeline.name + "." + stage_name + ".value");
+            }
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                pipeline.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        pipeline.name + ".future.producer.abi")},
+                    pipeline.name + ".future.handle"));
+        }
 
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
@@ -1418,15 +1454,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 continue;
             }
             llvm::Value* initial = nullptr;
-            if (!binding.task_await_name.empty()) {
-                const auto task = source_task_handles.find(
-                    binding.task_await_name);
+            if (!binding.task_await_name.empty() ||
+                    !binding.future_await_name.empty()) {
+                const std::string& awaited = !binding.task_await_name.empty()
+                    ? binding.task_await_name
+                    : binding.future_await_name;
+                const auto task = source_task_handles.find(awaited);
                 if (task == source_task_handles.end())
                     throw std::runtime_error(
-                        "Task<int> await lost runtime handle");
+                        "Task/Future<int> await lost runtime handle");
                 initial = builder.CreateCall(
                     taskAwait, {task->second},
-                    binding.name + ".task.awaited");
+                    binding.name + (!binding.task_await_name.empty()
+                        ? ".task.awaited" : ".future.awaited"));
             } else {
                 if (!binding.initializer)
                     throw std::runtime_error(
