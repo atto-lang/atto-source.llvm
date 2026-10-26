@@ -536,7 +536,15 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 
 } // namespace
 
-void validate_i64_ownership(const Program& program) {
+void validate_i64_ownership(Program& program) {
+    // A re-validation attempt must revoke every stale lowering authorization
+    // before checking anything. Failed ownership admission therefore cannot
+    // leave executable Future-pipeline authority from an earlier pass.
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines) {
+            pipeline.ownership_admitted = false;
+            pipeline.ownership_authority_fingerprint = 0;
+        }
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -659,6 +667,21 @@ void validate_i64_ownership(const Program& program) {
             }
             locals.emplace(param.name, std::move(entry));
         }
+        for (const auto& pipeline : function.future_pipelines) {
+            if (pipeline.plans.empty() ||
+                    pipeline.plans.front().input_ownership !=
+                        types::pipeline_root_ownership(pipeline.root_consumed))
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline root ownership proof "
+                    "does not match source rt take shape");
+            for (std::size_t i = 1; i < pipeline.plans.size(); ++i)
+                if (pipeline.plans[i].input_ownership !=
+                        types::PipelineInputOwnership::OwnedPipelineValue)
+                    throw std::runtime_error(
+                        "ownership violation: Future pipeline internal edge "
+                        "lost pipeline-owned authority");
+            types::validate_future_pipeline_chain(pipeline.plans);
+        }
         for (const auto& binding : function.locals) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
@@ -674,6 +697,38 @@ void validate_i64_ownership(const Program& program) {
                 const auto& call = *binding.initializer;
                 array_owner(*call.left, locals, true);
                 for (const auto& arg : call.arguments) check_value(*arg, locals, functions);
+            } else if (!binding.task_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Task<int> await result binding");
+                const bool task_exists = std::any_of(
+                    function.source_tasks.begin(), function.source_tasks.end(),
+                    [&](const SourceTaskI64Binding& task) {
+                        return task.name == binding.task_await_name &&
+                            task.awaited;
+                    });
+                if (!task_exists)
+                    throw std::runtime_error(
+                        "ownership violation: Task<int> await lost producer provenance");
+                // Capture-free producer transfers no caller owner or borrow.
+                // The awaited scalar becomes an ordinary owned stack value.
+            } else if (!binding.future_await_name.empty()) {
+                if (binding.scalar_type != ScalarType::I64 ||
+                        binding.initializer)
+                    throw std::runtime_error(
+                        "ownership violation: invalid Future<int> await result binding");
+                const auto future = std::find_if(
+                    function.future_pipelines.begin(),
+                    function.future_pipelines.end(),
+                    [&](const SourceFuturePipelineI64Binding& pipeline) {
+                        return pipeline.name == binding.future_await_name &&
+                            pipeline.awaited;
+                    });
+                if (future == function.future_pipelines.end())
+                    throw std::runtime_error(
+                        "ownership violation: Future<int> await lost pipeline provenance");
+                types::validate_future_pipeline_chain(future->plans);
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
@@ -1331,6 +1386,35 @@ void validate_i64_ownership(const Program& program) {
         ownership::verify(cfg);
 
     }
+
+    // Publication is compilation-unit atomic. First validate every ownership
+    // admission without mutating any pipeline authority. Only after all chains
+    // succeed do we mark them executable for LLVM lowering.
+    for (const auto& function : program.functions) {
+        for (const auto& pipeline : function.future_pipelines) {
+            std::vector<types::FuturePipelineOwnershipAdmission> admissions;
+            admissions.reserve(pipeline.plans.size());
+            for (const auto& plan : pipeline.plans) {
+                types::FuturePipelineOwnershipAdmission admission;
+                admission.declaration_identity = plan.declaration_identity;
+                admission.pipeline_node_identity = plan.pipeline_node_identity;
+                admission.input_ownership = plan.input_ownership;
+                admission.admitted = true;
+                admissions.push_back(admission);
+            }
+            if (!types::publish_future_pipeline_chain(
+                    pipeline.plans, admissions).has_value())
+                throw std::runtime_error(
+                    "ownership violation: Future pipeline proof publication "
+                    "failed closed");
+        }
+    }
+    for (auto& function : program.functions)
+        for (auto& pipeline : function.future_pipelines) {
+            pipeline.ownership_authority_fingerprint =
+                future_pipeline_authority_fingerprint(pipeline);
+            pipeline.ownership_admitted = true;
+        }
 }
 
 } // namespace oreslang
