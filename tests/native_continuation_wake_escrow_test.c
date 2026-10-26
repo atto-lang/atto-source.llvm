@@ -233,6 +233,18 @@ int main(void) {
     forged.code_generation++;
     CHECK(ores_native_actor_scheduler_publish_wake(
         f.scheduler, forged, ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+    forged = tickets[0];
+    ++forged.producer.generation;
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler, forged, ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+    forged = tickets[0];
+    ++forged.target.generation;
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler, forged, ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
+    forged = tickets[0];
+    ++forged.producer.scheduler_domain;
+    CHECK(ores_native_actor_scheduler_publish_wake(
+        f.scheduler, forged, ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_INVALID);
     CHECK(ores_native_actor_scheduler_publish_wake(
         f.scheduler, tickets[0], ORES_NATIVE_WAKE_READY) == ORES_NATIVE_WAKE_PUBLISHED);
     CHECK(ores_native_actor_scheduler_publish_wake(
