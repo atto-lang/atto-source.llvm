@@ -643,6 +643,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             if (!fn.actor_spawns.empty() || !fn.actor_sends.empty() ||
                 !fn.actor_stops.empty() || !fn.actor_field_writes.empty())
                 throw std::runtime_error("wasm32 actor operations are not implemented");
+            if (!fn.source_tasks.empty())
+                throw std::runtime_error(
+                    "wasm32 source Task<int> scheduler runtime is not implemented");
             for (const auto& local : fn.locals) {
                 // Preserve the native heap-owned diagnostic independently
                 // of array-backed ownership rejection.
@@ -724,7 +727,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     }
     if (string_runtime || record_runtime || owning_result_runtime || iteration_runtime) {
         if (!native_main || !source.actors.empty() || std::any_of(source.functions.begin(), source.functions.end(),
-                [](const Function& f) { return !f.ready_await_actor.empty() || f.caught_throw_value || f.scalar_while; }))
+                [](const Function& f) {
+                    return !f.ready_await_actor.empty() || f.caught_throw_value ||
+                        f.scalar_while || !f.source_tasks.empty();
+                }))
             throw std::runtime_error(string_runtime
                 ? "native strings currently require a synchronous host main region without actors, suspension or exception frames"
                 : "native records/owning results currently require a synchronous host main region without actors, suspension or exception frames");
@@ -771,6 +777,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
     // LLVM 18 removed Type::getInt8PtrTy. Use opaque address-space-zero
     // pointers on modern LLVM while preserving pre-18 typed-pointer support.
@@ -782,6 +789,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     // The test-only native owned-int experiment must never leak declarations
     // or allocations into ordinary int code. Resolve the ABI only when a
     // program actually contains a gated experimental heap-owned local.
+    const bool has_source_tasks = std::any_of(
+        source.functions.begin(), source.functions.end(),
+        [](const Function& fn) { return !fn.source_tasks.empty(); });
+    llvm::FunctionCallee taskStart, taskAwait, taskShutdown;
+    if (has_source_tasks) {
+        taskStart = module.getOrInsertFunction(
+            "oreslang_source_task_start_i64",
+            llvm::FunctionType::get(native_ptr, {native_ptr}, false));
+        taskAwait = module.getOrInsertFunction(
+            "oreslang_source_task_await_i64",
+            llvm::FunctionType::get(i64, {native_ptr}, false));
+        taskShutdown = module.getOrInsertFunction(
+            "oreslang_source_task_runtime_shutdown",
+            llvm::FunctionType::get(i32, {}, false));
+    }
+
     const bool has_region_bindings = std::any_of(source.functions.begin(), source.functions.end(),
         [](const Function& fn) {
             return std::any_of(fn.locals.begin(), fn.locals.end(),
@@ -1200,6 +1223,36 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         region_moves.layouts = &layouts;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+
+        std::unordered_map<std::string, llvm::Value*> source_task_handles;
+        for (const auto& task : fn.source_tasks) {
+            if (!has_source_tasks || !task.result)
+                throw std::runtime_error(
+                    "source Task<int> lacks runtime/result lowering");
+            auto* producer = llvm::Function::Create(
+                llvm::FunctionType::get(i64, {}, false),
+                llvm::Function::InternalLinkage,
+                function->getName().str() + ".task." + task.name + ".producer",
+                module);
+            llvm::IRBuilder<> producer_builder(
+                llvm::BasicBlock::Create(
+                    context, "entry", producer));
+            const std::unordered_map<std::string, llvm::Value*> no_storage;
+            const std::unordered_map<std::string, llvm::Value*> no_fields;
+            auto* produced = lower(
+                *task.result, producer_builder, i64,
+                no_storage, no_fields, declarations);
+            producer_builder.CreateRet(produced);
+            source_task_handles.emplace(
+                task.name,
+                builder.CreateCall(
+                    taskStart,
+                    {builder.CreatePointerCast(
+                        producer, native_ptr,
+                        task.name + ".task.producer.abi")},
+                    task.name + ".task.handle"));
+        }
+
         for (const auto& binding : fn.locals) {
             if (binding.int_array) {
                 llvm::Value* handle = new_checked_array(binding.name);
@@ -1364,7 +1417,24 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                                          std::move(owned_fields)});
                 continue;
             }
-            llvm::Value* initial = lower(*binding.initializer, builder, i64, storage, field_storage, declarations, &region_moves);
+            llvm::Value* initial = nullptr;
+            if (!binding.task_await_name.empty()) {
+                const auto task = source_task_handles.find(
+                    binding.task_await_name);
+                if (task == source_task_handles.end())
+                    throw std::runtime_error(
+                        "Task<int> await lost runtime handle");
+                initial = builder.CreateCall(
+                    taskAwait, {task->second},
+                    binding.name + ".task.awaited");
+            } else {
+                if (!binding.initializer)
+                    throw std::runtime_error(
+                        "native scalar local lacks initializer");
+                initial = lower(
+                    *binding.initializer, builder, i64, storage,
+                    field_storage, declarations, &region_moves);
+            }
             llvm::Value* slot = nullptr;
             if (binding.heap_owned) {
                 // Store only an opaque, generation-checked lifetime token.
@@ -2446,7 +2516,6 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
     if (native_main) {
         // OS/process ABI boundary: never expose i64/void Oreslang main as C main.
         // Reject invalid statuses without Unix low-byte truncation (256 -> 0).
-        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         auto* host_main = llvm::Function::Create(
             llvm::FunctionType::get(i32, false),
             llvm::Function::ExternalLinkage, "main", module);
@@ -2480,6 +2549,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             builder.SetInsertPoint(ready);
         }
         llvm::Value* result = builder.CreateCall(guest);
+        llvm::Value* tasks_ok = has_source_tasks
+            ? builder.CreateICmpEQ(
+                builder.CreateCall(taskShutdown),
+                llvm::ConstantInt::get(i32, 1),
+                "source.tasks.shutdown.ok")
+            : llvm::ConstantInt::getTrue(context);
         llvm::Value* records_ok = record_runtime
             ? builder.CreateICmpEQ(builder.CreateCall(record_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
@@ -2487,6 +2562,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             ? builder.CreateICmpEQ(builder.CreateCall(string_end), llvm::ConstantInt::get(i64, 0))
             : llvm::ConstantInt::getTrue(context);
         output_ok = builder.CreateAnd(output_ok, records_ok);
+        output_ok = builder.CreateAnd(output_ok, tasks_ok);
         if (main_it->returns_void) {
             builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
