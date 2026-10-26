@@ -24,9 +24,23 @@ typedef struct {
 static void no_op_data(void* raw, size_t actor, uint64_t payload) {
     (void)raw; (void)actor; (void)payload;
 }
-static void no_op_wake(void* raw, size_t actor, OresNativeWakeTicket ticket,
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeActorRef producer;
+    atomic_int failed_wakes;
+    atomic_int errors;
+} ReservedFailureFixture;
+
+static void on_reserved_failure_wake(
+        void* raw, size_t actor, OresNativeWakeTicket ticket,
         OresNativeWakeOutcome outcome) {
-    (void)raw; (void)actor; (void)ticket; (void)outcome;
+    ReservedFailureFixture* f = (ReservedFailureFixture*)raw;
+    if (actor != 0 || outcome != ORES_NATIVE_WAKE_FAILED
+            || !ores_native_actor_scheduler_is_current_wake(f->scheduler, ticket)
+            || !ores_native_actor_scheduler_is_current_actor(
+                f->scheduler, f->producer))
+        atomic_fetch_add(&f->errors, 1);
+    atomic_fetch_add(&f->failed_wakes, 1);
 }
 
 static void event(Fixture* f, int code) {
@@ -159,6 +173,51 @@ static void contest(Fixture* f, OresNativeWakeTicket ticket, int both_cancel) {
             f->scheduler, ticket));
     }
 }
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    OresNativeWakeTicket ticket;
+    atomic_int* go;
+    int action; /* 0 cancel, 1 transfer, 2 fail-reserved */
+    int won;
+} ReservedRaceContender;
+
+static void* contend_reserved_failure(void* raw) {
+    ReservedRaceContender* c = (ReservedRaceContender*)raw;
+    while (!atomic_load_explicit(c->go, memory_order_acquire)) {
+        struct timespec pause = {0, 1000000};
+        nanosleep(&pause, NULL);
+    }
+    if (c->action == 0) {
+        c->won = ores_native_actor_scheduler_cancel_wake(c->scheduler, c->ticket);
+    } else if (c->action == 1) {
+        c->won = ores_native_actor_scheduler_transfer_wake(c->scheduler, c->ticket);
+    } else {
+        c->won = ores_native_actor_scheduler_fail_reserved_wake(
+            c->scheduler, c->ticket) == ORES_NATIVE_WAKE_PUBLISHED;
+    }
+    return NULL;
+}
+
+static void contest_reserved_failure(
+        OresNativeActorScheduler* scheduler,
+        OresNativeWakeTicket ticket,
+        int opponent_action,
+        int* failure_won,
+        int* opponent_won) {
+    atomic_int go = ATOMIC_VAR_INIT(0);
+    ReservedRaceContender failure = {scheduler, ticket, &go, 2, 0};
+    ReservedRaceContender opponent = {scheduler, ticket, &go, opponent_action, 0};
+    pthread_t a, b;
+    CHECK(pthread_create(&a, NULL, contend_reserved_failure, &failure) == 0);
+    CHECK(pthread_create(&b, NULL, contend_reserved_failure, &opponent) == 0);
+    atomic_store_explicit(&go, 1, memory_order_release);
+    CHECK(pthread_join(a, NULL) == 0);
+    CHECK(pthread_join(b, NULL) == 0);
+    CHECK(failure.won + opponent.won == 1);
+    *failure_won = failure.won;
+    *opponent_won = opponent.won;
+}
+
 int main(void) {
     /* Public wake-ticket APIs must fail closed on legacy schedulers that do
      * not allocate a wake table. Before the matching_wake_locked hardening,
@@ -190,25 +249,73 @@ int main(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(plain));
 
     /* A local target that stops after reservation must lose before the
-     * irreversible transfer boundary. The reserved producer ticket remains
-     * cancellable and cannot become a false mailbox-admission receipt. */
+     * irreversible transfer boundary. Target STOP cooperatively resumes a
+     * still-live producer with FAILED so send_async cannot hang forever. */
+    ReservedFailureFixture rf = {0};
     OresNativeActorScheduler* local = ores_native_actor_scheduler_open_with_wakes(
-        2, 1, 1, no_op_data, NULL, NULL, no_op_wake, NULL);
+        2, 1, 1, no_op_data, NULL, NULL, on_reserved_failure_wake, &rf);
     CHECK(local);
+    rf.scheduler = local;
     OresNativeActorRef producer = ores_native_actor_scheduler_spawn(local, 0);
     OresNativeActorRef target = ores_native_actor_scheduler_spawn(local, 1);
+    rf.producer = producer;
     CHECK(producer.scheduler_domain && target.scheduler_domain);
     OresNativeWakeTicket target_ticket = {0};
     CHECK(ores_native_actor_scheduler_reserve_wake(
         local, producer, target, 1, 1, 1, 1, &target_ticket));
     CHECK(ores_native_actor_scheduler_stop(local, target));
     CHECK(!ores_native_actor_scheduler_transfer_wake(local, target_ticket));
-    CHECK(ores_native_actor_scheduler_cancel_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_fail_reserved_wake(
+        local, target_ticket) == ORES_NATIVE_WAKE_PUBLISHED);
+    CHECK(!ores_native_actor_scheduler_cancel_wake(local, target_ticket));
+    CHECK(!ores_native_actor_scheduler_transfer_wake(local, target_ticket));
+    CHECK(ores_native_actor_scheduler_drain(local));
+    CHECK(atomic_load(&rf.failed_wakes) == 1);
+    CHECK(!atomic_load(&rf.errors));
+    CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(local, producer));
     CHECK(ores_native_actor_scheduler_stop(local, producer));
     CHECK(ores_native_actor_scheduler_wait_done(local, target));
     CHECK(ores_native_actor_scheduler_wait_done(local, producer));
     ores_native_actor_scheduler_retire(local);
     CHECK(ores_native_actor_scheduler_try_destroy(local));
+
+    ReservedFailureFixture rr = {0};
+    OresNativeActorScheduler* race_scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            1, 1, 1, no_op_data, NULL, NULL, on_reserved_failure_wake, &rr);
+    CHECK(race_scheduler);
+    rr.scheduler = race_scheduler;
+    rr.producer = ores_native_actor_scheduler_spawn(race_scheduler, 0);
+    CHECK(rr.producer.scheduler_domain);
+    int failure_wins = 0;
+    for (int trial = 0; trial < 100; ++trial) {
+        OresNativeWakeTicket ticket = {0};
+        CHECK(ores_native_actor_scheduler_reserve_wake(
+            race_scheduler, rr.producer, rr.producer,
+            1000 + (uint64_t)trial, 1, 1, 1000 + (uint64_t)trial, &ticket));
+        int failed = 0, opponent = 0;
+        const int opponent_action = (trial & 1) ? 1 : 0;
+        contest_reserved_failure(
+            race_scheduler, ticket, opponent_action, &failed, &opponent);
+        if (failed) {
+            ++failure_wins;
+            CHECK(ores_native_actor_scheduler_drain(race_scheduler));
+        } else if (opponent_action == 1) {
+            CHECK(opponent);
+            CHECK(ores_native_actor_scheduler_abort_transferred_wake(
+                race_scheduler, ticket));
+        } else {
+            CHECK(opponent);
+        }
+    }
+    CHECK(atomic_load(&rr.failed_wakes) == failure_wins);
+    CHECK(!atomic_load(&rr.errors));
+    CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(
+        race_scheduler, rr.producer));
+    CHECK(ores_native_actor_scheduler_stop(race_scheduler, rr.producer));
+    CHECK(ores_native_actor_scheduler_wait_done(race_scheduler, rr.producer));
+    ores_native_actor_scheduler_retire(race_scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(race_scheduler));
 
     Fixture f = {0};
     setup(&f);
