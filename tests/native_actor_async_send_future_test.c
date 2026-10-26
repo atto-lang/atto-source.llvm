@@ -404,6 +404,9 @@ typedef struct {
     atomic_int wake_outcome;
     atomic_uint wake_count;
     atomic_uint cancelled_wakes;
+    atomic_int hold_wake;
+    atomic_int wake_entered;
+    atomic_int wake_exited;
     OresNativeWakeTicket wake_ticket;
 } BoundWakeState;
 
@@ -415,6 +418,9 @@ static void bound_wake_callback(
     CHECK(ores_native_actor_scheduler_is_current_wake(
         state->scheduler, ticket));
     state->wake_ticket = ticket;
+    atomic_store_explicit(&state->wake_entered, 1, memory_order_release);
+    while (atomic_load_explicit(&state->hold_wake, memory_order_acquire))
+        sched_yield();
     if (outcome == ORES_NATIVE_WAKE_CANCELLED
             && ticket.completion_code == ORES_NATIVE_SEND_TRANSPORT_UNAVAILABLE)
         atomic_fetch_add_explicit(
@@ -423,6 +429,7 @@ static void bound_wake_callback(
     atomic_store_explicit(
         &state->wake_outcome, (int)outcome, memory_order_release);
     atomic_store_explicit(&state->wake_seen, 1, memory_order_release);
+    atomic_store_explicit(&state->wake_exited, 1, memory_order_release);
 }
 
 static void ready_future_wake_survives_target_stop(void) {
@@ -679,6 +686,60 @@ static void bounded_wake_escrow_rejects_ninth_bind(void) {
     CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
 }
 
+static void release_during_executing_wake_is_deferred(void) {
+    BoundWakeState state = {0};
+    atomic_store_explicit(&state.hold_wake, 1, memory_order_release);
+    OresNativeActorScheduler* scheduler =
+        ores_native_actor_scheduler_open_with_wakes(
+            2, 2, 2, handler, NULL, NULL, bound_wake_callback, &state);
+    CHECK(scheduler != NULL);
+    state.scheduler = scheduler;
+
+    OresNativeActorRef target =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef producer =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+    CHECK(target.scheduler_domain && producer.scheduler_domain);
+
+    OresNativeAsyncSendTicket send = {0};
+    CHECK(ores_native_actor_scheduler_submit_async(
+        scheduler, target, 951, &send) == ORES_NATIVE_SEND_ACCEPTED);
+    expect_state(scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+
+    OresNativeWakeTicket wake = {0};
+    CHECK(ores_native_actor_scheduler_bind_async_send_wake(
+        scheduler, send, producer, 61, 67, 1, &wake));
+    while (!atomic_load_explicit(&state.wake_entered, memory_order_acquire))
+        sched_yield();
+
+    /* Release is accepted exactly once, but the descriptor remains readable
+     * until the callback has returned to the scheduler. */
+    CHECK(ores_native_actor_scheduler_release_async_send(scheduler, send));
+    CHECK(!ores_native_actor_scheduler_release_async_send(scheduler, send));
+    expect_state(scheduler, send,
+        ORES_NATIVE_ASYNC_SEND_READY, ORES_NATIVE_SEND_ACCEPTED);
+
+    atomic_store_explicit(&state.hold_wake, 0, memory_order_release);
+    while (!atomic_load_explicit(&state.wake_exited, memory_order_acquire))
+        sched_yield();
+    while (ores_native_actor_scheduler_wakes_completed(scheduler) == 0)
+        sched_yield();
+
+    OresNativeAsyncSendState stale_state = ORES_NATIVE_ASYNC_SEND_INVALID;
+    OresNativeSendStatus stale_outcome = ORES_NATIVE_SEND_INVALID_REF;
+    CHECK(!ores_native_actor_scheduler_async_send_status(
+        scheduler, send, &stale_state, &stale_outcome));
+
+    CHECK(ores_native_actor_scheduler_drain(scheduler));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, target));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, target));
+    CHECK(ores_native_actor_scheduler_stop(scheduler, producer));
+    CHECK(ores_native_actor_scheduler_wait_done(scheduler, producer));
+    ores_native_actor_scheduler_retire(scheduler);
+    CHECK(ores_native_actor_scheduler_try_destroy(scheduler));
+}
+
 static void wake_activation_is_bootstrap_only(void) {
     BoundWakeState pristine = {0};
     OresNativeActorScheduler* scheduler =
@@ -720,7 +781,8 @@ int main(void) {
     pending_resource_exhaustion_publishes_exact_failed_wake();
     duplicate_send_wake_bind_fails_closed();
     bounded_wake_escrow_rejects_ninth_bind();
+    release_during_executing_wake_is_deferred();
     wake_activation_is_bootstrap_only();
-    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 exact_resource_wake=1 release_fence=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
+    puts("NATIVE_ASYNC_SEND_FUTURE_PASS fail_fast_resource=1 immediate=1 fifo=1 cancel=1 stop=1 ready_survives_stop=1 bound=256 aba=1 destroy_fence=1 wake_after_stop=1 exact_stop_wake=1 exact_resource_wake=1 release_fence=1 deferred_release=1 duplicate_bind=1 wake_escrow=8 bootstrap_wake=1");
     return 0;
 }
