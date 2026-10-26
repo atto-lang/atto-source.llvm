@@ -340,6 +340,39 @@ struct ModuleImport {
     std::size_t offset = 0;
 };
 
+enum class SourceExportScope { File, Package, Public };
+enum class SourceExportKind {
+    Module, Actor, Class, Fnc, Routine, Interface, Contract, Trait, Struct, Type,
+    Const, Val, Let, Symbol
+};
+enum class SourceExportOrigin { ImplicitPub, ExplicitExport };
+
+struct SourceExportItem {
+    std::string local_name;
+    std::string external_name;
+    bool symbol = false;
+    bool self_identity = false;
+};
+
+struct SourceExportDecl {
+    SourceExportScope scope = SourceExportScope::Public;
+    bool typed = false;
+    SourceExportKind kind = SourceExportKind::Class;
+    std::vector<SourceExportItem> items;
+    std::size_t offset = 0;
+};
+
+struct SourceExportBinding {
+    std::string owner_namespace_id;
+    std::string local_symbol_id;
+    std::string local_name;
+    SourceExportKind local_kind = SourceExportKind::Class;
+    std::string external_name;
+    SourceExportScope scope = SourceExportScope::Public;
+    SourceExportOrigin origin = SourceExportOrigin::ExplicitExport;
+    std::size_t offset = 0;
+};
+
 struct TypeConstraintDescriptor {
     std::string schema_id;
     std::string qualified_type_name;
@@ -351,6 +384,10 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
+    // Source-language export metadata is deliberately distinct from existing
+    // native/linker-facing declaration exported flags.
+    std::vector<SourceExportDecl> export_declarations;
+    std::vector<SourceExportBinding> source_exports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::string namespace_name;
     std::string module;
