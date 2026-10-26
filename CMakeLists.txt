@@ -179,7 +179,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-core-sync-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-core-sync-test PRIVATE
-        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
     # Keep assert() live in Release/NDEBUG: these are security admission checks.
     target_compile_options(oreslang-native-core-sync-test PRIVATE
         $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
@@ -3480,7 +3480,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-vm-realtime-prestart-test PRIVATE Threads::Threads)
     target_compile_options(oreslang-native-vm-realtime-prestart-test PRIVATE
-        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_vm_realtime_preallocated_startup
         COMMAND oreslang-native-vm-realtime-prestart-test)
     set_tests_properties(native_vm_realtime_preallocated_startup PROPERTIES TIMEOUT 25)
@@ -3579,7 +3579,7 @@ if(BUILD_TESTING)
     target_compile_definitions(oreslang-native-record-region-test PRIVATE ORESLANG_RECORD_TEST_ALLOC_FAILURE=1)
     target_compile_features(oreslang-native-record-region-test PRIVATE c_std_11)
     target_compile_options(oreslang-native-record-region-test PRIVATE
-        $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
     target_link_libraries(oreslang-native-record-region-test PRIVATE Threads::Threads)
     add_test(NAME native_record_region_generation_quota_cleanup COMMAND oreslang-native-record-region-test)
     set_tests_properties(native_record_region_generation_quota_cleanup PROPERTIES TIMEOUT 30)
@@ -3870,7 +3870,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeFailureTrace.c)
     target_include_directories(oreslang-native-failure-trace-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-failure-trace-test PRIVATE Threads::Threads)
-    target_compile_options(oreslang-native-failure-trace-test PRIVATE $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    target_compile_options(oreslang-native-failure-trace-test PRIVATE $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_failure_trace_capture_and_render COMMAND oreslang-native-failure-trace-test)
     set_tests_properties(native_failure_trace_capture_and_render PROPERTIES TIMEOUT 30)
 endif()
@@ -3896,7 +3896,7 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_features(oreslang-native-string-host-test PRIVATE c_std_11)
   target_compile_options(oreslang-native-string-host-test PRIVATE
-    $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
   add_test(NAME native_string_utf8_json_host_contract
     COMMAND oreslang-native-string-host-test)
   set_tests_properties(native_string_utf8_json_host_contract PROPERTIES TIMEOUT 30)
@@ -3909,7 +3909,7 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_features(oreslang-native-cstring-host-test PRIVATE c_std_11)
   target_compile_options(oreslang-native-cstring-host-test PRIVATE
-    $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
   add_test(NAME native_string_cstring_explicit_length_contract
     COMMAND oreslang-native-cstring-host-test)
   set_tests_properties(native_string_cstring_explicit_length_contract PROPERTIES TIMEOUT 30)
