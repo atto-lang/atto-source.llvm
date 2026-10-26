@@ -828,7 +828,7 @@ static void settle_selectable_failure_locked(
      * a guest branch or fabricating target admission.
      */
     const OresNativeSelectCommitResult selected =
-        ores_native_select_try_commit(credit->select_token);
+        ores_native_select_try_commit_bound(credit->select_token);
     if (selected == ORES_NATIVE_SELECT_WON) {
         credit->state = ORES_NATIVE_ASYNC_SEND_FAILED;
         credit->outcome = outcome;
@@ -890,7 +890,7 @@ static void service_async_sends_locked(
 
         if (credit->select_bound) {
             const OresNativeSelectCommitResult selected =
-                ores_native_select_try_commit(credit->select_token);
+                ores_native_select_try_commit_bound(credit->select_token);
             if (selected != ORES_NATIVE_SELECT_WON) {
                 credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
                 credit->outcome = ORES_NATIVE_SEND_CANCELLED;
@@ -1163,12 +1163,12 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     lock(s);
 
     /*
-     * The common winner may have committed after the caller's precheck but
-     * before this scheduler acquired its target-credit lock. Detach this arm
-     * without minting any async descriptor in that case.
+     * Ownership of this select arm transfers to the scheduler before target
+     * inspection or descriptor allocation. From this point the caller's copied
+     * token cannot use generic try_commit()/detach() to fabricate a winner.
+     * A concurrent winner/seal makes bind_source fail and this arm is a loser.
      */
-    if (!ores_native_select_token_registered(select_token)) {
-        (void)ores_native_select_detach(select_token);
+    if (!ores_native_select_bind_source(select_token)) {
         unlock(s);
         return ORES_NATIVE_SEND_CANCELLED;
     }
@@ -1181,7 +1181,7 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
 
     if (immediate_terminal != ORES_NATIVE_SEND_ACCEPTED) {
         const OresNativeSelectCommitResult selected =
-            ores_native_select_try_commit(select_token);
+            ores_native_select_try_commit_bound(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
         return selected == ORES_NATIVE_SELECT_WON
@@ -1192,26 +1192,22 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     ActorLane* lane = &s->actors[target.actor_slot];
 
     /*
-     * Descriptor/sequence exhaustion means this select arm could not be
-     * registered. It is not an operation-completion event and must not win the
-     * common selection.
-     *
-     * Recheck the generation before reporting setup failure: another arm may
-     * have committed after our scheduler-lock precheck. In that race this arm
-     * is simply a loser, not a RESOURCE_EXHAUSTED failure for the completed
-     * selection.
+     * Descriptor/sequence exhaustion is registration/setup failure, not a
+     * ready select event. If another arm won while setup was being classified,
+     * report this arm as CANCELLED rather than leaking a stale resource error.
      */
     if (lane->async_live >= ORES_NATIVE_ASYNC_SENDS_PER_ACTOR
             || lane->next_async_sequence == 0) {
         const int still_open =
-            ores_native_select_token_registered(select_token);
-        (void)ores_native_select_detach(select_token);
+            ores_native_select_token_bound(select_token);
+        (void)ores_native_select_detach_bound(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
         return still_open
             ? ORES_NATIVE_SEND_RESOURCE_EXHAUSTED
             : ORES_NATIVE_SEND_CANCELLED;
     }
+
     size_t slot = ORES_NATIVE_ASYNC_SENDS_PER_ACTOR;
     for (size_t i = 0; i < ORES_NATIVE_ASYNC_SENDS_PER_ACTOR; ++i) {
         AsyncSendCredit* candidate = &lane->async_sends[i];
@@ -1223,8 +1219,8 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     }
     if (slot == ORES_NATIVE_ASYNC_SENDS_PER_ACTOR) {
         const int still_open =
-            ores_native_select_token_registered(select_token);
-        (void)ores_native_select_detach(select_token);
+            ores_native_select_token_bound(select_token);
+        (void)ores_native_select_detach_bound(select_token);
         if (s->rejected != UINT64_MAX) ++s->rejected;
         unlock(s);
         return still_open
@@ -1256,10 +1252,9 @@ OresNativeSendStatus ores_native_actor_scheduler_submit_selectable_async(
     };
 
     /*
-     * If target credit is already free this call may settle immediately, but
-     * only service_async_sends_locked may attempt the select CAS and enqueue.
-     * Thus winner commit and message publication share this scheduler critical
-     * section and no losing arm can publish a payload.
+     * Even if target credit is already free, only service_async_sends_locked
+     * may commit the BOUND arm and publish DATA. Winner CAS and mailbox
+     * publication therefore remain in one scheduler critical section.
      */
     service_async_sends_locked(s, (size_t)target.actor_slot);
     if (pthread_cond_broadcast(&s->credit) != 0) abort();
@@ -1314,7 +1309,7 @@ int ores_native_actor_scheduler_cancel_async_send(
         ActorLane* lane = &s->actors[ticket.target.actor_slot];
         if (!lane->async_pending) abort();
         if (credit->select_bound)
-            (void)ores_native_select_detach(credit->select_token);
+            (void)ores_native_select_detach_bound(credit->select_token);
         --lane->async_pending;
         credit->state = ORES_NATIVE_ASYNC_SEND_CANCELLED;
         credit->outcome = ORES_NATIVE_SEND_CANCELLED;
