@@ -129,6 +129,7 @@ static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
 static atomic_int test_readiness_publication_entered;
+static atomic_uintptr_t test_join_waiting_actor;
 
 void oreslang_source_actor_test_hold_initialization(int hold) {
     if (hold) {
@@ -186,6 +187,13 @@ int oreslang_source_actor_test_future_consuming(void* opaque_future) {
 finished:
     group_unlock();
     return result;
+}
+
+int oreslang_source_actor_test_join_waiting_on_futures(void* opaque) {
+    return opaque != NULL
+        && atomic_load_explicit(
+            &test_join_waiting_actor, memory_order_acquire)
+            == (uintptr_t)opaque;
 }
 
 int oreslang_source_actor_test_set_async_waiters(
@@ -1510,9 +1518,19 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
     while (instance->async_waiters != 0
-            || instance->send_future_live != 0)
+            || instance->send_future_live != 0) {
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_store_explicit(
+            &test_join_waiting_actor, (uintptr_t)instance,
+            memory_order_release);
+#endif
         ensure(pthread_cond_wait(
             &group.async_waiters_changed, &group.mutex) == 0);
+    }
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    atomic_store_explicit(
+        &test_join_waiting_actor, (uintptr_t)0, memory_order_release);
+#endif
     const int startup_state = atomic_load_explicit(
         &instance->startup_state, memory_order_acquire);
     ensure(startup_state == ORES_SOURCE_ACTOR_STARTUP_READY
